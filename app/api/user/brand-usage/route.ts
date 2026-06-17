@@ -9,7 +9,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Count brands where owner_id is the current user
   const brandCount = await prisma.brand.count({
     where: { owner_id: session.user.id },
   });
