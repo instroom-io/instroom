@@ -1,7 +1,10 @@
-"use client"
+import { Suspense } from "react"
+import { SolutionsPage } from "@/components/solutions-page"
 
-import { SolutionsPage } from "@/components/solutions-page/solutions-page"
-
-export default function Solutions() {
-  return <SolutionsPage />
+export default function Page() {
+  return (
+    <Suspense>
+      <SolutionsPage />
+    </Suspense>
+  )
 }

@@ -1,0 +1,1 @@
+export type PageId = "hub" | "freelancer" | "agency" | "dtc"
