@@ -1,9 +1,14 @@
 "use client"
-// app/dashboard/settings/security/page.tsx
 
 import { useSession } from "next-auth/react"
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
+import { KeyRound, ShieldCheck } from "lucide-react"
+import { cn } from "@/lib/utils"
 
 type Toast = { message: string; type: "success" | "error" }
 
@@ -22,17 +27,20 @@ export default function SecurityPage() {
   const { toast, show } = useToast()
 
   const [currentPassword, setCurrentPassword] = useState("")
-  const [newPassword, setNewPassword]          = useState("")
-  const [confirmPassword, setConfirmPassword]  = useState("")
-  const [savingPassword, setSavingPassword]    = useState(false)
+  const [newPassword, setNewPassword] = useState("")
+  const [confirmPassword, setConfirmPassword] = useState("")
+  const [savingPassword, setSavingPassword] = useState(false)
 
-  const [totpEnabled, setTotpEnabled]     = useState(false)
-  const [smsEnabled, setSmsEnabled]       = useState(false)
-  const [togglingTotp, setTogglingTotp]   = useState(false)
-  const [togglingSms, setTogglingSms]     = useState(false)
+  const [totpEnabled, setTotpEnabled] = useState(false)
+  const [smsEnabled, setSmsEnabled] = useState(false)
+  const [togglingTotp, setTogglingTotp] = useState(false)
+  const [togglingSms, setTogglingSms] = useState(false)
 
   useEffect(() => {
-    if (status === "unauthenticated") { router.push("/login"); return }
+    if (status === "unauthenticated") {
+      router.push("/login")
+      return
+    }
     if (status !== "authenticated") return
 
     fetch("/api/settings/security/2fa")
@@ -60,7 +68,7 @@ export default function SecurityPage() {
     }
     setSavingPassword(true)
     try {
-      const res  = await fetch("/api/user/update-password", {
+      const res = await fetch("/api/user/update-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ currentPassword, newPassword }),
@@ -79,11 +87,11 @@ export default function SecurityPage() {
   }
 
   async function toggle2FA(method: "totp" | "sms", current: boolean) {
-    const setter     = method === "totp" ? setTotpEnabled : setSmsEnabled
+    const setter = method === "totp" ? setTotpEnabled : setSmsEnabled
     const setLoading = method === "totp" ? setTogglingTotp : setTogglingSms
     setLoading(true)
     try {
-      const res  = await fetch("/api/settings/security/2fa", {
+      const res = await fetch("/api/settings/security/2fa", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ method, enabled: !current }),
@@ -100,70 +108,66 @@ export default function SecurityPage() {
   }
 
   return (
-    <div style={{ padding: "28px 36px", maxWidth: 780 }}>
+    <div className="max-w-3xl px-9 py-7">
       {toast && (
         <div
-          style={{
-            position: "fixed",
-            top: 20,
-            right: 24,
-            zIndex: 9999,
-            padding: "10px 18px",
-            borderRadius: 10,
-            fontSize: 13,
-            fontWeight: 500,
-            color: "#fff",
-            background: toast.type === "success" ? "#1FAE5B" : "#E24B4A",
-            boxShadow: "0 4px 16px rgba(0,0,0,0.12)",
-          }}
+          className={cn(
+            "fixed top-5 right-6 z-[9999] rounded-[10px] px-4.5 py-2.5 text-[13px] font-medium text-white shadow-[0_4px_16px_rgba(0,0,0,0.12)]",
+            toast.type === "success" ? "bg-emerald-600" : "bg-red-500"
+          )}
         >
           {toast.message}
         </div>
       )}
 
-      <div style={{ fontSize: 18, fontWeight: 600, color: "#1E1E1E", marginBottom: 4 }}>Security</div>
-      <div style={{ fontSize: 12, color: "#888", marginBottom: 24 }}>Manage your password and login settings</div>
+      <div className="mb-1 text-lg font-semibold text-gray-900">Security</div>
+      <div className="mb-6 text-xs text-stone-400">
+        Manage your password and login settings
+      </div>
 
       {/* Change Password Card */}
-      <div style={card}>
-        <div style={cardHeader}>
-          <div style={cardIcon}>
-            <svg viewBox="0 0 16 16" fill="none" stroke="#1FAE5B" strokeWidth="1.5" width={16} height={16}>
-              <rect x="4" y="7" width="8" height="7" rx="1.5" />
-              <path d="M5 7V5a3 3 0 016 0v2" />
-            </svg>
+      <div className="mb-4 overflow-hidden rounded-xl border border-black/[0.08] bg-white">
+        <div className="flex items-start gap-3 border-b border-black/[0.07] px-5 py-4">
+          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[9px] bg-emerald-50">
+            <KeyRound className="h-4 w-4 text-emerald-600" strokeWidth={1.5} />
           </div>
           <div>
-            <div style={cardTitle}>Change password</div>
-            <div style={cardDesc}>Update your password to keep your account secure</div>
+            <div className="text-[13px] font-semibold text-gray-900">Change password</div>
+            <div className="mt-0.5 text-[11px] text-stone-400">
+              Update your password to keep your account secure
+            </div>
           </div>
         </div>
-        <div style={cardBody}>
-          <div style={fGrid}>
-            <div style={{ ...fGroup, gridColumn: "1 / -1" }}>
-              <label style={fLabel}>Current password</label>
-              <input
-                style={fInput}
+
+        <div className="p-5">
+          <div className="grid grid-cols-2 gap-3.5">
+            <div className="col-span-2 flex flex-col gap-1">
+              <Label className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                Current password
+              </Label>
+              <Input
                 type="password"
                 placeholder="••••••••"
                 value={currentPassword}
                 onChange={(e) => setCurrentPassword(e.target.value)}
               />
             </div>
-            <div style={fGroup}>
-              <label style={fLabel}>New password</label>
-              <input
-                style={fInput}
+            <div className="flex flex-col gap-1">
+              <Label className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                New password
+              </Label>
+              <Input
                 type="password"
                 placeholder="••••••••"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
               />
             </div>
-            <div style={fGroup}>
-              <label style={fLabel}>Confirm new password</label>
-              <input
-                style={fInput}
+            <div className="flex flex-col gap-1">
+              <Label className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                Confirm new password
+              </Label>
+              <Input
                 type="password"
                 placeholder="••••••••"
                 value={confirmPassword}
@@ -171,29 +175,36 @@ export default function SecurityPage() {
               />
             </div>
           </div>
-          <div style={btnRow}>
-            <button style={btnPrimary} onClick={handleChangePassword} disabled={savingPassword}>
+
+          <div className="mt-4 flex justify-end gap-2 border-t border-black/[0.06] pt-3.5">
+            <Button
+              onClick={handleChangePassword}
+              disabled={savingPassword}
+              className="bg-emerald-600 hover:bg-emerald-700"
+            >
               {savingPassword ? "Updating…" : "Update password"}
-            </button>
+            </Button>
           </div>
         </div>
       </div>
 
       {/* 2FA Card */}
-      <div style={card}>
-        <div style={cardHeader}>
-          <div style={cardIcon}>
-            <svg viewBox="0 0 16 16" fill="none" stroke="#1FAE5B" strokeWidth="1.5" width={16} height={16}>
-              <rect x="2" y="2" width="12" height="12" rx="2" />
-              <path d="M8 6v4M6 8h4" />
-            </svg>
+      <div className="overflow-hidden rounded-xl border border-black/[0.08] bg-white">
+        <div className="flex items-start gap-3 border-b border-black/[0.07] px-5 py-4">
+          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[9px] bg-emerald-50">
+            <ShieldCheck className="h-4 w-4 text-emerald-600" strokeWidth={1.5} />
           </div>
           <div>
-            <div style={cardTitle}>Two-factor authentication</div>
-            <div style={cardDesc}>Add an extra layer of security to your account</div>
+            <div className="text-[13px] font-semibold text-gray-900">
+              Two-factor authentication
+            </div>
+            <div className="mt-0.5 text-[11px] text-stone-400">
+              Add an extra layer of security to your account
+            </div>
           </div>
         </div>
-        <div style={cardBody}>
+
+        <div className="p-5">
           <ToggleRow
             title="Authenticator app (TOTP)"
             desc="Use Google Authenticator, Authy, or similar apps"
@@ -232,111 +243,22 @@ function ToggleRow({
 }) {
   return (
     <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        padding: "12px 0",
-        borderBottom: last ? "none" : "0.5px solid rgba(0,0,0,0.05)",
-        opacity: loading ? 0.6 : 1,
-        transition: "opacity 0.2s",
-      }}
+      className={cn(
+        "flex items-center justify-between py-3 transition-opacity",
+        !last && "border-b border-black/5",
+        loading && "opacity-60"
+      )}
     >
       <div>
-        <div style={{ fontSize: 12, fontWeight: 500, color: "#1E1E1E" }}>{title}</div>
-        <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{desc}</div>
+        <div className="text-xs font-medium text-gray-900">{title}</div>
+        <div className="mt-0.5 text-[11px] text-stone-400">{desc}</div>
       </div>
-      <button
-        onClick={onToggle}
+      <Switch
+        checked={enabled}
         disabled={loading}
-        style={{
-          width: 36,
-          height: 20,
-          borderRadius: 10,
-          background: enabled ? "#1FAE5B" : "#ddd",
-          position: "relative",
-          flexShrink: 0,
-          cursor: loading ? "not-allowed" : "pointer",
-          border: "none",
-          padding: 0,
-          transition: "background 0.2s",
-        }}
-      >
-        <div
-          style={{
-            position: "absolute",
-            width: 16,
-            height: 16,
-            top: 2,
-            left: enabled ? 18 : 2,
-            background: "#fff",
-            borderRadius: "50%",
-            boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
-            transition: "left 0.2s",
-          }}
-        />
-      </button>
+        onCheckedChange={onToggle}
+        className="data-[state=checked]:bg-emerald-600"
+      />
     </div>
   )
-}
-
-// ── Shared styles ──────────────────────────────────────────────
-const card: React.CSSProperties = {
-  background: "#fff",
-  border: "0.5px solid rgba(0,0,0,0.08)",
-  borderRadius: 12,
-  marginBottom: 16,
-  overflow: "hidden",
-}
-const cardHeader: React.CSSProperties = {
-  padding: "16px 20px",
-  borderBottom: "0.5px solid rgba(0,0,0,0.07)",
-  display: "flex",
-  alignItems: "flex-start",
-  gap: 12,
-}
-const cardIcon: React.CSSProperties = {
-  width: 36,
-  height: 36,
-  borderRadius: 9,
-  background: "#f0faf5",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  flexShrink: 0,
-}
-const cardTitle: React.CSSProperties = { fontSize: 13, fontWeight: 600, color: "#1E1E1E" }
-const cardDesc: React.CSSProperties  = { fontSize: 11, color: "#888", marginTop: 2 }
-const cardBody: React.CSSProperties  = { padding: 20 }
-const fGrid: React.CSSProperties     = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }
-const fGroup: React.CSSProperties    = { display: "flex", flexDirection: "column", gap: 4 }
-const fLabel: React.CSSProperties    = { fontSize: 11, fontWeight: 600, color: "#555", letterSpacing: "0.02em" }
-const fInput: React.CSSProperties    = {
-  width: "100%",
-  fontSize: 12,
-  padding: "9px 12px",
-  borderRadius: 8,
-  border: "0.5px solid rgba(0,0,0,0.15)",
-  background: "#fff",
-  color: "#1E1E1E",
-  fontFamily: "inherit",
-}
-const btnRow: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "flex-end",
-  gap: 8,
-  marginTop: 16,
-  paddingTop: 14,
-  borderTop: "0.5px solid rgba(0,0,0,0.06)",
-}
-const btnPrimary: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 500,
-  padding: "8px 18px",
-  borderRadius: 9,
-  border: "none",
-  background: "#1FAE5B",
-  color: "#fff",
-  cursor: "pointer",
-  fontFamily: "inherit",
 }
