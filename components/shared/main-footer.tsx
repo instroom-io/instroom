@@ -3,8 +3,9 @@
 import Link from "next/link"
 import Image from "next/image"
 import { usePathname, useSearchParams } from "next/navigation"
+import { Suspense } from "react"
 
-export function MainFooter() {
+function FooterInner() {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const solutionType = searchParams.get("type")
@@ -12,8 +13,8 @@ export function MainFooter() {
 
   const getSolutionColor = (type: string) => {
     if (!isOnSolutions) return "text-zinc-400"
-    if (!solutionType) return "text-emerald-500" // All green on hub
-    return solutionType === type ? "text-emerald-500" : "text-zinc-400" // Current type green on specific page
+    if (!solutionType) return "text-emerald-500"
+    return solutionType === type ? "text-emerald-500" : "text-zinc-400"
   }
 
   return (
@@ -74,5 +75,13 @@ export function MainFooter() {
         </div>
       </div>
     </footer>
+  )
+}
+
+export function MainFooter() {
+  return (
+    <Suspense fallback={<footer className="bg-zinc-950 text-zinc-400 py-16 px-8 border-t border-zinc-800" />}>
+      <FooterInner />
+    </Suspense>
   )
 }
