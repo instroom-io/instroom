@@ -2,28 +2,172 @@
 
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
-import { useSession, signOut } from "next-auth/react";
+import { useSession } from "next-auth/react";
 import { useEffect, useState } from "react";
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface Plan {
+  name: string;
+  display_name: string;
+  max_brands: number | null;
+  included_brands: number;
+  max_seats: number | null;
+  included_seats: number;
+  price_per_extra_seat: number | string;
+  can_use_api: boolean;
+  custom_branding: boolean;
+  priority_support: boolean;
+}
+
+interface Subscription {
+  plan: Plan;
+  billing_cycle: string;
+  status: string;
+  current_period_end: string | null;
+}
+
+interface PlanItem {
+  icon: string;
+  text: string;
+}
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const PLAN_BADGE_COLORS: Record<string, string> = {
+  solo: "bg-stone-100 text-stone-700",
+  team: "bg-emerald-50 text-emerald-800",
+  agency: "bg-amber-50 text-amber-800",
+};
+
+const PLAN_LABELS: Record<string, string> = {
+  solo: "Solo",
+  team: "Team",
+  agency: "Agency",
+};
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function buildPlanItems(subscription: Subscription, brandCount: number): PlanItem[] {
+  const { plan } = subscription;
+  const maxBrands = plan.max_brands ?? plan.included_brands;
+  const maxSeats = plan.max_seats ?? plan.included_seats;
+  const items: PlanItem[] = [];
+
+  if (maxBrands === null || maxBrands > 100) {
+    items.push({ icon: "▸", text: `${brandCount} Brands — Unlimited` });
+  } else {
+    items.push({ icon: "▸", text: `${brandCount} of ${maxBrands} Brands used` });
+  }
+
+  if (maxSeats === null || maxSeats > 100) {
+    items.push({ icon: "▸", text: "Collaborators — Unlimited" });
+  } else {
+    const seatText =
+      plan.included_seats > 0
+        ? `${maxSeats} collaborator seats included`
+        : `Up to ${maxSeats} collaborators (paid add-on: $${Number(plan.price_per_extra_seat)}/seat)`;
+    items.push({ icon: "▸", text: seatText });
+  }
+
+  if (plan.can_use_api) items.push({ icon: "★", text: "API Access — Active" });
+  if (plan.custom_branding) items.push({ icon: "★", text: "Custom Branding — Active" });
+  if (plan.priority_support) items.push({ icon: "★", text: "Priority Support — Active" });
+
+  return items;
+}
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="text-[11px] font-semibold tracking-[0.12em] uppercase text-emerald-500 mb-4">
+      {children}
+    </p>
+  );
+}
+
+function Divider() {
+  return (
+    <div
+      className="my-6 h-px"
+      style={{ background: "linear-gradient(to right, transparent, #e7e5e0, transparent)" }}
+    />
+  );
+}
+
+function PlanBadge({ label, colorClass }: { label: string; colorClass: string }) {
+  return (
+    <span className={`text-[11px] font-semibold tracking-[0.08em] uppercase px-2.5 py-1 rounded-md ${colorClass}`}>
+      {label}
+    </span>
+  );
+}
+
+function UsageRow({ icon, text }: PlanItem) {
+  return (
+    <div className="flex items-center gap-2.5 py-2.5 border-b border-dashed border-stone-100 last:border-none text-[13.5px] text-gray-700">
+      <div className="w-[22px] h-[22px] rounded-md bg-emerald-50 text-emerald-500 flex items-center justify-center text-[10px] flex-shrink-0">
+        {icon}
+      </div>
+      <span>{text}</span>
+    </div>
+  );
+}
+
+function FieldLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <label className="block mb-1.5 text-[11px] font-semibold tracking-[0.08em] uppercase text-gray-400">
+      {children}
+    </label>
+  );
+}
+
+function FieldInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <input
+      {...props}
+      className={[
+        "w-full border border-stone-200 rounded-[10px] px-3.5 py-2.5",
+        "text-sm bg-stone-50 text-gray-900 outline-none",
+        "focus:border-emerald-500 focus:bg-white transition-colors",
+        "read-only:text-gray-500 read-only:cursor-default",
+        props.className ?? "",
+      ].join(" ")}
+    />
+  );
+}
+
+// ─── Loading Screen ───────────────────────────────────────────────────────────
+
+function LoadingScreen() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-stone-50">
+      <div className="flex flex-col items-center gap-3">
+        <div className="h-8 w-8 rounded-full border-2 border-emerald-600 border-t-transparent animate-spin" />
+        <p className="text-xs text-stone-400 tracking-widest uppercase">Loading</p>
+      </div>
+    </div>
+  );
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function AccountSettingsPage() {
   const { data: session } = useSession();
-  const [subscription, setSubscription] = useState<any>(null);
+  const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [fullName, setFullName] = useState("");
-  const [brandCount, setBrandCount] = useState<number>(0);
-  const [hasAPIAccess, setHasAPIAccess] = useState<boolean>(false);
+  const [brandCount, setBrandCount] = useState(0);
 
   useEffect(() => {
     if (!session?.user?.id) return;
-    async function fetchData() {
-      const subRes = await fetch("/api/subscription/check", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: session?.user?.id }),
-      });
-      const subData = await subRes.json();
-      setSubscription(subData.subscription);
-    }
-    fetchData();
+    fetch("/api/subscription/check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: session.user.id }),
+    })
+      .then((r) => r.json())
+      .then((data) => setSubscription(data.subscription));
   }, [session?.user?.id]);
 
   useEffect(() => {
@@ -32,389 +176,170 @@ export default function AccountSettingsPage() {
 
   useEffect(() => {
     if (!session?.user?.id) return;
-    async function fetchBrandCount() {
-      const res = await fetch("/api/user/brand-usage");
-      const data = await res.json();
-      setBrandCount(data.brandCount || 0);
-    }
-    fetchBrandCount();
+    fetch("/api/user/brand-usage")
+      .then((r) => r.json())
+      .then((data) => setBrandCount(data.brandCount ?? 0));
   }, [session?.user?.id]);
 
-  useEffect(() => {
-    if (!session?.user?.id) return;
-    async function checkAPIAccess() {
-      try {
-        const res = await fetch("/api/subscription/api-access");
-        const data = await res.json();
-        setHasAPIAccess(data.hasAccess || false);
-      } catch (error) {
-        setHasAPIAccess(false);
-      }
-    }
-    checkAPIAccess();
-  }, [session?.user?.id]);
+  if (!session || !subscription) return <LoadingScreen />;
 
-  if (!session || !subscription) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-stone-50">
-        <div className="flex flex-col items-center gap-3">
-          <div className="h-8 w-8 rounded-full border-2 border-emerald-600 border-t-transparent animate-spin" />
-          <p className="text-sm text-stone-400 tracking-widest uppercase">Loading</p>
-        </div>
-      </div>
-    );
+  const planName = subscription.plan?.name?.toLowerCase() ?? "solo";
+  const planLabel = PLAN_LABELS[planName] ?? "Solo";
+  const planColor = PLAN_BADGE_COLORS[planName] ?? PLAN_BADGE_COLORS.solo;
+  const planItems = buildPlanItems(subscription, brandCount);
+
+  const subscriptionRows = [
+    { label: "Current Plan", value: subscription.plan?.display_name ?? planLabel },
+    { label: "Billing Cycle", value: subscription.billing_cycle },
+    { label: "Status", value: subscription.status },
+    {
+      label: "Renewal Date",
+      value: subscription.current_period_end
+        ? new Date(subscription.current_period_end).toLocaleDateString()
+        : "—",
+    },
+  ];
+
+  async function handleSaveName() {
+    if (!fullName.trim()) return;
+    await fetch("/api/user/update-name", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: session?.user?.id, name: fullName }),
+    });
   }
-
-  // Build dynamic plan items based on subscription plan data
-  const buildPlanItems = () => {
-    if (!subscription.plan) return [];
-    
-    const maxBrands = subscription.plan.max_brands || subscription.plan.included_brands;
-    const maxSeats = subscription.plan.max_seats || subscription.plan.included_seats;
-    
-    const items: { icon: string; text: string }[] = [];
-    
-    // Brand limit
-    if (maxBrands === null || maxBrands > 100) {
-      items.push({ icon: "▸", text: `${brandCount} Brands — Unlimited` });
-    } else {
-      items.push({ icon: "▸", text: `${brandCount} of ${maxBrands} Brands used` });
-    }
-    
-    // Seat limit
-    if (maxSeats === null || maxSeats > 100) {
-      items.push({ icon: "▸", text: "Collaborators — Unlimited" });
-    } else {
-      const seatText = subscription.plan.included_seats > 0 
-        ? `${maxSeats} collaborator seats included`
-        : `Up to ${maxSeats} collaborators (paid add-on: $${Number(subscription.plan.price_per_extra_seat)}/seat)`;
-      items.push({ icon: "▸", text: seatText });
-    }
-    
-    // Plan-specific features
-    if (subscription.plan.can_use_api === true) {
-      items.push({ icon: "★", text: "API Access — Active" });
-    }
-    if (subscription.plan.custom_branding === true) {
-      items.push({ icon: "★", text: "Custom Branding — Active" });
-    }
-    if (subscription.plan.priority_support === true) {
-      items.push({ icon: "★", text: "Priority Support — Active" });
-    }
-    
-    return items;
-  };
-
-  const planColors: Record<string, string> = {
-    solo: "bg-stone-100 text-stone-700",
-    team: "bg-emerald-50 text-emerald-800",
-    agency: "bg-amber-50 text-amber-800",
-  };
-
-  const planLabel = {
-    solo: "Solo",
-    team: "Team",
-    agency: "Agency",
-  };
-
-  const planName = subscription.plan?.name?.toLowerCase() || "solo";
-  const plan = {
-    label: planLabel[planName as keyof typeof planLabel] || "Solo",
-    color: planColors[planName as keyof typeof planColors] || planColors.solo,
-    items: buildPlanItems(),
-  };
 
   return (
     <SidebarProvider className="flex w-full">
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600&family=DM+Sans:wght@300;400;500&display=swap');
-
-        .settings-root { font-family: 'DM Sans', sans-serif; }
-        .settings-heading { font-family: 'Playfair Display', serif; }
-
-        .card {
-          background: #ffffff;
-          border: 1px solid #e7e5e0;
-          border-radius: 20px;
-          transition: box-shadow 0.2s ease;
-        }
-        .card:hover { box-shadow: 0 8px 32px -8px rgba(0,0,0,0.08); }
-
-        .field-input {
-          width: 100%;
-          border: 1px solid #e7e5e0;
-          border-radius: 10px;
-          padding: 10px 14px;
-          font-family: 'DM Sans', sans-serif;
-          font-size: 14px;
-          background: #fafaf8;
-          color: #1c1c1c;
-          outline: none;
-          transition: border-color 0.2s;
-        }
-        .field-input:focus { border-color: #10b981; background: #fff; }
-        .field-input[readonly] { color: #6b7280; cursor: default; }
-
-        .stat-pill {
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-          padding: 6px 14px;
-          border-radius: 999px;
-          font-size: 13px;
-          font-weight: 500;
-          background: #f0fdf4;
-          color: #065f46;
-          border: 1px solid #a7f3d0;
-        }
-
-        .avatar-ring {
-          padding: 3px;
-          background: linear-gradient(135deg, #10b981, #34d399);
-          border-radius: 50%;
-          display: inline-block;
-        }
-
-        .divider {
-          height: 1px;
-          background: linear-gradient(to right, transparent, #e7e5e0, transparent);
-          margin: 24px 0;
-        }
-
-        .plan-badge {
-          font-size: 11px;
-          font-weight: 600;
-          letter-spacing: 0.08em;
-          text-transform: uppercase;
-          padding: 4px 10px;
-          border-radius: 6px;
-        }
-
-        .usage-row {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          padding: 10px 0;
-          border-bottom: 1px dashed #f0ede8;
-          font-size: 13.5px;
-          color: #374151;
-        }
-        .usage-row:last-child { border-bottom: none; }
-        .usage-icon {
-          width: 22px;
-          height: 22px;
-          border-radius: 6px;
-          background: #f0fdf4;
-          color: #10b981;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 10px;
-          flex-shrink: 0;
-        }
-
-        .section-label {
-          font-size: 11px;
-          font-weight: 600;
-          letter-spacing: 0.12em;
-          text-transform: uppercase;
-          color: #10b981;
-          margin-bottom: 18px;
-        }
-
-        .page-fade-in {
-          animation: fadeUp 0.4s ease both;
-        }
-        @keyframes fadeUp {
-          from { opacity: 0; transform: translateY(12px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        .delay-1 { animation-delay: 0.05s; }
-        .delay-2 { animation-delay: 0.1s; }
-        .delay-3 { animation-delay: 0.15s; }
-      `}</style>
-
-      <div className="settings-root flex w-full min-h-screen" style={{ background: "#f7f5f2" }}>
+      <div className="flex w-full min-h-screen font-sans" style={{ background: "#f7f5f2" }}>
+        {/* Sidebar */}
         <div className="w-[350px] flex-shrink-0">
           <AppSidebar />
         </div>
 
-        <main className="flex-1 min-h-screen px-10 py-12 w-full">
+        {/* Main */}
+        <main className="flex-1 min-h-screen px-10 py-12">
+
           {/* Header */}
-          <div className="page-fade-in mb-12">
-            <p className="section-label">Your Account</p>
-            <h1
-              className="settings-heading text-4xl font-semibold text-gray-900 leading-tight"
-              style={{ letterSpacing: "-0.01em" }}
-            >
+          <div className="mb-12 animate-[fadeUp_0.4s_ease_both]">
+            <SectionLabel>Your Account</SectionLabel>
+            <h1 className="font-serif text-4xl font-semibold text-gray-900 leading-tight tracking-tight">
               Account Settings
             </h1>
-            <p className="mt-2 mb-2 text-sm text-stone-400" style={{ fontWeight: 300 }}>
+            <p className="mt-2 text-sm text-stone-400 font-light">
               Manage your profile, plan, and usage details.
             </p>
           </div>
 
+          {/* Top grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Profile Card */}
-            <section className="card page-fade-in delay-1 p-8 flex flex-col">
-              <p className="section-label">Profile</p>
 
+            {/* Profile Card */}
+            <section className="bg-white border border-stone-200 rounded-[20px] p-8 flex flex-col hover:shadow-[0_8px_32px_-8px_rgba(0,0,0,0.08)] transition-shadow">
+              <SectionLabel>Profile</SectionLabel>
+
+              {/* Avatar row */}
               <div className="flex items-center gap-5 mb-6">
-                <div className="avatar-ring flex-shrink-0">
+                <div
+                  className="rounded-full flex-shrink-0 p-[3px]"
+                  style={{ background: "linear-gradient(135deg, #10b981, #34d399)" }}
+                >
                   <img
-                    src={session.user.image || "/avatars/instroom.jpg"}
+                    src={session.user.image ?? "/avatars/instroom.jpg"}
                     alt="Avatar"
-                    style={{
-                      width: 72,
-                      height: 72,
-                      borderRadius: "50%",
-                      objectFit: "cover",
-                      display: "block",
-                      border: "3px solid #fff",
-                    }}
+                    className="w-[72px] h-[72px] rounded-full object-cover block border-[3px] border-white"
                   />
                 </div>
                 <div>
-                  <p className="font-medium text-gray-900" style={{ fontSize: 15 }}>
-                    {fullName}
-                  </p>
-                  <p className="text-stone-400" style={{ fontSize: 13 }}>
-                    {session.user.email}
-                  </p>
-                  <span className="stat-pill mt-2" style={{ fontSize: 11 }}>
-                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#10b981", display: "inline-block" }} />
+                  <p className="text-[15px] font-medium text-gray-900">{fullName}</p>
+                  <p className="text-[13px] text-stone-400">{session.user.email}</p>
+                  <span className="mt-2 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-[11px] font-medium bg-emerald-50 text-emerald-800 border border-emerald-200">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
                     Active
                   </span>
                 </div>
               </div>
 
-              <div className="divider" />
+              <Divider />
 
+              {/* Fields */}
               <div className="space-y-4">
                 <div>
-                  <label className="block mb-1.5" style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.08em", color: "#9ca3af", textTransform: "uppercase" }}>
-                    Full Name
-                  </label>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <input
+                  <FieldLabel>Full Name</FieldLabel>
+                  <div className="flex gap-2">
+                    <FieldInput
                       type="text"
                       value={fullName}
-                      onChange={e => setFullName(e.target.value)}
-                      className="field-input"
-                      style={{ flex: 1 }}
+                      onChange={(e) => setFullName(e.target.value)}
+                      className="flex-1"
                     />
                     <button
-                      style={{
-                        padding: '8px 14px',
-                        borderRadius: 8,
-                        border: '1.5px solid #10b981',
-                        background: '#10b981',
-                        color: '#fff',
-                        fontSize: 13,
-                        fontWeight: 500,
-                        fontFamily: 'DM Sans, sans-serif',
-                        cursor: 'pointer',
-                        transition: 'background 0.18s, color 0.18s',
-                        marginLeft: 4
-                      }}
-                      onClick={async () => {
-                        if (!fullName.trim()) return;
-                        await fetch('/api/user/update-name', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ user_id: session.user.id, name: fullName })
-                        });
-                        // No refresh, just update local state
-                      }}
+                      onClick={handleSaveName}
+                      className="px-3.5 py-2 rounded-lg border border-emerald-500 bg-emerald-500 text-white text-[13px] font-medium hover:bg-emerald-600 hover:border-emerald-600 transition-colors"
                     >
                       Save
                     </button>
                   </div>
                 </div>
                 <div>
-                  <label className="block mb-1.5" style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.08em", color: "#9ca3af", textTransform: "uppercase" }}>
-                    Email Address
-                  </label>
-                  <input
+                  <FieldLabel>Email Address</FieldLabel>
+                  <FieldInput
                     type="email"
-                    value={session?.user?.email || ""}
+                    value={session.user.email ?? ""}
                     readOnly
-                    className="field-input"
                   />
                 </div>
               </div>
             </section>
 
             {/* Subscription Card */}
-            <section className="card page-fade-in delay-2 p-8 flex flex-col">
+            <section className="bg-white border border-stone-200 rounded-[20px] p-8 flex flex-col hover:shadow-[0_8px_32px_-8px_rgba(0,0,0,0.08)] transition-shadow">
               <div className="flex items-start justify-between mb-6">
-                <p className="section-label" style={{ marginBottom: 0 }}>Subscription</p>
-                <span className={`plan-badge ${plan.color}`}>{plan.label}</span>
+                <SectionLabel>Subscription</SectionLabel>
+                <PlanBadge label={planLabel} colorClass={planColor} />
               </div>
 
-              <div className="space-y-0">
-                {[
-                  { label: "Current Plan", value: subscription.plan?.display_name || plan.label },
-                  { label: "Billing Cycle", value: subscription.billing_cycle },
-                  { label: "Status", value: subscription.status },
-                  { label: "Renewal Date", value: subscription.current_period_end ? new Date(subscription.current_period_end).toLocaleDateString() : "—" },
-                ].map((row, i) => (
-                  <div key={i} className="usage-row">
-                    <span style={{ color: "#9ca3af", minWidth: 110, fontSize: 12, fontWeight: 500, letterSpacing: "0.04em", textTransform: "uppercase" }}>
+              <div>
+                {subscriptionRows.map((row) => (
+                  <div key={row.label} className="flex items-center gap-3 py-2.5 border-b border-dashed border-stone-100 last:border-none">
+                    <span className="text-[12px] font-medium tracking-[0.04em] uppercase text-gray-400 min-w-[110px]">
                       {row.label}
                     </span>
-                    <span style={{ color: "#111827", fontWeight: 400 }}>{row.value}</span>
+                    <span className="text-[13.5px] text-gray-900">{row.value}</span>
                   </div>
                 ))}
               </div>
-              <div className="divider" />
-              <button
-                style={{
-                  marginTop: "auto",
-                  padding: "10px 18px",
-                  borderRadius: 10,
-                  border: "1.5px solid #10b981",
-                  background: "transparent",
-                  color: "#065f46",
-                  fontSize: 13,
-                  fontWeight: 500,
-                  fontFamily: "DM Sans, sans-serif",
-                  cursor: "pointer",
-                  transition: "background 0.18s, color 0.18s",
-                  alignSelf: "flex-start",
-                }}
-                onMouseEnter={(e) => {
-                  (e.target as HTMLButtonElement).style.background = "#10b981";
-                  (e.target as HTMLButtonElement).style.color = "#fff";
-                }}
-                onMouseLeave={(e) => {
-                  (e.target as HTMLButtonElement).style.background = "transparent";
-                  (e.target as HTMLButtonElement).style.color = "#065f46";
-                }}
-              >
+
+              <Divider />
+
+              <button className="mt-auto self-start px-4.5 py-2.5 rounded-[10px] border-[1.5px] border-emerald-500 text-emerald-900 text-[13px] font-medium hover:bg-emerald-500 hover:text-white transition-colors">
                 Manage Plan →
               </button>
             </section>
           </div>
 
           {/* Plan Usage Card */}
-          <section className="card page-fade-in delay-3 p-8 mt-6">
+          <section className="bg-white border border-stone-200 rounded-[20px] p-8 mt-6 hover:shadow-[0_8px_32px_-8px_rgba(0,0,0,0.08)] transition-shadow">
             <div className="flex items-center justify-between mb-2">
-              <p className="section-label" style={{ marginBottom: 0 }}>Plan Usage & Limits</p>
-              <span className={`plan-badge ${plan.color}`}>{plan.label} Plan</span>
+              <SectionLabel>Plan Usage & Limits</SectionLabel>
+              <PlanBadge label={`${planLabel} Plan`} colorClass={planColor} />
             </div>
-            <div className="divider" />
+            <Divider />
             <div>
-              {plan.items.map((item, i) => (
-                <div key={i} className="usage-row">
-                  <div className="usage-icon">{item.icon}</div>
-                  <span>{item.text}</span>
-                </div>
+              {planItems.map((item, i) => (
+                <UsageRow key={i} {...item} />
               ))}
             </div>
           </section>
         </main>
       </div>
+
+      <style>{`
+        @keyframes fadeUp {
+          from { opacity: 0; transform: translateY(12px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
     </SidebarProvider>
   );
 }

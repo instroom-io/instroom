@@ -4,7 +4,7 @@ import { useEffect } from "react"
 import Image from "next/image"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
-import { MainHeader } from "@/components/main-header"
+import { MainHeader } from "@/components/shared/main-header"
 
 export default function FeaturesPage() {
   useEffect(() => {
@@ -679,7 +679,7 @@ export default function FeaturesPage() {
           <div>
             <h4>Company</h4>
             <ul>
-              <li><a href="#">About</a></li>
+              <li><a href="/about">About</a></li>
               <li><a href="#">Contact</a></li>
             </ul>
           </div>

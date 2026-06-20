@@ -1,7 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { getActivePlans } from "@/prisma/plans";
-import { MainHeader } from "@/components/main-header";
+import { MainHeader } from "@/components/shared/main-header";
 
 function getPlanSummary(plan: any) {
   if (plan.name === "basic") return "1 workspace (30-day free trial)";
@@ -556,7 +556,7 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
           <div>
             <h4>Company</h4>
             <ul>
-              <li><a href="#">About</a></li>
+              <li><a href="/about">About</a></li>
               <li><a href="#">Contact</a></li>
             </ul>
           </div>
