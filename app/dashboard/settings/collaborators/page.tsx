@@ -62,7 +62,6 @@ function CollaboratorsContent() {
   const [inviting, setInviting] = useState(false)
   const [removing, setRemoving] = useState<string | null>(null)
 
-  // Extra seats modal state
   const [buySeatsModal, setBuySeatsModal] = useState<BuySeatsModalState>({
     isOpen: false,
     maxSeatsAvailable: 0,
@@ -75,46 +74,25 @@ function CollaboratorsContent() {
   const [paypalLoaded, setPaypalLoaded] = useState(false)
   const paypalRef = useRef<HTMLDivElement>(null)
 
-  // Session
   const { data: session } = useSession()
 
-  // Handle hydration
-  useEffect(() => {
-    setMounted(true)
-  }, [])
+  useEffect(() => { setMounted(true) }, [])
 
-  // Watch for brand changes from URL
   useEffect(() => {
     const id = searchParams.get("brandId")
     setBrandId(id)
   }, [searchParams])
 
-
-
-  // Setup PayPal button when modal opens
   useEffect(() => {
-    if (!buySeatsModal.isOpen || !paypalLoaded || !paypalRef.current) {
-      return
-    }
-
-    // Only render once - don't clear and recreate on every state change
-    if (paypalRef.current.innerHTML !== "") {
-      return
-    }
+    if (!buySeatsModal.isOpen || !paypalLoaded || !paypalRef.current) return
+    if (paypalRef.current.innerHTML !== "") return
 
     if (window.paypal) {
       const button = window.paypal.Buttons({
-        style: {
-          shape: "pill",
-          color: "blue",
-          layout: "vertical",
-          label: "pay",
-        },
+        style: { shape: "pill", color: "blue", layout: "vertical", label: "pay" },
         createOrder: async (data: any, actions: any) => {
           try {
-            // Calculate amount dynamically at time of order creation
             const totalAmount = (buySeatsModal.pricePerSeat * seatsToAdd).toFixed(2)
-            
             const response = await fetch("/api/paypal/create-order", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -123,16 +101,12 @@ function CollaboratorsContent() {
                 description: `${seatsToAdd} extra seat(s) for collaborators`,
               }),
             })
-            
             if (!response.ok) {
               const errorData = await response.json()
               throw new Error(errorData.error || "Failed to create payment order")
             }
-            
             const orderData = await response.json()
-            if (!orderData.id) {
-              throw new Error("No order ID returned from server")
-            }
+            if (!orderData.id) throw new Error("No order ID returned from server")
             return orderData.id
           } catch (error) {
             setError(error instanceof Error ? error.message : "Failed to create payment order")
@@ -142,31 +116,21 @@ function CollaboratorsContent() {
         onApprove: async (data: any, actions: any) => {
           try {
             setBuyingSeats(true)
-            // Call our API with the PayPal order ID
             const response = await fetch("/api/subscription/buy-extra-seats", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                quantity: seatsToAdd,
-                paypalOrderId: data.orderID,
-              }),
+              body: JSON.stringify({ quantity: seatsToAdd, paypalOrderId: data.orderID }),
             })
-
             const result = await response.json()
-
             if (!response.ok) {
               const errorMsg = result.details ? `${result.error}: ${result.details}` : result.error
               setError(errorMsg || "Failed to complete purchase")
               setBuyingSeats(false)
               return
             }
-
-            // Close modal and reset
             setBuySeatsModal({ ...buySeatsModal, isOpen: false })
             setSeatsToAdd(1)
             setError("")
-
-            // Automatically retry the invitation
             if (inviteEmail) {
               const form = new Event("submit")
               handleInvite(form as any)
@@ -181,34 +145,24 @@ function CollaboratorsContent() {
           setBuyingSeats(false)
         },
       })
-
       button.render(paypalRef.current)
     }
   }, [buySeatsModal.isOpen, buySeatsModal.pricePerSeat, paypalLoaded])
 
-  // Fetch collaborators
   useEffect(() => {
     const fetchCollaborators = async () => {
       if (!brandId) return
-
       try {
         setLoading(true)
         setError("")
         const res = await fetch(`/api/brand/${brandId}/collaborators`)
         const data = await res.json()
-
         if (!res.ok) {
-          // Handle specific error codes
-          if (res.status === 403) {
-            setError("You don't have permission to manage collaborators for this brand. Make sure you're the brand owner.")
-          } else if (res.status === 404) {
-            setError("Brand not found.")
-          } else {
-            setError(data.error || "Failed to fetch collaborators")
-          }
+          if (res.status === 403) setError("You don't have permission to manage collaborators for this brand.")
+          else if (res.status === 404) setError("Brand not found.")
+          else setError(data.error || "Failed to fetch collaborators")
           return
         }
-
         setOwner(data.owner)
         setMembers(data.members || [])
       } catch (err) {
@@ -217,32 +171,21 @@ function CollaboratorsContent() {
         setLoading(false)
       }
     }
-
     fetchCollaborators()
   }, [brandId])
-
-
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!inviteEmail.trim() || !brandId) return
-
     try {
       setInviting(true)
       setError("")
-
-      // First check if they can add a collaborator
-      const limitCheckRes = await fetch(
-        `/api/brand/${brandId}/collaborators/check-limit`
-      )
+      const limitCheckRes = await fetch(`/api/brand/${brandId}/collaborators/check-limit`)
       const limitData = await limitCheckRes.json()
-
       if (!limitCheckRes.ok) {
         setError(limitData.error || "Failed to check collaborator limit")
         return
       }
-
-      // If they can buy more seats (either hit limit or exceeded included seats)
       if (limitData.canBuyMore) {
         setBuySeatsModal({
           isOpen: true,
@@ -254,31 +197,21 @@ function CollaboratorsContent() {
         setInviting(false)
         return
       }
-
       if (!limitData.allowed) {
-        setError("You've reached your collaborator limit. Unable to purchase more seats for your plan. Upgrade your plan to add more collaborators.")
+        setError("You've reached your collaborator limit. Upgrade your plan to add more collaborators.")
         setInviting(false)
         return
       }
-
-      // Proceed with invitation
       const res = await fetch(`/api/brand/${brandId}/collaborators/invite`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: inviteEmail.trim(),
-          role: inviteRole,
-        }),
+        body: JSON.stringify({ email: inviteEmail.trim(), role: inviteRole }),
       })
-
       const data = await res.json()
-
       if (!res.ok) {
         setError(data.error || "Failed to invite collaborator")
         return
       }
-
-      // Reload collaborators
       const refetch = await fetch(`/api/brand/${brandId}/collaborators`)
       const refreshed = await refetch.json()
       setMembers(refreshed.members || [])
@@ -293,22 +226,15 @@ function CollaboratorsContent() {
 
   const handleRemove = async (userId: string) => {
     if (!brandId || !confirm("Remove this collaborator?")) return
-
     try {
       setRemoving(userId)
       setError("")
-      const res = await fetch(`/api/brand/${brandId}/collaborators/${userId}`, {
-        method: "DELETE",
-      })
-
+      const res = await fetch(`/api/brand/${brandId}/collaborators/${userId}`, { method: "DELETE" })
       const data = await res.json()
-
       if (!res.ok) {
         setError(data.error || "Failed to remove collaborator")
         return
       }
-
-      // Remove from list
       setMembers(members.filter((m) => m.id !== userId))
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred")
@@ -317,21 +243,15 @@ function CollaboratorsContent() {
     }
   }
 
-  if (!mounted) {
-    return null
-  }
+  if (!mounted) return null
 
   if (!brandId) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle>No Brand Selected</CardTitle>
-          </CardHeader>
+          <CardHeader><CardTitle>No Brand Selected</CardTitle></CardHeader>
           <CardContent>
-            <p className="text-sm text-muted-foreground">
-              Please select a brand to manage collaborators.
-            </p>
+            <p className="text-sm text-muted-foreground">Please select a brand to manage collaborators.</p>
           </CardContent>
         </Card>
       </div>
@@ -339,285 +259,235 @@ function CollaboratorsContent() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#F7F9F8] via-white to-[#F0F7F4]">
-      <div className="max-w-full mx-auto p-4 sm:p-6 lg:p-12">
-        {error && (
-          <div className="mb-6 flex items-center gap-3 rounded-xl bg-red-50 p-4 text-sm text-red-700 border border-red-200 shadow-sm animate-in fade-in">
-            <AlertCircle className="h-5 w-5 flex-shrink-0" />
-            <span className="font-medium">{error}</span>
-          </div>
-        )}
+    <div style={{ padding: "28px 36px", maxWidth: 1040 }}>
+      <div style={{ fontSize: 18, fontWeight: 600, color: "#1E1E1E", marginBottom: 4 }}>
+        Team &amp; Collaborators
+      </div>
+      <div style={{ fontSize: 12, color: "#888", marginBottom: 24 }}>
+        Manage who has access to your brand
+      </div>
 
-        {/* ══════════════════════════════════════════════
-            TEAM & COLLABORATORS
-        ══════════════════════════════════════════════ */}
-        <div className="mb-12 pb-8 border-b border-gray-200">
-          <div className="flex items-center gap-3 mb-1">
-            <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-gray-100">
-              <Mail className="h-[18px] w-[18px] text-gray-600" />
-            </div>
-            <div>
-              <h2 className="text-xl font-semibold text-gray-900">Team &amp; Collaborators</h2>
-              <p className="text-sm text-gray-500">Manage who has access to your brand</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Two Column Layout */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
-          {/* Left Column - Owner & Invite */}
-          <div className="space-y-10">
-            {/* Owner Section */}
-            {owner && (
-              <div>
-                <h2 className="text-sm font-semibold text-gray-600 mb-3 uppercase tracking-wide">Brand Owner</h2>
-                <div className="bg-white border border-gray-200 rounded-xl p-8 shadow-sm hover:shadow-md transition-shadow">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <Avatar className="h-14 w-14 border-2 border-[#1FAE5B]/20">
-                        <AvatarImage src={owner.image || ""} alt={owner.name || ""} />
-                        <AvatarFallback className="bg-[#1FAE5B]/10 text-[#0F6B3E] font-semibold">
-                          {(owner.name || owner.email).charAt(0).toUpperCase()}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div>
-                        <p className="font-semibold text-gray-900">{owner.name || owner.email}</p>
-                        <p className="text-sm text-gray-500">{owner.email}</p>
-                      </div>
-                    </div>
-                    <span className="px-3 py-1.5 bg-[#1FAE5B]/10 text-[#0F6B3E] text-xs font-semibold rounded-full border border-[#1FAE5B]/30">
-                      Admin
-                    </span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Invite Form */}
-            <div>
-              <h2 className="text-sm font-semibold text-gray-600 mb-3 uppercase tracking-wide">Invite Team Member</h2>
-              <Card className="bg-white border-gray-200 shadow-sm">
-                <CardContent className="pt-8 px-8">
-                  <form onSubmit={handleInvite} className="space-y-6">
-                    <div className="space-y-4">
-                      <div>
-                        <Label htmlFor="email" className="text-sm font-medium text-gray-700">Email Address</Label>
-                        <Input
-                          id="email"
-                          type="email"
-                          placeholder="collaborator@example.com"
-                          value={inviteEmail}
-                          onChange={(e) => setInviteEmail(e.target.value)}
-                          className="mt-2 rounded-lg border-gray-300 focus:border-[#1FAE5B] focus:ring-[#1FAE5B]/20"
-                          required
-                        />
-                      </div>
-                      <div>
-                        <Label htmlFor="role" className="text-sm font-medium text-gray-700">Role</Label>
-                        <Select value={inviteRole} onValueChange={setInviteRole}>
-                          <SelectTrigger className="mt-2 rounded-lg border-gray-300 focus:border-[#1FAE5B]">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="manager">Manager</SelectItem>
-                            <SelectItem value="researcher">Researcher</SelectItem>
-                            <SelectItem value="viewer">Viewer</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-                    <Button
-                      type="submit"
-                      disabled={inviting || !inviteEmail.trim()}
-                      className="gap-2 w-full bg-[#1FAE5B] hover:bg-[#17a04e] text-white rounded-lg font-medium transition-colors"
-                    >
-                      <Mail className="h-4 w-4" />
-                      {inviting ? "Sending..." : "Send Invite"}
-                    </Button>
-                  </form>
-                </CardContent>
-              </Card>
-            </div>
-          </div>
-
-          {/* Right Column - Team Members */}
-          <div>
-            <h2 className="text-sm font-semibold text-gray-600 mb-3 uppercase tracking-wide">Team Members ({members.length})</h2>
-            <Card className="bg-white border-gray-200 shadow-sm">
-              <CardContent className="pt-8 px-8">
-                {loading ? (
-                  <div className="flex items-center justify-center py-8">
-                    <p className="text-sm text-gray-500">Loading team members...</p>
-                  </div>
-                ) : members.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-16 text-center">
-                    <div className="mb-4 w-14 h-14 rounded-full bg-gray-100 flex items-center justify-center">
-                      <Mail className="h-7 w-7 text-gray-400" />
-                    </div>
-                    <p className="text-sm font-medium text-gray-900 mb-1">No team members yet</p>
-                    <p className="text-sm text-gray-500">Invite collaborators on the left to get started</p>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {members.map((member) => (
-                      <div
-                        key={member.id}
-                        className="flex items-center justify-between p-5 border border-gray-100 rounded-lg hover:bg-gray-50/50 hover:border-gray-200 transition-all group"
-                      >
-                        <div className="flex items-center gap-4 flex-1">
-                          <Avatar className="h-10 w-10 border border-gray-200">
-                            <AvatarImage
-                              src={member.image || ""}
-                              alt={member.name || ""}
-                            />
-                            <AvatarFallback className="bg-gray-100 text-gray-700">
-                              {(member.name || member.email).charAt(0).toUpperCase()}
-                            </AvatarFallback>
-                          </Avatar>
-                          <div className="flex-1 min-w-0">
-                            <p className="font-medium text-gray-900 truncate">
-                              {member.name || member.email}
-                            </p>
-                            <p className="text-sm text-gray-500 truncate">
-                              {member.email}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <span className="text-xs font-semibold capitalize px-2.5 py-1 bg-[#1FAE5B]/10 text-[#0F6B3E] rounded-full border border-[#1FAE5B]/20 whitespace-nowrap">
-                            {member.role}
-                          </span>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleRemove(member.id)}
-                            disabled={removing === member.id}
-                            className="opacity-0 group-hover:opacity-100 text-red-500 hover:text-red-700 hover:bg-red-50 transition-all"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-
-      {/* Buy Extra Seats Modal */}
-      {buySeatsModal.isOpen && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <Card className="w-full max-w-md shadow-lg border-0">
-            <CardHeader className="bg-gradient-to-r from-[#1FAE5B]/10 to-[#0F6B3E]/10 border-b border-gray-200">
-              <CardTitle className="flex items-center gap-2 text-lg">
-                <Zap className="h-5 w-5 text-[#1FAE5B]" />
-                Upgrade Your Seats
-              </CardTitle>
-              <CardDescription className="mt-2">
-                Purchase additional seats to invite more team members
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6 pt-6">
-              {/* Current Usage */}
-              <div className="space-y-3">
-                <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Current Plan</p>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-gradient-to-br from-blue-50 to-blue-100/50 p-4 rounded-lg border border-blue-200">
-                    <p className="text-xs text-blue-600 font-medium mb-1">Seats Purchased</p>
-                    <p className="text-3xl font-bold text-blue-900">{buySeatsModal.currentExtraSeats}</p>
-                  </div>
-                  <div className="bg-gradient-to-br from-emerald-50 to-emerald-100/50 p-4 rounded-lg border border-emerald-200">
-                    <p className="text-xs text-emerald-600 font-medium mb-1">Max Available</p>
-                    <p className="text-3xl font-bold text-emerald-900">{buySeatsModal.maxTotalSeats}</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Quantity Selector */}
-              <div className="space-y-3">
-                <Label htmlFor="seats" className="text-sm font-medium text-gray-700">Number of Seats</Label>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setSeatsToAdd(Math.max(1, seatsToAdd - 1))}
-                    disabled={seatsToAdd <= 1 || buyingSeats}
-                    className="rounded-lg"
-                  >
-                    −
-                  </Button>
-                  <Input
-                    id="seats"
-                    type="number"
-                    min="1"
-                    max={buySeatsModal.maxSeatsAvailable}
-                    value={seatsToAdd}
-                    onChange={(e) => setSeatsToAdd(Math.min(buySeatsModal.maxSeatsAvailable, Math.max(1, parseInt(e.target.value) || 1)))}
-                    className="text-center font-medium rounded-lg border-gray-300 focus:border-[#1FAE5B] focus:ring-[#1FAE5B]/20"
-                    disabled={buyingSeats}
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setSeatsToAdd(Math.min(buySeatsModal.maxSeatsAvailable, seatsToAdd + 1))}
-                    disabled={seatsToAdd + 1 > buySeatsModal.maxSeatsAvailable || buyingSeats}
-                    className="rounded-lg"
-                  >
-                    +
-                  </Button>
-                </div>
-                <p className="text-xs text-gray-500 font-medium">
-                  Up to {buySeatsModal.maxSeatsAvailable} more seat(s) available
-                </p>
-              </div>
-
-              {/* Price Summary */}
-              <div className="border-t border-gray-200 pt-4 space-y-2">
-                <div className="flex justify-between items-center text-sm">
-                  <span className="text-gray-600">Price per seat:</span>
-                  <span className="font-semibold text-gray-900">${buySeatsModal.pricePerSeat.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between items-center text-sm">
-                  <span className="text-gray-600">Quantity:</span>
-                  <span className="font-semibold text-gray-900">{seatsToAdd} {seatsToAdd === 1 ? 'seat' : 'seats'}</span>
-                </div>
-                <div className="flex justify-between items-center pt-2 border-t border-gray-100">
-                  <span className="font-semibold text-gray-900">Total:</span>
-                  <span className="text-2xl font-bold text-[#1FAE5B]">
-                    ${(buySeatsModal.pricePerSeat * seatsToAdd).toFixed(2)}
-                  </span>
-                </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="space-y-3 pt-2">
-                <Script
-                  src={`https://www.paypal.com/sdk/js?client-id=${process.env.NEXT_PUBLIC_PAYPAL_CLIENT_ID}&intent=capture`}
-                  strategy="afterInteractive"
-                  onLoad={() => setPaypalLoaded(true)}
-                />
-                <div ref={paypalRef} className="paypal-button-container" />
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setBuySeatsModal({ ...buySeatsModal, isOpen: false })
-                    if (paypalRef.current) {
-                      paypalRef.current.innerHTML = ""
-                    }
-                  }}
-                  disabled={buyingSeats}
-                  className="w-full rounded-lg border-gray-300"
-                >
-                  Cancel
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+      {error && (
+        <div className="mb-6 flex items-center gap-3 rounded-xl bg-red-50 p-4 text-sm text-red-700 border border-red-200">
+          <AlertCircle className="h-5 w-5 flex-shrink-0" />
+          <span className="font-medium">{error}</span>
         </div>
       )}
+
+      {/* 3-column grid: left narrow for owner+invite, right wide for members */}
+      <div style={{ display: "grid", gridTemplateColumns: "420px 1fr", gap: 20, alignItems: "start" }}>
+
+        {/* Left Column */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+
+          {/* Owner */}
+          {owner && (
+            <div style={sectionCard}>
+              <div style={sectionHeader}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#1E1E1E" }}>Brand owner</div>
+              </div>
+              <div style={{ padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <Avatar className="h-10 w-10">
+                    <AvatarImage src={owner.image || ""} alt={owner.name || ""} />
+                    <AvatarFallback style={{ background: "#1FAE5B", color: "#fff", fontWeight: 600 }}>
+                      {(owner.name || owner.email).charAt(0).toUpperCase()}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "#1E1E1E" }}>
+                      {owner.name || owner.email}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#888" }}>{owner.email}</div>
+                  </div>
+                </div>
+                <span style={roleBadge}>Admin</span>
+              </div>
+            </div>
+          )}
+
+          {/* Invite Form */}
+          <div style={sectionCard}>
+            <div style={{ ...sectionHeader, display: "flex", alignItems: "flex-start", gap: 12 }}>
+              <div style={iconBox}><Mail className="h-4 w-4 text-[#1FAE5B]" /></div>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#1E1E1E" }}>Invite team member</div>
+                <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>Send an invite by email</div>
+              </div>
+            </div>
+            <form onSubmit={handleInvite} style={{ padding: "20px", display: "flex", flexDirection: "column", gap: 14 }}>
+              <div>
+                <label style={fLabel}>Email address</label>
+                <Input
+                  type="email"
+                  placeholder="collaborator@example.com"
+                  value={inviteEmail}
+                  onChange={(e) => setInviteEmail(e.target.value)}
+                  style={{ fontSize: 12, padding: "9px 12px", borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.15)", marginTop: 4 }}
+                  required
+                />
+              </div>
+              <div>
+                <label style={fLabel}>Role</label>
+                <div style={{ marginTop: 4 }}>
+                  <Select value={inviteRole} onValueChange={setInviteRole}>
+                    <SelectTrigger style={{ fontSize: 12, borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.15)" }}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="manager">Manager</SelectItem>
+                      <SelectItem value="researcher">Researcher</SelectItem>
+                      <SelectItem value="viewer">Viewer</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: 10, borderTop: "0.5px solid rgba(0,0,0,0.06)" }}>
+                <button
+                  type="submit"
+                  disabled={inviting || !inviteEmail.trim()}
+                  style={{
+                    fontSize: 12, fontWeight: 500, padding: "8px 18px",
+                    borderRadius: 9, background: "#1FAE5B", color: "#fff",
+                    border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
+                    opacity: inviting || !inviteEmail.trim() ? 0.6 : 1,
+                  }}
+                >
+                  <Mail className="h-3.5 w-3.5" />
+                  {inviting ? "Sending..." : "Send invite"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        {/* Right Column — Members list, stretches full height */}
+        <div style={{ ...sectionCard, height: "100%" }}>
+          <div style={sectionHeader}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#1E1E1E" }}>
+              Team members ({members.length})
+            </div>
+          </div>
+
+          <div style={{ padding: "20px" }}>
+            {loading ? (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 0" }}>
+                <div style={{ fontSize: 12, color: "#888" }}>Loading team members...</div>
+              </div>
+            ) : members.length === 0 ? (
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "60px 0", textAlign: "center" }}>
+                <div style={{ width: 44, height: 44, borderRadius: "50%", background: "#f0faf5", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 12 }}>
+                  <Mail className="h-5 w-5 text-[#1FAE5B]" />
+                </div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "#1E1E1E", marginBottom: 4 }}>No team members yet</div>
+                <div style={{ fontSize: 11, color: "#888" }}>Invite collaborators on the left to get started</div>
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {members.map((member) => (
+                  <div
+                    key={member.id}
+                    style={{
+                      border: "0.5px solid rgba(0,0,0,0.07)",
+                      borderRadius: 9,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      padding: "12px 14px",
+                    }}
+                    className="hover:bg-gray-50/60 transition-colors group"
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 0 }}>
+                      <Avatar className="h-9 w-9 flex-shrink-0">
+                        <AvatarImage src={member.image || ""} alt={member.name || ""} />
+                        <AvatarFallback style={{ background: "#f0faf5", color: "#0F6B3E", fontWeight: 600 }}>
+                          {(member.name || member.email).charAt(0).toUpperCase()}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: "#1E1E1E" }} className="truncate">
+                          {member.name || member.email}
+                        </div>
+                        <div style={{ fontSize: 11, color: "#888" }} className="truncate">
+                          {member.email}
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                      <span style={{ ...roleBadge, textTransform: "capitalize" }}>{member.role}</span>
+                      <button
+                        onClick={() => handleRemove(member.id)}
+                        disabled={removing === member.id}
+                        style={{ color: "#E24B4A", padding: "6px", borderRadius: 6, border: "none", background: "transparent", cursor: "pointer" }}
+                        className="opacity-0 group-hover:opacity-100 hover:bg-red-50 transition-all"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
+
+      {/* Buy Extra Seats Modal — unchanged */}
+      {buySeatsModal.isOpen && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div style={{ background: "#fff", border: "0.5px solid rgba(0,0,0,0.08)", borderRadius: 12, maxWidth: 420, width: "100%", overflow: "hidden" }}>
+            <div style={{ ...sectionHeader, display: "flex", alignItems: "flex-start", gap: 12 }}>
+              <div style={iconBox}><Zap className="h-4 w-4 text-[#1FAE5B]" /></div>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#1E1E1E" }}>Upgrade your seats</div>
+                <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>Purchase additional seats to invite more team members</div>
+              </div>
+            </div>
+            <div style={{ padding: "20px", display: "flex", flexDirection: "column", gap: 20 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div style={{ border: "0.5px solid rgba(0,0,0,0.08)", borderRadius: 9, padding: "12px 14px" }}>
+                  <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>Seats purchased</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: "#1E1E1E" }}>{buySeatsModal.currentExtraSeats}</div>
+                </div>
+                <div style={{ border: "0.5px solid rgba(0,0,0,0.08)", borderRadius: 9, padding: "12px 14px" }}>
+                  <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>Max available</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: "#1E1E1E" }}>{buySeatsModal.maxTotalSeats}</div>
+                </div>
+              </div>
+              <div>
+                <label style={fLabel}>Number of seats</label>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+                  <button onClick={() => setSeatsToAdd(Math.max(1, seatsToAdd - 1))} disabled={seatsToAdd <= 1 || buyingSeats} style={{ border: "0.5px solid rgba(0,0,0,0.15)", borderRadius: 8, width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", background: "#fff", cursor: "pointer" }}>−</button>
+                  <input type="number" min="1" max={buySeatsModal.maxSeatsAvailable} value={seatsToAdd} onChange={(e) => setSeatsToAdd(Math.min(buySeatsModal.maxSeatsAvailable, Math.max(1, parseInt(e.target.value) || 1)))} style={{ fontSize: 12, padding: "8px 12px", borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.15)", textAlign: "center", width: 64 }} disabled={buyingSeats} />
+                  <button onClick={() => setSeatsToAdd(Math.min(buySeatsModal.maxSeatsAvailable, seatsToAdd + 1))} disabled={seatsToAdd + 1 > buySeatsModal.maxSeatsAvailable || buyingSeats} style={{ border: "0.5px solid rgba(0,0,0,0.15)", borderRadius: 8, width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", background: "#fff", cursor: "pointer" }}>+</button>
+                </div>
+                <div style={{ fontSize: 10, color: "#888", marginTop: 6 }}>Up to {buySeatsModal.maxSeatsAvailable} more seat(s) available</div>
+              </div>
+              <div style={{ borderTop: "0.5px solid rgba(0,0,0,0.07)", paddingTop: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#555" }}>
+                  <span>Price per seat</span>
+                  <span style={{ fontWeight: 600, color: "#1E1E1E" }}>${buySeatsModal.pricePerSeat.toFixed(2)}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#555" }}>
+                  <span>Quantity</span>
+                  <span style={{ fontWeight: 600, color: "#1E1E1E" }}>{seatsToAdd} {seatsToAdd === 1 ? "seat" : "seats"}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "0.5px solid rgba(0,0,0,0.06)", paddingTop: 10 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: "#1E1E1E" }}>Total</span>
+                  <span style={{ fontSize: 18, fontWeight: 700, color: "#1FAE5B" }}>${(buySeatsModal.pricePerSeat * seatsToAdd).toFixed(2)}</span>
+                </div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <Script src={`https://www.paypal.com/sdk/js?client-id=${process.env.NEXT_PUBLIC_PAYPAL_CLIENT_ID}&intent=capture`} strategy="afterInteractive" onLoad={() => setPaypalLoaded(true)} />
+                <div ref={paypalRef} />
+                <button onClick={() => { setBuySeatsModal({ ...buySeatsModal, isOpen: false }); if (paypalRef.current) paypalRef.current.innerHTML = "" }} disabled={buyingSeats} style={{ fontSize: 12, fontWeight: 500, padding: "8px 0", borderRadius: 9, border: "0.5px solid rgba(0,0,0,0.15)", background: "#fff", color: "#555", width: "100%", cursor: "pointer" }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -628,4 +498,41 @@ export default function CollaboratorsPage() {
       <CollaboratorsContent />
     </Suspense>
   )
+}
+
+// ── Shared styles ──────────────────────────────────────────────
+const sectionCard: React.CSSProperties = {
+  background: "#fff",
+  border: "0.5px solid rgba(0,0,0,0.08)",
+  borderRadius: 12,
+  overflow: "hidden",
+}
+const sectionHeader: React.CSSProperties = {
+  padding: "16px 20px",
+  borderBottom: "0.5px solid rgba(0,0,0,0.07)",
+}
+const iconBox: React.CSSProperties = {
+  width: 36,
+  height: 36,
+  borderRadius: 9,
+  background: "#f0faf5",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  flexShrink: 0,
+}
+const roleBadge: React.CSSProperties = {
+  fontSize: 10,
+  fontWeight: 600,
+  color: "#0F6B3E",
+  background: "#f0faf5",
+  padding: "4px 10px",
+  borderRadius: 999,
+  whiteSpace: "nowrap",
+}
+const fLabel: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 600,
+  color: "#555",
+  letterSpacing: "0.02em",
 }

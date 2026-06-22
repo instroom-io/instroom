@@ -41,6 +41,7 @@ export default function BillingPage() {
   const router = useRouter()
 
   const [subscription, setSubscription] = useState<any>(null)
+  const [subscriptionLoading, setSubscriptionLoading] = useState(true)
   const [brandCount, setBrandCount] = useState<number>(0)
   const [cancelling, setCancelling] = useState(false)
   const [confirmCancel, setConfirmCancel] = useState(false)
@@ -60,6 +61,7 @@ export default function BillingPage() {
   // ── Fetch subscription (same call as settings page) ──────────────────────
   const fetchSubscription = () => {
     if (!session?.user?.id) return
+    setSubscriptionLoading(true)
     fetch("/api/subscription/check", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -67,7 +69,8 @@ export default function BillingPage() {
     })
       .then(r => r.json())
       .then(d => setSubscription(d.subscription))
-      .catch(() => {})
+      .catch(() => { })
+      .finally(() => setSubscriptionLoading(false))
   }
 
   useEffect(() => {
@@ -82,7 +85,7 @@ export default function BillingPage() {
     fetch("/api/user/brand-usage")
       .then(r => r.json())
       .then(d => setBrandCount(d.brandCount || 0))
-      .catch(() => {})
+      .catch(() => { })
   }, [session?.user?.id])
 
   // ── Payment method (card on file via Lemon Squeezy) ───────────────────────
@@ -226,7 +229,13 @@ export default function BillingPage() {
           </div>
         </div>
 
-        {!subscription ? (
+        {subscriptionLoading ? (
+          <Card>
+            <CardContent className="py-10 flex items-center justify-center">
+              <div className="h-6 w-6 rounded-full border-2 border-[#1FAE5B] border-t-transparent animate-spin" />
+            </CardContent>
+          </Card>
+        ) : !subscription ? (
           <Card>
             <CardContent className="py-10 text-center space-y-3">
               <p className="text-sm text-gray-500">No active subscription found.</p>

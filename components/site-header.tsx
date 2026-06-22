@@ -8,18 +8,24 @@ import { BrandSelector } from "@/components/brand-selector"
 export function SiteHeader() {
   const pathname = usePathname()
 
-const titles: Record<string, string> = {
-  "/dashboard": "Dashboard",
-  "/dashboard/manage-influencers": "Manage Influencers",
-  "/dashboard/inbox": "Inbox",
-  "/dashboard/pipeline": "Pipeline",
-  "/dashboard/brand-partners": "Brand Partners",
-  "/dashboard/post-tracker": "Post Tracker",
-  "/dashboard/analytics": "Analytics",
-  "/dashboard/influencer-discovery": "Influencer Discovery",
-  "/dashboard/influencer-discovery/search": "Discovery › Search Results",
-  "/dashboard/settings/collaborators": "Team & Collaborators",
-}
+  const titles: Record<string, string> = {
+    "/dashboard": "Dashboard",
+    "/dashboard/manage-influencers": "Manage Influencers",
+    "/dashboard/inbox": "Inbox",
+    "/dashboard/pipeline": "Pipeline",
+    "/dashboard/brand-partners": "Brand Partners",
+    "/dashboard/post-tracker": "Post Tracker",
+    "/dashboard/analytics": "Analytics",
+    "/dashboard/influencer-discovery": "Influencer Discovery",
+    "/dashboard/influencer-discovery/search": "Discovery › Search Results",
+    "/dashboard/settings": "Account · Profile",
+    "/dashboard/settings/security": "Account · Security",
+    "/dashboard/settings/notifications": "Account · Notifications",
+    "/dashboard/settings/collaborators": "Workspace · Team & Collaborators",
+    "/dashboard/settings/integrations": "Workspace · Integrations",
+    "/dashboard/settings/branding": "Workspace · Branding",
+    "/dashboard/settings/billing": "Plan · Billing & Subscription",
+  }
 
   const title = titles[pathname] || "Dashboard"
 
