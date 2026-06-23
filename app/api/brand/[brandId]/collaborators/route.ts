@@ -93,6 +93,7 @@ export async function GET(
         id: brand.id,
         name: brand.name,
         logo_url: brand.logo_url,
+        website_url: brand.website_url,
       },
     })
   } catch (error) {

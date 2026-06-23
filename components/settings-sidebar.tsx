@@ -80,6 +80,18 @@ const settingsSections: SettingsSection[] = [
           </svg>
         ),
       },
+      {
+        key: "integrations",
+        label: "Integrations",
+        href: "/dashboard/settings/integrations",
+        icon: (
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" width={14} height={14}>
+            <path d="M6.5 9.5l3-3" />
+            <path d="M7 4.5L8 3.5a2.5 2.5 0 113.5 3.5l-1 1" />
+            <path d="M9 11.5L8 12.5a2.5 2.5 0 11-3.5-3.5l1-1" />
+          </svg>
+        ),
+      },
     ],
   },
   {

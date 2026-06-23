@@ -16,6 +16,7 @@ export async function POST(req: Request) {
     const formData = await req.formData()
     const brandId = formData.get("brandId") as string
     const brandName = formData.get("brandName") as string
+    const brandWebsite = formData.get("brandWebsite") as string | null
     const logo = formData.get("logo") as File | null
 
     if (!brandId) {
@@ -100,6 +101,7 @@ export async function POST(req: Request) {
       where: { id: brandId },
       data: {
         name: brandName || brand.name,
+        website_url: brandWebsite || null,
         logo_url: logoUrl,
         updated_at: new Date(),
       },

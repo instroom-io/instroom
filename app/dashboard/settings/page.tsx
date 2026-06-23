@@ -2,7 +2,7 @@
 // app/dashboard/settings/page.tsx
 
 import { useSession } from "next-auth/react"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 
 type Toast = { message: string; type: "success" | "error" }
@@ -17,9 +17,13 @@ function useToast() {
 }
 
 export default function ProfilePage() {
-  const { data: session, status } = useSession()
+  const { data: session, status, update: updateSession } = useSession()
   const router = useRouter()
   const { toast, show } = useToast()
+
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [avatarUrl, setAvatarUrl]       = useState<string | null>(null)
+  const [uploading, setUploading]       = useState(false)
 
   const [firstName, setFirstName]   = useState("")
   const [lastName, setLastName]     = useState("")
@@ -29,16 +33,15 @@ export default function ProfilePage() {
   const [currency, setCurrency]     = useState("USD ($)")
   const [dateFormat, setDateFormat] = useState("MM/DD/YYYY")
 
-  const [savingProfile, setSavingProfile]   = useState(false)
-  const [savingPrefs, setSavingPrefs]       = useState(false)
+  const [savingProfile, setSavingProfile]     = useState(false)
+  const [savingPrefs, setSavingPrefs]         = useState(false)
   const [deletingAccount, setDeletingAccount] = useState(false)
-  const [confirmDelete, setConfirmDelete]   = useState(false)
+  const [confirmDelete, setConfirmDelete]     = useState(false)
 
   const initials = session?.user?.name
     ? session.user.name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase()
     : "??"
 
-  // Load profile + prefs on mount
   useEffect(() => {
     if (status === "unauthenticated") {
       router.push("/login")
@@ -54,17 +57,18 @@ export default function ProfilePage() {
           setFirstName(parts[0] ?? "")
           setLastName(parts.slice(1).join(" ") ?? "")
         }
-        if (data.email) setEmail(data.email)
+        if (data.email)    setEmail(data.email)
         if (data.jobTitle) setJobTitle(data.jobTitle)
+        if (data.image)    setAvatarUrl(data.image)
       })
       .catch(() => {
-        // Fallback to session data
         if (session?.user?.name) {
           const parts = session.user.name.split(" ")
           setFirstName(parts[0] ?? "")
           setLastName(parts.slice(1).join(" ") ?? "")
         }
         if (session?.user?.email) setEmail(session.user.email)
+        if (session?.user?.image) setAvatarUrl(session.user.image)
       })
 
     fetch("/api/settings/preferences")
@@ -77,6 +81,47 @@ export default function ProfilePage() {
       .catch(() => {})
   }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    if (!file.type.startsWith("image/")) {
+      show("Please select an image file.", "error")
+      return
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      show("Image must be under 5 MB.", "error")
+      return
+    }
+
+    setAvatarUrl(URL.createObjectURL(file))
+    setUploading(true)
+
+    try {
+      const formData = new FormData()
+      formData.append("file", file)
+
+      // ← updated from /api/user/update-avatar
+      const res = await fetch("/api/settings/profile", {
+        method: "POST",
+        body: formData,
+      })
+
+      if (!res.ok) throw new Error("Upload failed")
+
+      const data = await res.json()
+      setAvatarUrl(data.avatarUrl)
+      updateSession({ image: data.avatarUrl })
+      show("Photo updated", "success")
+    } catch {
+      show("Upload failed. Please try again.", "error")
+      setAvatarUrl(session?.user?.image ?? null)
+    } finally {
+      setUploading(false)
+      if (fileInputRef.current) fileInputRef.current.value = ""
+    }
+  }
+
   async function handleSaveProfile() {
     setSavingProfile(true)
     try {
@@ -88,8 +133,8 @@ export default function ProfilePage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "Failed to save profile")
       show("Profile saved successfully", "success")
-    } catch (err: any) {
-      show(err.message || "Something went wrong", "error")
+    } catch (err: unknown) {
+      show(err instanceof Error ? err.message : "Something went wrong", "error")
     } finally {
       setSavingProfile(false)
     }
@@ -106,8 +151,8 @@ export default function ProfilePage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "Failed to save preferences")
       show("Preferences saved", "success")
-    } catch (err: any) {
-      show(err.message || "Something went wrong", "error")
+    } catch (err: unknown) {
+      show(err instanceof Error ? err.message : "Something went wrong", "error")
     } finally {
       setSavingPrefs(false)
     }
@@ -124,8 +169,8 @@ export default function ProfilePage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "Failed to delete account")
       router.push("/login")
-    } catch (err: any) {
-      show(err.message || "Something went wrong", "error")
+    } catch (err: unknown) {
+      show(err instanceof Error ? err.message : "Something went wrong", "error")
       setDeletingAccount(false)
       setConfirmDelete(false)
     }
@@ -173,9 +218,31 @@ export default function ProfilePage() {
         </div>
         <div style={cardBody}>
           <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16 }}>
-            <div style={avatar}>{initials}</div>
+            {avatarUrl ? (
+              <img
+                src={avatarUrl}
+                alt="Avatar"
+                style={{ ...avatar, objectFit: "cover" } as React.CSSProperties}
+              />
+            ) : (
+              <div style={avatar}>{initials}</div>
+            )}
+
             <div>
-              <button style={auBtn}>Change photo</button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/png, image/jpeg, image/webp"
+                style={{ display: "none" }}
+                onChange={handleFileChange}
+              />
+              <button
+                style={auBtn}
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+              >
+                {uploading ? "Uploading…" : "Change photo"}
+              </button>
               <div style={hint}>PNG, JPG or WebP · max 5MB</div>
             </div>
           </div>
@@ -312,7 +379,7 @@ export default function ProfilePage() {
   )
 }
 
-// ── Shared styles ──────────────────────────────────────────────
+// ── Shared styles ──────────────────────────────────────────────────────────────
 const card: React.CSSProperties = {
   background: "#fff",
   border: "0.5px solid rgba(0,0,0,0.08)",
