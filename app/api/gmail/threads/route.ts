@@ -95,7 +95,6 @@ export async function GET(req: NextRequest) {
     })
 
     if (!account?.access_token) {
-      // No linked Google account — signed up with email/password, needs to re-consent
       return NextResponse.json(
         { error: "No Google account linked. Please connect your Gmail account.", reauth: true },
         { status: 403 }
@@ -131,8 +130,6 @@ export async function GET(req: NextRequest) {
       const err = await listRes.json()
       const message: string = err?.error?.message || "Failed to list threads"
 
-      // Token exists but was granted without Gmail scopes (e.g. user signed in
-      // before we added Gmail to the consent flow). Tell the client to re-consent.
       if (
         listRes.status === 403 ||
         message.toLowerCase().includes("insufficient authentication scopes") ||
@@ -183,7 +180,6 @@ export async function GET(req: NextRequest) {
       const firstMsg = messages[0] || {}
       const labelIds: string[] = thread.messages?.[0]?.labelIds || []
 
-      // Parse sender email from "Name <email>" or plain "email"
       const fromHeader: string = firstMsg.from || ""
       const emailMatch = fromHeader.match(/<([^>]+)>/)
       const senderEmail = (emailMatch ? emailMatch[1] : fromHeader).toLowerCase().trim()
@@ -198,10 +194,9 @@ export async function GET(req: NextRequest) {
       }
     })
 
-    // 4. Look up BrandInfluencer records for all sender emails in one Prisma query
+    // 4. Try to resolve brand context — if none found, return threads without pipeline data
     const userId = session.user?.id
-    
-    // Use provided brandId or find the most recent brand for this user
+
     let brand_id = brandId
     if (!brand_id && userId) {
       const brandMember = await prisma.brandMember.findFirst({
@@ -212,8 +207,14 @@ export async function GET(req: NextRequest) {
       brand_id = brandMember?.brand_id || null
     }
 
+    // No brand context — return threads without pipeline stage info.
+    // Gmail is still connected; we just can't attach influencer data.
     if (!brand_id) {
-      return NextResponse.json({ error: "No brand context found" }, { status: 400 })
+      const threads = shapedThreads.map(({ senderEmail, ...thread }) => ({
+        ...thread,
+        brandInfluencer: null,
+      }))
+      return NextResponse.json({ threads })
     }
 
     const senderEmails = [...new Set(shapedThreads.map((t) => t.senderEmail).filter(Boolean))]
@@ -240,13 +241,11 @@ export async function GET(req: NextRequest) {
       },
     })
 
-    // Build email → brandInfluencer map
     const biByEmail = new Map(
       brandInfluencers.map((bi) => [bi.influencer.email?.toLowerCase(), bi])
     )
 
     // 5. Attach brandInfluencer to each thread (null for unknown senders)
-    // This allows inbox to show all emails, but stage updates require existing BrandInfluencer
     const threads = shapedThreads.map(({ senderEmail, ...thread }) => ({
       ...thread,
       brandInfluencer: biByEmail.get(senderEmail) ?? null,

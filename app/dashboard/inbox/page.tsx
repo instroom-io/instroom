@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, Suspense } from "react"
 import { useSearchParams } from "next/navigation"
-import { signIn, useSession } from "next-auth/react"
+import { useSession } from "next-auth/react"
 import { SubscriptionGate } from "@/components/ui/subscription-gate"
 import {
   IconMail,
@@ -141,14 +141,12 @@ function mapGmailThreadToEmail(thread: any, index: number): Email {
   const firstMsg = messages[0] || {}
   const lastMsg = messages[messages.length - 1] || {}
 
-  // Extract sender name & email from headers
   const fromHeader = firstMsg.from || firstMsg.sender || ""
   const nameMatch = fromHeader.match(/^([^<]+)</)
   const emailMatch = fromHeader.match(/<([^>]+)>/)
   const senderName = nameMatch ? nameMatch[1].trim() : fromHeader.split("@")[0] || "Unknown"
   const senderEmail = (emailMatch ? emailMatch[1] : fromHeader).toLowerCase().trim()
 
-  // Build replies from all messages except the first
   const replies = messages.slice(1).map((msg: any) => {
     const replyFrom = msg.from || msg.sender || ""
     const replyName = replyFrom.match(/^([^<]+)</)?.[1]?.trim() || replyFrom.split("@")[0] || "Unknown"
@@ -162,7 +160,6 @@ function mapGmailThreadToEmail(thread: any, index: number): Email {
   })
 
   const status = getPipelineStatus(thread.brandInfluencer)
-
   const timestamp = firstMsg.date || new Date().toISOString()
 
   return {
@@ -207,7 +204,6 @@ function InboxContent() {
   const brandId = searchParams.get("brandId")
 
   // ── Subscription gate ──────────────────────────────────────────────────────
-  // null = still loading (no flash), true/false = resolved
   const [isSubscribed, setIsSubscribed] = useState<boolean | null>(null)
   const [subscriptionStatus, setSubscriptionStatus] = useState<{ status: string; isExpired: boolean } | null>(null)
 
@@ -224,7 +220,6 @@ function InboxContent() {
         setIsSubscribed(false)
       })
   }, [session?.user?.id])
-  // ──────────────────────────────────────────────────────────────────────────
 
   const [emails, setEmails] = useState<Email[]>([])
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null)
@@ -240,7 +235,6 @@ function InboxContent() {
   const [showActions, setShowActions] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
 
-  // Gmail sync state — no connect screen needed, user is already Google-authenticated
   const [gmailSyncState, setGmailSyncState] = useState<GmailSyncState>("checking")
   const [gmailError, setGmailError] = useState<string | undefined>()
   const [gmailConnected, setGmailConnected] = useState(false)
@@ -260,8 +254,27 @@ function InboxContent() {
     const checkMobile = () => setIsMobile(window.innerWidth < 768)
     checkMobile()
     window.addEventListener("resize", checkMobile)
-    // On mount, check if Gmail is already connected
     checkGmailConnection()
+
+    // Handle ?gmailConnected=1 redirect from OAuth callback
+    const params = new URLSearchParams(window.location.search)
+    if (params.get("gmailConnected") === "1") {
+      // Remove the param from the URL cleanly
+      const clean = new URL(window.location.href)
+      clean.searchParams.delete("gmailConnected")
+      window.history.replaceState({}, "", clean.toString())
+    }
+
+    // Handle ?gmailError=... from OAuth callback
+    const gmailErr = params.get("gmailError")
+    if (gmailErr) {
+      setGmailError(decodeURIComponent(gmailErr))
+      setGmailSyncState("error")
+      const clean = new URL(window.location.href)
+      clean.searchParams.delete("gmailError")
+      window.history.replaceState({}, "", clean.toString())
+    }
+
     return () => window.removeEventListener("resize", checkMobile)
   }, [])
 
@@ -271,36 +284,41 @@ function InboxContent() {
     }
   }, [selectedEmail?.replies])
 
-  // ── Gmail via NextAuth session ─────────────────────────────────────────────
-  // No connect flow needed — accessToken comes from the user's existing Google login.
-  // If the Gmail scope is missing (old session), we show a one-time re-login nudge.
+  // ── Gmail connection check ─────────────────────────────────────────────────
 
   const checkGmailConnection = async () => {
     try {
       const url = new URL("/api/gmail/threads", window.location.origin)
       if (brandId) url.searchParams.append("brandId", brandId)
       const res = await fetch(url.toString())
+      const data = await res.json()
+
       if (res.ok) {
-        const data = await res.json()
         const mappedEmails = (data.threads || []).map((t: any, i: number) => mapGmailThreadToEmail(t, i))
         setEmails(mappedEmails)
         setGmailConnected(true)
         setGmailSyncState("connected")
-      } else {
+      } else if (data?.reauth) {
+        // Explicitly needs Gmail re-auth — tokens missing or revoked
         setGmailSyncState("not_connected")
+      } else {
+        // Any other error (brand not found, network, etc.) — Gmail IS connected,
+        // just couldn't load threads. Show error state, not the connect prompt.
+        setGmailError(data?.error || "Failed to load inbox.")
+        setGmailSyncState("error")
       }
     } catch {
-      setGmailSyncState("not_connected")
+      // Network-level failure — don't show connect prompt, show retry instead
+      setGmailError("Network error. Please check your connection.")
+      setGmailSyncState("error")
     }
   }
 
+  // ── Connect Gmail — separate OAuth flow, no NextAuth signIn ───────────────
   const handleConnectGmail = () => {
     setGmailSyncState("connecting")
-    signIn("google", { callbackUrl: window.location.href }, {
-      scope: "openid email profile https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send",
-      access_type: "offline",
-      prompt: "consent",
-    })
+    const returnTo = window.location.pathname + window.location.search
+    window.location.href = `/api/gmail/connect?returnTo=${encodeURIComponent(returnTo)}`
   }
 
   const loadGmailThreads = async () => {
@@ -311,19 +329,19 @@ function InboxContent() {
       const res = await fetch(url.toString())
       const data = await res.json()
 
-      if (!res.ok) {
-        if (data?.reauth) {
-          // Scope missing or token fully expired — user needs to sign out/in once
-          setGmailSyncState("not_connected")
-          return
-        }
-        throw new Error(data?.error || "Failed to fetch Gmail threads")
+      if (res.ok) {
+        const mappedEmails = (data.threads || []).map((t: any, i: number) => mapGmailThreadToEmail(t, i))
+        setEmails(mappedEmails)
+        setGmailConnected(true)
+        setGmailSyncState("connected")
+      } else if (data?.reauth) {
+        // Tokens missing or revoked — user needs to reconnect
+        setGmailSyncState("not_connected")
+      } else {
+        // Other error — Gmail is connected but something else failed
+        setGmailError(data?.error || "Failed to load Gmail threads.")
+        setGmailSyncState("error")
       }
-
-      const mappedEmails = (data.threads || []).map((t: any, i: number) => mapGmailThreadToEmail(t, i))
-      setEmails(mappedEmails)
-      setGmailConnected(true)
-      setGmailSyncState("connected")
     } catch (err: any) {
       setGmailError(err?.message || "Failed to load Gmail threads.")
       setGmailSyncState("error")
@@ -365,8 +383,6 @@ function InboxContent() {
     }
   }
 
-  // No connect/disconnect handlers needed — Gmail access is tied to the Google login session
-
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   const filteredEmails = emails.filter((email) => {
@@ -394,7 +410,6 @@ function InboxContent() {
   }
 
   const updateEmailStage = async (emailId: number | string, newStage: PipelineStage) => {
-    // 1. Optimistically update UI
     const previousStatus = emails.find((e) => e.id === emailId)?.status
     setEmails((prev) => prev.map((email) => (email.id === emailId ? { ...email, status: newStage } : email)))
     if (selectedEmail?.id === emailId) {
@@ -402,7 +417,6 @@ function InboxContent() {
     }
     setUpdateStageModal({ open: false, email: null })
 
-    // 2. Persist to DB
     const email = emails.find((e) => e.id === emailId)
     if (!email?.fromEmail) return
     try {
@@ -413,27 +427,22 @@ function InboxContent() {
       })
       if (!res.ok) {
         const data = await res.json()
-        // Revert optimistic update on error
         setEmails((prev) => prev.map((e) => (e.id === emailId ? { ...e, status: previousStatus || null } : e)))
         if (selectedEmail?.id === emailId) {
           setSelectedEmail((prev) => (prev ? { ...prev, status: previousStatus || null } : null))
         }
-        // Show notification
-        const errorMsg = data?.error === "Influencer not registered" 
-          ? `${email.fromEmail} is not registered as an influencer` 
+        const errorMsg = data?.error === "Influencer not registered"
+          ? `${email.fromEmail} is not registered as an influencer`
           : data?.error === "Influencer not found in this brand"
           ? `${email.fromEmail} is not in your current brand`
           : data?.error || "Failed to save stage"
         setStageNotification({ show: true, message: errorMsg, type: "error" })
-        // Auto-hide notification after 5 seconds
         setTimeout(() => setStageNotification({ show: false, message: "", type: "error" }), 5000)
       } else {
-        // Show success notification
         setStageNotification({ show: true, message: "Stage updated successfully!", type: "success" })
         setTimeout(() => setStageNotification({ show: false, message: "", type: "success" }), 3000)
       }
-    } catch (err) {
-      // Revert optimistic update on error
+    } catch {
       setEmails((prev) => prev.map((e) => (e.id === emailId ? { ...e, status: previousStatus || null } : e)))
       if (selectedEmail?.id === emailId) {
         setSelectedEmail((prev) => (prev ? { ...prev, status: previousStatus || null } : null))
@@ -448,7 +457,6 @@ function InboxContent() {
     setSendError(undefined)
     setIsSending(true)
 
-    // Optimistically add to UI immediately
     const newReply = {
       sender: "You",
       message: messageText,
@@ -465,7 +473,6 @@ function InboxContent() {
     )
     setReply("")
 
-    // Send via Gmail API
     try {
       const res = await fetch("/api/gmail/send", {
         method: "POST",
@@ -482,7 +489,7 @@ function InboxContent() {
         const data = await res.json()
         setSendError(data?.error || "Failed to send. Message not delivered.")
       }
-    } catch (err: any) {
+    } catch {
       setSendError("Network error. Message may not have been delivered.")
     } finally {
       setIsSending(false)
@@ -643,17 +650,17 @@ function InboxContent() {
               </div>
             </div>
             <div className="flex items-center gap-3">
-              {/* Gmail status indicator — read-only, tied to Google login */}
-              <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium border transition-all ${
-                isGmailReady
-                  ? "bg-green-50 border-green-200 text-green-700"
-                  : needsConnect
-                  ? "bg-yellow-50 border-yellow-200 text-yellow-700 cursor-pointer hover:bg-yellow-100"
-                  : isLoading
-                  ? "bg-gray-50 border-gray-200 text-gray-400"
-                  : "bg-red-50 border-red-200 text-red-500"
-              }`}
-              onClick={needsConnect ? handleConnectGmail : undefined}
+              <div
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium border transition-all ${
+                  isGmailReady
+                    ? "bg-green-50 border-green-200 text-green-700"
+                    : needsConnect
+                    ? "bg-yellow-50 border-yellow-200 text-yellow-700 cursor-pointer hover:bg-yellow-100"
+                    : isLoading
+                    ? "bg-gray-50 border-gray-200 text-gray-400"
+                    : "bg-red-50 border-red-200 text-red-500"
+                }`}
+                onClick={needsConnect ? handleConnectGmail : undefined}
               >
                 <IconBrandGmail size={11} />
                 <span>{isGmailReady ? "Gmail synced" : needsConnect ? "Connect Gmail" : isLoading ? "Connecting…" : "Sync error"}</span>
@@ -675,7 +682,6 @@ function InboxContent() {
         {/* ── CONTACT LIST PANEL ── */}
         <div className="w-80 border-r border-gray-200 flex flex-col bg-white flex-shrink-0 shadow-sm">
           {isLoading ? (
-            // ── Checking / syncing / connecting ──
             <div className="flex-1 flex flex-col items-center justify-center gap-3 text-gray-400 p-6">
               <div className="relative w-10 h-10">
                 <div className="absolute inset-0 rounded-full border-4 border-gray-100" />
@@ -686,7 +692,6 @@ function InboxContent() {
               </p>
             </div>
           ) : needsConnect ? (
-            // ── One-time Gmail connect prompt ──
             <div className="flex-1 flex flex-col items-center justify-center gap-5 p-6 text-center">
               <div className="relative">
                 <div className="absolute inset-0 rounded-full bg-red-100 blur-xl opacity-50 scale-150" />
@@ -713,7 +718,6 @@ function InboxContent() {
               </p>
             </div>
           ) : gmailSyncState === "error" ? (
-            // ── Error state ──
             <div className="flex-1 flex flex-col items-center justify-center gap-4 p-6 text-center">
               <div className="w-12 h-12 rounded-full bg-red-50 flex items-center justify-center">
                 <IconAlertCircle size={24} className="text-red-500" />
@@ -730,7 +734,6 @@ function InboxContent() {
               </button>
             </div>
           ) : (
-            // ── Normal inbox list ──
             <>
               <div className="flex-shrink-0 p-4 border-b border-gray-200 bg-white">
                 <div className="flex items-center justify-between mb-4">
@@ -860,8 +863,6 @@ function InboxContent() {
                       </div>
                     </div>
                   </div>
-
-                  {/* Action buttons hidden — no functions yet */}
                 </div>
 
                 <div className="px-4 md:px-6 py-2 bg-gray-50 border-t border-gray-100 flex flex-wrap items-center gap-2">
@@ -869,7 +870,6 @@ function InboxContent() {
                     <IconUserCheck size={14} />
                     <span className="hidden sm:inline">Update Stage</span>
                   </button>
-                  {/* Reminder, Label, Forward hidden — no functions yet */}
                 </div>
 
                 {showActions && (
@@ -1115,8 +1115,8 @@ function InboxContent() {
       {stageNotification.show && (
         <div className="fixed bottom-6 right-6 z-40 animate-slideUp">
           <div className={`flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg ${
-            stageNotification.type === "error" 
-              ? "bg-red-50 border border-red-200" 
+            stageNotification.type === "error"
+              ? "bg-red-50 border border-red-200"
               : "bg-green-50 border border-green-200"
           }`}>
             <IconAlertCircle size={18} className={stageNotification.type === "error" ? "text-red-500" : "text-green-500"} />
