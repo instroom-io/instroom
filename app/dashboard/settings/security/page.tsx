@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { KeyRound, ShieldCheck } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { TwoFactorSetup } from "@/components/two-factor-setup"
 
 type Toast = { message: string; type: "success" | "error" }
 
@@ -33,7 +34,6 @@ export default function SecurityPage() {
 
   const [totpEnabled, setTotpEnabled] = useState(false)
   const [smsEnabled, setSmsEnabled] = useState(false)
-  const [togglingTotp, setTogglingTotp] = useState(false)
   const [togglingSms, setTogglingSms] = useState(false)
 
   useEffect(() => {
@@ -52,7 +52,6 @@ export default function SecurityPage() {
       .catch(() => {})
   }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Same API + validation as the settings page password card
   async function handleChangePassword() {
     if (!currentPassword || !newPassword || !confirmPassword) {
       show("All password fields are required", "error")
@@ -86,24 +85,22 @@ export default function SecurityPage() {
     }
   }
 
-  async function toggle2FA(method: "totp" | "sms", current: boolean) {
-    const setter = method === "totp" ? setTotpEnabled : setSmsEnabled
-    const setLoading = method === "totp" ? setTogglingTotp : setTogglingSms
-    setLoading(true)
+  async function toggleSms(current: boolean) {
+    setTogglingSms(true)
     try {
       const res = await fetch("/api/settings/security/2fa", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ method, enabled: !current }),
+        body: JSON.stringify({ method: "sms", enabled: !current }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "Failed to update 2FA")
-      setter(!current)
-      show(`${method.toUpperCase()} ${!current ? "enabled" : "disabled"}`, "success")
+      setSmsEnabled(!current)
+      show(`SMS ${!current ? "enabled" : "disabled"}`, "success")
     } catch (err: any) {
       show(err.message || "Something went wrong", "error")
     } finally {
-      setLoading(false)
+      setTogglingSms(false)
     }
   }
 
@@ -205,19 +202,18 @@ export default function SecurityPage() {
         </div>
 
         <div className="p-5">
-          <ToggleRow
-            title="Authenticator app (TOTP)"
-            desc="Use Google Authenticator, Authy, or similar apps"
+          <TwoFactorSetup
             enabled={totpEnabled}
-            loading={togglingTotp}
-            onToggle={() => toggle2FA("totp", totpEnabled)}
+            onEnabledChange={setTotpEnabled}
+            onToast={show}
           />
+
           <ToggleRow
             title="SMS verification"
             desc="Receive a code via text message when logging in"
             enabled={smsEnabled}
             loading={togglingSms}
-            onToggle={() => toggle2FA("sms", smsEnabled)}
+            onToggle={() => toggleSms(smsEnabled)}
             last
           />
         </div>

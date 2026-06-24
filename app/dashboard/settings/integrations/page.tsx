@@ -38,7 +38,7 @@ type IntegrationState = {
 type IntegrationsMap = Record<IntegrationId, IntegrationState>
 
 const DEFAULT_STATE: IntegrationsMap = {
-  uppromote: { connected: true, connectedAs: "Nonoise" },
+  uppromote: { connected: false },
   goaffpro: { connected: false },
   posttracker: { connected: false },
   shopify: { connected: false },
@@ -123,10 +123,6 @@ export default function IntegrationsPage() {
     show(`${label} settings opened`, "success")
   }
 
-  function handleUpgrade(label: string) {
-    show(`${label} upgrade flow started`, "success")
-  }
-
   const ptEnabled = integrations.posttracker.connected
 
   return (
@@ -156,21 +152,6 @@ export default function IntegrationsPage() {
       >
         <div className="flex flex-col gap-2.5">
           <IntegrationRow
-            logo={<span className="text-[13px]">🔗</span>}
-            logoBg="#e6f9ee"
-            name="UpPromote"
-            desc={
-              integrations.uppromote.connected
-                ? `Affiliate links & discount codes · Connected as ${integrations.uppromote.connectedAs}`
-                : "Affiliate links & discount codes per influencer"
-            }
-            connected={integrations.uppromote.connected}
-            loading={pendingId === "uppromote" || loading}
-            onConnect={() => handleConnect("uppromote", "UpPromote")}
-            onDisconnect={() => handleDisconnect("uppromote", "UpPromote")}
-            onManage={() => handleManage("UpPromote")}
-          />
-          <IntegrationRow
             logo={<span className="text-[11px] font-bold text-[#185FA5]">GA</span>}
             logoBg="#f0f6fc"
             name="GoAffPro"
@@ -180,6 +161,18 @@ export default function IntegrationsPage() {
             onConnect={() => handleConnect("goaffpro", "GoAffPro")}
             onDisconnect={() => handleDisconnect("goaffpro", "GoAffPro")}
             onManage={() => handleManage("GoAffPro")}
+          />
+          <IntegrationRow
+            logo={<span className="text-[13px]">🔗</span>}
+            logoBg="#e6f9ee"
+            name="UpPromote"
+            desc="Affiliate links & discount codes per influencer"
+            connected={integrations.uppromote.connected}
+            loading={pendingId === "uppromote" || loading}
+            comingSoon
+            onConnect={() => handleConnect("uppromote", "UpPromote")}
+            onDisconnect={() => handleDisconnect("uppromote", "UpPromote")}
+            onManage={() => handleManage("UpPromote")}
           />
         </div>
       </SettingsCard>
@@ -201,8 +194,8 @@ export default function IntegrationsPage() {
             connectedLabel="Enabled"
             disconnectedLabel="Not enabled"
             loading={pendingId === "posttracker" || loading}
-            connectLabel="Upgrade"
-            onConnect={() => handleUpgrade("Post Tracker Pro")}
+            comingSoon
+            onConnect={() => {}}
             onDisconnect={() => handleDisconnect("posttracker", "Post Tracker Pro")}
             onManage={() => handleManage("Post Tracker Pro")}
           />
@@ -255,6 +248,7 @@ export default function IntegrationsPage() {
             desc="Sync orders and revenue per affiliate link or discount code"
             connected={integrations.shopify.connected}
             loading={pendingId === "shopify" || loading}
+            comingSoon
             onConnect={() => handleConnect("shopify", "Shopify")}
             onDisconnect={() => handleDisconnect("shopify", "Shopify")}
             onManage={() => handleManage("Shopify")}
@@ -266,6 +260,7 @@ export default function IntegrationsPage() {
             desc="Connect your WordPress store for order and revenue tracking"
             connected={integrations.woocommerce.connected}
             loading={pendingId === "woocommerce" || loading}
+            comingSoon
             onConnect={() => handleConnect("woocommerce", "WooCommerce")}
             onDisconnect={() => handleDisconnect("woocommerce", "WooCommerce")}
             onManage={() => handleManage("WooCommerce")}
@@ -286,6 +281,7 @@ export default function IntegrationsPage() {
           desc="Auto-save post content and metrics snapshots to Drive"
           connected={integrations.gdrive.connected}
           loading={pendingId === "gdrive" || loading}
+          comingSoon
           onConnect={() => handleConnect("gdrive", "Google Drive")}
           onDisconnect={() => handleDisconnect("gdrive", "Google Drive")}
           onManage={() => handleManage("Google Drive")}
@@ -335,6 +331,7 @@ function IntegrationRow({
   disconnectedLabel = "Not connected",
   connectLabel = "Connect",
   loading,
+  comingSoon = false,
   onConnect,
   onDisconnect,
   onManage,
@@ -349,6 +346,7 @@ function IntegrationRow({
   disconnectedLabel?: string
   connectLabel?: string
   loading?: boolean
+  comingSoon?: boolean
   onConnect: () => void
   onDisconnect: () => void
   onManage: () => void
@@ -357,12 +355,16 @@ function IntegrationRow({
     <div
       className={cn(
         "flex items-center gap-3.5 rounded-[10px] border-[0.5px] px-4 py-3.5",
-        connected ? "border-[#9ed4b8] bg-[#f0faf5]" : "border-black/[0.09] bg-white"
+        connected
+          ? "border-[#9ed4b8] bg-[#f0faf5]"
+          : comingSoon
+          ? "border-black/[0.07] bg-[#fafafa]"
+          : "border-black/[0.09] bg-white"
       )}
     >
       <div
         className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-[10px]"
-        style={{ background: logoBg }}
+        style={{ background: comingSoon && !connected ? "#f0f0ee" : logoBg, opacity: comingSoon && !connected ? 0.6 : 1 }}
       >
         {logo}
       </div>
@@ -383,24 +385,15 @@ function IntegrationRow({
       </div>
 
       <div className="flex flex-shrink-0 items-center gap-1.5">
-        <Badge
-          variant="outline"
-          className={cn(
-            "gap-1.5 rounded-full border-none px-[9px] py-[3px] text-[10px] font-semibold",
-            connected ? "bg-[#e6f9ee] text-[#0F6B3E]" : "bg-[#f0f0ee] text-[#888]"
-          )}
-        >
-          <span
-            className={cn(
-              "h-1.5 w-1.5 rounded-full",
-              connected ? "bg-[#1FAE5B]" : "bg-[#ccc]"
-            )}
-          />
-          {connected ? connectedLabel : disconnectedLabel}
-        </Badge>
-
         {connected ? (
           <>
+            <Badge
+              variant="outline"
+              className="gap-1.5 rounded-full border-none bg-[#e6f9ee] px-[9px] py-[3px] text-[10px] font-semibold text-[#0F6B3E]"
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-[#1FAE5B]" />
+              {connectedLabel}
+            </Badge>
             <Button
               size="sm"
               variant="outline"
@@ -420,15 +413,32 @@ function IntegrationRow({
               {loading ? "…" : "Disconnect"}
             </Button>
           </>
-        ) : (
-          <Button
-            size="sm"
-            className="h-auto rounded-lg bg-[#1FAE5B] px-3.5 py-1.5 text-[11px] font-medium text-white hover:bg-[#0F6B3E]"
-            onClick={onConnect}
-            disabled={loading}
+        ) : comingSoon ? (
+          <Badge
+            variant="outline"
+            className="gap-1.5 rounded-full border-none bg-[#f0f0ee] px-[10px] py-[4px] text-[10px] font-semibold text-[#999]"
           >
-            {loading ? "…" : connectLabel}
-          </Button>
+            <span className="h-1.5 w-1.5 rounded-full bg-[#ccc]" />
+            Coming soon
+          </Badge>
+        ) : (
+          <>
+            <Badge
+              variant="outline"
+              className="gap-1.5 rounded-full border-none bg-[#f0f0ee] px-[9px] py-[3px] text-[10px] font-semibold text-[#888]"
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-[#ccc]" />
+              {disconnectedLabel}
+            </Badge>
+            <Button
+              size="sm"
+              className="h-auto rounded-lg bg-[#1FAE5B] px-3.5 py-1.5 text-[11px] font-medium text-white hover:bg-[#0F6B3E]"
+              onClick={onConnect}
+              disabled={loading}
+            >
+              {loading ? "…" : connectLabel}
+            </Button>
+          </>
         )}
       </div>
     </div>

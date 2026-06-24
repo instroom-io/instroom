@@ -19,6 +19,11 @@ model User {
   created_at    DateTime @default(now())
   updated_at    DateTime @updatedAt
 
+  two_factor_enabled        Boolean  @default(false)
+  two_factor_secret         String?  @db.Text
+  two_factor_secret_pending String?  @db.Text
+  two_factor_backup_codes   Json?
+
   onboarding   Onboarding?
   subscription UserSubscription?
   brandMembers BrandMember[]
@@ -182,6 +187,8 @@ model Brand {
   influencers  BrandInfluencer[]
   campaigns    Campaign[]
   activityLogs ActivityLog[]
+  partners     BrandPartner[]    
+  tierSettings BrandTierSettings? 
 
   @@index([owner_id])
   @@index([slug])
@@ -243,6 +250,7 @@ model Influencer {
   updated_at        DateTime @updatedAt
 
   brandInfluencers BrandInfluencer[]
+  brandPartners    BrandPartner[]    // new
 
   @@unique([handle, platform])
   @@index([handle])
@@ -300,6 +308,7 @@ model BrandInfluencer {
   brand      Brand      @relation(fields: [brand_id], references: [id], onDelete: Cascade)
   influencer Influencer @relation(fields: [influencer_id], references: [id], onDelete: Cascade)
   campaign   Campaign?  @relation(fields: [campaign_id], references: [id], onDelete: SetNull)
+  partner    BrandPartner? // new (1:1 back-relation)
 
   @@unique([brand_id, influencer_id])
   @@index([brand_id])
@@ -440,4 +449,44 @@ model BrandNiche {
 
   @@unique([brand_id, name])
   @@index([brand_id])
+}
+
+model BrandPartner {
+  id                  String   @id @default(cuid()) @db.VarChar(30)
+  brand_id            String   @db.VarChar(30)
+  influencer_id       String   @db.VarChar(30)
+  brand_influencer_id String   @unique @db.VarChar(30)
+
+  on_retainer        Boolean  @default(false)
+  retainer_fee       Decimal  @default(0)
+  default_commission Decimal  @default(0)
+
+  tier_override String? @db.VarChar(20)
+
+  product_cost    Decimal @default(0)
+  fees_paid       Decimal @default(0)
+  commission_paid Decimal @default(0)
+
+  clicks      Int     @default(0)
+  sales_count Int     @default(0)
+  gmv         Decimal @default(0)
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  brand           Brand           @relation(fields: [brand_id], references: [id], onDelete: Restrict)
+  influencer      Influencer      @relation(fields: [influencer_id], references: [id], onDelete: Restrict)
+  brandInfluencer BrandInfluencer @relation(fields: [brand_influencer_id], references: [id], onDelete: Cascade)
+
+  @@index([brand_id])
+  @@index([influencer_id])
+}
+
+model BrandTierSettings {
+  brand_id   String   @id @db.VarChar(30)
+  bronze_max Decimal  @default(2000)
+  silver_max Decimal  @default(10000)
+  updated_at DateTime @updatedAt
+
+  brand Brand @relation(fields: [brand_id], references: [id], onDelete: Cascade)
 }

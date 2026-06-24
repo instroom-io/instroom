@@ -5,6 +5,7 @@ import { redirect } from "next/navigation"
 import { prisma } from "./prisma"
 import { sendWelcomeEmail } from "./email"
 import { syncBrandActivityWithSubscription } from "./subscription-limits"
+import { verifyTwoFactorCode, verifyAndConsumeBackupCode } from "./two-factor"
 import bcrypt from "bcryptjs"
 
 const INACTIVITY_TIMEOUT = 30 * 60 // 30 minutes in seconds
@@ -45,6 +46,7 @@ const nextAuthConfig = {
       credentials: {
         email: { label: "Email", type: "text" },
         password: { label: "Password", type: "password" },
+        twoFactorCode: { label: "2FA Code", type: "text" },
       },
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) {
@@ -75,6 +77,41 @@ const nextAuthConfig = {
             return null
           }
 
+          // ── Two-factor authentication check ──────────────────────────────
+          if (user.two_factor_enabled) {
+            if (!credentials.twoFactorCode) {
+              const error = new Error("TwoFactorRequired")
+              error.message = "TwoFactorRequired"
+              throw error
+            }
+
+            const isValidTotp = user.two_factor_secret
+              ? verifyTwoFactorCode(credentials.twoFactorCode, user.two_factor_secret)
+              : false
+
+            if (!isValidTotp) {
+              // Fall back to checking backup codes
+              const backupCodes = (user.two_factor_backup_codes as string[]) || []
+              const { valid, remaining } = await verifyAndConsumeBackupCode(
+                credentials.twoFactorCode,
+                backupCodes
+              )
+
+              if (!valid) {
+                const error = new Error("InvalidTwoFactorCode")
+                error.message = "InvalidTwoFactorCode"
+                throw error
+              }
+
+              // Consume the used backup code so it can't be reused
+              await prisma.user.update({
+                where: { id: user.id },
+                data: { two_factor_backup_codes: remaining },
+              })
+            }
+          }
+          // ──────────────────────────────────────────────────────────────────
+
           return {
             id: user.id,
             email: user.email,
@@ -82,8 +119,11 @@ const nextAuthConfig = {
             image: user.image,
           }
         } catch (error) {
-          // Re-throw custom auth method errors
-          if (error instanceof Error && error.message === "GoogleSignupOnly") {
+          // Re-throw custom auth method / 2FA errors so the client can branch on them
+          if (
+            error instanceof Error &&
+            ["GoogleSignupOnly", "TwoFactorRequired", "InvalidTwoFactorCode"].includes(error.message)
+          ) {
             throw error
           }
           return null
