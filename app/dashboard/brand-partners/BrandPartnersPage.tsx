@@ -107,7 +107,7 @@ interface TierSettings {
   goldMin: number
 }
 
-// ─── Tier helpers ─────────────────────────────────────────────────────────────
+// ─── Tier helpers — mutable module-level vars updated from DB ─────────────────
 let tierBronzeMax = 2000
 let tierSilverMax = 10000
 
@@ -234,6 +234,15 @@ const STATUS_STYLES: Record<string, { bg: string; color: string }> = {
   agreed:        { bg: "#e6f9ee",  color: "#0F6B3E" },
 }
 
+// ─── Default tier settings ────────────────────────────────────────────────────
+const DEFAULT_TIER_SETTINGS: TierSettings = {
+  bronzeMin: 0,
+  bronzeMax: 2000,
+  silverMin: 2001,
+  silverMax: 10000,
+  goldMin: 10001,
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 interface Props {
@@ -245,6 +254,10 @@ export default function BrandPartnersPage({ brandId }: Props) {
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  // ── Tier settings — loaded from DB, defaults until then ──────────────────
+  const [tierSettings, setTierSettings] = useState<TierSettings>(DEFAULT_TIER_SETTINGS)
+  const [tierSettingsLoading, setTierSettingsLoading] = useState(true)
 
   const [activeTab, setActiveTab] = useState(0)
   const [searchQuery, setSearchQuery] = useState("")
@@ -271,6 +284,53 @@ export default function BrandPartnersPage({ brandId }: Props) {
 
   // ── Taxonomy (for filter panel) ──────────────────────────────────────────
   const { niches, locations } = useBrandTaxonomy(brandId)
+
+  // ── Load tier settings from DB ───────────────────────────────────────────
+  useEffect(() => {
+    if (!brandId) return
+
+    async function loadTierSettings() {
+      try {
+        setTierSettingsLoading(true)
+        const res = await fetch(`/api/brand-tier-settings?brandId=${brandId}`)
+        if (!res.ok) throw new Error("Failed to load tier settings")
+        const data = await res.json()
+
+        const bronzeMax = Number(data.bronze_max)
+        const silverMax = Number(data.silver_max)
+
+        // Keep module-level vars in sync for autoTier()
+        tierBronzeMax = bronzeMax
+        tierSilverMax = silverMax
+
+        setTierSettings({
+          bronzeMin: 0,
+          bronzeMax,
+          silverMin: bronzeMax + 1,
+          silverMax,
+          goldMin: silverMax + 1,
+        })
+      } catch {
+        // Non-critical — fall back to defaults already set
+      } finally {
+        setTierSettingsLoading(false)
+      }
+    }
+
+    loadTierSettings()
+  }, [brandId])
+
+  // ── Re-compute partner tiers whenever tier settings change ───────────────
+  useEffect(() => {
+    if (partners.length === 0) return
+    setPartners((prev) =>
+      prev.map((p) => ({
+        ...p,
+        tier: p.tierOverride || autoTier(p.rev),
+      }))
+    )
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tierSettings])
 
   // ── Initial data load — campaigns only, partners start blank ─────────────
   useEffect(() => {
@@ -303,10 +363,12 @@ export default function BrandPartnersPage({ brandId }: Props) {
   // ── Tier helpers ─────────────────────────────────────────────────────────
   const getDisplayTier = useCallback((p: Partner) => p.tierOverride || autoTier(p.rev), [])
 
+  // Called by TierSettingsModal after a successful PUT to /api/brand-tier-settings
   const handleTierSave = (settings: TierSettings) => {
     tierBronzeMax = settings.bronzeMax
     tierSilverMax = settings.silverMax
-    setPartners((prev) => prev.map((p) => ({ ...p, tier: p.tierOverride || autoTier(p.rev) })))
+    setTierSettings(settings)
+    // Partner tiers re-compute via the useEffect above
   }
 
   // ── Add partner ──────────────────────────────────────────────────────────
@@ -896,13 +958,10 @@ export default function BrandPartnersPage({ brandId }: Props) {
                             style={{ borderBottom: "0.5px solid rgba(0,0,0,0.05)", cursor: "pointer" }}
                             onClick={() => openPartnerSidebar(p)}
                           >
-                            {/* Creator */}
                             <td style={{ padding: "10px", verticalAlign: "top" }}>
                               <div style={{ fontWeight: 500 }}>{p.handle}</div>
                               <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>{p.plat} · {p.niche || "—"}</div>
                             </td>
-
-                            {/* Deliverables */}
                             <td style={{ padding: "10px", verticalAlign: "top" }}>
                               {deliverablesList.length > 0 ? (
                                 deliverablesList.map((d, i) => (
@@ -915,36 +974,24 @@ export default function BrandPartnersPage({ brandId }: Props) {
                                 <span style={{ fontSize: 11, color: "#ccc" }}>—</span>
                               )}
                             </td>
-
-                            {/* Agreed fee */}
                             <td style={{ padding: "10px", textAlign: "right", verticalAlign: "top" }}>
                               {p.agreed_rate
                                 ? <span style={{ fontWeight: 600 }}>{formatMoney(p.agreed_rate)}</span>
                                 : <span style={{ color: "#ccc", fontSize: 11 }}>—</span>}
                             </td>
-
-                            {/* Likes */}
                             <td style={{ padding: "10px", textAlign: "right", verticalAlign: "top", fontSize: 11 }}>
                               {p.likes_count
-                                ? p.likes_count >= 1000
-                                  ? (p.likes_count / 1000).toFixed(1) + "K"
-                                  : p.likes_count
+                                ? p.likes_count >= 1000 ? (p.likes_count / 1000).toFixed(1) + "K" : p.likes_count
                                 : "—"}
                             </td>
-
-                            {/* Eng rate */}
                             <td style={{ padding: "10px", textAlign: "right", verticalAlign: "top", fontSize: 11 }}>
                               {p.eng ? p.eng + "%" : "—"}
                             </td>
-
-                            {/* Revenue */}
                             <td style={{ padding: "10px", textAlign: "right", verticalAlign: "top" }}>
                               {pRev
                                 ? <span style={{ fontWeight: 600, color: "#1FAE5B" }}>{formatMoney(pRev)}</span>
                                 : <span style={{ color: "#ccc", fontSize: 11 }}>—</span>}
                             </td>
-
-                            {/* ROAS / ROI */}
                             <td style={{ padding: "10px", textAlign: "right", verticalAlign: "top" }}>
                               {pSpend > 0 ? (
                                 <>
@@ -955,8 +1002,6 @@ export default function BrandPartnersPage({ brandId }: Props) {
                                 <span style={{ color: "#ccc", fontSize: 11 }}>—</span>
                               )}
                             </td>
-
-                            {/* Status */}
                             <td style={{ padding: "10px", textAlign: "right", verticalAlign: "top" }}>
                               <span style={{
                                 display: "inline-block", fontSize: 10, fontWeight: 500,
@@ -974,7 +1019,6 @@ export default function BrandPartnersPage({ brandId }: Props) {
                       })}
                     </tbody>
 
-                    {/* Totals footer */}
                     {campPartners.length > 1 && (
                       <tfoot>
                         <tr style={{ borderTop: "1px solid rgba(0,0,0,0.08)", background: "#fafaf9" }}>
@@ -987,9 +1031,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
                           <td style={{ padding: "8px 10px", textAlign: "right", fontSize: 11 }}>
                             {campLikes >= 1000 ? (campLikes / 1000).toFixed(1) + "K" : campLikes || "—"}
                           </td>
-                          <td style={{ padding: "8px 10px", textAlign: "right", fontSize: 11 }}>
-                            {avgEng}%
-                          </td>
+                          <td style={{ padding: "8px 10px", textAlign: "right", fontSize: 11 }}>{avgEng}%</td>
                           <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, color: "#1FAE5B", fontSize: 12 }}>
                             {campRev ? formatMoney(campRev) : "—"}
                           </td>
@@ -1020,14 +1062,15 @@ export default function BrandPartnersPage({ brandId }: Props) {
         isOpen={showTierModal}
         onClose={() => setShowTierModal(false)}
         onSave={handleTierSave}
-        initialSettings={{ bronzeMin: 0, bronzeMax: tierBronzeMax, silverMin: tierBronzeMax + 1, silverMax: tierSilverMax, goldMin: tierSilverMax + 1 }}
+        initialSettings={tierSettings}
+        brandId={brandId}
       />
 
       <AddPartnerModal
         isOpen={showAddPartnerModal}
         onClose={() => setShowAddPartnerModal(false)}
         brandId={brandId}
-        onAdded={() => {}} // no-op — AddPartnerModal handles state via onAdded internally
+        onAdded={() => {}}
       />
 
       <NewCampaignModal
@@ -1049,7 +1092,6 @@ export default function BrandPartnersPage({ brandId }: Props) {
         }}
       />
 
-      {/* ── Profile Sidebar ── */}
       {showProfilePanel && selectedPartner && (
         <InfluencerProfileSidebar
           partner={selectedPartner as any}

@@ -43,7 +43,6 @@ export function TwoFactorSetup({ enabled, onEnabledChange, onToast }: TwoFactorS
   async function handleSwitchChange(checked: boolean) {
     setError("")
     if (checked) {
-      // Start setup flow: generate secret + QR
       setLoading(true)
       try {
         const res = await fetch("/api/settings/security/2fa", {
@@ -61,7 +60,6 @@ export function TwoFactorSetup({ enabled, onEnabledChange, onToast }: TwoFactorS
         setLoading(false)
       }
     } else {
-      // Turning off — require password confirmation
       setStep("disable")
     }
   }
@@ -184,7 +182,6 @@ export function TwoFactorSetup({ enabled, onEnabledChange, onToast }: TwoFactorS
         </DialogContent>
       </Dialog>
 
-      {/* Backup codes — shown once after successful setup */}
       <Dialog open={step === "backup-codes"} onOpenChange={(open) => !open && handleBackupCodesDone()}>
         <DialogContent>
           <DialogHeader>

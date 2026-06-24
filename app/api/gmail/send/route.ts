@@ -6,10 +6,8 @@ import { prisma } from "@/lib/prisma"
 // ─── Token helper ─────────────────────────────────────────────────────────────
 
 async function getAccessToken(session: any): Promise<string | null> {
-  // 1. Try session first (Google OAuth login)
   if (session.accessToken) return session.accessToken
 
-  // 2. Fall back to DB Account table (credentials login)
   const userId = session.user?.id
   if (!userId) return null
 

@@ -4,10 +4,6 @@ import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { NextRequest, NextResponse } from "next/server"
 
-/**
- * GET /api/brand/[brandId]/campaigns
- * Fetch all campaigns for a specific brand
- */
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ brandId: string }> }

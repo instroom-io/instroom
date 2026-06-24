@@ -13,7 +13,6 @@ export function SubscriptionStatusProvider({
 
   return (
     <>
-      {/* Show expiration warning banner if subscription is expiring soon */}
       {subscriptionStatus.isExpiringSoon && !subscriptionStatus.isExpired && (
         <div className="px-4 py-2 bg-white border-b border-gray-200">
           <SubscriptionExpiringWarning
@@ -23,7 +22,6 @@ export function SubscriptionStatusProvider({
         </div>
       )}
 
-      {/* Show expired modal if subscription is expired */}
       <SubscriptionExpiredModal
         isOpen={subscriptionStatus.isExpired}
         endedAt={subscriptionStatus.subscription?.ended_at}
