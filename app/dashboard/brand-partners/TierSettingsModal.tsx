@@ -1,6 +1,3 @@
-// C:\Users\reyme\Videos\instroom\app\dashboard\brand-partners\TierSettingsModal.tsx
-
-
 "use client"
 
 import { useState, useEffect } from "react"
@@ -18,6 +15,7 @@ interface TierSettingsModalProps {
   onClose: () => void
   onSave: (settings: TierSettings) => void
   initialSettings?: TierSettings
+  brandId: string
 }
 
 export default function TierSettingsModal({
@@ -25,12 +23,15 @@ export default function TierSettingsModal({
   onClose,
   onSave,
   initialSettings = { bronzeMin: 0, bronzeMax: 2000, silverMin: 2001, silverMax: 10000, goldMin: 10001 },
+  brandId,
 }: TierSettingsModalProps) {
   const [bronzeMin, setBronzeMin] = useState(initialSettings.bronzeMin)
   const [bronzeMax, setBronzeMax] = useState(initialSettings.bronzeMax)
   const [silverMin, setSilverMin] = useState(initialSettings.silverMin)
   const [silverMax, setSilverMax] = useState(initialSettings.silverMax)
   const [goldMin, setGoldMin] = useState(initialSettings.goldMin)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   useEffect(() => {
     if (isOpen) {
@@ -39,6 +40,7 @@ export default function TierSettingsModal({
       setSilverMin(initialSettings.silverMin)
       setSilverMax(initialSettings.silverMax)
       setGoldMin(initialSettings.goldMin)
+      setSaveError(null)
     }
   }, [isOpen, initialSettings])
 
@@ -63,15 +65,37 @@ export default function TierSettingsModal({
     setSilverMax(value - 1)
   }
 
-  const handleSave = () => {
-    onSave({ 
-      bronzeMin, 
-      bronzeMax, 
-      silverMin, 
-      silverMax, 
-      goldMin 
-    })
-    onClose()
+  const isInvalid = bronzeMax >= silverMin || silverMax >= goldMin
+
+  const handleSave = async () => {
+    if (isInvalid) return
+    setSaving(true)
+    setSaveError(null)
+
+    try {
+      const res = await fetch(`/api/brand/brand-tier-settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          brandId,
+          bronze_max: bronzeMax,
+          silver_max: silverMax,
+          gold_min: goldMin,
+        }),
+      })
+
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.error || `Server error ${res.status}`)
+      }
+
+      onSave({ bronzeMin, bronzeMax, silverMin, silverMax, goldMin })
+      onClose()
+    } catch (e: any) {
+      setSaveError(e.message || "Failed to save tier settings")
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -156,7 +180,7 @@ export default function TierSettingsModal({
           </div>
 
           {/* Validation Warning */}
-          {(bronzeMax >= silverMin || silverMax >= goldMin) && (
+          {isInvalid && (
             <div
               style={{
                 fontSize: "11px",
@@ -169,6 +193,23 @@ export default function TierSettingsModal({
               }}
             >
               ⚠️ Tier ranges should not overlap. Please ensure each tier has a unique revenue range.
+            </div>
+          )}
+
+          {/* Save Error */}
+          {saveError && (
+            <div
+              style={{
+                fontSize: "11px",
+                color: "#E24B4A",
+                padding: "10px",
+                background: "#fff5f5",
+                borderRadius: "8px",
+                border: "0.5px solid #E24B4A",
+                marginBottom: "14px",
+              }}
+            >
+              ⚠️ {saveError}
             </div>
           )}
 
@@ -189,8 +230,15 @@ export default function TierSettingsModal({
         </div>
 
         <div className="mf">
-          <button className="btn-outline" onClick={onClose}>Cancel</button>
-          <button className="btn-primary" onClick={handleSave}>Save thresholds</button>
+          <button className="btn-outline" onClick={onClose} disabled={saving}>Cancel</button>
+          <button
+            className="btn-primary"
+            onClick={handleSave}
+            disabled={saving || isInvalid}
+            style={{ opacity: saving || isInvalid ? 0.6 : 1, cursor: saving || isInvalid ? "not-allowed" : "pointer" }}
+          >
+            {saving ? "Saving…" : "Save thresholds"}
+          </button>
         </div>
       </div>
 
@@ -205,11 +253,7 @@ export default function TierSettingsModal({
           justify-content: center;
           padding: 20px;
         }
-
-        .mo.open {
-          display: flex;
-        }
-
+        .mo.open { display: flex; }
         .md {
           background: #fff;
           border-radius: 14px;
@@ -220,7 +264,6 @@ export default function TierSettingsModal({
           flex-direction: column;
           box-shadow: 0 8px 40px rgba(0, 0, 0, 0.2);
         }
-
         .mh {
           padding: 18px 20px 14px;
           border-bottom: 0.5px solid rgba(0, 0, 0, 0.08);
@@ -228,27 +271,9 @@ export default function TierSettingsModal({
           align-items: flex-start;
           justify-content: space-between;
         }
-
-        .mt {
-          font-size: 15px;
-          font-weight: 600;
-          color: #1e1e1e;
-        }
-
-        .mc {
-          background: none;
-          border: none;
-          font-size: 20px;
-          color: #888;
-          cursor: pointer;
-        }
-
-        .mb {
-          padding: 20px;
-          overflow-y: auto;
-          flex: 1;
-        }
-
+        .mt { font-size: 15px; font-weight: 600; color: #1e1e1e; }
+        .mc { background: none; border: none; font-size: 20px; color: #888; cursor: pointer; }
+        .mb { padding: 20px; overflow-y: auto; flex: 1; }
         .mf {
           padding: 14px 20px;
           border-top: 0.5px solid rgba(0, 0, 0, 0.08);
@@ -256,7 +281,6 @@ export default function TierSettingsModal({
           justify-content: flex-end;
           gap: 8px;
         }
-
         .btn-outline {
           font-size: 11px;
           padding: 6px 14px;
@@ -266,7 +290,6 @@ export default function TierSettingsModal({
           color: #555;
           cursor: pointer;
         }
-
         .btn-primary {
           font-size: 11px;
           padding: 6px 14px;
@@ -275,12 +298,9 @@ export default function TierSettingsModal({
           background: #1fae5b;
           color: #fff;
           cursor: pointer;
+          transition: background 0.15s;
         }
-
-        .btn-primary:hover {
-          background: #0f6b3e;
-        }
-
+        .btn-primary:hover:not(:disabled) { background: #0f6b3e; }
         .tier-header {
           display: flex;
           gap: 10px;
@@ -289,20 +309,8 @@ export default function TierSettingsModal({
           padding-bottom: 6px;
           border-bottom: 0.5px solid rgba(0, 0, 0, 0.1);
         }
-
-        .tier-row {
-          display: flex;
-          gap: 10px;
-          align-items: center;
-          margin-bottom: 12px;
-        }
-
-        .tier-label {
-          font-size: 12px;
-          font-weight: 600;
-          width: 80px;
-        }
-
+        .tier-row { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; }
+        .tier-label { font-size: 12px; font-weight: 600; width: 80px; }
         .tier-input {
           font-size: 12px;
           padding: 6px 10px;
@@ -311,11 +319,7 @@ export default function TierSettingsModal({
           width: 100%;
           flex: 1;
         }
-
-        .tier-input:focus {
-          outline: none;
-          border-color: #1fae5b;
-        }
+        .tier-input:focus { outline: none; border-color: #1fae5b; }
       `}</style>
     </div>
   )
