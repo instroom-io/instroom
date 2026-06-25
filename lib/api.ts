@@ -1,17 +1,3 @@
-// lib/api.ts
-// Typed API client for the Brand Partners feature.
-// Import these in your page/component instead of using mock data.
-//
-// Usage:
-//   import { partnersApi, campaignsApi, influencersApi } from "@/lib/api"
-//
-//   const partners = await partnersApi.list(brandId)
-//   const created  = await partnersApi.add(brandId, { handle: "@foo", platform: "instagram" })
-//   await partnersApi.update(brandId, partnerId, { stage: 3 })
-//   await partnersApi.remove(brandId, partnerId)
-
-// ─── Types ──────────────────────────────────────────────────────────────────
-
 export interface InfluencerRecord {
   id: string
   handle: string
@@ -29,6 +15,25 @@ export interface InfluencerRecord {
   avg_likes: number
   avg_comments: number
   avg_views: number
+  created_at: string
+  updated_at: string
+}
+
+export interface BrandPartnerRecord {
+  id: string
+  brand_id: string
+  influencer_id: string
+  brand_influencer_id: string
+  on_retainer: boolean
+  retainer_fee: number
+  default_commission: number
+  tier_override: string | null
+  product_cost: number
+  fees_paid: number
+  commission_paid: number
+  clicks: number
+  sales_count: number
+  gmv: number
   created_at: string
   updated_at: string
 }
@@ -64,6 +69,7 @@ export interface BrandInfluencerRecord {
   updated_at: string
   influencer: InfluencerRecord
   campaign?: { id: string; name: string; status: string } | null
+  partner?: BrandPartnerRecord | null
 }
 
 export interface CampaignRecord {
@@ -72,6 +78,10 @@ export interface CampaignRecord {
   name: string
   description: string | null
   status: string
+  start_date: string | null   // ← added
+  end_date: string | null     // ← added
+  budget: number | null       // ← added
+  type: string | null         // ← added
   created_at: string
   updated_at: string
   influencers: BrandInfluencerRecord[]
@@ -109,6 +119,13 @@ export interface ContentPostRecord {
   engagement_rate: number
   saved_count: number
   created_at: string
+}
+
+export interface BrandTierSettingsRecord {
+  brand_id: string
+  bronze_max: number
+  silver_max: number
+  updated_at: string
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -153,15 +170,9 @@ export const partnersApi = {
     )
   },
 
-  /** Get a single brand-influencer record */
   get: (brandId: string, partnerId: string) =>
     apiFetch<BrandInfluencerRecord>(`/api/brands/${brandId}/partners/${partnerId}`),
 
-  /**
-   * Add an influencer to a brand.
-   * Pass influencer_id if the global influencer already exists,
-   * or pass handle + platform (+ optional fields) to create-or-link.
-   */
   add: (
     brandId: string,
     data: Partial<InfluencerRecord> & {
@@ -177,12 +188,39 @@ export const partnersApi = {
       body: JSON.stringify(data),
     }),
 
-  /** Partial update of a brand-influencer record */
+  /** Partial update of a brand-influencer record (CRM/outreach fields) */
   update: (brandId: string, partnerId: string, data: Partial<BrandInfluencerRecord>) =>
     apiFetch<BrandInfluencerRecord>(`/api/brands/${brandId}/partners/${partnerId}`, {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
+
+  updateFinancials: (
+    brandId: string,
+    partnerId: string,
+    data: Partial<
+      Pick<
+        BrandPartnerRecord,
+        | "on_retainer"
+        | "retainer_fee"
+        | "default_commission"
+        | "tier_override"
+        | "product_cost"
+        | "fees_paid"
+        | "commission_paid"
+        | "clicks"
+        | "sales_count"
+        | "gmv"
+      >
+    >
+  ) =>
+    apiFetch<BrandInfluencerRecord>(
+      `/api/brands/${brandId}/partners/${partnerId}/financials`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }
+    ),
 
   /** Remove a brand-influencer link (does NOT delete the global influencer) */
   remove: (brandId: string, partnerId: string) =>
@@ -257,6 +295,10 @@ export const campaignsApi = {
       name: string
       description?: string | null
       status?: string
+      start_date?: string | null
+      end_date?: string | null
+      budget?: number | null
+      type?: string | null
       influencer_ids?: string[]
     }
   ) =>
@@ -272,6 +314,10 @@ export const campaignsApi = {
       name?: string
       description?: string | null
       status?: string
+      start_date?: string | null
+      end_date?: string | null
+      budget?: number | null
+      type?: string | null
       add_influencer_ids?: string[]
       remove_influencer_ids?: string[]
     }
@@ -310,6 +356,24 @@ export const influencersApi = {
     apiFetch<InfluencerRecord>("/api/influencers", {
       method: "POST",
       body: JSON.stringify(data),
+    }),
+}
+
+// ─── Brand Tier Settings API ──────────────────────────────────────────────────
+
+export const tierSettingsApi = {
+  /** Get tier thresholds for a brand. Returns sensible defaults if none saved yet. */
+  get: (brandId: string) =>
+    apiFetch<BrandTierSettingsRecord>(`/api/brands/${brandId}/tier-settings`),
+
+  /** Save (upsert) tier thresholds for a brand */
+  save: (brandId: string, settings: { bronzeMax: number; silverMax: number }) =>
+    apiFetch<BrandTierSettingsRecord>(`/api/brands/${brandId}/tier-settings`, {
+      method: "PUT",
+      body: JSON.stringify({
+        bronze_max: settings.bronzeMax,
+        silver_max: settings.silverMax,
+      }),
     }),
 }
 

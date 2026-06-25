@@ -50,6 +50,7 @@ export async function GET(
         campaign: {
           select: { id: true, name: true, status: true },
         },
+        partner: true, // ← fixes missing financials (product_cost, fees_paid, clicks, tier_override, etc.)
       },
       orderBy: { created_at: "desc" },
     })
@@ -151,6 +152,7 @@ export async function POST(
       include: {
         influencer: true,
         campaign: { select: { id: true, name: true, status: true } },
+        partner: true, // ← ensures POST response also includes financials (null on first create, that's fine)
       },
     })
 

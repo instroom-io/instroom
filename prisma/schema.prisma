@@ -260,13 +260,17 @@ model Influencer {
 }
 
 model Campaign {
-  id          String   @id @default(cuid()) @db.VarChar(30)
-  brand_id    String   @db.VarChar(30)
+  id          String    @id @default(cuid()) @db.VarChar(30)
+  brand_id    String    @db.VarChar(30)
   name        String
-  description String?  @db.Text
-  status      String   @default("draft") @db.VarChar(20)
-  created_at  DateTime @default(now())
-  updated_at  DateTime @updatedAt
+  description String?   @db.Text
+  type        String?   @db.VarChar(30)   
+  status      String    @default("draft") @db.VarChar(20)
+  budget      Decimal?                     
+  start_date  DateTime?                    
+  end_date    DateTime?                    
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @updatedAt
 
   brand            Brand             @relation(fields: [brand_id], references: [id], onDelete: Cascade)
   brandInfluencers BrandInfluencer[]

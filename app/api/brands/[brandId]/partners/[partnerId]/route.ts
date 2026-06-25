@@ -21,6 +21,7 @@ export async function GET(
       include: {
         influencer: true,
         campaign: true,
+        partner: true, // ← added: financial/commercial layer (BrandPartner)
       },
     })
 
@@ -87,6 +88,7 @@ export async function PATCH(
       include: {
         influencer: true,
         campaign: { select: { id: true, name: true } },
+        partner: true, // ← added: keep financials in the response shape consistent with GET
       },
     })
 
@@ -109,6 +111,8 @@ export async function DELETE(
 
     const { partnerId } = await context.params
 
+    // BrandPartner row (if any) is cascade-deleted automatically via the
+    // brand_influencer_id FK (onDelete: Cascade) — no manual cleanup needed.
     await prisma.brandInfluencer.delete({ where: { id: partnerId } })
     return NextResponse.json({ success: true })
   } catch (error) {

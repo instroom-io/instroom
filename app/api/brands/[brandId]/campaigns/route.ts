@@ -1,4 +1,3 @@
-// app/api/brands/[brandId]/campaigns/route.ts
 import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { getServerSession } from "next-auth"
@@ -16,7 +15,6 @@ export async function GET(
 
     const { brandId } = await context.params
 
-    // Fetch campaigns first
     const campaigns = await prisma.campaign.findMany({
       where: { brand_id: brandId },
       orderBy: { created_at: "desc" },
@@ -28,8 +26,6 @@ export async function GET(
 
     const campaignIds = campaigns.map((c) => c.id)
 
-    // Fetch linked BrandInfluencer rows separately — avoids the
-    // CampaignInclude `influencers` key issue with stale Prisma client
     const brandInfluencers = await prisma.brandInfluencer.findMany({
       where: {
         brand_id: brandId,
@@ -44,7 +40,6 @@ export async function GET(
       },
     })
 
-    // Group by campaign_id for stats
     const bisByCampaign = new Map<string, typeof brandInfluencers>()
     for (const bi of brandInfluencers) {
       if (!bi.campaign_id) continue
@@ -63,7 +58,7 @@ export async function GET(
           partner_count: bis.length,
           posts_done:    postedCount,
           posts_total:   bis.length,
-          total_rev:     0, // extend when revenue tracking is in place
+          total_rev:     0,
         },
       }
     })
@@ -95,9 +90,13 @@ export async function POST(
     const campaign = await prisma.campaign.create({
       data: {
         brand_id:    brandId,
-        name:        body.name        as string,
+        name:        body.name                                        as string,
         description: (body.description as string | null | undefined) ?? null,
-        status:      (body.status     as string | undefined) ?? "draft",
+        status:      (body.status      as string | undefined)        ?? "draft",
+        type:        (body.type        as string | null | undefined) ?? null,
+        budget:      body.budget    != null ? Number(body.budget)    : null,
+        start_date:  body.start_date   ? new Date(body.start_date)  : null,
+        end_date:    body.end_date     ? new Date(body.end_date)     : null,
       },
     })
 
