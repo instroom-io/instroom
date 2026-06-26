@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react"
 import TierSettingsModal from "./TierSettingsModal"
 import AddPartnerModal from "./AddPartnerModal"
 import NewCampaignModal from "./NewCampaignModal"
-import InfluencerProfileSidebar from "@/components/InfluencerProfileSidebar"
+import InfluencerProfileSidebar from "./InfluencerProfileSidebar"
 import { IconSearch, IconFilter } from "@tabler/icons-react"
 import { ReactNode } from "react"
 import { useBrandTaxonomy } from "@/hooks/useBrandTaxonomy"
@@ -12,6 +12,7 @@ import { useBrandTaxonomy } from "@/hooks/useBrandTaxonomy"
 import {
   partnersApi,
   campaignsApi,
+  tierSettingsApi,
   BrandInfluencerRecord,
   CampaignRecord,
 } from "@/lib/api"
@@ -107,102 +108,9 @@ interface TierSettings {
   goldMin: number
 }
 
-// ─── Tier helpers — mutable module-level vars updated from DB ─────────────────
-let tierBronzeMax = 2000
-let tierSilverMax = 10000
-
-function autoTier(rev: number): string {
-  if (rev >= tierSilverMax + 1) return "Gold"
-  if (rev >= tierBronzeMax + 1) return "Silver"
-  return "Bronze"
-}
-
 // ─── Formatters ───────────────────────────────────────────────────────────────
 function formatMoney(v: number) {
   return "$" + Math.round(v).toLocaleString()
-}
-
-// ─── DB record → component Partner shape ─────────────────────────────────────
-function dbToPartner(bi: BrandInfluencerRecord): Partner {
-  const inf = bi.influencer
-  const nameParts = (inf.full_name || inf.handle.replace("@", "")).split(" ")
-  const rev = bi.agreed_rate ? Number(bi.agreed_rate) : 0
-
-  return {
-    id: bi.id,
-    influencer_id: bi.influencer_id,
-    handle: inf.handle,
-    firstName: nameParts[0] || "",
-    lastName: nameParts.slice(1).join(" ") || "",
-    plat: inf.platform,
-    niche: inf.niche || "",
-    gend: inf.gender || "",
-    loc: inf.location || "",
-    tier: autoTier(rev),
-    tierOverride: null,
-    onRet: false,
-    retFee: 0,
-    defComm: 0,
-    commSt: bi.contact_status || "not_contacted",
-    clicks: 0,
-    cvr: 0,
-    sales: 0,
-    aov: 0,
-    rev,
-    fol: inf.follower_count || 0,
-    eng: Number(inf.engagement_rate) || 0,
-    avgV: inf.avg_views || 0,
-    gmv: 0,
-    added: new Date(bi.created_at),
-    prodCost: 0,
-    feesPaid: 0,
-    commPaid: 0,
-    totalSpend: 0,
-    roi_val: 0,
-    roas_val: 0,
-    likes_count: bi.likes_count,
-    comments_count: bi.comments_count,
-    engagement_count: bi.engagement_count,
-    contact_status: bi.contact_status,
-    stage: bi.stage,
-    content_posted: bi.content_posted,
-    post_url: bi.post_url,
-    notes: bi.notes,
-    agreed_rate: bi.agreed_rate ? Number(bi.agreed_rate) : null,
-    internal_rating: bi.internal_rating ? Number(bi.internal_rating) : null,
-    campaign_id: bi.campaign_id,
-    monthly: [],
-    avg_likes: inf.avg_likes || 0,
-    avg_comments: inf.avg_comments || 0,
-    avg_views: inf.avg_views || 0,
-    email: inf.email || null,
-    bio: inf.bio || null,
-    profile_image_url: inf.profile_image_url || null,
-    social_link: inf.social_link || null,
-    follower_count: inf.follower_count || 0,
-    engagement_rate: Number(inf.engagement_rate) || 0,
-    _raw: bi,
-  }
-}
-
-// ─── DB record → component Campaign shape ────────────────────────────────────
-function dbToCampaign(c: CampaignRecord): Campaign {
-  return {
-    id: c.id,
-    name: c.name,
-    status: c.status,
-    start: c.created_at?.slice(0, 10) ?? "",
-    end: "",
-    budget: 0,
-    type: "—",
-    notes: c.description || "",
-    partner_count: c._stats?.partner_count ?? c.influencers?.length ?? 0,
-    posts_done: c._stats?.posts_done ?? 0,
-    posts_total: c._stats?.posts_total ?? 0,
-    total_rev: c._stats?.total_rev ?? 0,
-    partners: (c.influencers ?? []).map((bi: any) => ({ pid: bi.id ?? bi.influencer_id })),
-    _raw: c,
-  }
 }
 
 // ─── Platform icons ───────────────────────────────────────────────────────────
@@ -234,15 +142,6 @@ const STATUS_STYLES: Record<string, { bg: string; color: string }> = {
   agreed:        { bg: "#e6f9ee",  color: "#0F6B3E" },
 }
 
-// ─── Default tier settings ────────────────────────────────────────────────────
-const DEFAULT_TIER_SETTINGS: TierSettings = {
-  bronzeMin: 0,
-  bronzeMax: 2000,
-  silverMin: 2001,
-  silverMax: 10000,
-  goldMin: 10001,
-}
-
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 interface Props {
@@ -254,10 +153,6 @@ export default function BrandPartnersPage({ brandId }: Props) {
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-
-  // ── Tier settings — loaded from DB, defaults until then ──────────────────
-  const [tierSettings, setTierSettings] = useState<TierSettings>(DEFAULT_TIER_SETTINGS)
-  const [tierSettingsLoading, setTierSettingsLoading] = useState(true)
 
   const [activeTab, setActiveTab] = useState(0)
   const [searchQuery, setSearchQuery] = useState("")
@@ -282,57 +177,118 @@ export default function BrandPartnersPage({ brandId }: Props) {
   const [showCampaignDetail, setShowCampaignDetail] = useState(false)
   const [selectedCampaign, setSelectedCampaign] = useState<Campaign | null>(null)
 
-  // ── Taxonomy (for filter panel) ──────────────────────────────────────────
+  // ── Tier thresholds ──────────────────────────────────────────────────────
+  const [tierThresholds, setTierThresholds] = useState({ bronzeMax: 2000, silverMax: 10000 })
+
+  const autoTier = useCallback(
+    (rev: number): string => {
+      if (rev >= tierThresholds.silverMax + 1) return "Gold"
+      if (rev >= tierThresholds.bronzeMax + 1) return "Silver"
+      return "Bronze"
+    },
+    [tierThresholds]
+  )
+
+  // ── DB record → Partner ──────────────────────────────────────────────────
+  const dbToPartner = useCallback(
+    (bi: BrandInfluencerRecord): Partner => {
+      const inf = bi.influencer
+      const bp = bi.partner
+      const nameParts = (inf.full_name || inf.handle.replace("@", "")).split(" ")
+      const rev = bi.agreed_rate ? Number(bi.agreed_rate) : 0
+
+      const prodCost   = bp ? Number(bp.product_cost) : 0
+      const feesPaid   = bp ? Number(bp.fees_paid) : 0
+      const commPaid   = bp ? Number(bp.commission_paid) : 0
+      const totalSpend = prodCost + feesPaid + commPaid
+
+      const clicks = bp?.clicks ?? 0
+      const sales  = bp?.sales_count ?? 0
+      const cvr    = clicks > 0 ? (sales / clicks) * 100 : 0
+
+      return {
+        id: bi.id,
+        influencer_id: bi.influencer_id,
+        handle: inf.handle,
+        firstName: nameParts[0] || "",
+        lastName: nameParts.slice(1).join(" ") || "",
+        plat: inf.platform,
+        niche: inf.niche || "",
+        gend: inf.gender || "",
+        loc: inf.location || "",
+        tier: autoTier(rev),
+        tierOverride: bp?.tier_override ?? null,
+        onRet: bp?.on_retainer ?? false,
+        retFee: bp ? Number(bp.retainer_fee) : 0,
+        defComm: bp ? Number(bp.default_commission) : 0,
+        commSt: bi.contact_status || "not_contacted",
+        clicks,
+        cvr,
+        sales,
+        aov: 0,
+        rev,
+        fol: inf.follower_count || 0,
+        eng: Number(inf.engagement_rate) || 0,
+        avgV: inf.avg_views || 0,
+        gmv: bp ? Number(bp.gmv) : 0,
+        added: new Date(bi.created_at),
+        prodCost,
+        feesPaid,
+        commPaid,
+        totalSpend,
+        roi_val: totalSpend > 0 ? ((rev - totalSpend) / totalSpend) * 100 : 0,
+        roas_val: totalSpend > 0 ? rev / totalSpend : 0,
+        likes_count: bi.likes_count,
+        comments_count: bi.comments_count,
+        engagement_count: bi.engagement_count,
+        contact_status: bi.contact_status,
+        stage: bi.stage,
+        content_posted: bi.content_posted,
+        post_url: bi.post_url,
+        notes: bi.notes,
+        agreed_rate: bi.agreed_rate ? Number(bi.agreed_rate) : null,
+        internal_rating: bi.internal_rating ? Number(bi.internal_rating) : null,
+        campaign_id: bi.campaign_id,
+        monthly: [],
+        avg_likes: inf.avg_likes || 0,
+        avg_comments: inf.avg_comments || 0,
+        avg_views: inf.avg_views || 0,
+        email: inf.email || null,
+        bio: inf.bio || null,
+        profile_image_url: inf.profile_image_url || null,
+        social_link: inf.social_link || null,
+        follower_count: inf.follower_count || 0,
+        engagement_rate: Number(inf.engagement_rate) || 0,
+        _raw: bi,
+      }
+    },
+    [autoTier]
+  )
+
+  // ── DB record → Campaign ─────────────────────────────────────────────────
+  function dbToCampaign(c: CampaignRecord): Campaign {
+    return {
+      id: c.id,
+      name: c.name,
+      status: c.status,
+      start: c.start_date?.slice(0, 10) ?? c.created_at?.slice(0, 10) ?? "",
+      end: c.end_date?.slice(0, 10) ?? "",
+      budget: c.budget ? Number(c.budget) : 0,
+      type: c.type || "—",
+      notes: c.description || "",
+      partner_count: c._stats?.partner_count ?? c.influencers?.length ?? 0,
+      posts_done: c._stats?.posts_done ?? 0,
+      posts_total: c._stats?.posts_total ?? 0,
+      total_rev: c._stats?.total_rev ?? 0,
+      partners: (c.influencers ?? []).map((bi: any) => ({ pid: bi.id ?? bi.influencer_id })),
+      _raw: c,
+    }
+  }
+
+  // ── Taxonomy ─────────────────────────────────────────────────────────────
   const { niches, locations } = useBrandTaxonomy(brandId)
 
-  // ── Load tier settings from DB ───────────────────────────────────────────
-  useEffect(() => {
-    if (!brandId) return
-
-    async function loadTierSettings() {
-      try {
-        setTierSettingsLoading(true)
-        const res = await fetch(`/api/brand-tier-settings?brandId=${brandId}`)
-        if (!res.ok) throw new Error("Failed to load tier settings")
-        const data = await res.json()
-
-        const bronzeMax = Number(data.bronze_max)
-        const silverMax = Number(data.silver_max)
-
-        // Keep module-level vars in sync for autoTier()
-        tierBronzeMax = bronzeMax
-        tierSilverMax = silverMax
-
-        setTierSettings({
-          bronzeMin: 0,
-          bronzeMax,
-          silverMin: bronzeMax + 1,
-          silverMax,
-          goldMin: silverMax + 1,
-        })
-      } catch {
-        // Non-critical — fall back to defaults already set
-      } finally {
-        setTierSettingsLoading(false)
-      }
-    }
-
-    loadTierSettings()
-  }, [brandId])
-
-  // ── Re-compute partner tiers whenever tier settings change ───────────────
-  useEffect(() => {
-    if (partners.length === 0) return
-    setPartners((prev) =>
-      prev.map((p) => ({
-        ...p,
-        tier: p.tierOverride || autoTier(p.rev),
-      }))
-    )
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tierSettings])
-
-  // ── Initial data load — campaigns only, partners start blank ─────────────
+  // ── Initial data load ────────────────────────────────────────────────────
   useEffect(() => {
     if (!brandId) {
       setLoading(false)
@@ -344,8 +300,19 @@ export default function BrandPartnersPage({ brandId }: Props) {
       try {
         setLoading(true)
         setError(null)
-        const camps = await campaignsApi.list(brandId)
+
+        const [camps, partnerRecords, tierSettings] = await Promise.all([
+          campaignsApi.list(brandId),
+          partnersApi.list(brandId),
+          tierSettingsApi.get(brandId),
+        ])
+
+        setTierThresholds({
+          bronzeMax: Number(tierSettings.bronze_max),
+          silverMax: Number(tierSettings.silver_max),
+        })
         setCampaigns(camps.map(dbToCampaign))
+        setPartners(partnerRecords.map(dbToPartner))
       } catch (e: any) {
         setError(
           e?.message?.includes("Unauthorized")
@@ -358,17 +325,62 @@ export default function BrandPartnersPage({ brandId }: Props) {
     }
 
     loadData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId])
 
   // ── Tier helpers ─────────────────────────────────────────────────────────
-  const getDisplayTier = useCallback((p: Partner) => p.tierOverride || autoTier(p.rev), [])
+  const getDisplayTier = useCallback((p: Partner) => p.tierOverride || autoTier(p.rev), [autoTier])
 
-  // Called by TierSettingsModal after a successful PUT to /api/brand-tier-settings
-  const handleTierSave = (settings: TierSettings) => {
-    tierBronzeMax = settings.bronzeMax
-    tierSilverMax = settings.silverMax
-    setTierSettings(settings)
-    // Partner tiers re-compute via the useEffect above
+  const handleTierSave = async (settings: TierSettings) => {
+    try {
+      await tierSettingsApi.save(brandId, {
+        bronzeMax: settings.bronzeMax,
+        silverMax: settings.silverMax,
+      })
+      setTierThresholds({ bronzeMax: settings.bronzeMax, silverMax: settings.silverMax })
+      setPartners((prev) =>
+        prev.map((p) => ({
+          ...p,
+          tier: p.tierOverride || (
+            p.rev >= settings.silverMax + 1 ? "Gold" :
+            p.rev >= settings.bronzeMax + 1 ? "Silver" : "Bronze"
+          ),
+        }))
+      )
+    } catch (e: any) {
+      alert("Failed to save tier settings: " + (e.message || "Unknown error"))
+    }
+  }
+
+  // ── Manual tier override ─────────────────────────────────────────────────
+  const handleTierOverride = async (partnerId: string, tier: string | null) => {
+    try {
+      const updated = await partnersApi.updateFinancials(brandId, partnerId, {
+        tier_override: tier,
+      })
+      setPartners((prev) =>
+        prev.map((p) => (p.id === partnerId ? dbToPartner(updated) : p))
+      )
+    } catch (e: any) {
+      alert("Failed to update tier: " + (e.message || "Unknown error"))
+    }
+  }
+
+  // ── Campaign status update ───────────────────────────────────────────────
+  const handleCampaignStatusUpdate = async (campaignId: string, status: string) => {
+    try {
+      await fetch(`/api/brands/${brandId}/campaigns/${campaignId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      })
+      setSelectedCampaign((prev) => prev ? { ...prev, status } : prev)
+      setCampaigns((prev) =>
+        prev.map((c) => c.id === campaignId ? { ...c, status } : c)
+      )
+    } catch (e: any) {
+      alert("Failed to update campaign status: " + (e.message || "Unknown error"))
+    }
   }
 
   // ── Add partner ──────────────────────────────────────────────────────────
@@ -448,7 +460,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
     }
   }
 
-  // ── Update a partner ─────────────────────────────────────────────────────
+  // ── Update partner ───────────────────────────────────────────────────────
   const handleUpdatePartner = async (partnerId: string, updates: Partial<BrandInfluencerRecord>) => {
     try {
       const updated = await partnersApi.update(brandId, partnerId, updates)
@@ -460,7 +472,22 @@ export default function BrandPartnersPage({ brandId }: Props) {
     }
   }
 
-  // ── Remove a partner ─────────────────────────────────────────────────────
+  // ── Update partner financials ─────────────────────────────────────────────
+  const handleUpdateFinancials = async (
+    partnerId: string,
+    updates: Parameters<typeof partnersApi.updateFinancials>[2]
+  ) => {
+    try {
+      const updated = await partnersApi.updateFinancials(brandId, partnerId, updates)
+      setPartners((prev) =>
+        prev.map((p) => (p.id === partnerId ? dbToPartner(updated) : p))
+      )
+    } catch (e: any) {
+      alert("Failed to update financials: " + e.message)
+    }
+  }
+
+  // ── Remove partner ───────────────────────────────────────────────────────
   const handleRemovePartner = async (partnerId: string) => {
     if (!confirm("Remove this partner from the brand?")) return
     try {
@@ -505,6 +532,11 @@ export default function BrandPartnersPage({ brandId }: Props) {
         case "alpha":      v = a.handle.localeCompare(b.handle); break
         case "tier":       v = tierOrder[getDisplayTier(a)] - tierOrder[getDisplayTier(b)]; break
         case "added":      v = new Date(a.added).getTime() - new Date(b.added).getTime(); break
+        case "spend":      v = a.totalSpend - b.totalSpend; break
+        case "clicks":     v = a.clicks - b.clicks; break
+        case "cvr":        v = a.cvr - b.cvr; break
+        case "sales":      v = a.sales - b.sales; break
+        case "roas":       v = a.roas_val - b.roas_val; break
         default: v = 0
       }
       return sortAsc ? v : -v
@@ -529,7 +561,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
     setCurrentPage(1)
   }
 
-  // ── Loading / error states ───────────────────────────────────────────────
+  // ── Loading / error ──────────────────────────────────────────────────────
   if (loading) {
     return (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh", fontFamily: "'Inter', sans-serif", color: "#888" }}>
@@ -668,14 +700,18 @@ export default function BrandPartnersPage({ brandId }: Props) {
                   <tr>
                     <th style={{ width: 28, color: "#bbb" }}>#</th>
                     <th><div className="thi" onClick={() => handleSort("alpha")}><span className="cl">Creator</span><span className="sa">↕</span></div></th>
-                    <th><div className="thi" onClick={() => handleSort("platform")}><span className="cl">Platform</span><span className="sa">↕</span></div></th>
+                    <th><span className="cl">Platform</span></th>
                     <th><span className="cl">Niche</span></th>
                     <th><span className="cl">Location</span></th>
                     <th><div className="thi" onClick={() => handleSort("tier")}><span className="cl">Tier</span><span className="sa">↕</span></div></th>
                     <th><div className="thi" onClick={() => handleSort("stage")}><span className="cl">Stage</span><span className="sa">↕</span></div></th>
-                    <th><div className="thi" onClick={() => handleSort("followers")}><span className="cl">Followers</span><span className="sa">↕</span></div></th>
-                    <th><div className="thi" onClick={() => handleSort("engagement")}><span className="cl">Eng. rate</span><span className="sa">↕</span></div></th>
-                    <th><div className="thi" onClick={() => handleSort("revenue")}><span className="cl">Agreed rate</span><span className="sa">↕</span></div></th>
+                    <th><span className="cl">Retainer</span></th>
+                    <th><div className="thi" onClick={() => handleSort("spend")}><span className="cl">Total spend</span><span className="sa">↕</span></div></th>
+                    <th><div className="thi" onClick={() => handleSort("clicks")}><span className="cl">Clicks</span><span className="sa">↕</span></div></th>
+                    <th><div className="thi" onClick={() => handleSort("cvr")}><span className="cl">CVR</span><span className="sa">↕</span></div></th>
+                    <th><div className="thi" onClick={() => handleSort("sales")}><span className="cl">Sales (units)</span><span className="sa">↕</span></div></th>
+                    <th><div className="thi" onClick={() => handleSort("revenue")}><span className="cl">Revenue</span><span className="sa">↕</span></div></th>
+                    <th><div className="thi" onClick={() => handleSort("roas")}><span className="cl">ROAS / ROI</span><span className="sa">↕</span></div></th>
                     <th><span className="cl">Status</span></th>
                     <th><span className="cl">Posted</span></th>
                     <th style={{ width: 40 }}></th>
@@ -704,20 +740,59 @@ export default function BrandPartnersPage({ brandId }: Props) {
                         <td style={{ fontSize: 11, color: "#888" }}>{p.loc || "—"}</td>
                         <td>
                           <div className="flex justify-center">
-                            <span className={`tb ${tierClass}`}>{tierIcon}</span>
+                            <span
+                              className={`tb ${tierClass}`}
+                              title={p.tierOverride ? "Manually overridden — click to reset to auto" : "Click to manually override"}
+                              style={{ cursor: "pointer" }}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                if (p.tierOverride) {
+                                  handleTierOverride(p.id, null)
+                                } else {
+                                  const next = tier === "Bronze" ? "Silver" : tier === "Silver" ? "Gold" : "Gold"
+                                  handleTierOverride(p.id, next)
+                                }
+                              }}
+                            >
+                              {tierIcon}{p.tierOverride ? " ✎" : ""}
+                            </span>
                           </div>
                         </td>
                         <td>
                           <span className="stage-badge" data-stage={p.stage}>Stage {p.stage}</span>
                         </td>
-                        <td style={{ fontSize: 11 }}>
-                          {p.fol >= 1000 ? (p.fol / 1000).toFixed(1) + "K" : p.fol || "—"}
+                        <td style={{ fontSize: 11, color: "#aaa", textAlign: "center" }}>—</td>
+                        <td style={{ fontSize: 12 }}>
+                          {p.totalSpend > 0 ? (
+                            <>
+                              <div style={{ fontWeight: 600 }}>{formatMoney(p.totalSpend)}</div>
+                              <div style={{ fontSize: 10, color: "#888" }}>
+                                {formatMoney(p.prodCost)} COGS + {formatMoney(p.feesPaid)} fees
+                              </div>
+                            </>
+                          ) : (
+                            <span style={{ color: "#ccc" }}>—</span>
+                          )}
                         </td>
-                        <td style={{ fontSize: 11 }}>
-                          {p.eng ? p.eng + "%" : "—"}
-                        </td>
+                        <td style={{ fontSize: 11 }}>{p.clicks > 0 ? p.clicks.toLocaleString() : "—"}</td>
+                        <td style={{ fontSize: 11, color: "#185FA5" }}>{p.clicks > 0 ? p.cvr.toFixed(0) + "%" : "—"}</td>
+                        <td style={{ fontSize: 11 }}>{p.sales > 0 ? p.sales.toLocaleString() : "—"}</td>
                         <td style={{ fontWeight: 600, color: "#1FAE5B", fontSize: 12 }}>
                           {p.agreed_rate ? formatMoney(p.agreed_rate) : "—"}
+                        </td>
+                        <td>
+                          {p.totalSpend > 0 ? (
+                            <>
+                              <div style={{ fontWeight: 600, color: p.roas_val >= 1 ? "#1FAE5B" : "#E24B4A", fontSize: 12 }}>
+                                {p.roas_val.toFixed(1)}x
+                              </div>
+                              <div style={{ fontSize: 10, color: "#888" }}>
+                                {p.roi_val >= 0 ? "+" : ""}{p.roi_val.toFixed(1)}% ROI
+                              </div>
+                            </>
+                          ) : (
+                            <span style={{ color: "#ccc", fontSize: 11 }}>—</span>
+                          )}
                         </td>
                         <td>
                           <span className={`status-badge s-${p.contact_status?.replace(/_/g, "-")}`}>
@@ -785,7 +860,12 @@ export default function BrandPartnersPage({ brandId }: Props) {
                 <div className="cc-header">
                   <div>
                     <div className="cc-name">{c.name}</div>
-                    <div className="cc-meta">{c.notes || "No description"}</div>
+                    <div className="cc-meta">
+                      {c.start ? `${c.start}${c.end ? ` → ${c.end}` : " → Open-ended"}` : ""}
+                      {c.type && c.type !== "—" ? ` · ${c.type}` : ""}
+                      {c.budget ? ` · Budget: ${formatMoney(c.budget)}` : ""}
+                    </div>
+                    {c.notes && <div className="cc-meta" style={{ marginTop: 2 }}>{c.notes}</div>}
                   </div>
                   <span className={`cs c-${c.status.toLowerCase()}`}>{c.status}</span>
                 </div>
@@ -850,14 +930,43 @@ export default function BrandPartnersPage({ brandId }: Props) {
                     <div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>{selectedCampaign.notes}</div>
                   )}
                 </div>
+
+                {/* ── Edit / Activate / Complete buttons ── */}
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <button
+                    className="btn-outline"
+                    onClick={() => {/* TODO: open edit modal */}}
+                  >
+                    Edit
+                  </button>
+                  {selectedCampaign.status !== "active" && selectedCampaign.status !== "completed" && (
+                    <button
+                      className="btn-primary"
+                      onClick={() => handleCampaignStatusUpdate(selectedCampaign.id, "active")}
+                    >
+                      Activate
+                    </button>
+                  )}
+                  {selectedCampaign.status === "active" && (
+                    <button
+                      className="btn-outline"
+                      style={{ color: "#185FA5", borderColor: "#b5d4f4" }}
+                      onClick={() => {
+                        if (confirm("Mark this campaign as completed?")) {
+                          handleCampaignStatusUpdate(selectedCampaign.id, "completed")
+                        }
+                      }}
+                    >
+                      Complete
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
 
             {/* ── Performance summary ── */}
             <div className="cd-section">
               <div className="cd-section-title">Performance summary</div>
-
-              {/* Row 1 — financial KPIs */}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8, marginBottom: 8 }}>
                 <div className="kpi-card">
                   <div className="kpi-l">Total revenue</div>
@@ -874,21 +983,15 @@ export default function BrandPartnersPage({ brandId }: Props) {
                 </div>
                 <div className="kpi-card">
                   <div className="kpi-l">ROAS</div>
-                  <div className="kpi-v" style={{ color: campRoasNum >= 1 ? "#1FAE5B" : "#E24B4A" }}>
-                    {campRoas}
-                  </div>
+                  <div className="kpi-v" style={{ color: campRoasNum >= 1 ? "#1FAE5B" : "#E24B4A" }}>{campRoas}</div>
                   <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>revenue ÷ spend</div>
                 </div>
                 <div className="kpi-card">
                   <div className="kpi-l">ROI</div>
-                  <div className="kpi-v" style={{ color: campRoiNum >= 0 ? "#1FAE5B" : "#E24B4A" }}>
-                    {campRoi}
-                  </div>
+                  <div className="kpi-v" style={{ color: campRoiNum >= 0 ? "#1FAE5B" : "#E24B4A" }}>{campRoi}</div>
                   <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>net profit ÷ spend</div>
                 </div>
               </div>
-
-              {/* Row 2 — content KPIs */}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8 }}>
                 <div className="kpi-card">
                   <div className="kpi-l">Posts done</div>
@@ -901,15 +1004,11 @@ export default function BrandPartnersPage({ brandId }: Props) {
                 </div>
                 <div className="kpi-card">
                   <div className="kpi-l">Total views</div>
-                  <div className="kpi-v">
-                    {campViews >= 1000 ? (campViews / 1000).toFixed(1) + "K" : campViews || "—"}
-                  </div>
+                  <div className="kpi-v">{campViews >= 1000 ? (campViews / 1000).toFixed(1) + "K" : campViews || "—"}</div>
                 </div>
                 <div className="kpi-card">
                   <div className="kpi-l">Total likes</div>
-                  <div className="kpi-v">
-                    {campLikes >= 1000 ? (campLikes / 1000).toFixed(1) + "K" : campLikes || "—"}
-                  </div>
+                  <div className="kpi-v">{campLikes >= 1000 ? (campLikes / 1000).toFixed(1) + "K" : campLikes || "—"}</div>
                 </div>
                 <div className="kpi-card">
                   <div className="kpi-l">Avg eng. rate</div>
@@ -980,9 +1079,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
                                 : <span style={{ color: "#ccc", fontSize: 11 }}>—</span>}
                             </td>
                             <td style={{ padding: "10px", textAlign: "right", verticalAlign: "top", fontSize: 11 }}>
-                              {p.likes_count
-                                ? p.likes_count >= 1000 ? (p.likes_count / 1000).toFixed(1) + "K" : p.likes_count
-                                : "—"}
+                              {p.likes_count ? p.likes_count >= 1000 ? (p.likes_count / 1000).toFixed(1) + "K" : p.likes_count : "—"}
                             </td>
                             <td style={{ padding: "10px", textAlign: "right", verticalAlign: "top", fontSize: 11 }}>
                               {p.eng ? p.eng + "%" : "—"}
@@ -1031,7 +1128,9 @@ export default function BrandPartnersPage({ brandId }: Props) {
                           <td style={{ padding: "8px 10px", textAlign: "right", fontSize: 11 }}>
                             {campLikes >= 1000 ? (campLikes / 1000).toFixed(1) + "K" : campLikes || "—"}
                           </td>
-                          <td style={{ padding: "8px 10px", textAlign: "right", fontSize: 11 }}>{avgEng}%</td>
+                          <td style={{ padding: "8px 10px", textAlign: "right", fontSize: 11 }}>
+                            {avgEng}%
+                          </td>
                           <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, color: "#1FAE5B", fontSize: 12 }}>
                             {campRev ? formatMoney(campRev) : "—"}
                           </td>
@@ -1050,7 +1149,6 @@ export default function BrandPartnersPage({ brandId }: Props) {
                 </div>
               )}
             </div>
-
           </div>
         </div>
       )}
@@ -1062,7 +1160,6 @@ export default function BrandPartnersPage({ brandId }: Props) {
         isOpen={showTierModal}
         onClose={() => setShowTierModal(false)}
         onSave={handleTierSave}
-        initialSettings={tierSettings}
         brandId={brandId}
       />
 
@@ -1135,11 +1232,11 @@ export default function BrandPartnersPage({ brandId }: Props) {
         .fc-btn { font-size: 11px; padding: 5px 10px; border-radius: 7px; border: 0.5px solid rgba(0,0,0,0.15); background: transparent; color: #888; cursor: pointer; }
         .fa-btn { font-size: 11px; padding: 5px 12px; border-radius: 7px; border: none; background: #1FAE5B; color: #fff; cursor: pointer; }
         .content { padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; }
-        .tw { background: #fff; border: 0.5px solid rgba(0,0,0,0.08); border-radius: 10px; overflow: hidden; }
+        .tw { background: #fff; border: 0.5px solid rgba(0,0,0,0.08); border-radius: 10px; overflow: hidden; overflow-x: auto; }
         .pt { width: 100%; border-collapse: collapse; font-size: 12px; }
         .pt thead { background: #fafaf9; }
         .pt th { padding: 9px 10px; font-weight: 500; font-size: 11px; border-bottom: 0.5px solid rgba(0,0,0,0.08); white-space: nowrap; }
-        .pt td { padding: 9px 10px; border-bottom: 0.5px solid rgba(0,0,0,0.05); color: #1E1E1E; vertical-align: middle; }
+        .pt td { padding: 9px 10px; border-bottom: 0.5px solid rgba(0,0,0,0.05); color: #1E1E1E; vertical-align: middle; white-space: nowrap; }
         .pt tr:last-child td { border-bottom: none; }
         .dr:hover td { background: #f0faf5; }
         .thi { display: flex; align-items: center; gap: 3px; cursor: pointer; }
