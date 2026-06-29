@@ -27,6 +27,12 @@ interface Subscription {
   current_period_end: string | null;
 }
 
+interface Profile {
+  name: string | null;
+  email: string | null;
+  image: string | null;
+}
+
 interface PlanItem {
   icon: string;
   text: string;
@@ -154,10 +160,26 @@ function LoadingScreen() {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function AccountSettingsPage() {
-  const { data: session } = useSession();
+  const { data: session, status: sessionStatus } = useSession();
+
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
-  const [fullName, setFullName] = useState("");
-  const [brandCount, setBrandCount] = useState(0);
+  const [brandCount, setBrandCount] = useState<number | null>(null);
+
+  // Local editable copy of the name field, seeded once profile loads.
+  const [fullName, setFullName] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  // Fetch profile (name, email, image) from the single source of truth.
+  useEffect(() => {
+    if (!session?.user?.id) return;
+    fetch("/api/settings/profile")
+      .then((r) => r.json())
+      .then((data: Profile) => {
+        setProfile(data);
+        setFullName(data.name ?? "");
+      });
+  }, [session?.user?.id]);
 
   useEffect(() => {
     if (!session?.user?.id) return;
@@ -171,17 +193,24 @@ export default function AccountSettingsPage() {
   }, [session?.user?.id]);
 
   useEffect(() => {
-    if (session?.user?.name) setFullName(session.user.name);
-  }, [session?.user?.name]);
-
-  useEffect(() => {
     if (!session?.user?.id) return;
     fetch("/api/user/brand-usage")
       .then((r) => r.json())
       .then((data) => setBrandCount(data.brandCount ?? 0));
   }, [session?.user?.id]);
 
-  if (!session || !subscription) return <LoadingScreen />;
+  // Gate on every piece of data the first paint depends on. Don't let
+  // default/empty state values (0, "", null-ish) sneak through and render
+  // an unfinished form before the real data arrives.
+  const isLoading =
+    sessionStatus === "loading" ||
+    !session ||
+    !profile ||
+    !subscription ||
+    brandCount === null ||
+    fullName === null;
+
+  if (isLoading) return <LoadingScreen />;
 
   const planName = subscription.plan?.name?.toLowerCase() ?? "solo";
   const planLabel = PLAN_LABELS[planName] ?? "Solo";
@@ -201,12 +230,22 @@ export default function AccountSettingsPage() {
   ];
 
   async function handleSaveName() {
-    if (!fullName.trim()) return;
-    await fetch("/api/user/update-name", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: session?.user?.id, name: fullName }),
-    });
+    if (!fullName?.trim()) return;
+    setSaving(true);
+    try {
+      const res = await fetch("/api/settings/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: fullName }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setProfile((prev) => (prev ? { ...prev, name: updated.name } : prev));
+        setFullName(updated.name ?? fullName);
+      }
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -245,14 +284,14 @@ export default function AccountSettingsPage() {
                   style={{ background: "linear-gradient(135deg, #10b981, #34d399)" }}
                 >
                   <img
-                    src={session.user.image ?? "/avatars/instroom.jpg"}
+                    src={profile.image ?? "/avatars/instroom.jpg"}
                     alt="Avatar"
                     className="w-[72px] h-[72px] rounded-full object-cover block border-[3px] border-white"
                   />
                 </div>
                 <div>
                   <p className="text-[15px] font-medium text-gray-900">{fullName}</p>
-                  <p className="text-[13px] text-stone-400">{session.user.email}</p>
+                  <p className="text-[13px] text-stone-400">{profile.email}</p>
                   <span className="mt-2 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-[11px] font-medium bg-emerald-50 text-emerald-800 border border-emerald-200">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
                     Active
@@ -275,9 +314,10 @@ export default function AccountSettingsPage() {
                     />
                     <button
                       onClick={handleSaveName}
-                      className="px-3.5 py-2 rounded-lg border border-emerald-500 bg-emerald-500 text-white text-[13px] font-medium hover:bg-emerald-600 hover:border-emerald-600 transition-colors"
+                      disabled={saving}
+                      className="px-3.5 py-2 rounded-lg border border-emerald-500 bg-emerald-500 text-white text-[13px] font-medium hover:bg-emerald-600 hover:border-emerald-600 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                      Save
+                      {saving ? "Saving…" : "Save"}
                     </button>
                   </div>
                 </div>
@@ -285,7 +325,7 @@ export default function AccountSettingsPage() {
                   <FieldLabel>Email Address</FieldLabel>
                   <FieldInput
                     type="email"
-                    value={session.user.email ?? ""}
+                    value={profile.email ?? ""}
                     readOnly
                   />
                 </div>

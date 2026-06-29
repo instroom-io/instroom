@@ -1,45 +1,78 @@
 "use client"
 // app/dashboard/settings/page.tsx
 
-import { useSession } from "next-auth/react"
 import { useEffect, useRef, useState } from "react"
+import { useSession } from "next-auth/react"
 import { useRouter } from "next/navigation"
 
-type Toast = { message: string; type: "success" | "error" }
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import {
+  Card,
+  CardContent,
+  CardHeader,
+} from "@/components/ui/card"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { User, CreditCard, Loader2 } from "lucide-react"
+import { toast } from "sonner" // swap for your shadcn toast hook if you use a different one
 
-function useToast() {
-  const [toast, setToast] = useState<Toast | null>(null)
-  const show = (message: string, type: Toast["type"]) => {
-    setToast({ message, type })
-    setTimeout(() => setToast(null), 3500)
-  }
-  return { toast, show }
+// ─── Loading ──────────────────────────────────────────────────────────────────
+
+function LoadingScreen() {
+  return (
+    <div className="flex min-h-[400px] flex-col items-center justify-center gap-3">
+      <Loader2 className="h-7 w-7 animate-spin text-emerald-600" />
+      <p className="text-[11px] uppercase tracking-wider text-stone-400">Loading</p>
+    </div>
+  )
 }
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function ProfilePage() {
   const { data: session, status, update: updateSession } = useSession()
   const router = useRouter()
-  const { toast, show } = useToast()
 
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const [avatarUrl, setAvatarUrl]       = useState<string | null>(null)
-  const [uploading, setUploading]       = useState(false)
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
+  const [uploading, setUploading] = useState(false)
 
-  const [firstName, setFirstName]   = useState("")
-  const [lastName, setLastName]     = useState("")
-  const [email, setEmail]           = useState("")
-  const [jobTitle, setJobTitle]     = useState("")
-  const [timezone, setTimezone]     = useState("Asia/Manila (UTC+8)")
-  const [currency, setCurrency]     = useState("USD ($)")
+  const [firstName, setFirstName] = useState("")
+  const [lastName, setLastName] = useState("")
+  const [email, setEmail] = useState("")
+  const [jobTitle, setJobTitle] = useState("")
+  const [timezone, setTimezone] = useState("Asia/Manila (UTC+8)")
+  const [currency, setCurrency] = useState("USD ($)")
   const [dateFormat, setDateFormat] = useState("MM/DD/YYYY")
 
-  const [savingProfile, setSavingProfile]     = useState(false)
-  const [savingPrefs, setSavingPrefs]         = useState(false)
+  const [savingProfile, setSavingProfile] = useState(false)
+  const [savingPrefs, setSavingPrefs] = useState(false)
   const [deletingAccount, setDeletingAccount] = useState(false)
-  const [confirmDelete, setConfirmDelete]     = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+
+  // Gate the form behind a single loading flag. Stays true until BOTH
+  // /api/settings/profile and /api/settings/preferences have resolved
+  // (success or failure), so the form never renders with placeholder
+  // defaults before real data arrives.
+  const [profileLoaded, setProfileLoaded] = useState(false)
+  const [prefsLoaded, setPrefsLoaded] = useState(false)
+  const dataLoaded = profileLoaded && prefsLoaded
 
   const initials = session?.user?.name
-    ? session.user.name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase()
+    ? session.user.name
+        .split(" ")
+        .map((n: string) => n[0])
+        .join("")
+        .slice(0, 2)
+        .toUpperCase()
     : "??"
 
   useEffect(() => {
@@ -57,9 +90,9 @@ export default function ProfilePage() {
           setFirstName(parts[0] ?? "")
           setLastName(parts.slice(1).join(" ") ?? "")
         }
-        if (data.email)    setEmail(data.email)
+        if (data.email) setEmail(data.email)
         if (data.jobTitle) setJobTitle(data.jobTitle)
-        if (data.image)    setAvatarUrl(data.image)
+        if (data.image) setAvatarUrl(data.image)
       })
       .catch(() => {
         if (session?.user?.name) {
@@ -70,15 +103,17 @@ export default function ProfilePage() {
         if (session?.user?.email) setEmail(session.user.email)
         if (session?.user?.image) setAvatarUrl(session.user.image)
       })
+      .finally(() => setProfileLoaded(true))
 
     fetch("/api/settings/preferences")
       .then((r) => r.json())
       .then((data) => {
-        if (data.timezone)   setTimezone(data.timezone)
-        if (data.currency)   setCurrency(data.currency)
+        if (data.timezone) setTimezone(data.timezone)
+        if (data.currency) setCurrency(data.currency)
         if (data.dateFormat) setDateFormat(data.dateFormat)
       })
       .catch(() => {})
+      .finally(() => setPrefsLoaded(true))
   }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -86,11 +121,11 @@ export default function ProfilePage() {
     if (!file) return
 
     if (!file.type.startsWith("image/")) {
-      show("Please select an image file.", "error")
+      toast.error("Please select an image file.")
       return
     }
     if (file.size > 5 * 1024 * 1024) {
-      show("Image must be under 5 MB.", "error")
+      toast.error("Image must be under 5 MB.")
       return
     }
 
@@ -101,7 +136,6 @@ export default function ProfilePage() {
       const formData = new FormData()
       formData.append("file", file)
 
-      // ← updated from /api/user/update-avatar
       const res = await fetch("/api/settings/profile", {
         method: "POST",
         body: formData,
@@ -112,9 +146,9 @@ export default function ProfilePage() {
       const data = await res.json()
       setAvatarUrl(data.avatarUrl)
       updateSession({ image: data.avatarUrl })
-      show("Photo updated", "success")
+      toast.success("Photo updated")
     } catch {
-      show("Upload failed. Please try again.", "error")
+      toast.error("Upload failed. Please try again.")
       setAvatarUrl(session?.user?.image ?? null)
     } finally {
       setUploading(false)
@@ -132,9 +166,9 @@ export default function ProfilePage() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "Failed to save profile")
-      show("Profile saved successfully", "success")
+      toast.success("Profile saved successfully")
     } catch (err: unknown) {
-      show(err instanceof Error ? err.message : "Something went wrong", "error")
+      toast.error(err instanceof Error ? err.message : "Something went wrong")
     } finally {
       setSavingProfile(false)
     }
@@ -150,9 +184,9 @@ export default function ProfilePage() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "Failed to save preferences")
-      show("Preferences saved", "success")
+      toast.success("Preferences saved")
     } catch (err: unknown) {
-      show(err instanceof Error ? err.message : "Something went wrong", "error")
+      toast.error(err instanceof Error ? err.message : "Something went wrong")
     } finally {
       setSavingPrefs(false)
     }
@@ -170,118 +204,106 @@ export default function ProfilePage() {
       if (!res.ok) throw new Error(data.error || "Failed to delete account")
       router.push("/login")
     } catch (err: unknown) {
-      show(err instanceof Error ? err.message : "Something went wrong", "error")
+      toast.error(err instanceof Error ? err.message : "Something went wrong")
       setDeletingAccount(false)
       setConfirmDelete(false)
     }
   }
 
+  // Spinner stays up until session resolves AND both fetches complete.
+  if (status === "loading" || !dataLoaded) {
+    return <LoadingScreen />
+  }
+
   return (
-    <div style={{ padding: "28px 36px", maxWidth: 780 }}>
-      {/* Toast */}
-      {toast && (
-        <div
-          style={{
-            position: "fixed",
-            top: 20,
-            right: 24,
-            zIndex: 9999,
-            padding: "10px 18px",
-            borderRadius: 10,
-            fontSize: 13,
-            fontWeight: 500,
-            color: "#fff",
-            background: toast.type === "success" ? "#1FAE5B" : "#E24B4A",
-            boxShadow: "0 4px 16px rgba(0,0,0,0.12)",
-          }}
-        >
-          {toast.message}
-        </div>
-      )}
+    <div className="max-w-3xl px-9 py-7">
+      <div className="mb-6">
+        <h1 className="text-lg font-semibold text-foreground">Profile</h1>
+        <p className="text-xs text-muted-foreground">Manage your personal account information</p>
+      </div>
 
-      <div style={{ fontSize: 18, fontWeight: 600, color: "#1E1E1E", marginBottom: 4 }}>Profile</div>
-      <div style={{ fontSize: 12, color: "#888", marginBottom: 24 }}>Manage your personal account information</div>
-
-      {/* Personal Information Card */}
-      <div style={card}>
-        <div style={cardHeader}>
-          <div style={cardIcon}>
-            <svg viewBox="0 0 16 16" fill="none" stroke="#1FAE5B" strokeWidth="1.5" width={16} height={16}>
-              <circle cx="8" cy="5" r="3" />
-              <path d="M2 14c0-3.3 2.7-6 6-6s6 2.7 6 6" />
-            </svg>
+      {/* Personal Information */}
+      <Card className="mb-4">
+        <div className="flex items-center gap-3 border-b px-5 py-3">
+          <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-primary/10">
+            <User className="h-4 w-4 text-primary" />
           </div>
           <div>
-            <div style={cardTitle}>Personal Information</div>
-            <div style={cardDesc}>Your name and email visible across the workspace</div>
+            <p className="text-sm font-semibold leading-tight text-foreground">Personal Information</p>
+            <p className="text-xs leading-tight text-muted-foreground">Your name and email visible across the workspace</p>
           </div>
         </div>
-        <div style={cardBody}>
-          <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16 }}>
-            {avatarUrl ? (
-              <img
-                src={avatarUrl}
-                alt="Avatar"
-                style={{ ...avatar, objectFit: "cover" } as React.CSSProperties}
-              />
-            ) : (
-              <div style={avatar}>{initials}</div>
-            )}
+        <CardContent className="pt-4">
+          <div className="mb-4 flex items-center gap-4">
+            <Avatar className="h-20 w-20">
+              <AvatarImage src={avatarUrl ?? undefined} alt="Avatar" />
+              <AvatarFallback className="bg-primary text-lg font-bold text-primary-foreground">
+                {initials}
+              </AvatarFallback>
+            </Avatar>
 
             <div>
               <input
                 ref={fileInputRef}
                 type="file"
                 accept="image/png, image/jpeg, image/webp"
-                style={{ display: "none" }}
+                className="hidden"
                 onChange={handleFileChange}
               />
-              <button
-                style={auBtn}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={uploading}
               >
                 {uploading ? "Uploading…" : "Change photo"}
-              </button>
-              <div style={hint}>PNG, JPG or WebP · max 5MB</div>
+              </Button>
+              <p className="mt-1 text-[10px] text-muted-foreground">PNG, JPG or WebP · max 5MB</p>
             </div>
           </div>
 
-          <div style={fGrid}>
-            <div style={fGroup}>
-              <label style={fLabel}>First name</label>
-              <input
-                style={fInput}
+          <div className="grid grid-cols-2 gap-3.5">
+            <div className="space-y-1">
+              <Label htmlFor="firstName" className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                First name
+              </Label>
+              <Input
+                id="firstName"
                 value={firstName}
                 onChange={(e) => setFirstName(e.target.value)}
                 placeholder="First name"
               />
             </div>
-            <div style={fGroup}>
-              <label style={fLabel}>Last name</label>
-              <input
-                style={fInput}
+            <div className="space-y-1">
+              <Label htmlFor="lastName" className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                Last name
+              </Label>
+              <Input
+                id="lastName"
                 value={lastName}
                 onChange={(e) => setLastName(e.target.value)}
                 placeholder="Last name"
               />
             </div>
-            <div style={{ ...fGroup, gridColumn: "1 / -1" }}>
-              <label style={fLabel}>Email address</label>
-              <input
-                style={fInput}
+            <div className="col-span-2 space-y-1">
+              <Label htmlFor="email" className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                Email address
+              </Label>
+              <Input
+                id="email"
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
               />
             </div>
-            <div style={{ ...fGroup, gridColumn: "1 / -1" }}>
-              <label style={fLabel}>
-                Job title <span style={{ color: "#aaa", fontWeight: 400 }}>(optional)</span>
-              </label>
-              <input
-                style={fInput}
+            <div className="col-span-2 space-y-1">
+              <Label htmlFor="jobTitle" className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                Job title <span className="font-normal text-muted-foreground/70">(optional)</span>
+              </Label>
+              <Input
+                id="jobTitle"
                 value={jobTitle}
                 onChange={(e) => setJobTitle(e.target.value)}
                 placeholder="e.g. Marketing Manager"
@@ -289,198 +311,111 @@ export default function ProfilePage() {
             </div>
           </div>
 
-          <div style={btnRow}>
-            <button style={btnPrimary} onClick={handleSaveProfile} disabled={savingProfile}>
+          <div className="mt-4 flex justify-end border-t pt-3">
+            <Button
+              className="bg-[#15803d] hover:bg-[#166534] text-white"
+              onClick={handleSaveProfile}
+              disabled={savingProfile}
+            >
               {savingProfile ? "Saving…" : "Save changes"}
-            </button>
+            </Button>
           </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
-      {/* Preferences Card */}
-      <div style={card}>
-        <div style={cardHeader}>
-          <div style={cardIcon}>
-            <svg viewBox="0 0 16 16" fill="none" stroke="#1FAE5B" strokeWidth="1.5" width={16} height={16}>
-              <rect x="1" y="4" width="14" height="9" rx="2" />
-              <path d="M1 8h14" />
-            </svg>
+      {/* Preferences */}
+      <Card className="mb-4">
+        <div className="flex items-center gap-3 border-b px-5 py-3">
+          <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-primary/10">
+            <CreditCard className="h-4 w-4 text-primary" />
           </div>
           <div>
-            <div style={cardTitle}>Preferences</div>
-            <div style={cardDesc}>Language, timezone and display settings</div>
+            <p className="text-sm font-semibold leading-tight text-foreground">Preferences</p>
+            <p className="text-xs leading-tight text-muted-foreground">Language, timezone and display settings</p>
           </div>
         </div>
-        <div style={cardBody}>
-          <div style={fGrid}>
-            <div style={fGroup}>
-              <label style={fLabel}>Timezone</label>
-              <select style={fInput} value={timezone} onChange={(e) => setTimezone(e.target.value)}>
-                <option>Asia/Manila (UTC+8)</option>
-                <option>Asia/Singapore (UTC+8)</option>
-                <option>America/New_York (UTC-5)</option>
-                <option>Europe/London (UTC+0)</option>
-              </select>
+        <CardContent className="pt-4">
+          <div className="grid grid-cols-3 gap-3.5">
+            <div className="space-y-1">
+              <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">Timezone</Label>
+              <Select value={timezone} onValueChange={setTimezone}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Asia/Manila (UTC+8)">Asia/Manila (UTC+8)</SelectItem>
+                  <SelectItem value="Asia/Singapore (UTC+8)">Asia/Singapore (UTC+8)</SelectItem>
+                  <SelectItem value="America/New_York (UTC-5)">America/New_York (UTC-5)</SelectItem>
+                  <SelectItem value="Europe/London (UTC+0)">Europe/London (UTC+0)</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
-            <div style={fGroup}>
-              <label style={fLabel}>Currency display</label>
-              <select style={fInput} value={currency} onChange={(e) => setCurrency(e.target.value)}>
-                <option>USD ($)</option>
-                <option>PHP (₱)</option>
-                <option>SGD (S$)</option>
-                <option>EUR (€)</option>
-              </select>
+            <div className="space-y-1">
+              <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">Currency display</Label>
+              <Select value={currency} onValueChange={setCurrency}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="USD ($)">USD ($)</SelectItem>
+                  <SelectItem value="PHP (₱)">PHP (₱)</SelectItem>
+                  <SelectItem value="SGD (S$)">SGD (S$)</SelectItem>
+                  <SelectItem value="EUR (€)">EUR (€)</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
-            <div style={fGroup}>
-              <label style={fLabel}>Date format</label>
-              <select style={fInput} value={dateFormat} onChange={(e) => setDateFormat(e.target.value)}>
-                <option>MM/DD/YYYY</option>
-                <option>DD/MM/YYYY</option>
-                <option>YYYY-MM-DD</option>
-              </select>
+            <div className="space-y-1">
+              <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">Date format</Label>
+              <Select value={dateFormat} onValueChange={setDateFormat}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="MM/DD/YYYY">MM/DD/YYYY</SelectItem>
+                  <SelectItem value="DD/MM/YYYY">DD/MM/YYYY</SelectItem>
+                  <SelectItem value="YYYY-MM-DD">YYYY-MM-DD</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
-          <div style={btnRow}>
-            <button style={btnPrimary} onClick={handleSavePrefs} disabled={savingPrefs}>
+
+          <div className="mt-4 flex justify-end border-t pt-3">
+            <Button
+              className="bg-[#15803d] hover:bg-[#166534] text-white"
+              onClick={handleSavePrefs}
+              disabled={savingPrefs}
+            >
               {savingPrefs ? "Saving…" : "Save changes"}
-            </button>
+            </Button>
           </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       {/* Danger Zone */}
-      <div style={dangerZone}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: "#a32d2d", marginBottom: 4 }}>Danger zone</div>
-        <div style={{ fontSize: 11, color: "#888", marginBottom: 12 }}>
+      <div className="rounded-lg border border-destructive/25 bg-destructive/5 p-4">
+        <p className="mb-1 text-xs font-semibold text-destructive">Danger zone</p>
+        <p className="mb-3 text-[11px] text-muted-foreground">
           {confirmDelete
             ? "Are you sure? This permanently deletes your account and all data. Click again to confirm."
             : "Permanently delete your account and all associated data. This action cannot be undone."}
-        </div>
-        <button
-          style={{
-            ...btnDanger,
-            ...(confirmDelete ? { background: "#E24B4A", color: "#fff" } : {}),
-          }}
-          onClick={handleDeleteAccount}
-          disabled={deletingAccount}
-        >
-          {deletingAccount ? "Deleting…" : confirmDelete ? "Confirm delete" : "Delete account"}
-        </button>
-        {confirmDelete && (
-          <button
-            style={{ ...auBtn, marginLeft: 8 }}
-            onClick={() => setConfirmDelete(false)}
+        </p>
+        <div className="flex items-center gap-2">
+          <Button
+            variant={confirmDelete ? "destructive" : "outline"}
+            size="sm"
+            className={confirmDelete ? "" : "border-destructive text-destructive hover:bg-destructive/10"}
+            onClick={handleDeleteAccount}
+            disabled={deletingAccount}
           >
-            Cancel
-          </button>
-        )}
+            {deletingAccount ? "Deleting…" : confirmDelete ? "Confirm delete" : "Delete account"}
+          </Button>
+          {confirmDelete && (
+            <Button variant="outline" size="sm" onClick={() => setConfirmDelete(false)}>
+              Cancel
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   )
-}
-
-// ── Shared styles ──────────────────────────────────────────────────────────────
-const card: React.CSSProperties = {
-  background: "#fff",
-  border: "0.5px solid rgba(0,0,0,0.08)",
-  borderRadius: 12,
-  marginBottom: 16,
-  overflow: "hidden",
-}
-const cardHeader: React.CSSProperties = {
-  padding: "16px 20px",
-  borderBottom: "0.5px solid rgba(0,0,0,0.07)",
-  display: "flex",
-  alignItems: "flex-start",
-  gap: 12,
-}
-const cardIcon: React.CSSProperties = {
-  width: 36,
-  height: 36,
-  borderRadius: 9,
-  background: "#f0faf5",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  flexShrink: 0,
-}
-const cardTitle: React.CSSProperties = { fontSize: 13, fontWeight: 600, color: "#1E1E1E" }
-const cardDesc: React.CSSProperties  = { fontSize: 11, color: "#888", marginTop: 2 }
-const cardBody: React.CSSProperties  = { padding: 20 }
-const fGrid: React.CSSProperties     = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }
-const fGroup: React.CSSProperties    = { display: "flex", flexDirection: "column", gap: 4 }
-const fLabel: React.CSSProperties    = { fontSize: 11, fontWeight: 600, color: "#555", letterSpacing: "0.02em" }
-const fInput: React.CSSProperties    = {
-  width: "100%",
-  fontSize: 12,
-  padding: "9px 12px",
-  borderRadius: 8,
-  border: "0.5px solid rgba(0,0,0,0.15)",
-  background: "#fff",
-  color: "#1E1E1E",
-  fontFamily: "inherit",
-}
-const hint: React.CSSProperties   = { fontSize: 10, color: "#aaa", marginTop: 2 }
-const avatar: React.CSSProperties = {
-  width: 64,
-  height: 64,
-  borderRadius: "50%",
-  background: "#1FAE5B",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  fontSize: 22,
-  fontWeight: 700,
-  color: "#fff",
-  flexShrink: 0,
-}
-const auBtn: React.CSSProperties = {
-  fontSize: 11,
-  fontWeight: 500,
-  padding: "6px 14px",
-  borderRadius: 8,
-  border: "0.5px solid rgba(0,0,0,0.15)",
-  background: "#fff",
-  color: "#555",
-  cursor: "pointer",
-  fontFamily: "inherit",
-  display: "inline-block",
-  marginBottom: 4,
-}
-const btnRow: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "flex-end",
-  gap: 8,
-  marginTop: 16,
-  paddingTop: 14,
-  borderTop: "0.5px solid rgba(0,0,0,0.06)",
-}
-const btnPrimary: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 500,
-  padding: "8px 18px",
-  borderRadius: 9,
-  border: "none",
-  background: "#1FAE5B",
-  color: "#fff",
-  cursor: "pointer",
-  fontFamily: "inherit",
-  opacity: 1,
-}
-const btnDanger: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 500,
-  padding: "8px 14px",
-  borderRadius: 9,
-  border: "0.5px solid #E24B4A",
-  background: "#fff",
-  color: "#E24B4A",
-  cursor: "pointer",
-  fontFamily: "inherit",
-}
-const dangerZone: React.CSSProperties = {
-  border: "0.5px solid rgba(226,75,74,0.25)",
-  borderRadius: 10,
-  padding: "16px 18px",
-  background: "#fdf5f5",
 }

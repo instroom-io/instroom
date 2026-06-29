@@ -10,26 +10,40 @@ interface AddPartnerModalProps {
   onAdded: () => void
 }
 
-interface GlobalInfluencer {
+interface BrandInfluencerPreview {
   id: string
-  handle: string
-  platform: string
-  full_name: string | null
-  niche: string | null
-  location: string | null
-  follower_count: number
-  engagement_rate: number
+  influencer_id: string
+  influencer: {
+    id: string
+    handle: string
+    platform: string
+    full_name: string | null
+    niche: string | null
+    location: string | null
+    follower_count: number
+    engagement_rate: number
+  }
 }
+
+const TIER_OPTIONS = [
+  { value: "auto",     label: "Auto (based on revenue)" },
+  { value: "bronze",   label: "Bronze" },
+  { value: "silver",   label: "Silver" },
+  { value: "gold",     label: "Gold" },
+  { value: "platinum", label: "Platinum" },
+]
 
 export default function AddPartnerModal({ isOpen, onClose, brandId, onAdded }: AddPartnerModalProps) {
   const [mode, setMode] = useState<"search" | "manual">("search")
 
   // Search mode
-  const [searchQuery, setSearchQuery] = useState("")
-  const [results, setResults]         = useState<GlobalInfluencer[]>([])
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  const [searching, setSearching]     = useState(false)
-  const [searchNotes, setSearchNotes] = useState("")
+  const [searchQuery,    setSearchQuery]    = useState("")
+  const [results,        setResults]        = useState<BrandInfluencerPreview[]>([])
+  const [selectedIds,    setSelectedIds]    = useState<Set<string>>(new Set())
+  const [searching,      setSearching]      = useState(false)
+  const [searchNotes,    setSearchNotes]    = useState("")
+  const [assignTier,     setAssignTier]     = useState("auto")
+  const [commissionPct,  setCommissionPct]  = useState("")
 
   // Manual mode
   const [handle,   setHandle]   = useState("")
@@ -66,6 +80,7 @@ export default function AddPartnerModal({ isOpen, onClose, brandId, onAdded }: A
     if (!isOpen) return
     setMode("search")
     setSearchQuery(""); setResults([]); setSelectedIds(new Set()); setSearchNotes("")
+    setAssignTier("auto"); setCommissionPct("")
     setHandle(""); setPlatform(""); setNiche(""); setLocation(""); setEmail(""); setNotes("")
     setNewNicheInput(""); setNewLocationInput("")
     setAddingNiche(false); setAddingLocation(false)
@@ -76,11 +91,11 @@ export default function AddPartnerModal({ isOpen, onClose, brandId, onAdded }: A
   const doSearch = useCallback(async (q: string) => {
     setSearching(true)
     try {
-      const p = new URLSearchParams({ exclude_brand_id: brandId, limit: "100" })
+      const p = new URLSearchParams({ unpartnered_only: "true" })
       if (q.trim()) p.set("search", q.trim())
-      const res  = await fetch(`/api/influencers?${p}`)
+      const res  = await fetch(`/api/brand/${brandId}/influencers?${p}`)
       const json = await res.json()
-      setResults(Array.isArray(json.data) ? json.data : [])
+      setResults(Array.isArray(json.influencers) ? json.influencers : [])
     } catch { setResults([]) }
     finally  { setSearching(false) }
   }, [brandId])
@@ -125,13 +140,32 @@ export default function AddPartnerModal({ isOpen, onClose, brandId, onAdded }: A
       if (mode === "search") {
         if (selectedIds.size === 0) { setErrMsg("Select at least one influencer."); setSaving(false); return }
         const errs: string[] = []
-        for (const influencer_id of Array.from(selectedIds)) {
-          const res  = await fetch(`/api/brands/${brandId}/partners`, {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ influencer_id, notes: searchNotes || null }),
+        for (const partnerId of Array.from(selectedIds)) {
+          let noteError: string | null = null
+
+          if (searchNotes.trim()) {
+            const noteRes = await fetch(`/api/brands/${brandId}/partners/${partnerId}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ notes: searchNotes.trim() }),
+            })
+
+            const noteJson = await noteRes.json()
+            if (!noteRes.ok) {
+              noteError = noteJson.error || "Failed to save notes"
+            }
+          }
+
+          const res  = await fetch(`/api/brands/${brandId}/partners/${partnerId}/financials`, {
+            method: "PATCH", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              tier_override: assignTier !== "auto" ? assignTier : null,
+              default_commission: commissionPct ? parseFloat(commissionPct) : null,
+            }),
           })
           const json = await res.json()
-          if (!res.ok && res.status !== 409) errs.push(json.error || "Failed")
+          if (!res.ok) errs.push(json.error || "Failed")
+          if (noteError) errs.push(noteError)
         }
         if (errs.length) { setErrMsg(errs.join(" · ")); setSaving(false); return }
 
@@ -203,7 +237,7 @@ export default function AddPartnerModal({ isOpen, onClose, brandId, onAdded }: A
     setAdding: (v: boolean) => void
     inputVal: string
     setInputVal: (v: string) => void
-    inputRef: React.RefObject<HTMLInputElement>
+    inputRef: React.RefObject<HTMLInputElement | null>
     onCommit: () => void
   }) => (
     <div>
@@ -287,7 +321,7 @@ export default function AddPartnerModal({ isOpen, onClose, brandId, onAdded }: A
         <div style={{ padding: "18px 20px 14px", borderBottom: "0.5px solid rgba(0,0,0,0.08)", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div>
             <div style={{ fontSize: 15, fontWeight: 600 }}>Add Brand Partner</div>
-            <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>Search the global list or add manually</div>
+            <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>Promote brand influencers to Brand Partners or add manually</div>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, color: "#888", cursor: "pointer" }}>×</button>
         </div>
@@ -308,17 +342,21 @@ export default function AddPartnerModal({ isOpen, onClose, brandId, onAdded }: A
 
           {/* ── Search mode ── */}
           {mode === "search" && (<>
-            <div style={{ fontSize: 12, color: "#888" }}>Select influencers from the global list — they'll be linked to this brand.</div>
+            <div style={{ fontSize: 12, color: "#888" }}>Select brand influencers that do not already have a Brand Partner record.</div>
+
+            {/* Search input */}
             <div style={{ position: "relative" }}>
               <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "#aaa" }}>🔍</span>
-              <input style={{ ...fs, paddingLeft: 30 }} placeholder="Search by handle, niche, location…" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
+              <input style={{ ...fs, paddingLeft: 30 }} placeholder="Search…" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
             </div>
+
+            {/* Results list */}
             <div style={{ border: "0.5px solid rgba(0,0,0,0.1)", borderRadius: 8, maxHeight: 240, overflowY: "auto" }}>
               {searching ? (
                 <div style={{ padding: 20, textAlign: "center", color: "#888", fontSize: 12 }}>Searching…</div>
               ) : results.length === 0 ? (
                 <div style={{ padding: 20, textAlign: "center", color: "#888", fontSize: 12 }}>
-                  {searchQuery ? "No results found" : "No influencers in system yet — add them manually first"}
+                  {searchQuery ? "No matching brand influencers found" : "No brand influencers are available to promote yet"}
                 </div>
               ) : results.map(inf => (
                 <div key={inf.id} onClick={() => toggle(inf.id)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", cursor: "pointer", background: selectedIds.has(inf.id) ? "#f0faf5" : "transparent", borderBottom: "0.5px solid rgba(0,0,0,0.04)" }}>
@@ -326,26 +364,60 @@ export default function AddPartnerModal({ isOpen, onClose, brandId, onAdded }: A
                     {selectedIds.has(inf.id) ? "✓" : ""}
                   </div>
                   <div>
-                    <div style={{ fontWeight: 500, fontSize: 12 }}>@{inf.handle}</div>
-                    <div style={{ fontSize: 11, color: "#888" }}>{inf.platform} · {inf.niche || "—"} · {inf.location || "—"}</div>
+                    <div style={{ fontWeight: 500, fontSize: 12 }}>@{inf.influencer.handle}</div>
+                    <div style={{ fontSize: 11, color: "#888" }}>{inf.influencer.platform} · {inf.influencer.niche || "—"} · {inf.influencer.location || "—"}</div>
                     <div style={{ fontSize: 10, color: "#aaa" }}>
-                      {inf.follower_count >= 1000 ? (inf.follower_count / 1000).toFixed(1) + "K" : inf.follower_count} followers
-                      {inf.engagement_rate ? ` · ${inf.engagement_rate}% eng` : ""}
+                      {inf.influencer.follower_count >= 1000 ? (inf.influencer.follower_count / 1000).toFixed(1) + "K" : inf.influencer.follower_count} followers
+                      {inf.influencer.engagement_rate ? ` · ${inf.influencer.engagement_rate}% eng` : ""}
                     </div>
                   </div>
                 </div>
               ))}
             </div>
+
             <div style={{ fontSize: 11, color: "#888" }}>{selectedIds.size} selected</div>
+
+            {/* Assign tier + Commission % */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div>
+                <div style={{ fontSize: 11, color: "#555", fontWeight: 500, marginBottom: 4 }}>
+                  Assign tier <span style={{ color: "#aaa", fontWeight: 400 }}>(or auto-suggested)</span>
+                </div>
+                <select style={fs} value={assignTier} onChange={e => setAssignTier(e.target.value)}>
+                  {TIER_OPTIONS.map(t => (
+                    <option key={t.value} value={t.value}>{t.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: "#555", fontWeight: 500, marginBottom: 4 }}>
+                  Commission % <span style={{ color: "#aaa", fontWeight: 400 }}>(optional — affiliate only)</span>
+                </div>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={0.1}
+                  style={fs}
+                  placeholder="e.g. 15"
+                  value={commissionPct}
+                  onChange={e => setCommissionPct(e.target.value)}
+                />
+              </div>
+            </div>
+
+            {/* Notes */}
             <div>
               <div style={{ fontSize: 11, color: "#555", fontWeight: 500, marginBottom: 4 }}>Notes <span style={{ color: "#aaa", fontWeight: 400 }}>(optional)</span></div>
-              <textarea style={{ ...fs, minHeight: 50, resize: "vertical" }} placeholder="e.g. Proven performer…" value={searchNotes} onChange={e => setSearchNotes(e.target.value)} />
+              <textarea style={{ ...fs, minHeight: 60, resize: "vertical" }} placeholder="e.g. Proven performer…" value={searchNotes} onChange={e => setSearchNotes(e.target.value)} />
             </div>
           </>)}
 
           {/* ── Manual mode ── */}
           {mode === "manual" && (<>
             <div style={{ fontSize: 12, color: "#888" }}>Creates a new influencer record and links them to this brand.</div>
+
+            {/* Row 1: Handle + Platform */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <div>
                 <div style={{ fontSize: 11, color: "#555", fontWeight: 500, marginBottom: 4 }}>Handle <span style={{ color: "#E24B4A", fontSize: 10 }}>*</span></div>
@@ -364,16 +436,48 @@ export default function AddPartnerModal({ isOpen, onClose, brandId, onAdded }: A
               </div>
             </div>
 
+            {/* Row 2: Niche + Location */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <TaxonomySelect
+                label="Niche"
+                required
+                value={niche}
+                onChange={setNiche}
+                options={niches}
+                loading={taxonomyLoading}
+                adding={addingNiche}
+                setAdding={setAddingNiche}
+                inputVal={newNicheInput}
+                setInputVal={setNewNicheInput}
+                inputRef={nicheInputRef}
+                onCommit={handleAddNiche}
+              />
+              <TaxonomySelect
+                label="Location"
+                required
+                value={location}
+                onChange={setLocation}
+                options={locations}
+                loading={taxonomyLoading}
+                adding={addingLocation}
+                setAdding={setAddingLocation}
+                inputVal={newLocationInput}
+                setInputVal={setNewLocationInput}
+                inputRef={locationInputRef}
+                onCommit={handleAddLocation}
+              />
             </div>
 
+            {/* Email */}
             <div>
               <div style={{ fontSize: 11, color: "#555", fontWeight: 500, marginBottom: 4 }}>Email <span style={{ color: "#aaa", fontWeight: 400, fontSize: 10 }}>(optional)</span></div>
               <input type="email" style={fs} placeholder="creator@email.com" value={email} onChange={e => setEmail(e.target.value)} />
             </div>
+
+            {/* Notes */}
             <div>
               <div style={{ fontSize: 11, color: "#555", fontWeight: 500, marginBottom: 4 }}>Notes <span style={{ color: "#aaa", fontWeight: 400, fontSize: 10 }}>(optional)</span></div>
-              <textarea style={{ ...fs, minHeight: 50, resize: "vertical" }} placeholder="Relationship context…" value={notes} onChange={e => setNotes(e.target.value)} />
+              <textarea style={{ ...fs, minHeight: 60, resize: "vertical" }} placeholder="Relationship context…" value={notes} onChange={e => setNotes(e.target.value)} />
             </div>
           </>)}
 

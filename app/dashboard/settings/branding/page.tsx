@@ -2,22 +2,30 @@
 
 import { useEffect, useState, Suspense } from "react"
 import { useSearchParams } from "next/navigation"
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import { AlertCircle, Palette, Lock, ArrowRight } from "lucide-react"
-import Link from "next/link"
 import { useSession } from "next-auth/react"
+import Link from "next/link"
+import { Card, CardContent } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { AlertCircle, Palette, Lock, ArrowRight, Loader2 } from "lucide-react"
+import { cn } from "@/lib/utils"
+
+function LoadingScreen() {
+  return (
+    <div className="flex min-h-[400px] flex-col items-center justify-center gap-3">
+      <Loader2 className="h-7 w-7 animate-spin text-emerald-600" />
+      <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Loading</p>
+    </div>
+  )
+}
 
 function BrandingContent() {
   const searchParams = useSearchParams()
-  const [brandId, setBrandId] = useState<string | null>(null)
-  const [mounted, setMounted] = useState(false)
-
   const { data: session } = useSession()
+
+  const [brandId, setBrandId] = useState<string | null>(null)
+  const [paramsResolved, setParamsResolved] = useState(false)
 
   const [brandingAllowed, setBrandingAllowed] = useState<boolean | null>(null)
   const [brandName, setBrandName] = useState("")
@@ -29,13 +37,16 @@ function BrandingContent() {
   const [brandingSaved, setBrandingSaved] = useState(false)
   const [error, setError] = useState("")
 
-  useEffect(() => {
-    setMounted(true)
-  }, [])
+  // Gate the form behind these two flags. Both must resolve (success or
+  // failure) before anything renders, so the brand-identity form never
+  // flashes with empty fields before the real name/logo/website arrive.
+  const [accessChecked, setAccessChecked] = useState(false)
+  const [brandDataLoaded, setBrandDataLoaded] = useState(false)
 
   useEffect(() => {
     const id = searchParams.get("brandId")
     setBrandId(id)
+    setParamsResolved(true)
   }, [searchParams])
 
   useEffect(() => {
@@ -44,10 +55,15 @@ function BrandingContent() {
       .then((r) => r.json())
       .then((d) => setBrandingAllowed(d.allowed ?? false))
       .catch(() => setBrandingAllowed(false))
+      .finally(() => setAccessChecked(true))
   }, [session?.user?.id])
 
   useEffect(() => {
-    if (!brandId) return
+    if (!brandId) {
+      setBrandDataLoaded(true)
+      return
+    }
+    setBrandDataLoaded(false)
     fetch(`/api/brand/${brandId}/collaborators`)
       .then((r) => r.json())
       .then((data) => {
@@ -58,6 +74,7 @@ function BrandingContent() {
         }
       })
       .catch((err) => console.error("Error fetching brand:", err))
+      .finally(() => setBrandDataLoaded(true))
   }, [brandId])
 
   const handleSaveBranding = async () => {
@@ -136,19 +153,33 @@ function BrandingContent() {
     }
   }
 
-  if (!mounted) {
-    return null
+  // Wait for: search params resolved, access check done, and (if a brand
+  // is selected) the brand data fetch done.
+  if (!paramsResolved || !accessChecked || !brandDataLoaded) {
+    return <LoadingScreen />
   }
 
   if (!brandId) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle>No Brand Selected</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
+      <div className="flex min-h-screen items-center justify-center">
+        <Card className="w-fit max-w-md">
+          <CardContent className="flex flex-col items-center gap-1.5 px-6 py-5 text-center">
+            <div className="flex items-center gap-2">
+              <svg
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                width={16}
+                height={16}
+                className="text-emerald-600"
+              >
+                <circle cx="8" cy="8" r="6" />
+                <circle cx="8" cy="8" r="2" />
+              </svg>
+              <p className="text-sm font-semibold text-foreground">No Brand Selected</p>
+            </div>
+            <p className="text-xs text-muted-foreground">
               Please select a brand to customize branding.
             </p>
           </CardContent>
@@ -158,97 +189,75 @@ function BrandingContent() {
   }
 
   return (
-    <div style={{ padding: "28px 36px", maxWidth: 780 }}>
-      <div style={{ fontSize: 18, fontWeight: 600, color: "#1E1E1E", marginBottom: 4 }}>
-        Branding
-      </div>
-      <div style={{ fontSize: 12, color: "#888", marginBottom: 24 }}>
-        Customize your workspace appearance
+    <div className="max-w-3xl px-9 py-7">
+      <div className="mb-6">
+        <h1 className="text-lg font-semibold text-foreground">Branding</h1>
+        <p className="text-xs text-muted-foreground">Customize your workspace appearance</p>
       </div>
 
       {error && (
-        <div className="mb-6 flex items-center gap-3 rounded-xl bg-red-50 p-4 text-sm text-red-700 border border-red-200">
+        <div className="mb-6 flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
           <AlertCircle className="h-5 w-5 flex-shrink-0" />
           <span className="font-medium">{error}</span>
         </div>
       )}
 
-      {brandingAllowed === null ? (
-        <div className="flex items-center justify-center py-10">
-          <div className="h-6 w-6 rounded-full border-2 border-[#1FAE5B] border-t-transparent animate-spin" />
-        </div>
-      ) : !brandingAllowed ? (
-        <div
-          style={{
-            border: "0.5px solid rgba(0,0,0,0.08)",
-            borderRadius: 12,
-          }}
-          className="flex items-start gap-4 p-5 bg-white"
-        >
-          <div className="flex items-center justify-center w-9 h-9 rounded-[9px] bg-[#f0faf5] shrink-0">
-            <Lock className="h-4 w-4 text-[#1FAE5B]" />
-          </div>
-          <div className="flex-1">
-            <div style={{ fontSize: 13, fontWeight: 600, color: "#1E1E1E" }} className="mb-1">
-              Upgrade to Customize Branding
+      {!brandingAllowed ? (
+        <Card className="mb-4">
+          <CardContent className="flex items-start gap-4 p-5">
+            <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-emerald-50">
+              <Lock className="h-4 w-4 text-emerald-600" />
             </div>
-            <p style={{ fontSize: 11, color: "#888" }} className="mb-4">
-              Custom branding is available on{" "}
-              <span style={{ color: "#1E1E1E", fontWeight: 600 }}>Solo and Team plans</span>.
-              Upgrade your subscription to customize your brand.
-            </p>
-            <Link href="/pricing?cycle=monthly">
-              <button className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#1FAE5B] hover:bg-[#0F6B3E] text-white text-sm font-medium transition-colors">
-                View Plans <ArrowRight className="h-4 w-4" />
-              </button>
-            </Link>
-          </div>
-        </div>
+            <div className="flex-1">
+              <p className="mb-1 text-sm font-semibold text-foreground">
+                Upgrade to Customize Branding
+              </p>
+              <p className="mb-4 text-xs text-muted-foreground">
+                Custom branding is available on{" "}
+                <span className="font-semibold text-foreground">Solo and Team plans</span>.
+                Upgrade your subscription to customize your brand.
+              </p>
+              <Link href="/pricing?cycle=monthly">
+                <Button className="bg-[#15803d] hover:bg-[#166534] text-white">
+                  View Plans <ArrowRight className="h-4 w-4" />
+                </Button>
+              </Link>
+            </div>
+          </CardContent>
+        </Card>
       ) : (
-        <div
-          style={{
-            background: "#fff",
-            border: "0.5px solid rgba(0,0,0,0.08)",
-            borderRadius: 12,
-            overflow: "hidden",
-          }}
-        >
-          {/* Card header row — icon + title + description */}
-          <div
-            style={{ borderBottom: "0.5px solid rgba(0,0,0,0.07)" }}
-            className="flex items-start gap-3 px-5 py-4"
-          >
-            <div className="flex items-center justify-center w-9 h-9 rounded-[9px] bg-[#f0faf5] shrink-0">
-              <Palette className="h-4 w-4 text-[#1FAE5B]" />
+        <Card className="mb-4">
+          <div className="flex items-center gap-3 border-b px-5 py-3">
+            <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-emerald-50">
+              <Palette className="h-4 w-4 text-emerald-600" />
             </div>
             <div>
-              <div style={{ fontSize: 13, fontWeight: 600, color: "#1E1E1E" }}>Brand identity</div>
-              <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>
+              <p className="text-sm font-semibold leading-tight text-foreground">Brand identity</p>
+              <p className="text-xs leading-tight text-muted-foreground">
                 Logo and name shown across your workspace
-              </div>
+              </p>
             </div>
           </div>
 
-          {/* Body — logo + fields side by side */}
-          <div className="px-5 py-5">
-            <div className="flex gap-6 max-w-2xl">
-              {/* Left column — logo */}
+          <CardContent className="pt-5">
+            <div className="flex max-w-2xl gap-6">
+              {/* Logo */}
               <div className="w-[120px] flex-shrink-0">
-                <label style={{ fontSize: 11, fontWeight: 600, color: "#555" }} className="mb-2 block">
+                <Label className="mb-2 block text-[11px] uppercase tracking-wide text-muted-foreground">
                   Brand logo
-                </label>
+                </Label>
                 <label
                   htmlFor="logo-input"
-                  className="flex flex-col items-center justify-center w-full aspect-square rounded-lg border border-dashed border-gray-300 bg-gray-50 hover:bg-gray-100 cursor-pointer transition-colors overflow-hidden text-center p-2"
+                  className="flex aspect-square w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-lg border border-dashed border-border bg-muted/50 p-2 text-center transition-colors hover:bg-muted"
                 >
                   {logoPreview ? (
-                    <img src={logoPreview} alt="Logo preview" className="w-full h-full object-cover" />
+                    <img src={logoPreview} alt="Logo preview" className="h-full w-full object-cover" />
                   ) : currentLogo ? (
-                    <img src={currentLogo} alt="Current logo" className="w-full h-full object-cover" />
+                    <img src={currentLogo} alt="Current logo" className="h-full w-full object-cover" />
                   ) : (
                     <>
-                      <Palette className="h-6 w-6 text-gray-400 mb-1" />
-                      <span className="text-[11px] text-gray-400 leading-tight">
+                      <Palette className="mb-1 h-6 w-6 text-muted-foreground" />
+                      <span className="text-[11px] leading-tight text-muted-foreground">
                         Upload logo
                         <br />
                         PNG, JPG, SVG
@@ -270,83 +279,56 @@ function BrandingContent() {
                   <button
                     onClick={handleRemoveLogo}
                     disabled={savingBranding}
-                    style={{ fontSize: 10, color: "#aaa", marginTop: 6 }}
-                    className="hover:text-red-500 transition disabled:opacity-50"
+                    className="mt-1.5 text-[10px] text-muted-foreground transition hover:text-red-500 disabled:opacity-50"
                   >
                     Remove logo
                   </button>
                 )}
               </div>
 
-              {/* Right column — name + website */}
+              {/* Name + website */}
               <div className="flex-1 space-y-4">
-                <div>
-                  <label style={{ fontSize: 11, fontWeight: 600, color: "#555" }} className="mb-1 block">
+                <div className="space-y-1">
+                  <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">
                     Brand name
-                  </label>
-                  <input
+                  </Label>
+                  <Input
                     type="text"
                     placeholder="Enter your brand name"
                     value={brandName}
                     onChange={(e) => setBrandName(e.target.value)}
-                    style={{
-                      fontSize: 12,
-                      padding: "9px 12px",
-                      borderRadius: 8,
-                      border: "0.5px solid rgba(0,0,0,0.15)",
-                    }}
-                    className="w-full focus:outline-none focus:border-[#1FAE5B] focus:ring-2 focus:ring-[#1FAE5B]/20"
                   />
-                  <div style={{ fontSize: 10, color: "#aaa", marginTop: 4 }}>
+                  <p className="text-[10px] text-muted-foreground">
                     Shown in the top navigation and emails
-                  </div>
+                  </p>
                 </div>
 
-                <div>
-                  <label style={{ fontSize: 11, fontWeight: 600, color: "#555" }} className="mb-1 block">
+                <div className="space-y-1">
+                  <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">
                     Brand website{" "}
-                    <span style={{ color: "#aaa", fontWeight: 400 }}>(optional)</span>
-                  </label>
-                  <input
+                    <span className="font-normal text-muted-foreground/70">(optional)</span>
+                  </Label>
+                  <Input
                     type="url"
                     placeholder="https://yourwebsite.com"
                     value={brandWebsite}
                     onChange={(e) => setBrandWebsite(e.target.value)}
-                    style={{
-                      fontSize: 12,
-                      padding: "9px 12px",
-                      borderRadius: 8,
-                      border: "0.5px solid rgba(0,0,0,0.15)",
-                    }}
-                    className="w-full focus:outline-none focus:border-[#1FAE5B] focus:ring-2 focus:ring-[#1FAE5B]/20"
                   />
                 </div>
               </div>
             </div>
-          </div>
 
-          {/* Footer — save button right-aligned */}
-          <div
-            style={{ borderTop: "0.5px solid rgba(0,0,0,0.06)" }}
-            className="flex justify-end px-5 py-4"
-          >
-            <button
-              onClick={handleSaveBranding}
-              disabled={savingBranding}
-              style={{
-                fontSize: 12,
-                fontWeight: 500,
-                padding: "8px 18px",
-                borderRadius: 9,
-                background: "#1FAE5B",
-                color: "#fff",
-              }}
-              className="disabled:opacity-60"
-            >
-              {savingBranding ? "Saving..." : brandingSaved ? "Saved!" : "Save changes"}
-            </button>
-          </div>
-        </div>
+            <div className="mt-4 flex justify-end border-t pt-3">
+              <Button
+                onClick={handleSaveBranding}
+                disabled={savingBranding}
+                className="bg-[#15803d] hover:bg-[#166534] text-white"
+              >
+                {savingBranding ? "Saving…" : brandingSaved ? "Saved!" : "Save changes"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       )}
     </div>
   )
@@ -354,7 +336,7 @@ function BrandingContent() {
 
 export default function BrandingPage() {
   return (
-    <Suspense>
+    <Suspense fallback={<LoadingScreen />}>
       <BrandingContent />
     </Suspense>
   )

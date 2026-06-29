@@ -16,6 +16,10 @@ export async function GET(
     }
 
     const { brandId } = await params
+    const { searchParams } = new URL(req.url)
+    const search = searchParams.get("search") || ""
+    const unpartneredOnly = searchParams.get("unpartnered_only") === "true"
+
     const brand = await prisma.brand.findUnique({ where: { id: brandId } })
     if (!brand) {
       return NextResponse.json({ error: "Brand not found" }, { status: 404 })
@@ -58,31 +62,60 @@ export async function GET(
     }
 
     const brandInfluencers = await prisma.brandInfluencer.findMany({
-      where: { brand_id: brandId },
+      where: {
+        brand_id: brandId,
+      },
       orderBy: { created_at: "desc" },
     })
 
     const influencerIds = [...new Set(brandInfluencers.map((bi) => bi.influencer_id))]
-    const brandInfluencerIds = brandInfluencers.map((bi) => bi.id)
 
-    // Fetch influencers and "added" logs in parallel
-    const [influencers, addedLogs] = await Promise.all([
-      prisma.influencer.findMany({ where: { id: { in: influencerIds } } }),
-      prisma.activityLog.findMany({
-        where: {
-          brand_id: brandId,
-          action: "influencer.added",
-          entity_type: "brand_influencer",
-          entity_id: { in: brandInfluencerIds },
-        },
-        orderBy: { created_at: "asc" },
-        select: {
-          entity_id: true,
-          created_at: true,
-          user_id: true,
-        },
-      }),
-    ])
+    const partnerIds = unpartneredOnly
+      ? new Set(
+          (
+            await prisma.brandPartner.findMany({
+              where: { brand_id: brandId },
+              select: { brand_influencer_id: true },
+            })
+          ).map((partner) => partner.brand_influencer_id)
+        )
+      : new Set<string>()
+
+    // Fetch influencers first so orphaned brand_influencer rows can be skipped safely.
+    const influencers = await prisma.influencer.findMany({ where: { id: { in: influencerIds } } })
+    const influencerMap = new Map(influencers.map((i) => [i.id, i]))
+
+    const filteredBrandInfluencers = brandInfluencers.filter((bi) => {
+      const inf = influencerMap.get(bi.influencer_id)
+      if (!inf) return false
+      if (unpartneredOnly && partnerIds.has(bi.id)) return false
+
+      if (!search) return true
+
+      const haystack = [inf.handle, inf.full_name, inf.niche, inf.location]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+
+      return haystack.includes(search.toLowerCase())
+    })
+
+    const brandInfluencerIds = filteredBrandInfluencers.map((bi) => bi.id)
+
+    const addedLogs = await prisma.activityLog.findMany({
+      where: {
+        brand_id: brandId,
+        action: "influencer.added",
+        entity_type: "brand_influencer",
+        entity_id: { in: brandInfluencerIds },
+      },
+      orderBy: { created_at: "asc" },
+      select: {
+        entity_id: true,
+        created_at: true,
+        user_id: true,
+      },
+    })
 
     // Fetch user info for whoever added each influencer
     const userIds = [...new Set(addedLogs.map((l) => l.user_id))]
@@ -102,9 +135,7 @@ export async function GET(
       }
     }
 
-    const influencerMap = new Map(influencers.map((i) => [i.id, i]))
-
-    const combined = brandInfluencers
+    const combined = filteredBrandInfluencers
       .filter((bi) => influencerMap.has(bi.influencer_id))
       .map((bi) => {
         const inf = influencerMap.get(bi.influencer_id)!

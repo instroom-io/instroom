@@ -176,6 +176,9 @@ export default function BrandPartnersPage({ brandId }: Props) {
   const [selectedPartner, setSelectedPartner] = useState<Partner | null>(null)
   const [showCampaignDetail, setShowCampaignDetail] = useState(false)
   const [selectedCampaign, setSelectedCampaign] = useState<Campaign | null>(null)
+  const [showAddToCampaign, setShowAddToCampaign] = useState(false)
+  const [pickerSelectedIds, setPickerSelectedIds] = useState<string[]>([])
+  const [addingToCampaign, setAddingToCampaign] = useState(false)
 
   // ── Tier thresholds ──────────────────────────────────────────────────────
   const [tierThresholds, setTierThresholds] = useState({ bronzeMax: 2000, silverMax: 10000 })
@@ -195,16 +198,33 @@ export default function BrandPartnersPage({ brandId }: Props) {
       const inf = bi.influencer
       const bp = bi.partner
       const nameParts = (inf.full_name || inf.handle.replace("@", "")).split(" ")
-      const rev = bi.agreed_rate ? Number(bi.agreed_rate) : 0
 
+      // ── Revenue is GMV (what the influencer actually generated in sales) ──
+      // agreed_rate is what you PAY the influencer — a cost, not revenue —
+      // so it's folded into totalSpend below instead of treated as rev.
+      const gmv        = bp ? Number(bp.gmv) : 0
       const prodCost   = bp ? Number(bp.product_cost) : 0
       const feesPaid   = bp ? Number(bp.fees_paid) : 0
       const commPaid   = bp ? Number(bp.commission_paid) : 0
-      const totalSpend = prodCost + feesPaid + commPaid
+      const agreedRate = bi.agreed_rate ? Number(bi.agreed_rate) : 0
+
+      const totalSpend = prodCost + feesPaid + commPaid + agreedRate
 
       const clicks = bp?.clicks ?? 0
       const sales  = bp?.sales_count ?? 0
-      const cvr    = clicks > 0 ? (sales / clicks) * 100 : 0
+      
+      // ── Calculate metrics only if data exists ──────────────────────────
+      // CVR: Conversion Rate = (Sales / Clicks) * 100
+      const cvr = clicks > 0 && sales > 0 ? (sales / clicks) * 100 : 0
+      
+      // AOV: Average Order Value = GMV / Sales
+      const aov = sales > 0 ? gmv / sales : 0
+      
+      // ROAS: Return on Ad Spend = GMV / Total Spend
+      const roas_val = totalSpend > 0 ? gmv / totalSpend : 0
+      
+      // ROI: Return on Investment = ((GMV - Total Spend) / Total Spend) * 100
+      const roi_val = totalSpend > 0 ? ((gmv - totalSpend) / totalSpend) * 100 : 0
 
       return {
         id: bi.id,
@@ -216,7 +236,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
         niche: inf.niche || "",
         gend: inf.gender || "",
         loc: inf.location || "",
-        tier: autoTier(rev),
+        tier: autoTier(gmv),
         tierOverride: bp?.tier_override ?? null,
         onRet: bp?.on_retainer ?? false,
         retFee: bp ? Number(bp.retainer_fee) : 0,
@@ -225,19 +245,19 @@ export default function BrandPartnersPage({ brandId }: Props) {
         clicks,
         cvr,
         sales,
-        aov: 0,
-        rev,
+        aov,
+        rev: gmv,
         fol: inf.follower_count || 0,
         eng: Number(inf.engagement_rate) || 0,
         avgV: inf.avg_views || 0,
-        gmv: bp ? Number(bp.gmv) : 0,
+        gmv,
         added: new Date(bi.created_at),
         prodCost,
         feesPaid,
         commPaid,
         totalSpend,
-        roi_val: totalSpend > 0 ? ((rev - totalSpend) / totalSpend) * 100 : 0,
-        roas_val: totalSpend > 0 ? rev / totalSpend : 0,
+        roi_val,
+        roas_val,
         likes_count: bi.likes_count,
         comments_count: bi.comments_count,
         engagement_count: bi.engagement_count,
@@ -380,6 +400,49 @@ export default function BrandPartnersPage({ brandId }: Props) {
       )
     } catch (e: any) {
       alert("Failed to update campaign status: " + (e.message || "Unknown error"))
+    }
+  }
+
+  // ── Add partners to campaign ─────────────────────────────────────────────
+  const handleAddPartnersToCampaign = async (campaignId: string, influencerIds: string[]) => {
+    if (influencerIds.length === 0) return
+    setAddingToCampaign(true)
+    try {
+      const res = await fetch(`/api/brands/${brandId}/campaigns/${campaignId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ add_influencer_ids: influencerIds }),
+      })
+      if (!res.ok) throw new Error(`Server error ${res.status}`)
+
+      // Refresh partners so campaign_id changes are reflected locally
+      const fresh = await partnersApi.list(brandId)
+      setPartners(fresh.map(dbToPartner))
+      setShowAddToCampaign(false)
+      setPickerSelectedIds([])
+    } catch (e: any) {
+      alert("Failed to add creators to campaign: " + (e.message || "Unknown error"))
+    } finally {
+      setAddingToCampaign(false)
+    }
+  }
+
+  // ── Remove a partner from a campaign ─────────────────────────────────────
+  const handleRemoveFromCampaign = async (campaignId: string, influencerId: string) => {
+    if (!confirm("Remove this creator from the campaign? Their financials stay intact.")) return
+    try {
+      const res = await fetch(`/api/brands/${brandId}/campaigns/${campaignId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ remove_influencer_ids: [influencerId] }),
+      })
+      if (!res.ok) throw new Error(`Server error ${res.status}`)
+
+      setPartners((prev) =>
+        prev.map((p) => (p.id === influencerId ? { ...p, campaign_id: null } : p))
+      )
+    } catch (e: any) {
+      alert("Failed to remove creator from campaign: " + (e.message || "Unknown error"))
     }
   }
 
@@ -586,11 +649,13 @@ export default function BrandPartnersPage({ brandId }: Props) {
     ? partners.filter((p) => p.campaign_id === selectedCampaign.id)
     : []
 
-  const campRev     = campPartners.reduce((a, p) => a + (p.agreed_rate ?? 0), 0)
+  // Revenue is GMV (value the influencer generated), not agreed_rate (cost paid to them).
+  const campRev     = campPartners.reduce((a, p) => a + p.gmv, 0)
   const campSpend   = campPartners.reduce((a, p) => a + p.totalSpend, 0)
   const campCOGS    = campPartners.reduce((a, p) => a + p.prodCost, 0)
   const campFees    = campPartners.reduce((a, p) => a + p.feesPaid, 0)
   const campComm    = campPartners.reduce((a, p) => a + p.commPaid, 0)
+  const campFeesAgreed = campPartners.reduce((a, p) => a + (p.agreed_rate ?? 0), 0)
   const campViews   = campPartners.reduce((a, p) => a + p.avgV, 0)
   const campLikes   = campPartners.reduce((a, p) => a + p.likes_count, 0)
   const campPosted  = campPartners.filter((p) => p.content_posted).length
@@ -711,6 +776,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
                     <th><div className="thi" onClick={() => handleSort("cvr")}><span className="cl">CVR</span><span className="sa">↕</span></div></th>
                     <th><div className="thi" onClick={() => handleSort("sales")}><span className="cl">Sales (units)</span><span className="sa">↕</span></div></th>
                     <th><div className="thi" onClick={() => handleSort("revenue")}><span className="cl">Revenue</span><span className="sa">↕</span></div></th>
+                    <th><span className="cl">Agreed fee</span></th>
                     <th><div className="thi" onClick={() => handleSort("roas")}><span className="cl">ROAS / ROI</span><span className="sa">↕</span></div></th>
                     <th><span className="cl">Status</span></th>
                     <th><span className="cl">Posted</span></th>
@@ -761,24 +827,42 @@ export default function BrandPartnersPage({ brandId }: Props) {
                         <td>
                           <span className="stage-badge" data-stage={p.stage}>Stage {p.stage}</span>
                         </td>
-                        <td style={{ fontSize: 11, color: "#aaa", textAlign: "center" }}>—</td>
+                        <td style={{ fontSize: 11, color: "#555", textAlign: "center" }}>
+                          {p.onRet ? (
+                            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                              <span style={{ fontWeight: 600, color: "#185FA5" }}>Yes</span>
+                              <span style={{ fontSize: 10, color: "#888" }}>
+                                {p.retFee ? `${formatMoney(p.retFee)}/mo` : "No fee set"}
+                              </span>
+                              <span style={{ fontSize: 10, color: "#888" }}>
+                                {p.defComm ? `${p.defComm}% comm` : "0% comm"}
+                              </span>
+                            </div>
+                          ) : (
+                            <span style={{ color: "#888" }}>No</span>
+                          )}
+                        </td>
                         <td style={{ fontSize: 12 }}>
                           {p.totalSpend > 0 ? (
                             <>
                               <div style={{ fontWeight: 600 }}>{formatMoney(p.totalSpend)}</div>
                               <div style={{ fontSize: 10, color: "#888" }}>
                                 {formatMoney(p.prodCost)} COGS + {formatMoney(p.feesPaid)} fees
+                                {p.agreed_rate ? ` + ${formatMoney(p.agreed_rate)} fee` : ""}
                               </div>
                             </>
                           ) : (
                             <span style={{ color: "#ccc" }}>—</span>
                           )}
                         </td>
-                        <td style={{ fontSize: 11 }}>{p.clicks > 0 ? p.clicks.toLocaleString() : "—"}</td>
-                        <td style={{ fontSize: 11, color: "#185FA5" }}>{p.clicks > 0 ? p.cvr.toFixed(0) + "%" : "—"}</td>
-                        <td style={{ fontSize: 11 }}>{p.sales > 0 ? p.sales.toLocaleString() : "—"}</td>
+                        <td style={{ fontSize: 11 }}>{p.clicks.toLocaleString()}</td>
+                        <td style={{ fontSize: 11, color: "#185FA5" }}>{p.cvr.toFixed(0) + "%"}</td>
+                        <td style={{ fontSize: 11 }}>{p.sales.toLocaleString()}</td>
                         <td style={{ fontWeight: 600, color: "#1FAE5B", fontSize: 12 }}>
-                          {p.agreed_rate ? formatMoney(p.agreed_rate) : "—"}
+                          {formatMoney(p.rev)}
+                        </td>
+                        <td style={{ fontSize: 11, color: "#555" }}>
+                          {p.agreed_rate !== null && p.agreed_rate !== undefined ? formatMoney(p.agreed_rate) : "—"}
                         </td>
                         <td>
                           {p.totalSpend > 0 ? (
@@ -931,8 +1015,14 @@ export default function BrandPartnersPage({ brandId }: Props) {
                   )}
                 </div>
 
-                {/* ── Edit / Activate / Complete buttons ── */}
+                {/* ── Edit / Add Creators / Activate / Complete buttons ── */}
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <button
+                    className="btn-outline"
+                    onClick={() => setShowAddToCampaign((v) => !v)}
+                  >
+                    + Add Creators
+                  </button>
                   <button
                     className="btn-outline"
                     onClick={() => {/* TODO: open edit modal */}}
@@ -964,6 +1054,83 @@ export default function BrandPartnersPage({ brandId }: Props) {
               </div>
             </div>
 
+            {/* ── Add Creators picker ── */}
+            {showAddToCampaign && (
+              <div className="cd-section">
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                  <div className="cd-section-title" style={{ margin: 0 }}>Add creators to this campaign</div>
+                  <button
+                    onClick={() => { setShowAddToCampaign(false); setPickerSelectedIds([]) }}
+                    style={{ background: "none", border: "none", color: "#888", cursor: "pointer", fontSize: 13 }}
+                  >
+                    ✕
+                  </button>
+                </div>
+                {(() => {
+                  const eligible = partners.filter((p) => p.campaign_id !== selectedCampaign.id)
+                  if (eligible.length === 0) {
+                    return (
+                      <div style={{ fontSize: 12, color: "#888", padding: "8px 0" }}>
+                        All your partners are already in this campaign.
+                      </div>
+                    )
+                  }
+                  return (
+                    <>
+                      <div style={{ maxHeight: 260, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
+                        {eligible.map((p) => {
+                          const checked = pickerSelectedIds.includes(p.id)
+                          return (
+                            <label
+                              key={p.id}
+                              style={{
+                                display: "flex", alignItems: "center", gap: 8, padding: "6px 8px",
+                                borderRadius: 6, fontSize: 12, cursor: "pointer",
+                                background: checked ? "#e6f9ee" : "transparent",
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(e) => {
+                                  setPickerSelectedIds((prev) =>
+                                    e.target.checked ? [...prev, p.id] : prev.filter((id) => id !== p.id)
+                                  )
+                                }}
+                              />
+                              <span style={{ fontWeight: 500 }}>{p.handle}</span>
+                              <span style={{ color: "#888" }}>{p.plat}{p.niche ? ` · ${p.niche}` : ""}</span>
+                              {p.campaign_id && (
+                                <span style={{ marginLeft: "auto", fontSize: 10, color: "#aaa" }}>
+                                  already in another campaign
+                                </span>
+                              )}
+                            </label>
+                          )
+                        })}
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12, paddingTop: 10, borderTop: "0.5px solid rgba(0,0,0,0.06)" }}>
+                        <button
+                          className="btn-outline"
+                          onClick={() => { setShowAddToCampaign(false); setPickerSelectedIds([]) }}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          className="btn-primary"
+                          disabled={pickerSelectedIds.length === 0 || addingToCampaign}
+                          style={{ opacity: pickerSelectedIds.length === 0 || addingToCampaign ? 0.5 : 1 }}
+                          onClick={() => handleAddPartnersToCampaign(selectedCampaign.id, pickerSelectedIds)}
+                        >
+                          {addingToCampaign ? "Adding…" : `Add ${pickerSelectedIds.length || ""} creator${pickerSelectedIds.length === 1 ? "" : "s"}`}
+                        </button>
+                      </div>
+                    </>
+                  )
+                })()}
+              </div>
+            )}
+
             {/* ── Performance summary ── */}
             <div className="cd-section">
               <div className="cd-section-title">Performance summary</div>
@@ -978,6 +1145,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
                   {campSpend > 0 && (
                     <div style={{ fontSize: 10, color: "#888", marginTop: 3 }}>
                       {formatMoney(campCOGS)} COGS · {formatMoney(campFees)} fees · {formatMoney(campComm)} comm
+                      {campFeesAgreed ? ` · ${formatMoney(campFeesAgreed)} agreed fees` : ""}
                     </div>
                   )}
                 </div>
@@ -1029,8 +1197,8 @@ export default function BrandPartnersPage({ brandId }: Props) {
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                     <thead>
                       <tr style={{ borderBottom: "0.5px solid rgba(0,0,0,0.08)" }}>
-                        {["Creator", "Deliverables", "Agreed fee", "Likes", "Eng. rate", "Revenue", "ROAS / ROI", "Status"].map((h) => (
-                          <th key={h} style={{
+                        {["Creator", "Deliverables", "Agreed fee", "Likes", "Eng. rate", "Revenue", "ROAS / ROI", "Status", ""].map((h) => (
+                          <th key={h || "remove"} style={{
                             textAlign: h === "Creator" || h === "Deliverables" ? "left" : "right",
                             padding: "8px 10px", fontSize: 10, color: "#888", fontWeight: 500, whiteSpace: "nowrap",
                           }}>{h}</th>
@@ -1040,7 +1208,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
                     <tbody>
                       {campPartners.map((p) => {
                         const pSpend  = p.totalSpend
-                        const pRev    = p.agreed_rate ?? 0
+                        const pRev    = p.gmv
                         const pRoasN  = pSpend > 0 ? pRev / pSpend : 0
                         const pRoiN   = pSpend > 0 ? (pRev - pSpend) / pSpend * 100 : 0
                         const pRoas   = pSpend > 0 ? pRoasN.toFixed(1) + "x" : "—"
@@ -1074,20 +1242,20 @@ export default function BrandPartnersPage({ brandId }: Props) {
                               )}
                             </td>
                             <td style={{ padding: "10px", textAlign: "right", verticalAlign: "top" }}>
-                              {p.agreed_rate
+                              {p.agreed_rate !== null && p.agreed_rate !== undefined
                                 ? <span style={{ fontWeight: 600 }}>{formatMoney(p.agreed_rate)}</span>
-                                : <span style={{ color: "#ccc", fontSize: 11 }}>—</span>}
+                                : <span style={{ color: "#ccc", fontSize: 11 }}>$0</span>}
                             </td>
                             <td style={{ padding: "10px", textAlign: "right", verticalAlign: "top", fontSize: 11 }}>
-                              {p.likes_count ? p.likes_count >= 1000 ? (p.likes_count / 1000).toFixed(1) + "K" : p.likes_count : "—"}
+                              {p.likes_count >= 1000 ? (p.likes_count / 1000).toFixed(1) + "K" : p.likes_count.toLocaleString()}
                             </td>
                             <td style={{ padding: "10px", textAlign: "right", verticalAlign: "top", fontSize: 11 }}>
-                              {p.eng ? p.eng + "%" : "—"}
+                              {p.eng.toFixed(1) + "%"}
                             </td>
                             <td style={{ padding: "10px", textAlign: "right", verticalAlign: "top" }}>
                               {pRev
                                 ? <span style={{ fontWeight: 600, color: "#1FAE5B" }}>{formatMoney(pRev)}</span>
-                                : <span style={{ color: "#ccc", fontSize: 11 }}>—</span>}
+                                : <span style={{ color: "#ccc", fontSize: 11 }}>$0</span>}
                             </td>
                             <td style={{ padding: "10px", textAlign: "right", verticalAlign: "top" }}>
                               {pSpend > 0 ? (
@@ -1111,6 +1279,18 @@ export default function BrandPartnersPage({ brandId }: Props) {
                                 <div style={{ fontSize: 10, color: "#1FAE5B", marginTop: 3 }}>✅ Posted</div>
                               )}
                             </td>
+                            <td style={{ padding: "10px", textAlign: "right", verticalAlign: "top" }}>
+                              <button
+                                className="abt del"
+                                title="Remove from campaign"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  handleRemoveFromCampaign(selectedCampaign.id, p.id)
+                                }}
+                              >
+                                ✕
+                              </button>
+                            </td>
                           </tr>
                         )
                       })}
@@ -1123,7 +1303,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
                             Totals ({campPartners.length} creators)
                           </td>
                           <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, fontSize: 11 }}>
-                            {campRev ? formatMoney(campRev) : "—"}
+                            {campFeesAgreed ? formatMoney(campFeesAgreed) : "—"}
                           </td>
                           <td style={{ padding: "8px 10px", textAlign: "right", fontSize: 11 }}>
                             {campLikes >= 1000 ? (campLikes / 1000).toFixed(1) + "K" : campLikes || "—"}

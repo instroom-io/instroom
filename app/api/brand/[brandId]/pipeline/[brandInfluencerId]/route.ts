@@ -18,6 +18,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
+import { sendNotification } from "@/lib/notifications"
+import type { NotifType } from "@/emails/notification"
 
 // ─── Status → DB field mapping ────────────────────────────────────────────────
 function pipelineStatusToFields(pipelineStatus: string): {
@@ -115,6 +117,67 @@ export async function PATCH(
         approval_status: true,
       },
     })
+    // ── Send notification ───────────────────────────────────────────────────
+    // Non-blocking: notify all brand members in background
+    try {
+      const brandInfluencerFull = await prisma.brandInfluencer.findUnique({
+        where: { id: brandInfluencerId },
+        select: { influencer_id: true },
+      })
+      
+      if (brandInfluencerFull) {
+        const influencer = await prisma.influencer.findUnique({
+          where: { id: brandInfluencerFull.influencer_id },
+          select: { full_name: true, handle: true },
+        })
+        
+        const brand = await prisma.brand.findUnique({
+          where: { id: brandId },
+          select: { slug: true },
+        })
+
+        const influencerName = influencer?.full_name || influencer?.handle || "Influencer"
+        const appUrl = process.env.NEXTAUTH_URL ?? ""
+        const actionUrl = brand ? `${appUrl}/dashboard/${brand.slug}/influencers/${brandInfluencerId}` : undefined
+
+        // Determine notification type and message based on pipeline status
+        let notifType: NotifType = "stage_change"
+        let title: string
+        let message: string
+
+        if (pipelineStatus === "Deal Agreed") {
+          notifType = "deal_agreed"
+          title = `Deal agreed with ${influencerName}`
+          message = `${influencerName} has confirmed the collaboration!`
+        } else {
+          title = `Pipeline update: ${influencerName}`
+          message = `${influencerName}'s status has been updated to "${pipelineStatus}".`
+        }
+
+        // Send to all brand members (non-blocking)
+        prisma.brandMember
+          .findMany({
+            where: { brand_id: brandId },
+            select: { user_id: true },
+          })
+          .then(async (members) => {
+            await Promise.allSettled(
+              members.map(({ user_id }) =>
+                sendNotification({
+                  userId: user_id,
+                  type: notifType,
+                  title,
+                  message,
+                  actionUrl,
+                })
+              )
+            )
+          })
+          .catch((err) => console.error("Notification dispatch failed:", err))
+      }
+    } catch (err) {
+      console.error("❌ Notification setup failed:", err)
+    }
 
     return NextResponse.json({ success: true, data: updated })
 

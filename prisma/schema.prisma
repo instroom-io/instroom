@@ -388,6 +388,18 @@ model Notification {
   @@index([user_id, is_read])
 }
 
+model NotificationPreference {
+  id               String   @id @default(cuid()) @db.VarChar(30)
+  user_id          String   @unique @db.VarChar(30)
+  influencer_reply Boolean  @default(true)
+  stage_change     Boolean  @default(false)
+  deal_agreed      Boolean  @default(true)
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  @@index([user_id])
+}
+
 model PlatformSettings {
   id            String   @id @default(cuid()) @db.VarChar(30)
   setting_key   String   @unique @db.VarChar(100)
@@ -494,3 +506,4 @@ model BrandTierSettings {
 
   brand Brand @relation(fields: [brand_id], references: [id], onDelete: Cascade)
 }
+

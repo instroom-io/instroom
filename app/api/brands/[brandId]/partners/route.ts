@@ -28,12 +28,14 @@ export async function GET(
     const brandInfluencers = await prisma.brandInfluencer.findMany({
       where: {
         brand_id: brandId,
+        partner: { isNot: null }, // only rows promoted to an actual BrandPartner
         ...(stage         ? { stage: parseInt(stage) } : {}),
         ...(contactStatus ? { contact_status: contactStatus } : {}),
         ...(campaignId    ? { campaign_id: campaignId } : {}),
         influencer: {
           ...(platform ? { platform } : {}),
           ...(niche    ? { niche }    : {}),
+          // Fix 1: removed mode: "insensitive" — SQLite doesn't support it
           ...(search   ? {
               OR: [
                 { handle:    { contains: search } },
@@ -50,7 +52,7 @@ export async function GET(
         campaign: {
           select: { id: true, name: true, status: true },
         },
-        partner: true, // ← fixes missing financials (product_cost, fees_paid, clicks, tier_override, etc.)
+        partner: true,
       },
       orderBy: { created_at: "desc" },
     })
@@ -133,8 +135,12 @@ export async function POST(
       )
     }
 
-    // ── Create the BrandInfluencer link ──────────────────────────────────
-    const brandInfluencer = await prisma.brandInfluencer.create({
+    // ── Create the BrandInfluencer link + matching BrandPartner row ──────
+    // Fix 2: removed $transaction wrapper — the findUniqueOrThrow with nested
+    // includes was too slow and hitting SQLite's 5s transaction timeout.
+    // Sequential awaits are safe here since the duplicate check above guards
+    // against concurrent double-inserts in the vast majority of cases.
+    const bi = await prisma.brandInfluencer.create({
       data: {
         brand_id:        brandId,
         influencer_id:   influencerId,
@@ -149,10 +155,22 @@ export async function POST(
         deliverables:    body.deliverables    ?? null,
         deadline:        body.deadline ? new Date(body.deadline) : null,
       },
+    })
+
+    await prisma.brandPartner.create({
+      data: {
+        brand_id:            brandId,
+        influencer_id:       influencerId,
+        brand_influencer_id: bi.id,
+      },
+    })
+
+    const brandInfluencer = await prisma.brandInfluencer.findUniqueOrThrow({
+      where: { id: bi.id },
       include: {
         influencer: true,
         campaign: { select: { id: true, name: true, status: true } },
-        partner: true, // ← ensures POST response also includes financials (null on first create, that's fine)
+        partner: true,
       },
     })
 

@@ -1,178 +1,310 @@
+"use client"
 // app/dashboard/settings/notifications/page.tsx
-import { getServerSession } from "next-auth"
-import { authOptions } from "@/lib/auth"
-import { redirect } from "next/navigation"
 
-export default async function NotificationsPage() {
-  const session = await getServerSession(authOptions)
-  if (!session?.user?.id) redirect("/login")
+import { useEffect, useState } from "react"
+import { useSession } from "next-auth/react"
+import { useRouter } from "next/navigation"
+import { Switch } from "@/components/ui/switch"
+import { Card, CardContent } from "@/components/ui/card"
+import { Bell, Loader2 } from "lucide-react"
+import { cn } from "@/lib/utils"
 
-  const notifGroups = [
-    {
-      group: "Pipeline",
-      items: [
-        { title: "Influencer replies", desc: "When an influencer replies to your outreach", on: true },
-        { title: "Stage changes", desc: "When an influencer is moved to a new pipeline stage", on: false },
-        { title: "Deal agreed", desc: "When a deal is confirmed with an influencer", on: true },
-      ],
-    },
-    {
-      group: "Post Tracker",
-      items: [
-        { title: "Post detected", desc: "When a new post is auto-tracked via hashtag or mention", on: true },
-        { title: "Post overdue alert", desc: "14 days after delivery with no post detected", on: true },
-        { title: "Metrics snapshot ready", desc: "When final post metrics are locked and saved", on: false },
-      ],
-    },
-    {
-      group: "Paid Collabs",
-      items: [
-        { title: "Payment due reminders", desc: "3 days before a payment milestone is due", on: true },
-        { title: "Content approved", desc: "When a script or content submission is approved", on: true },
-      ],
-    },
-    {
-      group: "Brand Partners",
-      items: [
-        { title: "New partner suggestion", desc: "When an influencer crosses the Brand Partner threshold", on: true },
-      ],
-    },
-  ]
+// ── Toast ─────────────────────────────────────────────────────────────────────
 
+type Toast = { message: string; type: "success" | "error" }
+
+function useToast() {
+  const [toast, setToast] = useState<Toast | null>(null)
+  const show = (message: string, type: Toast["type"]) => {
+    setToast({ message, type })
+    setTimeout(() => setToast(null), 3500)
+  }
+  return { toast, show }
+}
+
+// ── Loading screen ────────────────────────────────────────────────────────────
+
+function LoadingScreen() {
   return (
-    <div style={{ padding: "28px 36px", maxWidth: 780 }}>
-      <div style={{ fontSize: 18, fontWeight: 600, color: "#1E1E1E", marginBottom: 4 }}>Notifications</div>
-      <div style={{ fontSize: 12, color: "#888", marginBottom: 24 }}>Choose when and how you get notified</div>
-
-      <div style={card}>
-        <div style={cardHeader}>
-          <div style={cardIcon}>
-            <svg viewBox="0 0 16 16" fill="none" stroke="#1FAE5B" strokeWidth="1.5" width={16} height={16}>
-              <path d="M8 2a5 5 0 00-5 5v3l-1 2h12l-1-2V7a5 5 0 00-5-5z" />
-              <path d="M6.5 13a1.5 1.5 0 003 0" />
-            </svg>
-          </div>
-          <div>
-            <div style={cardTitle}>Email notifications</div>
-            <div style={cardDesc}>Sent to {session.user.email}</div>
-          </div>
-        </div>
-        <div style={cardBody}>
-          {notifGroups.map((group, gi) => (
-            <div key={group.group} style={{ marginBottom: 4 }}>
-              <div
-                style={{
-                  fontSize: 10,
-                  fontWeight: 700,
-                  letterSpacing: "0.08em",
-                  textTransform: "uppercase",
-                  color: "#aaa",
-                  marginBottom: 8,
-                  marginTop: gi === 0 ? 0 : 14,
-                }}
-              >
-                {group.group}
-              </div>
-              {group.items.map((item, ii) => (
-                <div
-                  key={item.title}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    padding: "12px 0",
-                    borderBottom:
-                      ii === group.items.length - 1 && gi === notifGroups.length - 1
-                        ? "none"
-                        : "0.5px solid rgba(0,0,0,0.05)",
-                  }}
-                >
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 500, color: "#1E1E1E" }}>{item.title}</div>
-                    <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{item.desc}</div>
-                  </div>
-                  <div
-                    style={{
-                      width: 36,
-                      height: 20,
-                      borderRadius: 10,
-                      background: item.on ? "#1FAE5B" : "#ddd",
-                      position: "relative",
-                      flexShrink: 0,
-                      cursor: "pointer",
-                    }}
-                  >
-                    <div
-                      style={{
-                        position: "absolute",
-                        width: 16,
-                        height: 16,
-                        top: 2,
-                        left: item.on ? 18 : 2,
-                        background: "#fff",
-                        borderRadius: "50%",
-                        boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
-                      }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-          ))}
-
-          <div style={btnRow}>
-            <button style={btnPrimary}>Save preferences</button>
-          </div>
-        </div>
-      </div>
+    <div className="flex min-h-[400px] flex-col items-center justify-center gap-3">
+      <Loader2 className="h-7 w-7 animate-spin text-emerald-600" />
+      <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+        Loading
+      </p>
     </div>
   )
 }
 
-// ── Shared styles ──────────────────────────────────────────────
-const card: React.CSSProperties = {
-  background: "#fff",
-  border: "0.5px solid rgba(0,0,0,0.08)",
-  borderRadius: 12,
-  marginBottom: 16,
-  overflow: "hidden",
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+interface NotifItem {
+  apiKey: "influencer_reply" | "stage_change" | "deal_agreed" | null
+  title:  string
+  desc:   string
+  on:     boolean
 }
-const cardHeader: React.CSSProperties = {
-  padding: "16px 20px",
-  borderBottom: "0.5px solid rgba(0,0,0,0.07)",
-  display: "flex",
-  alignItems: "flex-start",
-  gap: 12,
+
+interface NotifGroup {
+  group: string
+  items: NotifItem[]
 }
-const cardIcon: React.CSSProperties = {
-  width: 36,
-  height: 36,
-  borderRadius: 9,
-  background: "#f0faf5",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  flexShrink: 0,
-}
-const cardTitle: React.CSSProperties = { fontSize: 13, fontWeight: 600, color: "#1E1E1E" }
-const cardDesc: React.CSSProperties = { fontSize: 11, color: "#888", marginTop: 2 }
-const cardBody: React.CSSProperties = { padding: 20 }
-const btnRow: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "flex-end",
-  gap: 8,
-  marginTop: 16,
-  paddingTop: 14,
-  borderTop: "0.5px solid rgba(0,0,0,0.06)",
-}
-const btnPrimary: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 500,
-  padding: "8px 18px",
-  borderRadius: 9,
-  border: "none",
-  background: "#1FAE5B",
-  color: "#fff",
-  cursor: "pointer",
-  fontFamily: "inherit",
+
+// ── Default groups ────────────────────────────────────────────────────────────
+
+const DEFAULT_GROUPS: NotifGroup[] = [
+  {
+    group: "Pipeline",
+    items: [
+      {
+        apiKey: "influencer_reply",
+        title:  "Influencer replies",
+        desc:   "When an influencer replies to your outreach",
+        on:     true,
+      },
+      {
+        apiKey: "stage_change",
+        title:  "Stage changes",
+        desc:   "When an influencer is moved to a new pipeline stage",
+        on:     false,
+      },
+      {
+        apiKey: "deal_agreed",
+        title:  "Deal agreed",
+        desc:   "When a deal is confirmed with an influencer",
+        on:     true,
+      },
+    ],
+  },
+  {
+    group: "Post Tracker",
+    items: [
+      {
+        apiKey: null,
+        title:  "Post detected",
+        desc:   "When a new post is auto-tracked via hashtag or mention",
+        on:     true,
+      },
+      {
+        apiKey: null,
+        title:  "Post overdue alert",
+        desc:   "14 days after delivery with no post detected",
+        on:     true,
+      },
+      {
+        apiKey: null,
+        title:  "Metrics snapshot ready",
+        desc:   "When final post metrics are locked and saved",
+        on:     false,
+      },
+    ],
+  },
+  {
+    group: "Paid Collabs",
+    items: [
+      {
+        apiKey: null,
+        title:  "Payment due reminders",
+        desc:   "3 days before a payment milestone is due",
+        on:     true,
+      },
+      {
+        apiKey: null,
+        title:  "Content approved",
+        desc:   "When a script or content submission is approved",
+        on:     true,
+      },
+    ],
+  },
+  {
+    group: "Brand Partners",
+    items: [
+      {
+        apiKey: null,
+        title:  "New partner suggestion",
+        desc:   "When an influencer crosses the Brand Partner threshold",
+        on:     true,
+      },
+    ],
+  },
+]
+
+// ── Page ──────────────────────────────────────────────────────────────────────
+
+export default function NotificationsPage() {
+  const { data: session, status } = useSession()
+  const router                   = useRouter()
+  const { toast, show }          = useToast()
+
+  const [groups,       setGroups]       = useState<NotifGroup[]>(DEFAULT_GROUPS)
+  const [notifsLoaded, setNotifsLoaded] = useState(false)
+  const [toggling,     setToggling]     = useState<string | null>(null)
+
+  // ── Load saved preferences ────────────────────────────────────────────────
+  useEffect(() => {
+    if (status === "unauthenticated") {
+      router.push("/login")
+      return
+    }
+    if (status !== "authenticated") return
+
+    fetch("/api/settings/notifications")
+      .then((r) => r.json())
+      .then((data: Record<string, boolean>) => {
+        setGroups((prev) =>
+          prev.map((group) => ({
+            ...group,
+            items: group.items.map((item) => {
+              if (!item.apiKey) return item
+              const saved = data[item.apiKey]
+              return saved !== undefined ? { ...item, on: saved } : item
+            }),
+          })),
+        )
+      })
+      .catch(() => {})
+      .finally(() => setNotifsLoaded(true))
+  }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Toggle + auto-save ────────────────────────────────────────────────────
+  async function handleToggle(groupIndex: number, itemIndex: number) {
+    const item = groups[groupIndex].items[itemIndex]
+    if (!item.apiKey || toggling) return
+
+    const newValue = !item.on
+
+    // Optimistic update
+    setGroups((prev) =>
+      prev.map((g, gi) =>
+        gi !== groupIndex
+          ? g
+          : {
+              ...g,
+              items: g.items.map((it, ii) =>
+                ii !== itemIndex ? it : { ...it, on: newValue },
+              ),
+            },
+      ),
+    )
+
+    setToggling(item.apiKey)
+    try {
+      const res = await fetch("/api/settings/notifications", {
+        method:  "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ [item.apiKey]: newValue }),
+      })
+      if (!res.ok) throw new Error()
+      show(
+        `${item.title} ${newValue ? "enabled" : "disabled"}`,
+        "success",
+      )
+    } catch {
+      // Revert on failure
+      setGroups((prev) =>
+        prev.map((g, gi) =>
+          gi !== groupIndex
+            ? g
+            : {
+                ...g,
+                items: g.items.map((it, ii) =>
+                  ii !== itemIndex ? it : { ...it, on: !newValue },
+                ),
+              },
+        ),
+      )
+      show("Something went wrong", "error")
+    } finally {
+      setToggling(null)
+    }
+  }
+
+  if (status === "loading" || !notifsLoaded) return <LoadingScreen />
+
+  return (
+    <div className="max-w-3xl px-9 py-7">
+      {/* Toast */}
+      {toast && (
+        <div
+          className={cn(
+            "fixed top-5 right-6 z-[9999] rounded-[10px] px-4.5 py-2.5 text-[13px] font-medium text-white shadow-[0_4px_16px_rgba(0,0,0,0.12)]",
+            toast.type === "success" ? "bg-emerald-600" : "bg-red-500",
+          )}
+        >
+          {toast.message}
+        </div>
+      )}
+
+      {/* Header */}
+      <div className="mb-6">
+        <h1 className="text-lg font-semibold text-foreground">Notifications</h1>
+        <p className="text-xs text-muted-foreground">
+          Choose when and how you get notified
+        </p>
+      </div>
+
+      <Card className="mb-4">
+        {/* Email destination */}
+        <div className="flex items-center gap-3 border-b px-5 py-3">
+          <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-emerald-50">
+            <Bell className="h-4 w-4 text-emerald-600" strokeWidth={1.5} />
+          </div>
+          <div>
+            <p className="text-sm font-semibold leading-tight text-foreground">
+              Email notifications
+            </p>
+            <p className="text-xs leading-tight text-muted-foreground">
+              Sent to {session?.user?.email}
+            </p>
+          </div>
+        </div>
+
+        <CardContent className="pt-4 pb-2">
+          {groups.map((group, gi) => (
+            <div key={group.group} className={gi === 0 ? "" : "mt-3.5"}>
+              <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">
+                {group.group}
+              </p>
+              {group.items.map((item, ii) => {
+                const isLast =
+                  ii === group.items.length - 1 && gi === groups.length - 1
+                const isToggling = toggling === item.apiKey
+
+                return (
+                  <div
+                    key={item.title}
+                    className={cn(
+                      "flex items-center justify-between py-3 transition-opacity",
+                      !isLast && "border-b",
+                      !item.apiKey && "opacity-50",
+                      isToggling && "opacity-60",
+                    )}
+                  >
+                    <div>
+                      <p className="text-xs font-medium text-foreground">
+                        {item.title}
+                        {!item.apiKey && (
+                          <span className="ml-2 text-[10px] font-normal text-muted-foreground">
+                            coming soon
+                          </span>
+                        )}
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-muted-foreground">
+                        {item.desc}
+                      </p>
+                    </div>
+                    <Switch
+                      checked={item.on}
+                      onCheckedChange={() => handleToggle(gi, ii)}
+                      disabled={!item.apiKey || isToggling}
+                      className="data-[state=checked]:bg-emerald-600"
+                    />
+                  </div>
+                )
+              })}
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+    </div>
+  )
 }
