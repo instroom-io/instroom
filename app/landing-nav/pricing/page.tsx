@@ -132,21 +132,22 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
         }
 
         .plans-grid {
-          display: flex;
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 320px));
           justify-content: center;
-          align-items: flex-end;
+          align-items: stretch;
           gap: 24px;
-          flex-wrap: wrap;
         }
 
         .plan-card {
           position: relative;
-          width: 320px;
+          width: 100%;
           border-radius: 20px;
           border: 1px solid rgba(15,107,62,0.15);
           background: white;
           box-shadow: 0 4px 24px rgba(0,0,0,0.06);
           transition: box-shadow 0.2s, border-color 0.2s;
+          display: flex;
         }
 
         .plan-card:hover {
@@ -158,7 +159,7 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
           border-color: rgba(31,174,91,0.6);
           background: linear-gradient(to bottom right, white, rgba(31,174,91,0.04));
           box-shadow: 0 0 0 2px rgba(31,174,91,0.3), 0 8px 40px rgba(31,174,91,0.1);
-          transform: scale(1.04);
+          z-index: 1;
         }
 
         .popular-badge {
@@ -181,7 +182,7 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
           padding: 32px;
           display: flex;
           flex-direction: column;
-          height: 100%;
+          flex: 1;
         }
 
         .plan-name {
@@ -417,15 +418,14 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
         .footer-legal a:hover { color: white; }
 
         @media (max-width: 900px) {
-          .plans-grid { flex-direction: column; align-items: center; }
-          .plan-card.popular { transform: none; }
+          .plans-grid { grid-template-columns: 1fr; justify-items: center; }
           .footer-inner { grid-template-columns: 1fr 1fr; }
         }
 
         @media (max-width: 640px) {
           .footer-inner { grid-template-columns: 1fr; }
           .page-hero { padding: 64px 0 48px; }
-          .plan-card { width: 100%; max-width: 360px; }
+          .plan-card { max-width: 360px; }
         }
       `}</style>
 
@@ -459,7 +459,7 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
             {plans.map((plan: any, idx: number) => {
               const price = cycle === "yearly" ? plan.price_yearly : plan.price_monthly;
               const priceLabel = cycle === "yearly" ? "/yr" : "/mo";
-              const isPopular = idx === 2;
+              const isPopular = plan.name === "solo";
               const showAdditionalFeatures = plan.name === "solo" || plan.name === "team";
               return (
                 <div key={plan.id} className={`plan-card${isPopular ? " popular" : ""}`}>
@@ -497,21 +497,22 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
                       {plan.name === "basic" ? "Get Started Free" : "Get Started"}
                     </Link>
 
-                    {showAdditionalFeatures && (
-                      <div className="card-additional-features">
-                        <span className="card-additional-features-label">Additional Features</span>
-                        <ul className="card-additional-features-list">
-                          <li>
-                            <span>Instroom Post Tracker</span>
-                            <span className="card-additional-features-info" title="Track influencer posts and performance across all your campaigns.">i</span>
-                          </li>
-                          <li>
-                            <span>Instroom Chrome Extension</span>
-                            <span className="card-additional-features-info" title="Discover and save influencer profiles directly from your browser.">i</span>
-                          </li>
-                        </ul>
-                      </div>
-                    )}
+                    <div
+                      className="card-additional-features"
+                      style={showAdditionalFeatures ? undefined : { visibility: "hidden" }}
+                    >
+                      <span className="card-additional-features-label">Additional Features</span>
+                      <ul className="card-additional-features-list">
+                        <li>
+                          <span>Instroom Post Tracker</span>
+                          <span className="card-additional-features-info" title="Track influencer posts and performance across all your campaigns.">i</span>
+                        </li>
+                        <li>
+                          <span>Instroom Chrome Extension</span>
+                          <span className="card-additional-features-info" title="Discover and save influencer profiles directly from your browser.">i</span>
+                        </li>
+                      </ul>
+                    </div>
                   </div>
                 </div>
               );

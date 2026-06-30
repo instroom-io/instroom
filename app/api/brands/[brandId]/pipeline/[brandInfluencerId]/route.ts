@@ -1,7 +1,3 @@
-// app/api/brands/[brandId]/pipeline/[brandInfluencerId]/route.ts
-// PATCH — updates contact_status + stage on a BrandInfluencer record.
-// Called by drag-and-drop and the status dropdown in the pipeline view.
-
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"

@@ -1,9 +1,3 @@
-// app/api/brands/[brandId]/partners/[partnerId]/financials/route.ts
-//
-// Manages the BrandPartner row (financial/commercial layer) for a given
-// BrandInfluencer relationship. 1:1 — keyed off brand_influencer_id.
-// PATCH upserts: creates the row on first write, updates it after.
-
 import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { getServerSession } from "next-auth"
@@ -22,8 +16,6 @@ export async function PATCH(
     const { brandId, partnerId } = await context.params
     const body = await req.json()
 
-    // Confirm the BrandInfluencer row exists and belongs to this brand
-    // before touching/creating its financial counterpart.
     const bi = await prisma.brandInfluencer.findFirst({
       where: { id: partnerId, brand_id: brandId },
       select: { id: true, brand_id: true, influencer_id: true },
@@ -63,8 +55,6 @@ export async function PATCH(
       },
     })
 
-    // Return the parent BrandInfluencer record with `partner` populated,
-    // so the client can swap it in via dbToPartner() the same way GET/PATCH do.
     const updated = await prisma.brandInfluencer.findUnique({
       where: { id: partnerId },
       include: {

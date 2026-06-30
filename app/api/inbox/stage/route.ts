@@ -117,9 +117,6 @@ export async function PATCH(req: NextRequest) {
     },
   })
 
-  // ── Fire notifications (non-blocking) ────────────────────────────────────
-  // Runs after the response is returned so it never slows down the API call.
-
   const influencerName =
     influencer.full_name ?? influencer.handle ?? senderEmail
 

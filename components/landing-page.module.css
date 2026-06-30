@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Caveat:wght@600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Caveat:wght@600;700&family=Patrick+Hand&family=Alex+Brush&display=swap');
 
 :root {
   --green: #1FAE5B;
@@ -12,6 +12,18 @@
 /* ── Typography ── */
 .fontDisplay { font-family: 'Manrope', sans-serif; }
 .fontHand { font-family: 'Caveat', cursive; }
+.fontHandQuote { font-family: 'Caveat', cursive; }
+.fontSignature { font-family: 'Alex Brush', cursive; }
+
+.founderQuote.fontHandQuote p {
+  font-size: 1.125rem;
+  line-height: 1.48;
+  letter-spacing: 0;
+  font-weight: 400;
+  font-style: normal;
+  color: #4b5563;
+  text-align: justify;
+}
 
 /* ── Layout helpers ── */
 .containerMd {
@@ -604,7 +616,7 @@
   align-items: stretch;
   max-width: 1140px;
   margin: 0 auto;
-  padding: 0 24px;
+  padding: 0 24px 0 0;
   background: white;
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -1278,6 +1290,7 @@
   .founderInner {
     grid-template-columns: 1fr;
     gap: 0;
+    padding: 0;
   }
 }
 
@@ -1287,3 +1300,4 @@
   .trustLogos { gap: 16px; }
   .footerInner { grid-template-columns: 1fr; }
 }
+
