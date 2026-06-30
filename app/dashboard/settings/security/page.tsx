@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
-import { KeyRound, ShieldCheck } from "lucide-react"
+import { Card, CardContent } from "@/components/ui/card"
+import { KeyRound, ShieldCheck, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { TwoFactorSetup } from "@/components/two-factor-setup"
 
@@ -20,6 +21,15 @@ function useToast() {
     setTimeout(() => setToast(null), 3500)
   }
   return { toast, show }
+}
+
+function LoadingScreen() {
+  return (
+    <div className="flex min-h-[400px] flex-col items-center justify-center gap-3">
+      <Loader2 className="h-7 w-7 animate-spin text-emerald-600" />
+      <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Loading</p>
+    </div>
+  )
 }
 
 export default function SecurityPage() {
@@ -36,6 +46,8 @@ export default function SecurityPage() {
   const [smsEnabled, setSmsEnabled] = useState(false)
   const [togglingSms, setTogglingSms] = useState(false)
 
+  const [securityLoaded, setSecurityLoaded] = useState(false)
+
   useEffect(() => {
     if (status === "unauthenticated") {
       router.push("/login")
@@ -50,6 +62,7 @@ export default function SecurityPage() {
         setSmsEnabled(data.sms ?? false)
       })
       .catch(() => {})
+      .finally(() => setSecurityLoaded(true))
   }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleChangePassword() {
@@ -104,6 +117,10 @@ export default function SecurityPage() {
     }
   }
 
+  if (status === "loading" || !securityLoaded) {
+    return <LoadingScreen />
+  }
+
   return (
     <div className="max-w-3xl px-9 py-7">
       {toast && (
@@ -117,29 +134,29 @@ export default function SecurityPage() {
         </div>
       )}
 
-      <div className="mb-1 text-lg font-semibold text-gray-900">Security</div>
-      <div className="mb-6 text-xs text-stone-400">
-        Manage your password and login settings
+      <div className="mb-6">
+        <h1 className="text-lg font-semibold text-foreground">Security</h1>
+        <p className="text-xs text-muted-foreground">Manage your password and login settings</p>
       </div>
 
-      {/* Change Password Card */}
-      <div className="mb-4 overflow-hidden rounded-xl border border-black/[0.08] bg-white">
-        <div className="flex items-start gap-3 border-b border-black/[0.07] px-5 py-4">
-          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[9px] bg-emerald-50">
+      {/* Change Password */}
+      <Card className="mb-4">
+        <div className="flex items-center gap-3 border-b px-5 py-3">
+          <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-emerald-50">
             <KeyRound className="h-4 w-4 text-emerald-600" strokeWidth={1.5} />
           </div>
           <div>
-            <div className="text-[13px] font-semibold text-gray-900">Change password</div>
-            <div className="mt-0.5 text-[11px] text-stone-400">
+            <p className="text-sm font-semibold leading-tight text-foreground">Change password</p>
+            <p className="text-xs leading-tight text-muted-foreground">
               Update your password to keep your account secure
-            </div>
+            </p>
           </div>
         </div>
 
-        <div className="p-5">
+        <CardContent className="pt-4">
           <div className="grid grid-cols-2 gap-3.5">
-            <div className="col-span-2 flex flex-col gap-1">
-              <Label className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+            <div className="col-span-2 space-y-1">
+              <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">
                 Current password
               </Label>
               <Input
@@ -149,8 +166,8 @@ export default function SecurityPage() {
                 onChange={(e) => setCurrentPassword(e.target.value)}
               />
             </div>
-            <div className="flex flex-col gap-1">
-              <Label className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+            <div className="space-y-1">
+              <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">
                 New password
               </Label>
               <Input
@@ -160,8 +177,8 @@ export default function SecurityPage() {
                 onChange={(e) => setNewPassword(e.target.value)}
               />
             </div>
-            <div className="flex flex-col gap-1">
-              <Label className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+            <div className="space-y-1">
+              <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">
                 Confirm new password
               </Label>
               <Input
@@ -173,35 +190,35 @@ export default function SecurityPage() {
             </div>
           </div>
 
-          <div className="mt-4 flex justify-end gap-2 border-t border-black/[0.06] pt-3.5">
+          <div className="mt-4 flex justify-end border-t pt-3">
             <Button
               onClick={handleChangePassword}
               disabled={savingPassword}
-              className="bg-emerald-600 hover:bg-emerald-700"
+              className="bg-[#15803d] hover:bg-[#166534] text-white"
             >
               {savingPassword ? "Updating…" : "Update password"}
             </Button>
           </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
-      {/* 2FA Card */}
-      <div className="overflow-hidden rounded-xl border border-black/[0.08] bg-white">
-        <div className="flex items-start gap-3 border-b border-black/[0.07] px-5 py-4">
-          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[9px] bg-emerald-50">
+      {/* Two-Factor Authentication */}
+      <Card className="mb-4">
+        <div className="flex items-center gap-3 border-b px-5 py-3">
+          <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-emerald-50">
             <ShieldCheck className="h-4 w-4 text-emerald-600" strokeWidth={1.5} />
           </div>
           <div>
-            <div className="text-[13px] font-semibold text-gray-900">
+            <p className="text-sm font-semibold leading-tight text-foreground">
               Two-factor authentication
-            </div>
-            <div className="mt-0.5 text-[11px] text-stone-400">
+            </p>
+            <p className="text-xs leading-tight text-muted-foreground">
               Add an extra layer of security to your account
-            </div>
+            </p>
           </div>
         </div>
 
-        <div className="p-5">
+        <CardContent className="pt-4">
           <TwoFactorSetup
             enabled={totpEnabled}
             onEnabledChange={setTotpEnabled}
@@ -216,8 +233,8 @@ export default function SecurityPage() {
             onToggle={() => toggleSms(smsEnabled)}
             last
           />
-        </div>
-      </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }
@@ -241,13 +258,13 @@ function ToggleRow({
     <div
       className={cn(
         "flex items-center justify-between py-3 transition-opacity",
-        !last && "border-b border-black/5",
+        !last && "border-b",
         loading && "opacity-60"
       )}
     >
       <div>
-        <div className="text-xs font-medium text-gray-900">{title}</div>
-        <div className="mt-0.5 text-[11px] text-stone-400">{desc}</div>
+        <p className="text-xs font-medium text-foreground">{title}</p>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">{desc}</p>
       </div>
       <Switch
         checked={enabled}

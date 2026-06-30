@@ -1,17 +1,12 @@
 "use client"
 
-import { useEffect, useState, useRef, useCallback, Suspense } from "react"
+import { useEffect, useState, useRef, Suspense } from "react"
 import { useSearchParams } from "next/navigation"
-import { Button } from "@/components/ui/button"
+import { useSession } from "next-auth/react"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent } from "@/components/ui/card"
 import {
   Select,
   SelectContent,
@@ -20,10 +15,9 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { AlertCircle, Trash2, Mail, Zap } from "lucide-react"
+import { AlertCircle, Trash2, Mail, Zap, Loader2 } from "lucide-react"
 import Script from "next/script"
-import Link from "next/link"
-import { useSession } from "next-auth/react"
+import { cn } from "@/lib/utils"
 
 interface Collaborator {
   id: string
@@ -48,14 +42,24 @@ declare global {
   }
 }
 
+function LoadingScreen() {
+  return (
+    <div className="flex min-h-[400px] flex-col items-center justify-center gap-3">
+      <Loader2 className="h-7 w-7 animate-spin text-emerald-600" />
+      <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Loading</p>
+    </div>
+  )
+}
+
 function CollaboratorsContent() {
   const searchParams = useSearchParams()
-  const [brandId, setBrandId] = useState<string | null>(null)
-  const [mounted, setMounted] = useState(false)
+  useSession()
+
+  const brandId = searchParams.get("brandId")
 
   const [owner, setOwner] = useState<Collaborator | null>(null)
   const [members, setMembers] = useState<Collaborator[]>([])
-  const [loading, setLoading] = useState(true)
+  const [dataLoaded, setDataLoaded] = useState(false)
   const [error, setError] = useState("")
   const [inviteEmail, setInviteEmail] = useState("")
   const [inviteRole, setInviteRole] = useState("manager")
@@ -74,14 +78,7 @@ function CollaboratorsContent() {
   const [paypalLoaded, setPaypalLoaded] = useState(false)
   const paypalRef = useRef<HTMLDivElement>(null)
 
-  const { data: session } = useSession()
-
-  useEffect(() => { setMounted(true) }, [])
-
-  useEffect(() => {
-    const id = searchParams.get("brandId")
-    setBrandId(id)
-  }, [searchParams])
+  // brandId is read directly from searchParams above — no effect needed.
 
   useEffect(() => {
     if (!buySeatsModal.isOpen || !paypalLoaded || !paypalRef.current) return
@@ -128,7 +125,7 @@ function CollaboratorsContent() {
               setBuyingSeats(false)
               return
             }
-            setBuySeatsModal({ ...buySeatsModal, isOpen: false })
+            setBuySeatsModal((s) => ({ ...s, isOpen: false }))
             setSeatsToAdd(1)
             setError("")
             if (inviteEmail) {
@@ -140,20 +137,25 @@ function CollaboratorsContent() {
             setBuyingSeats(false)
           }
         },
-        onError: (err: any) => {
+        onError: () => {
           setError("Payment failed. Please try again.")
           setBuyingSeats(false)
         },
       })
       button.render(paypalRef.current)
     }
-  }, [buySeatsModal.isOpen, buySeatsModal.pricePerSeat, paypalLoaded])
+  }, [buySeatsModal.isOpen, buySeatsModal.pricePerSeat, paypalLoaded]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    if (!brandId) {
+      setDataLoaded(true)
+      return
+    }
+
+    setDataLoaded(false)
+
     const fetchCollaborators = async () => {
-      if (!brandId) return
       try {
-        setLoading(true)
         setError("")
         const res = await fetch(`/api/brand/${brandId}/collaborators`)
         const data = await res.json()
@@ -168,7 +170,7 @@ function CollaboratorsContent() {
       } catch (err) {
         setError(err instanceof Error ? err.message : "An error occurred while fetching collaborators")
       } finally {
-        setLoading(false)
+        setDataLoaded(true)
       }
     }
     fetchCollaborators()
@@ -243,15 +245,35 @@ function CollaboratorsContent() {
     }
   }
 
-  if (!mounted) return null
+  if (!dataLoaded) {
+    return <LoadingScreen />
+  }
 
   if (!brandId) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <Card className="w-full max-w-md">
-          <CardHeader><CardTitle>No Brand Selected</CardTitle></CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">Please select a brand to manage collaborators.</p>
+      <div className="flex min-h-screen items-center justify-center">
+        <Card className="w-fit max-w-md">
+          <CardContent className="flex flex-col items-center gap-1.5 px-6 py-5 text-center">
+            <div className="flex items-center gap-2">
+              <svg
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                width={16}
+                height={16}
+                className="text-emerald-600"
+              >
+                <circle cx="6" cy="5" r="2.5" />
+                <path d="M1 14c0-2.8 2.2-5 5-5" />
+                <circle cx="11" cy="5" r="2.5" />
+                <path d="M15 14c0-2.8-2.2-5-5-5" />
+              </svg>
+              <p className="text-sm font-semibold text-foreground">No Brand Selected</p>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Please select a brand to manage collaborators.
+            </p>
           </CardContent>
         </Card>
       </div>
@@ -259,79 +281,77 @@ function CollaboratorsContent() {
   }
 
   return (
-    <div style={{ padding: "28px 36px", maxWidth: 1040 }}>
-      <div style={{ fontSize: 18, fontWeight: 600, color: "#1E1E1E", marginBottom: 4 }}>
-        Team &amp; Collaborators
-      </div>
-      <div style={{ fontSize: 12, color: "#888", marginBottom: 24 }}>
-        Manage who has access to your brand
+    <div className="max-w-[1040px] px-9 py-7">
+      <div className="mb-6">
+        <h1 className="text-lg font-semibold text-foreground">Team & Collaborators</h1>
+        <p className="text-xs text-muted-foreground">Manage who has access to your brand</p>
       </div>
 
       {error && (
-        <div className="mb-6 flex items-center gap-3 rounded-xl bg-red-50 p-4 text-sm text-red-700 border border-red-200">
+        <div className="mb-6 flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
           <AlertCircle className="h-5 w-5 flex-shrink-0" />
           <span className="font-medium">{error}</span>
         </div>
       )}
 
-      {/* 3-column grid: left narrow for owner+invite, right wide for members */}
-      <div style={{ display: "grid", gridTemplateColumns: "420px 1fr", gap: 20, alignItems: "start" }}>
-
-        {/* Left Column */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-
+      <div className="grid grid-cols-[420px_1fr] items-start gap-5">
+        {/* Left column */}
+        <div className="flex flex-col gap-4">
           {/* Owner */}
           {owner && (
-            <div style={sectionCard}>
-              <div style={sectionHeader}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#1E1E1E" }}>Brand owner</div>
+            <Card>
+              <div className="border-b px-5 py-3">
+                <p className="text-sm font-semibold text-foreground">Brand owner</p>
               </div>
-              <div style={{ padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <CardContent className="flex items-center justify-between px-5 py-4">
+                <div className="flex items-center gap-3">
                   <Avatar className="h-10 w-10">
                     <AvatarImage src={owner.image || ""} alt={owner.name || ""} />
-                    <AvatarFallback style={{ background: "#1FAE5B", color: "#fff", fontWeight: 600 }}>
+                    <AvatarFallback className="bg-emerald-600 font-semibold text-white">
                       {(owner.name || owner.email).charAt(0).toUpperCase()}
                     </AvatarFallback>
                   </Avatar>
                   <div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: "#1E1E1E" }}>
-                      {owner.name || owner.email}
-                    </div>
-                    <div style={{ fontSize: 11, color: "#888" }}>{owner.email}</div>
+                    <p className="text-sm font-semibold text-foreground">{owner.name || owner.email}</p>
+                    <p className="text-xs text-muted-foreground">{owner.email}</p>
                   </div>
                 </div>
-                <span style={roleBadge}>Admin</span>
-              </div>
-            </div>
+                <span className="whitespace-nowrap rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold text-emerald-800">
+                  Admin
+                </span>
+              </CardContent>
+            </Card>
           )}
 
-          {/* Invite Form */}
-          <div style={sectionCard}>
-            <div style={{ ...sectionHeader, display: "flex", alignItems: "flex-start", gap: 12 }}>
-              <div style={iconBox}><Mail className="h-4 w-4 text-[#1FAE5B]" /></div>
+          {/* Invite form */}
+          <Card>
+            <div className="flex items-center gap-3 border-b px-5 py-3">
+              <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-emerald-50">
+                <Mail className="h-4 w-4 text-emerald-600" />
+              </div>
               <div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#1E1E1E" }}>Invite team member</div>
-                <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>Send an invite by email</div>
+                <p className="text-sm font-semibold leading-tight text-foreground">Invite team member</p>
+                <p className="text-xs leading-tight text-muted-foreground">Send an invite by email</p>
               </div>
             </div>
-            <form onSubmit={handleInvite} style={{ padding: "20px", display: "flex", flexDirection: "column", gap: 14 }}>
-              <div>
-                <label style={fLabel}>Email address</label>
-                <Input
-                  type="email"
-                  placeholder="collaborator@example.com"
-                  value={inviteEmail}
-                  onChange={(e) => setInviteEmail(e.target.value)}
-                  style={{ fontSize: 12, padding: "9px 12px", borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.15)", marginTop: 4 }}
-                  required
-                />
-              </div>
-              <div>
-                <label style={fLabel}>Role</label>
-                <div style={{ marginTop: 4 }}>
+            <form onSubmit={handleInvite}>
+              <CardContent className="space-y-3.5 pt-4">
+                <div className="space-y-1">
+                  <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                    Email address
+                  </Label>
+                  <Input
+                    type="email"
+                    placeholder="collaborator@example.com"
+                    value={inviteEmail}
+                    onChange={(e) => setInviteEmail(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">Role</Label>
                   <Select value={inviteRole} onValueChange={setInviteRole}>
-                    <SelectTrigger style={{ fontSize: 12, borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.15)" }}>
+                    <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -341,85 +361,67 @@ function CollaboratorsContent() {
                     </SelectContent>
                   </Select>
                 </div>
-              </div>
-              <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: 10, borderTop: "0.5px solid rgba(0,0,0,0.06)" }}>
-                <button
-                  type="submit"
-                  disabled={inviting || !inviteEmail.trim()}
-                  style={{
-                    fontSize: 12, fontWeight: 500, padding: "8px 18px",
-                    borderRadius: 9, background: "#1FAE5B", color: "#fff",
-                    border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
-                    opacity: inviting || !inviteEmail.trim() ? 0.6 : 1,
-                  }}
-                >
-                  <Mail className="h-3.5 w-3.5" />
-                  {inviting ? "Sending..." : "Send invite"}
-                </button>
-              </div>
+                <div className="flex justify-end border-t pt-3">
+                  <Button
+                    type="submit"
+                    disabled={inviting || !inviteEmail.trim()}
+                    className="gap-1.5 bg-[#15803d] text-white hover:bg-[#166534]"
+                  >
+                    <Mail className="h-3.5 w-3.5" />
+                    {inviting ? "Sending…" : "Send invite"}
+                  </Button>
+                </div>
+              </CardContent>
             </form>
-          </div>
+          </Card>
         </div>
 
-        {/* Right Column — Members list, stretches full height */}
-        <div style={{ ...sectionCard, height: "100%" }}>
-          <div style={sectionHeader}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "#1E1E1E" }}>
-              Team members ({members.length})
-            </div>
+        {/* Right column — members list */}
+        <Card className="h-full">
+          <div className="border-b px-5 py-3">
+            <p className="text-sm font-semibold text-foreground">Team members ({members.length})</p>
           </div>
 
-          <div style={{ padding: "20px" }}>
-            {loading ? (
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 0" }}>
-                <div style={{ fontSize: 12, color: "#888" }}>Loading team members...</div>
-              </div>
-            ) : members.length === 0 ? (
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "60px 0", textAlign: "center" }}>
-                <div style={{ width: 44, height: 44, borderRadius: "50%", background: "#f0faf5", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 12 }}>
-                  <Mail className="h-5 w-5 text-[#1FAE5B]" />
+          <CardContent className="pt-4">
+            {members.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-14 text-center">
+                <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-emerald-50">
+                  <Mail className="h-5 w-5 text-emerald-600" />
                 </div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#1E1E1E", marginBottom: 4 }}>No team members yet</div>
-                <div style={{ fontSize: 11, color: "#888" }}>Invite collaborators on the left to get started</div>
+                <p className="mb-1 text-xs font-semibold text-foreground">No team members yet</p>
+                <p className="text-[11px] text-muted-foreground">
+                  Invite collaborators on the left to get started
+                </p>
               </div>
             ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div className="flex flex-col gap-2">
                 {members.map((member) => (
                   <div
                     key={member.id}
-                    style={{
-                      border: "0.5px solid rgba(0,0,0,0.07)",
-                      borderRadius: 9,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      padding: "12px 14px",
-                    }}
-                    className="hover:bg-gray-50/60 transition-colors group"
+                    className="group flex items-center justify-between rounded-[9px] border px-3.5 py-3 transition-colors hover:bg-muted/50"
                   >
-                    <div style={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 0 }}>
+                    <div className="flex min-w-0 flex-1 items-center gap-3">
                       <Avatar className="h-9 w-9 flex-shrink-0">
                         <AvatarImage src={member.image || ""} alt={member.name || ""} />
-                        <AvatarFallback style={{ background: "#f0faf5", color: "#0F6B3E", fontWeight: 600 }}>
+                        <AvatarFallback className="bg-emerald-50 font-semibold text-emerald-800">
                           {(member.name || member.email).charAt(0).toUpperCase()}
                         </AvatarFallback>
                       </Avatar>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: "#1E1E1E" }} className="truncate">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-xs font-semibold text-foreground">
                           {member.name || member.email}
-                        </div>
-                        <div style={{ fontSize: 11, color: "#888" }} className="truncate">
-                          {member.email}
-                        </div>
+                        </p>
+                        <p className="truncate text-[11px] text-muted-foreground">{member.email}</p>
                       </div>
                     </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                      <span style={{ ...roleBadge, textTransform: "capitalize" }}>{member.role}</span>
+                    <div className="flex flex-shrink-0 items-center gap-2">
+                      <span className="whitespace-nowrap rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold capitalize text-emerald-800">
+                        {member.role}
+                      </span>
                       <button
                         onClick={() => handleRemove(member.id)}
                         disabled={removing === member.id}
-                        style={{ color: "#E24B4A", padding: "6px", borderRadius: 6, border: "none", background: "transparent", cursor: "pointer" }}
-                        className="opacity-0 group-hover:opacity-100 hover:bg-red-50 transition-all"
+                        className="rounded-md p-1.5 text-red-500 opacity-0 transition-all hover:bg-red-50 group-hover:opacity-100"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
@@ -428,64 +430,116 @@ function CollaboratorsContent() {
                 ))}
               </div>
             )}
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       </div>
 
-      {/* Buy Extra Seats Modal — unchanged */}
+      {/* Buy Extra Seats Modal */}
       {buySeatsModal.isOpen && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div style={{ background: "#fff", border: "0.5px solid rgba(0,0,0,0.08)", borderRadius: 12, maxWidth: 420, width: "100%", overflow: "hidden" }}>
-            <div style={{ ...sectionHeader, display: "flex", alignItems: "flex-start", gap: 12 }}>
-              <div style={iconBox}><Zap className="h-4 w-4 text-[#1FAE5B]" /></div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <Card className="w-full max-w-[420px]">
+            <div className="flex items-center gap-3 border-b px-5 py-3">
+              <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-emerald-50">
+                <Zap className="h-4 w-4 text-emerald-600" />
+              </div>
               <div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#1E1E1E" }}>Upgrade your seats</div>
-                <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>Purchase additional seats to invite more team members</div>
+                <p className="text-sm font-semibold leading-tight text-foreground">Upgrade your seats</p>
+                <p className="text-xs leading-tight text-muted-foreground">
+                  Purchase additional seats to invite more team members
+                </p>
               </div>
             </div>
-            <div style={{ padding: "20px", display: "flex", flexDirection: "column", gap: 20 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                <div style={{ border: "0.5px solid rgba(0,0,0,0.08)", borderRadius: 9, padding: "12px 14px" }}>
-                  <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>Seats purchased</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: "#1E1E1E" }}>{buySeatsModal.currentExtraSeats}</div>
+
+            <CardContent className="space-y-5 pt-5">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-[9px] border px-3.5 py-3">
+                  <p className="mb-1 text-[10px] text-muted-foreground">Seats purchased</p>
+                  <p className="text-xl font-bold text-foreground">{buySeatsModal.currentExtraSeats}</p>
                 </div>
-                <div style={{ border: "0.5px solid rgba(0,0,0,0.08)", borderRadius: 9, padding: "12px 14px" }}>
-                  <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>Max available</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: "#1E1E1E" }}>{buySeatsModal.maxTotalSeats}</div>
+                <div className="rounded-[9px] border px-3.5 py-3">
+                  <p className="mb-1 text-[10px] text-muted-foreground">Max available</p>
+                  <p className="text-xl font-bold text-foreground">{buySeatsModal.maxTotalSeats}</p>
                 </div>
               </div>
+
               <div>
-                <label style={fLabel}>Number of seats</label>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
-                  <button onClick={() => setSeatsToAdd(Math.max(1, seatsToAdd - 1))} disabled={seatsToAdd <= 1 || buyingSeats} style={{ border: "0.5px solid rgba(0,0,0,0.15)", borderRadius: 8, width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", background: "#fff", cursor: "pointer" }}>−</button>
-                  <input type="number" min="1" max={buySeatsModal.maxSeatsAvailable} value={seatsToAdd} onChange={(e) => setSeatsToAdd(Math.min(buySeatsModal.maxSeatsAvailable, Math.max(1, parseInt(e.target.value) || 1)))} style={{ fontSize: 12, padding: "8px 12px", borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.15)", textAlign: "center", width: 64 }} disabled={buyingSeats} />
-                  <button onClick={() => setSeatsToAdd(Math.min(buySeatsModal.maxSeatsAvailable, seatsToAdd + 1))} disabled={seatsToAdd + 1 > buySeatsModal.maxSeatsAvailable || buyingSeats} style={{ border: "0.5px solid rgba(0,0,0,0.15)", borderRadius: 8, width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", background: "#fff", cursor: "pointer" }}>+</button>
+                <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                  Number of seats
+                </Label>
+                <div className="mt-2 flex items-center gap-2">
+                  <button
+                    onClick={() => setSeatsToAdd(Math.max(1, seatsToAdd - 1))}
+                    disabled={seatsToAdd <= 1 || buyingSeats}
+                    className="flex h-8 w-8 items-center justify-center rounded-lg border bg-background disabled:opacity-50"
+                  >
+                    −
+                  </button>
+                  <Input
+                    type="number"
+                    min="1"
+                    max={buySeatsModal.maxSeatsAvailable}
+                    value={seatsToAdd}
+                    onChange={(e) =>
+                      setSeatsToAdd(
+                        Math.min(buySeatsModal.maxSeatsAvailable, Math.max(1, parseInt(e.target.value) || 1))
+                      )
+                    }
+                    disabled={buyingSeats}
+                    className="w-16 text-center"
+                  />
+                  <button
+                    onClick={() => setSeatsToAdd(Math.min(buySeatsModal.maxSeatsAvailable, seatsToAdd + 1))}
+                    disabled={seatsToAdd + 1 > buySeatsModal.maxSeatsAvailable || buyingSeats}
+                    className="flex h-8 w-8 items-center justify-center rounded-lg border bg-background disabled:opacity-50"
+                  >
+                    +
+                  </button>
                 </div>
-                <div style={{ fontSize: 10, color: "#888", marginTop: 6 }}>Up to {buySeatsModal.maxSeatsAvailable} more seat(s) available</div>
+                <p className="mt-1.5 text-[10px] text-muted-foreground">
+                  Up to {buySeatsModal.maxSeatsAvailable} more seat(s) available
+                </p>
               </div>
-              <div style={{ borderTop: "0.5px solid rgba(0,0,0,0.07)", paddingTop: 14, display: "flex", flexDirection: "column", gap: 8 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#555" }}>
+
+              <div className="flex flex-col gap-2 border-t pt-3.5">
+                <div className="flex justify-between text-xs text-muted-foreground">
                   <span>Price per seat</span>
-                  <span style={{ fontWeight: 600, color: "#1E1E1E" }}>${buySeatsModal.pricePerSeat.toFixed(2)}</span>
+                  <span className="font-semibold text-foreground">${buySeatsModal.pricePerSeat.toFixed(2)}</span>
                 </div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#555" }}>
+                <div className="flex justify-between text-xs text-muted-foreground">
                   <span>Quantity</span>
-                  <span style={{ fontWeight: 600, color: "#1E1E1E" }}>{seatsToAdd} {seatsToAdd === 1 ? "seat" : "seats"}</span>
+                  <span className="font-semibold text-foreground">
+                    {seatsToAdd} {seatsToAdd === 1 ? "seat" : "seats"}
+                  </span>
                 </div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "0.5px solid rgba(0,0,0,0.06)", paddingTop: 10 }}>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: "#1E1E1E" }}>Total</span>
-                  <span style={{ fontSize: 18, fontWeight: 700, color: "#1FAE5B" }}>${(buySeatsModal.pricePerSeat * seatsToAdd).toFixed(2)}</span>
+                <div className="flex items-center justify-between border-t pt-2.5">
+                  <span className="text-sm font-semibold text-foreground">Total</span>
+                  <span className="text-lg font-bold text-emerald-600">
+                    ${(buySeatsModal.pricePerSeat * seatsToAdd).toFixed(2)}
+                  </span>
                 </div>
               </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                <Script src={`https://www.paypal.com/sdk/js?client-id=${process.env.NEXT_PUBLIC_PAYPAL_CLIENT_ID}&intent=capture`} strategy="afterInteractive" onLoad={() => setPaypalLoaded(true)} />
+
+              <div className="flex flex-col gap-2.5">
+                <Script
+                  src={`https://www.paypal.com/sdk/js?client-id=${process.env.NEXT_PUBLIC_PAYPAL_CLIENT_ID}&intent=capture`}
+                  strategy="afterInteractive"
+                  onLoad={() => setPaypalLoaded(true)}
+                />
                 <div ref={paypalRef} />
-                <button onClick={() => { setBuySeatsModal({ ...buySeatsModal, isOpen: false }); if (paypalRef.current) paypalRef.current.innerHTML = "" }} disabled={buyingSeats} style={{ fontSize: 12, fontWeight: 500, padding: "8px 0", borderRadius: 9, border: "0.5px solid rgba(0,0,0,0.15)", background: "#fff", color: "#555", width: "100%", cursor: "pointer" }}>
+                <Button
+                  variant="outline"
+                  disabled={buyingSeats}
+                  onClick={() => {
+                    setBuySeatsModal((s) => ({ ...s, isOpen: false }))
+                    if (paypalRef.current) paypalRef.current.innerHTML = ""
+                  }}
+                  className="w-full"
+                >
                   Cancel
-                </button>
+                </Button>
               </div>
-            </div>
-          </div>
+            </CardContent>
+          </Card>
         </div>
       )}
     </div>
@@ -494,45 +548,8 @@ function CollaboratorsContent() {
 
 export default function CollaboratorsPage() {
   return (
-    <Suspense>
+    <Suspense fallback={<LoadingScreen />}>
       <CollaboratorsContent />
     </Suspense>
   )
-}
-
-// ── Shared styles ──────────────────────────────────────────────
-const sectionCard: React.CSSProperties = {
-  background: "#fff",
-  border: "0.5px solid rgba(0,0,0,0.08)",
-  borderRadius: 12,
-  overflow: "hidden",
-}
-const sectionHeader: React.CSSProperties = {
-  padding: "16px 20px",
-  borderBottom: "0.5px solid rgba(0,0,0,0.07)",
-}
-const iconBox: React.CSSProperties = {
-  width: 36,
-  height: 36,
-  borderRadius: 9,
-  background: "#f0faf5",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  flexShrink: 0,
-}
-const roleBadge: React.CSSProperties = {
-  fontSize: 10,
-  fontWeight: 600,
-  color: "#0F6B3E",
-  background: "#f0faf5",
-  padding: "4px 10px",
-  borderRadius: 999,
-  whiteSpace: "nowrap",
-}
-const fLabel: React.CSSProperties = {
-  fontSize: 11,
-  fontWeight: 600,
-  color: "#555",
-  letterSpacing: "0.02em",
 }

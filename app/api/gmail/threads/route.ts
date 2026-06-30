@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
+import { sendNotification } from "@/lib/notifications"
 
 function getHeader(headers: { name: string; value: string }[], name: string): string {
   return headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value || ""
@@ -248,8 +249,71 @@ export async function GET(req: NextRequest) {
     // 5. Attach brandInfluencer to each thread (null for unknown senders)
     const threads = shapedThreads.map(({ senderEmail, ...thread }) => ({
       ...thread,
+      senderEmail,
       brandInfluencer: biByEmail.get(senderEmail) ?? null,
     }))
+
+    // 6. Send notifications for new unread messages from influencers (non-blocking)
+    if (brand_id && session.user?.id) {
+      const userId = session.user.id
+      const appUrl = process.env.NEXTAUTH_URL ?? ""
+      
+      const notifyPromises = threads
+        .filter(t => t.unread && t.brandInfluencer && t.messages.length > 0)
+        .map(async (thread) => {
+          try {
+            // Only notify if this is from a known influencer
+            if (!thread.brandInfluencer) return
+
+            const firstMsg = thread.messages[0]
+            const lastMsg = thread.messages[thread.messages.length - 1]
+            
+            // Only notify for recent messages (last 24 hours)
+            const lastMsgDate = lastMsg?.date ? new Date(lastMsg.date).getTime() : Date.now()
+            const oneHourAgo = Date.now() - 60 * 60 * 1000
+            
+            if (lastMsgDate < oneHourAgo) return
+
+            // Check if we've recently notified for this thread (avoid duplicates)
+            const recentNotif = await prisma.notification.findFirst({
+              where: {
+                user_id: userId,
+                notification_type: "influencer_reply",
+                created_at: {
+                  gte: new Date(Date.now() - 24 * 60 * 60 * 1000), // Last 24 hours
+                },
+                title: { contains: thread.senderEmail },
+              },
+              select: { id: true },
+            })
+
+            if (recentNotif) return // Already notified recently
+
+            // Extract influencer name from sender email if available
+            const senderName = thread.messages[0]?.from
+              ? thread.messages[0].from.match(/^([^<]+)</)?.[1]?.trim() || thread.senderEmail.split("@")[0]
+              : thread.senderEmail.split("@")[0]
+
+            const inboxUrl = `${appUrl}/dashboard/inbox?brandId=${brand_id}`
+
+            await sendNotification({
+              userId,
+              type: "influencer_reply",
+              title: `New reply from ${senderName}`,
+              message: `${senderName} replied to your outreach.`,
+              actionUrl: inboxUrl,
+            })
+            console.log(`✅ Influencer reply notification sent for ${senderName}`)
+          } catch (err) {
+            console.error("❌ Failed to send influencer reply notification:", err)
+          }
+        })
+
+      // Run notifications in background without blocking response
+      Promise.allSettled(notifyPromises).catch(err => 
+        console.error("Notification batch error:", err)
+      )
+    }
 
     return NextResponse.json({ threads })
   } catch (err: any) {
