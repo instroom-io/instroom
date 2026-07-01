@@ -1,46 +1,30 @@
+import { Suspense } from "react"
 import { SignupForm } from "@/components/signup-form"
+import Image from "next/image"
 
-export default function Page() {
+export default function SignupPage() {
   return (
-    <div className="relative min-h-svh overflow-hidden bg-[#0b0f0d] text-white">
-      <div className="pointer-events-none absolute -left-24 top-16 h-72 w-72 rounded-full bg-emerald-500/20 blur-3xl" />
-      <div className="pointer-events-none absolute -right-24 bottom-10 h-72 w-72 rounded-full bg-lime-400/20 blur-3xl" />
+    <div className="min-h-svh w-full bg-[#F7F9F8] text-[#1E1E1E] relative overflow-hidden">
+      <div className="fixed top-4 sm:top-6 left-4 sm:left-12 z-50">
+        <Image 
+          src="/images/Instroom Logo 1.png" 
+          alt="Instroom Logo" 
+          width={140}
+          height={140}
+          priority
+          quality={95}
+          className="drop-shadow-sm w-32 sm:w-44 h-auto"
+        />
+      </div>
 
-      <div className="relative mx-auto grid min-h-svh w-full max-w-7xl items-center gap-10 px-6 py-10 lg:grid-cols-2 lg:px-10">
-        <section className="space-y-6">
-          <p className="inline-flex w-fit items-center rounded-full border border-emerald-300/25 bg-emerald-400/10 px-3 py-1 text-xs font-medium tracking-wide text-emerald-300">
-            Instroom • Creator Analytics
-          </p>
+      <div className="absolute top-0 left-0 w-64 sm:w-96 h-64 sm:h-96 rounded-full bg-[#1FAE5B]/8 blur-3xl -translate-x-1/2 -translate-y-1/2" />
+      <div className="absolute bottom-0 right-0 w-56 sm:w-80 h-56 sm:h-80 rounded-full bg-[#0F6B3E]/6 blur-3xl translate-x-1/3 translate-y-1/3" />
+      <div className="hidden sm:block absolute top-1/3 right-1/4 w-64 h-64 rounded-full bg-[#2C8EC4]/5 blur-3xl" />
 
-          <h1 className="max-w-xl text-4xl font-semibold leading-tight text-white md:text-5xl">
-            Grow your influence with data-driven insights.
-          </h1>
-
-          <p className="max-w-lg text-sm leading-7 text-zinc-300 md:text-base">
-            Create your account to unlock deeper analytics for Instagram and
-            TikTok profiles, audience trends, and content performance in one
-            powerful dashboard.
-          </p>
-
-          <ul className="space-y-2 text-sm text-zinc-300">
-            <li className="flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full bg-emerald-400" />
-              Track engagement, followers, and growth rate.
-            </li>
-            <li className="flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full bg-lime-300" />
-              Compare creators and identify top-performing content.
-            </li>
-            <li className="flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full bg-emerald-300" />
-              Export reports and share actionable insights quickly.
-            </li>
-          </ul>
-        </section>
-
-        <div className="w-full max-w-md justify-self-center lg:justify-self-end">
-          <SignupForm className="border-emerald-300/20 bg-white/10 shadow-2xl shadow-emerald-500/10 backdrop-blur-xl" />
-        </div>
+      <div className="min-h-svh flex flex-col items-center justify-center px-4 sm:px-6 py-8 sm:py-0 gap-4 sm:gap-0 relative z-20">
+        <Suspense fallback={null}>
+          <SignupForm className="rounded-2xl shadow-lg p-6 sm:p-8 border border-[#0F6B3E]/15 bg-gradient-to-b from-white via-white to-[#0F6B3E]/5 relative overflow-hidden" />
+        </Suspense>
       </div>
     </div>
   )

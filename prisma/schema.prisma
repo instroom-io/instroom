@@ -1,0 +1,509 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String   @id @default(cuid()) @db.VarChar(30)
+  email         String   @unique
+  name          String?  @map("full_name")
+  password_hash String?
+  image         String?  @map("avatar_url")
+  platform_role String   @default("user") @db.VarChar(20)
+  is_active     Boolean  @default(true)
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  two_factor_enabled        Boolean  @default(false)
+  two_factor_secret         String?  @db.Text
+  two_factor_secret_pending String?  @db.Text
+  two_factor_backup_codes   Json?
+
+  onboarding   Onboarding?
+  subscription UserSubscription?
+  brandMembers BrandMember[]
+  activityLogs ActivityLog[]
+
+  @@index([email])
+  @@index([platform_role])
+}
+
+model Account {
+  id                String  @id @default(cuid()) @db.VarChar(30)
+  userId            String  @map("user_id") @db.VarChar(30)
+  type              String  @db.VarChar(50)
+  provider          String  @db.VarChar(50)
+  providerAccountId String  @map("provider_account_id") @db.VarChar(150)
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String? @db.VarChar(50)
+  scope             String? @db.VarChar(255)
+  id_token          String? @db.Text
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+  @@index([provider, providerAccountId])
+  @@map("Account")
+}
+
+model Session {
+  id           String   @id @default(cuid()) @db.VarChar(30)
+  sessionToken String   @unique @map("session_token")
+  userId       String   @map("user_id") @db.VarChar(30)
+  expires      DateTime
+  created_at   DateTime @default(now())
+
+  @@index([sessionToken])
+  @@index([userId])
+  @@map("Session")
+}
+
+model VerificationToken {
+  identifier String   @db.VarChar(100)
+  token      String   @unique @db.VarChar(100)
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Onboarding {
+  id                 String    @id @default(cuid()) @db.VarChar(30)
+  user_id            String    @unique @db.VarChar(30)
+  operator_type      String?   @db.VarChar(20)
+  business_type      String?   @db.VarChar(20)
+  campaign_goal      String?   @db.VarChar(20)
+  influencer_count   String?   @db.VarChar(30)
+  acquisition_source Json?
+  completed_at       DateTime?
+  created_at         DateTime  @default(now())
+  updated_at         DateTime  @updatedAt
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+}
+
+model SubscriptionPlan {
+  id                    String   @id @default(cuid()) @db.VarChar(30)
+  name                  String   @unique @db.VarChar(50)
+  display_name          String   @db.VarChar(100)
+  price_monthly         Decimal
+  price_yearly          Decimal
+  included_seats        Int      @default(0)
+  max_seats             Int?
+  price_per_extra_seat  Decimal?
+  included_brands       Int      @default(1)
+  max_brands            Int?
+  price_per_extra_brand Decimal?
+  max_influencers       Int?
+  max_campaigns         Int?
+  can_use_api           Boolean  @default(false)
+  custom_branding       Boolean  @default(false)
+  priority_support      Boolean  @default(false)
+  sort_order            Int      @default(0)
+  is_active             Boolean  @default(true)
+  created_at            DateTime @default(now())
+  updated_at            DateTime @updatedAt
+
+  subscriptions UserSubscription[]
+
+  @@index([name])
+}
+
+model UserSubscription {
+  id                      String    @id @default(cuid()) @db.VarChar(30)
+  user_id                 String    @unique @db.VarChar(30)
+  plan_id                 String    @db.VarChar(30)
+  payment_customer_id     String?   @unique
+  payment_subscription_id String?   @unique
+  status                  String    @default("trialing") @db.VarChar(20)
+  billing_cycle           String    @default("monthly") @db.VarChar(10)
+  extra_seats             Int       @default(0)
+  extra_brands            Int       @default(0)
+  started_at              DateTime  @default(now())
+  ended_at                DateTime?
+  current_period_start    DateTime  @default(now())
+  current_period_end      DateTime?
+  created_at              DateTime  @default(now())
+  updated_at              DateTime  @updatedAt
+
+  plan SubscriptionPlan @relation(fields: [plan_id], references: [id])
+  user User             @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([status])
+  @@index([payment_subscription_id])
+  @@index([plan_id])
+}
+
+model BrandSeatOverride {
+  id          String   @id @default(cuid()) @db.VarChar(30)
+  brand_id    String   @unique @db.VarChar(30)
+  extra_seats Int      @default(0)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  @@index([brand_id])
+}
+
+model PaymentHistory {
+  id                String   @id @default(cuid()) @db.VarChar(30)
+  user_id           String   @db.VarChar(30)
+  brand_id          String?  @db.VarChar(30)
+  subscription_id   String?  @db.VarChar(30)
+  stripe_payment_id String?
+  amount            Decimal
+  currency          String   @default("USD") @db.VarChar(10)
+  status            String   @db.VarChar(20)
+  description       String?
+  invoice_url       String?
+  created_at        DateTime @default(now())
+
+  @@index([user_id])
+  @@index([brand_id])
+  @@index([subscription_id])
+}
+
+model Brand {
+  id          String   @id @default(cuid()) @db.VarChar(30)
+  owner_id    String   @db.VarChar(30)
+  name        String
+  slug        String   @unique
+  logo_url    String?
+  description String?  @db.Text
+  website_url String?
+  is_active   Boolean  @default(true)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  members      BrandMember[]
+  locations    BrandLocation[]
+  influencers  BrandInfluencer[]
+  campaigns    Campaign[]
+  activityLogs ActivityLog[]
+  partners     BrandPartner[]    
+  tierSettings BrandTierSettings? 
+
+  @@index([owner_id])
+  @@index([slug])
+}
+
+model BrandMember {
+  id         String   @id @default(cuid()) @db.VarChar(30)
+  brand_id   String   @db.VarChar(30)
+  user_id    String   @db.VarChar(30)
+  role       String   @default("collaborator") @db.VarChar(20)
+  joined_at  DateTime @default(now())
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  brand Brand @relation(fields: [brand_id], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([brand_id, user_id])
+  @@index([user_id])
+  @@index([brand_id])
+}
+
+model BrandInvitation {
+  id            String   @id @default(cuid()) @db.VarChar(30)
+  brand_id      String   @db.VarChar(30)
+  email         String
+  invited_by_id String   @db.VarChar(30)
+  token         String   @unique
+  role          String   @default("collaborator") @db.VarChar(20)
+  status        String   @default("pending") @db.VarChar(20)
+  expires_at    DateTime
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  @@unique([brand_id, email])
+  @@index([token])
+  @@index([email])
+  @@index([invited_by_id], map: "BrandInvitation_invited_by_id_fkey")
+}
+
+model Influencer {
+  id                String   @id @default(cuid()) @db.VarChar(30)
+  handle            String
+  platform          String   @db.VarChar(50)
+  full_name         String?
+  email             String?
+  gender            String?  @db.VarChar(20)
+  social_link       String?
+  bio               String?  @db.Text
+  profile_image_url String?
+  follower_count    Int      @default(0)
+  engagement_rate   Decimal  @default(0.000000000000000000000000000000)
+  avg_likes         Int      @default(0)
+  avg_comments      Int      @default(0)
+  avg_views         Int      @default(0)
+  niche             String?  @db.VarChar(100)
+  location          String?  @db.VarChar(255)
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+
+  brandInfluencers BrandInfluencer[]
+  brandPartners    BrandPartner[]    // new
+
+  @@unique([handle, platform])
+  @@index([handle])
+  @@index([platform])
+  @@index([email])
+  @@index([niche])
+}
+
+model Campaign {
+  id          String    @id @default(cuid()) @db.VarChar(30)
+  brand_id    String    @db.VarChar(30)
+  name        String
+  description String?   @db.Text
+  type        String?   @db.VarChar(30)   
+  status      String    @default("draft") @db.VarChar(20)
+  budget      Decimal?                     
+  start_date  DateTime?                    
+  end_date    DateTime?                    
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @updatedAt
+
+  brand            Brand             @relation(fields: [brand_id], references: [id], onDelete: Cascade)
+  brandInfluencers BrandInfluencer[]
+
+  @@index([brand_id])
+}
+
+model BrandInfluencer {
+  id               String    @id @default(cuid()) @db.VarChar(30)
+  brand_id         String    @db.VarChar(30)
+  influencer_id    String    @db.VarChar(30)
+  campaign_id      String?   @db.VarChar(30)
+  contact_status   String    @default("not_contacted") @db.VarChar(30)
+  outreach_method  String?   @db.VarChar(20)
+  stage            Int       @default(1)
+  order_status     String?   @db.VarChar(20)
+  product_details  String?   @db.Text
+  shipped_at       DateTime?
+  delivered_at     DateTime?
+  content_posted   Boolean   @default(false)
+  posted_at        DateTime?
+  post_url         String?
+  post_caption     String?   @db.Text
+  likes_count      Int       @default(0)
+  comments_count   Int       @default(0)
+  engagement_count Int       @default(0)
+  agreed_rate      Decimal?
+  currency         String?   @db.VarChar(10)
+  deliverables     String?   @db.Text
+  deadline         DateTime?
+  notes            String?   @db.Text
+  internal_rating  Decimal?
+  approval_status  String?   @db.VarChar(20)
+  approval_notes   String?   @db.Text
+  transferred_date DateTime?
+  created_at       DateTime  @default(now())
+  updated_at       DateTime  @updatedAt
+
+  brand      Brand      @relation(fields: [brand_id], references: [id], onDelete: Cascade)
+  influencer Influencer @relation(fields: [influencer_id], references: [id], onDelete: Cascade)
+  campaign   Campaign?  @relation(fields: [campaign_id], references: [id], onDelete: SetNull)
+  partner    BrandPartner? // new (1:1 back-relation)
+
+  @@unique([brand_id, influencer_id])
+  @@index([brand_id])
+  @@index([influencer_id])
+  @@index([brand_id, stage])
+  @@index([brand_id, contact_status])
+  @@index([campaign_id])
+  @@index([brand_id, order_status])
+}
+
+model OutreachLog {
+  id                  String    @id @default(cuid()) @db.VarChar(30)
+  brand_influencer_id String    @db.VarChar(30)
+  outreach_type       String    @db.VarChar(20)
+  subject             String?
+  message             String?   @db.Text
+  response_received   Boolean   @default(false)
+  response_date       DateTime?
+  response_text       String?   @db.Text
+  created_at          DateTime  @default(now())
+
+  @@index([brand_influencer_id])
+}
+
+model ContentPost {
+  id                  String   @id @default(cuid()) @db.VarChar(30)
+  brand_influencer_id String   @db.VarChar(30)
+  platform            String   @db.VarChar(50)
+  post_url            String
+  caption             String?  @db.Text
+  posted_date         DateTime
+  likes               Int      @default(0)
+  comments            Int      @default(0)
+  shares              Int      @default(0)
+  engagement_rate     Decimal  @default(0.000000000000000000000000000000)
+  saved_count         Int      @default(0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@index([brand_influencer_id])
+}
+
+model ActivityLog {
+  id          String   @id @default(cuid()) @db.VarChar(30)
+  brand_id    String   @db.VarChar(30)
+  user_id     String   @db.VarChar(30)
+  action      String   @db.VarChar(50)
+  entity_type String   @db.VarChar(50)
+  entity_id   String   @db.VarChar(30)
+  details     String?  @db.Text
+  created_at  DateTime @default(now())
+
+  brand Brand @relation(fields: [brand_id], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([brand_id])
+  @@index([user_id])
+  @@index([entity_type, entity_id])
+  @@index([created_at])
+}
+
+model Notification {
+  id                String    @id @default(cuid()) @db.VarChar(30)
+  user_id           String    @db.VarChar(30)
+  title             String    @db.VarChar(255)
+  message           String?   @db.Text
+  action_url        String?
+  notification_type String?   @db.VarChar(50)
+  is_read           Boolean   @default(false)
+  read_at           DateTime?
+  created_at        DateTime  @default(now())
+
+  @@index([user_id, is_read])
+}
+
+model NotificationPreference {
+  id               String   @id @default(cuid()) @db.VarChar(30)
+  user_id          String   @unique @db.VarChar(30)
+  influencer_reply Boolean  @default(true)
+  stage_change     Boolean  @default(false)
+  deal_agreed      Boolean  @default(true)
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  @@index([user_id])
+}
+
+model PlatformSettings {
+  id            String   @id @default(cuid()) @db.VarChar(30)
+  setting_key   String   @unique @db.VarChar(100)
+  setting_value String?  @db.Text
+  description   String?
+  updated_at    DateTime @updatedAt
+}
+
+model BrandCustomField {
+  id               String   @id @default(cuid()) @db.VarChar(30)
+  brand_id         String   @db.VarChar(30)
+  field_name       String   @db.VarChar(100)
+  field_key        String   @db.VarChar(100)
+  field_type       String   @default("text") @db.VarChar(20)
+  field_options    Json
+  description      String?  @db.VarChar(500)
+  placeholder      String?  @db.VarChar(255)
+  is_required      Boolean  @default(false)
+  sort_order       Int      @default(0)
+  is_visible       Boolean  @default(true)
+  validation_rules Json
+  created_by       String?  @db.VarChar(30)
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  @@unique([brand_id, field_key])
+  @@index([brand_id])
+  @@index([brand_id, sort_order])
+  @@index([created_by], map: "BrandCustomField_created_by_fkey")
+}
+
+model BrandInfluencerCustomValue {
+  id                  String   @id @default(cuid()) @db.VarChar(30)
+  brand_influencer_id String   @db.VarChar(30)
+  custom_field_id     String   @db.VarChar(30)
+  value               String?  @db.Text
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@unique([brand_influencer_id, custom_field_id])
+  @@index([brand_influencer_id])
+  @@index([custom_field_id])
+  @@index([custom_field_id, value(length: 191)])
+}
+
+model BrandLocation {
+  id         String   @id @default(cuid()) @db.VarChar(30)
+  brand_id   String   @db.VarChar(30)
+  name       String   @db.VarChar(150)
+  created_at DateTime @default(now()) @db.DateTime(0)
+
+  brand Brand @relation(fields: [brand_id], references: [id], onDelete: Cascade)
+
+  @@unique([brand_id, name])
+  @@index([brand_id])
+}
+
+model BrandNiche {
+  id         String   @id @default(cuid()) @db.VarChar(30)
+  brand_id   String   @db.VarChar(30)
+  name       String   @db.VarChar(100)
+  created_at DateTime @default(now()) @db.DateTime(0)
+
+  @@unique([brand_id, name])
+  @@index([brand_id])
+}
+
+model BrandPartner {
+  id                  String   @id @default(cuid()) @db.VarChar(30)
+  brand_id            String   @db.VarChar(30)
+  influencer_id       String   @db.VarChar(30)
+  brand_influencer_id String   @unique @db.VarChar(30)
+
+  on_retainer        Boolean  @default(false)
+  retainer_fee       Decimal  @default(0)
+  default_commission Decimal  @default(0)
+
+  tier_override String? @db.VarChar(20)
+
+  product_cost    Decimal @default(0)
+  fees_paid       Decimal @default(0)
+  commission_paid Decimal @default(0)
+
+  clicks      Int     @default(0)
+  sales_count Int     @default(0)
+  gmv         Decimal @default(0)
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  brand           Brand           @relation(fields: [brand_id], references: [id], onDelete: Restrict)
+  influencer      Influencer      @relation(fields: [influencer_id], references: [id], onDelete: Restrict)
+  brandInfluencer BrandInfluencer @relation(fields: [brand_influencer_id], references: [id], onDelete: Cascade)
+
+  @@index([brand_id])
+  @@index([influencer_id])
+}
+
+model BrandTierSettings {
+  brand_id   String   @id @db.VarChar(30)
+  bronze_max Decimal  @default(2000)
+  silver_max Decimal  @default(10000)
+  updated_at DateTime @updatedAt
+
+  brand Brand @relation(fields: [brand_id], references: [id], onDelete: Cascade)
+}
+

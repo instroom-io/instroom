@@ -108,12 +108,12 @@ import {
 
 export const schema = z.object({
   id: z.number(),
-  header: z.string(),
-  type: z.string(),
-  status: z.string(),
-  target: z.string(),
-  limit: z.string(),
-  reviewer: z.string(),
+  influencer: z.string(),
+  niche: z.string(),
+  pipelineStatus: z.string(),
+  followers: z.string(),
+  engagementRate: z.string(),
+  instagramHandle: z.string(),
 })
 
 // Create a separate component for the drag handle
@@ -169,115 +169,115 @@ const columns: ColumnDef<z.infer<typeof schema>>[] = [
     enableHiding: false,
   },
   {
-    accessorKey: "header",
-    header: "Header",
+    accessorKey: "influencer",
+    header: "Influencer",
     cell: ({ row }) => {
       return <TableCellViewer item={row.original} />
     },
     enableHiding: false,
   },
   {
-    accessorKey: "type",
-    header: "Section Type",
+    accessorKey: "niche",
+    header: "Niche",
     cell: ({ row }) => (
       <div className="w-32">
         <Badge variant="outline" className="px-1.5 text-muted-foreground">
-          {row.original.type}
+          {row.original.niche}
         </Badge>
       </div>
     ),
   },
   {
-    accessorKey: "status",
-    header: "Status",
+    accessorKey: "pipelineStatus",
+    header: "Pipeline Status",
     cell: ({ row }) => (
       <Badge variant="outline" className="px-1.5 text-muted-foreground">
-        {row.original.status === "Done" ? (
+        {row.original.pipelineStatus === "Done" ? (
           <IconCircleCheckFilled className="fill-green-500 dark:fill-green-400" />
         ) : (
           <IconLoader />
         )}
-        {row.original.status}
+        {row.original.pipelineStatus}
       </Badge>
     ),
   },
   {
-    accessorKey: "target",
-    header: () => <div className="w-full text-right">Target</div>,
+    accessorKey: "followers",
+    header: () => <div className="w-full text-right">Followers</div>,
     cell: ({ row }) => (
       <form
         onSubmit={(e) => {
           e.preventDefault()
           toast.promise(new Promise((resolve) => setTimeout(resolve, 1000)), {
-            loading: `Saving ${row.original.header}`,
+            loading: `Saving ${row.original.influencer}`,
             success: "Done",
             error: "Error",
           })
         }}
       >
-        <Label htmlFor={`${row.original.id}-target`} className="sr-only">
-          Target
+        <Label htmlFor={`${row.original.id}-followers`} className="sr-only">
+          Followers
         </Label>
         <Input
           className="h-8 w-16 border-transparent bg-transparent text-right shadow-none hover:bg-input/30 focus-visible:border focus-visible:bg-background dark:bg-transparent dark:hover:bg-input/30 dark:focus-visible:bg-input/30"
-          defaultValue={row.original.target}
-          id={`${row.original.id}-target`}
+          defaultValue={row.original.followers}
+          id={`${row.original.id}-followers`}
         />
       </form>
     ),
   },
   {
-    accessorKey: "limit",
-    header: () => <div className="w-full text-right">Limit</div>,
+    accessorKey: "engagementRate",
+    header: () => <div className="w-full text-right">Engagement Rate</div>,
     cell: ({ row }) => (
       <form
         onSubmit={(e) => {
           e.preventDefault()
           toast.promise(new Promise((resolve) => setTimeout(resolve, 1000)), {
-            loading: `Saving ${row.original.header}`,
+            loading: `Saving ${row.original.influencer}`,
             success: "Done",
             error: "Error",
           })
         }}
       >
-        <Label htmlFor={`${row.original.id}-limit`} className="sr-only">
-          Limit
+        <Label htmlFor={`${row.original.id}-engagementRate`} className="sr-only">
+          Engagement Rate
         </Label>
         <Input
           className="h-8 w-16 border-transparent bg-transparent text-right shadow-none hover:bg-input/30 focus-visible:border focus-visible:bg-background dark:bg-transparent dark:hover:bg-input/30 dark:focus-visible:bg-input/30"
-          defaultValue={row.original.limit}
-          id={`${row.original.id}-limit`}
+          defaultValue={row.original.engagementRate}
+          id={`${row.original.id}-engagementRate`}
         />
       </form>
     ),
   },
   {
-    accessorKey: "reviewer",
-    header: "Reviewer",
+    accessorKey: "instagramHandle",
+    header: "Instagram Handle",
     cell: ({ row }) => {
-      const isAssigned = row.original.reviewer !== "Assign reviewer"
+      const isAssigned = row.original.instagramHandle !== "Assign reviewer"
 
       if (isAssigned) {
-        return row.original.reviewer
+        return row.original.instagramHandle
       }
 
       return (
         <>
-          <Label htmlFor={`${row.original.id}-reviewer`} className="sr-only">
-            Reviewer
+          <Label htmlFor={`${row.original.id}-instagramHandle`} className="sr-only">
+            Instagram Handle
           </Label>
           <Select>
             <SelectTrigger
               className="w-38 **:data-[slot=select-value]:block **:data-[slot=select-value]:truncate"
               size="sm"
-              id={`${row.original.id}-reviewer`}
+              id={`${row.original.id}-instagramHandle`}
             >
               <SelectValue placeholder="Assign reviewer" />
             </SelectTrigger>
             <SelectContent align="end">
-              <SelectItem value="Eddie Lake">Eddie Lake</SelectItem>
-              <SelectItem value="Jamik Tashpulatov">
-                Jamik Tashpulatov
+              <SelectItem value="@eddie_lake">@eddie_lake</SelectItem>
+              <SelectItem value="@jamik_tashpulatov">
+                @jamik_tashpulatov
               </SelectItem>
             </SelectContent>
           </Select>
@@ -654,12 +654,12 @@ function TableCellViewer({ item }: { item: z.infer<typeof schema> }) {
     <Drawer direction={isMobile ? "bottom" : "right"}>
       <DrawerTrigger asChild>
         <Button variant="link" className="w-fit px-0 text-left text-foreground">
-          {item.header}
+          {item.influencer}
         </Button>
       </DrawerTrigger>
       <DrawerContent>
         <DrawerHeader className="gap-1">
-          <DrawerTitle>{item.header}</DrawerTitle>
+          <DrawerTitle>{item.influencer}</DrawerTitle>
           <DrawerDescription>
             Showing total visitors for the last 6 months
           </DrawerDescription>
@@ -724,40 +724,32 @@ function TableCellViewer({ item }: { item: z.infer<typeof schema> }) {
           )}
           <form className="flex flex-col gap-4">
             <div className="flex flex-col gap-3">
-              <Label htmlFor="header">Header</Label>
-              <Input id="header" defaultValue={item.header} />
+              <Label htmlFor="influencer">Influencer</Label>
+              <Input id="influencer" defaultValue={item.influencer} />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="flex flex-col gap-3">
-                <Label htmlFor="type">Type</Label>
-                <Select defaultValue={item.type}>
-                  <SelectTrigger id="type" className="w-full">
-                    <SelectValue placeholder="Select a type" />
+                <Label htmlFor="niche">Niche</Label>
+                <Select defaultValue={item.niche}>
+                  <SelectTrigger id="niche" className="w-full">
+                    <SelectValue placeholder="Select a niche" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="Table of Contents">
-                      Table of Contents
-                    </SelectItem>
-                    <SelectItem value="Executive Summary">
-                      Executive Summary
-                    </SelectItem>
-                    <SelectItem value="Technical Approach">
-                      Technical Approach
-                    </SelectItem>
-                    <SelectItem value="Design">Design</SelectItem>
-                    <SelectItem value="Capabilities">Capabilities</SelectItem>
-                    <SelectItem value="Focus Documents">
-                      Focus Documents
-                    </SelectItem>
-                    <SelectItem value="Narrative">Narrative</SelectItem>
-                    <SelectItem value="Cover Page">Cover Page</SelectItem>
+                    <SelectItem value="Fashion">Fashion</SelectItem>
+                    <SelectItem value="Beauty">Beauty</SelectItem>
+                    <SelectItem value="Fitness">Fitness</SelectItem>
+                    <SelectItem value="Lifestyle">Lifestyle</SelectItem>
+                    <SelectItem value="Tech">Tech</SelectItem>
+                    <SelectItem value="Travel">Travel</SelectItem>
+                    <SelectItem value="Food">Food</SelectItem>
+                    <SelectItem value="Gaming">Gaming</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               <div className="flex flex-col gap-3">
-                <Label htmlFor="status">Status</Label>
-                <Select defaultValue={item.status}>
-                  <SelectTrigger id="status" className="w-full">
+                <Label htmlFor="pipelineStatus">Pipeline Status</Label>
+                <Select defaultValue={item.pipelineStatus}>
+                  <SelectTrigger id="pipelineStatus" className="w-full">
                     <SelectValue placeholder="Select a status" />
                   </SelectTrigger>
                   <SelectContent>
@@ -770,26 +762,26 @@ function TableCellViewer({ item }: { item: z.infer<typeof schema> }) {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="flex flex-col gap-3">
-                <Label htmlFor="target">Target</Label>
-                <Input id="target" defaultValue={item.target} />
+                <Label htmlFor="followers">Followers</Label>
+                <Input id="followers" defaultValue={item.followers} />
               </div>
               <div className="flex flex-col gap-3">
-                <Label htmlFor="limit">Limit</Label>
-                <Input id="limit" defaultValue={item.limit} />
+                <Label htmlFor="engagementRate">Engagement Rate</Label>
+                <Input id="engagementRate" defaultValue={item.engagementRate} />
               </div>
             </div>
             <div className="flex flex-col gap-3">
-              <Label htmlFor="reviewer">Reviewer</Label>
-              <Select defaultValue={item.reviewer}>
-                <SelectTrigger id="reviewer" className="w-full">
-                  <SelectValue placeholder="Select a reviewer" />
+              <Label htmlFor="instagramHandle">Instagram Handle</Label>
+              <Select defaultValue={item.instagramHandle}>
+                <SelectTrigger id="instagramHandle" className="w-full">
+                  <SelectValue placeholder="Select an Instagram handle" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="Eddie Lake">Eddie Lake</SelectItem>
-                  <SelectItem value="Jamik Tashpulatov">
-                    Jamik Tashpulatov
+                  <SelectItem value="@eddie_lake">@eddie_lake</SelectItem>
+                  <SelectItem value="@jamik_tashpulatov">
+                    @jamik_tashpulatov
                   </SelectItem>
-                  <SelectItem value="Emily Whalen">Emily Whalen</SelectItem>
+                  <SelectItem value="@emily_whalen">@emily_whalen</SelectItem>
                 </SelectContent>
               </Select>
             </div>

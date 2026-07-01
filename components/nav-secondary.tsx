@@ -13,6 +13,7 @@ import {
 
 export function NavSecondary({
   items,
+  brandId,
   ...props
 }: {
   items: {
@@ -20,7 +21,14 @@ export function NavSecondary({
     url: string
     icon: Icon
   }[]
+  brandId?: string | null
 } & React.ComponentPropsWithoutRef<typeof SidebarGroup>) {
+  const buildUrl = (baseUrl: string) => {
+    if (!brandId) return baseUrl
+    const separator = baseUrl.includes("?") ? "&" : "?"
+    return `${baseUrl}${separator}brandId=${brandId}`
+  }
+
   return (
     <SidebarGroup {...props}>
       <SidebarGroupContent>
@@ -28,7 +36,7 @@ export function NavSecondary({
           {items.map((item) => (
             <SidebarMenuItem key={item.title}>
               <SidebarMenuButton asChild>
-                <a href={item.url}>
+                <a href={buildUrl(item.url)}>
                   <item.icon />
                   <span>{item.title}</span>
                 </a>
