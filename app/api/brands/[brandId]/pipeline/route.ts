@@ -81,10 +81,6 @@ export async function POST(req: Request) {
       )
     }
 
-    // Check for duplicate email across platforms (warn but still allow)
-    // We don't block on email — same person can be on multiple platforms
-
-    // Create the global Influencer record
     const influencer = await prisma.influencer.create({
       data: {
         handle,
@@ -119,7 +115,6 @@ export async function POST(req: Request) {
 
     return NextResponse.json(influencer, { status: 201 })
   } catch (error: any) {
-    // Prisma unique constraint violation (race condition)
     if (error.code === "P2002") {
       const handle = (await req.json().catch(() => ({}))).handle?.replace(/^@/, "").toLowerCase()
       const existing = await prisma.influencer
@@ -130,10 +125,5 @@ export async function POST(req: Request) {
         { status: 409 }
       )
     }
-    console.error("Create influencer error:", error)
-    return NextResponse.json(
-      { error: "Failed to create influencer", details: error.message },
-      { status: 500 }
-    )
   }
 }

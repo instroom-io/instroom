@@ -382,7 +382,7 @@ export function LandingPage() {
         </div>
       </section>
 
-      {/* FOUNDER */}
+{/* FOUNDER */}
       <section className={`${styles.section} ${styles.secEven}`}>
         <div className={styles.containerMd}>
           <div className={styles.founderHeader}>
@@ -400,7 +400,7 @@ export function LandingPage() {
               />
             </div>
             <div className={styles.founderContent}>
-              <div className={styles.founderQuote}>
+              <div className={`${styles.founderQuote} ${styles.fontHandQuote}`}>
                 <p>Before Instroom, I ran an influencer marketing agency. And still do.</p>
                 <p>Over the years we built a pretty organized system. A clean spreadsheet. Clear processes. A team that knew where everything lived. On paper, it worked.</p>
                 <p>Then we scaled. We're now managing 30 brands, each with its own spreadsheet, and it's honestly insane. A spreadsheet can only do so much. We were jumping between six different tools to get one campaign out the door. One app for outreach. Another for tracking posts. Another for payments. Another for reporting to the client. Every tool was fine on its own. Together, they were exhausting.</p>
@@ -408,7 +408,7 @@ export function LandingPage() {
                 <p>Not everything is ready yet. We're still building, still improving, still listening to the people using it. But it's getting there, and we'd love for you to come along.</p>
               </div>
               <div className={styles.founderSign}>
-                <div className={styles.founderName}>Armand Manibo</div>
+                <div className={`${styles.founderName} ${styles.fontHand}`}>Armand Mañibo</div>
                 <div className={styles.founderTitle}>Founder & CEO, Instroom</div>
               </div>
             </div>
@@ -443,7 +443,7 @@ export function LandingPage() {
         <div className={styles.earlyInner}>
           <h2>No testimonials yet</h2>
           <p className={styles.earlyBody}>We're not going to make any up. Right now, we are our own testimonials. We use Instroom every day to run our agency across 30 brands, and that's the honest proof that it works.</p>
-          <p className="font-hand text-3xl font-semibold text-[#0F6B3E] mb-8 leading-snug">
+          <p className={`${styles.fontHand} text-3xl font-semibold text-[#0F6B3E] mb-8 leading-snug`}>
             Hopefully yours will live here soon.<br />Fingers crossed.
           </p>
           <Link href="/signup">

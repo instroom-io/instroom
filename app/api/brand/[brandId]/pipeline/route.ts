@@ -189,12 +189,6 @@ export async function GET(
         : {}),
     })
 
-    // ── Access denied check ──────────────────────────────────────────────────
-    // If the brand doesn't exist, isn't active, or the user has no access,
-    // Prisma returns 0 rows. We need to distinguish "empty brand" (valid)
-    // from "no access" (403).
-    // We only do this second query when the result set is empty — so for the
-    // 99% case (brand has data) there's zero extra cost.
     if (brandInfluencers.length === 0 && !cursor) {
       const access = await prisma.brand.findFirst({
         where: {
@@ -290,9 +284,6 @@ export async function GET(
       { data, nextCursor },
       {
         headers: {
-          // Private (per-user) cache.
-          // stale-while-revalidate: browser can use cached data for 30s
-          // while fetching a fresh copy in the background — feels instant.
           "Cache-Control": "private, max-age=0, stale-while-revalidate=30",
         },
       }
