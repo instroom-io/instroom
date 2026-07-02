@@ -1,15 +1,24 @@
 "use client"
 // app/dashboard/settings/integrations/page.tsx
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, Suspense } from "react"
 import { useSession } from "next-auth/react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
-import { Link2, BoxSelect, ShoppingCart, FolderOpen, Radio } from "lucide-react"
+import { Link2, BoxSelect, ShoppingCart, FolderOpen, Radio, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
+
+function LoadingScreen() {
+  return (
+    <div className="flex min-h-[400px] flex-col items-center justify-center gap-3">
+      <Loader2 className="h-7 w-7 animate-spin text-emerald-600" />
+      <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Loading</p>
+    </div>
+  )
+}
 
 type Toast = { message: string; type: "success" | "error" }
 
@@ -46,26 +55,35 @@ const DEFAULT_STATE: IntegrationsMap = {
   gdrive: { connected: false },
 }
 
-export default function IntegrationsPage() {
+function IntegrationsContent() {
   const { status } = useSession()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const { toast, show } = useToast()
+
+  const brandId = searchParams.get("brandId")
 
   const [loading, setLoading] = useState(true)
   const [integrations, setIntegrations] = useState<IntegrationsMap>(DEFAULT_STATE)
   const [pendingId, setPendingId] = useState<IntegrationId | null>(null)
+  const [goaffproSyncing, setGoaffproSyncing] = useState(false)
 
   const [hashtags, setHashtags] = useState("")
   const [mentions, setMentions] = useState("")
 
   useEffect(() => {
+    if (!brandId) {
+      setLoading(false)
+      return
+    }
+
     if (status === "unauthenticated") {
       router.push("/login")
       return
     }
     if (status !== "authenticated") return
 
-    fetch("/api/settings/integrations")
+    fetch(`/api/settings/integrations?brandId=${encodeURIComponent(brandId)}`)
       .then((r) => r.json())
       .then((data) => {
         if (data.integrations) setIntegrations(data.integrations)
@@ -74,7 +92,7 @@ export default function IntegrationsPage() {
       })
       .catch(() => {})
       .finally(() => setLoading(false))
-  }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [status, brandId, router])
 
   async function handleConnect(id: IntegrationId, label: string) {
     setPendingId(id)
@@ -82,7 +100,7 @@ export default function IntegrationsPage() {
       const res = await fetch("/api/settings/integrations/connect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id }),
+        body: JSON.stringify({ id, brandId }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || `Failed to connect ${label}`)
@@ -105,7 +123,7 @@ export default function IntegrationsPage() {
       const res = await fetch("/api/settings/integrations/disconnect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id }),
+        body: JSON.stringify({ id, brandId }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || `Failed to disconnect ${label}`)
@@ -121,6 +139,37 @@ export default function IntegrationsPage() {
 
   function handleManage(label: string) {
     show(`${label} settings opened`, "success")
+  }
+
+  async function handleGoAffProManage() {
+    setGoaffproSyncing(true)
+
+    try {
+      const res = await fetch(
+        `/api/settings/integrations/goaffpro/clicks?days=7&brandId=${encodeURIComponent(brandId ?? "")}`
+      )
+      const data = await res.json()
+
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to sync GoAffPro clicks")
+      }
+
+      const topAffiliate = data?.data?.affiliates?.[0]
+      const topLabel = topAffiliate
+        ? topAffiliate.name || topAffiliate.email || topAffiliate.ref_code || topAffiliate.id
+        : null
+
+      show(
+        topLabel
+          ? `GoAffPro synced: ${data.data.totalClicks} clicks in the last ${data.data.windowDays} days. Top affiliate: ${topLabel} (${topAffiliate.clicks})`
+          : `GoAffPro synced: ${data.data.totalClicks} clicks in the last ${data.data.windowDays} days`,
+        "success"
+      )
+    } catch (err: any) {
+      show(err.message || "Failed to sync GoAffPro clicks", "error")
+    } finally {
+      setGoaffproSyncing(false)
+    }
   }
 
   const ptEnabled = integrations.posttracker.connected
@@ -157,10 +206,10 @@ export default function IntegrationsPage() {
             name="GoAffPro"
             desc="Affiliate program management and commission tracking"
             connected={integrations.goaffpro.connected}
-            loading={pendingId === "goaffpro" || loading}
+            loading={pendingId === "goaffpro" || loading || goaffproSyncing}
             onConnect={() => handleConnect("goaffpro", "GoAffPro")}
             onDisconnect={() => handleDisconnect("goaffpro", "GoAffPro")}
-            onManage={() => handleManage("GoAffPro")}
+            onManage={handleGoAffProManage}
           />
           <IntegrationRow
             logo={<span className="text-[13px]">🔗</span>}
@@ -288,6 +337,14 @@ export default function IntegrationsPage() {
         />
       </SettingsCard>
     </div>
+  )
+}
+
+export default function IntegrationsPage() {
+  return (
+    <Suspense fallback={<LoadingScreen />}>
+      <IntegrationsContent />
+    </Suspense>
   )
 }
 

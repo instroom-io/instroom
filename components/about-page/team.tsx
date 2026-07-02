@@ -41,8 +41,8 @@ export function AboutTeam() {
                   <Image src="/images/CEO.jpg" alt={founder.name} fill className="object-cover" />
                 </div>
               ) : (
-                <div className="w-48 bg-gradient-to-br from-zinc-800 to-zinc-900 flex items-center justify-center flex-shrink-0 text-5xl text-white/10">
-                  👤
+                <div className="relative w-48 flex-shrink-0">
+                  <Image src="/images/CTO.png" alt={founder.name} fill className="object-cover" />
                 </div>
               )}
               <div className="p-8 flex flex-col justify-center flex-1">

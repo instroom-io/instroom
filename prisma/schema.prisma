@@ -189,6 +189,7 @@ model Brand {
   activityLogs ActivityLog[]
   partners     BrandPartner[]    
   tierSettings BrandTierSettings? 
+  integrations IntegrationConnection[]
 
   @@index([owner_id])
   @@index([slug])
@@ -406,6 +407,23 @@ model PlatformSettings {
   setting_value String?  @db.Text
   description   String?
   updated_at    DateTime @updatedAt
+}
+
+model IntegrationConnection {
+  id              String   @id @default(cuid()) @db.VarChar(30)
+  brand_id        String   @db.VarChar(30)
+  integration_key String   @db.VarChar(50)
+  connected       Boolean  @default(false)
+  connected_as    String?  @db.VarChar(255)
+  config          Json?
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  brand Brand @relation(fields: [brand_id], references: [id], onDelete: Cascade)
+
+  @@unique([brand_id, integration_key])
+  @@index([brand_id])
+  @@index([integration_key])
 }
 
 model BrandCustomField {
