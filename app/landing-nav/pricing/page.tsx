@@ -3,6 +3,11 @@ import Link from "next/link";
 import { getActivePlans } from "@/prisma/plans";
 import { MainHeader } from "@/components/shared/main-header";
 
+// Render at request time — this page reads plans from the DB, so it must not be
+// statically prerendered during `next build` (the DB may be unreachable or the
+// SubscriptionPlan table not yet migrated at build time).
+export const dynamic = "force-dynamic";
+
 function getPlanSummary(plan: any) {
   if (plan.name === "basic") return "1 workspace (30-day free trial)";
   if (plan.name === "solo") return "1 workspace (cannot add more)";
