@@ -58,23 +58,32 @@ const DEFAULT_STATE: IntegrationsMap = {
 function IntegrationsContent() {
   const { status } = useSession()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const { toast, show } = useToast()
+
+  const brandId = searchParams.get("brandId")
 
   const [loading, setLoading] = useState(true)
   const [integrations, setIntegrations] = useState<IntegrationsMap>(DEFAULT_STATE)
   const [pendingId, setPendingId] = useState<IntegrationId | null>(null)
+  const [goaffproSyncing, setGoaffproSyncing] = useState(false)
 
   const [hashtags, setHashtags] = useState("")
   const [mentions, setMentions] = useState("")
 
   useEffect(() => {
+    if (!brandId) {
+      setLoading(false)
+      return
+    }
+
     if (status === "unauthenticated") {
       router.push("/login")
       return
     }
     if (status !== "authenticated") return
 
-    fetch("/api/settings/integrations")
+    fetch(`/api/settings/integrations?brandId=${encodeURIComponent(brandId)}`)
       .then((r) => r.json())
       .then((data) => {
         if (data.integrations) setIntegrations(data.integrations)
@@ -83,7 +92,7 @@ function IntegrationsContent() {
       })
       .catch(() => {})
       .finally(() => setLoading(false))
-  }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [status, brandId, router])
 
   async function handleConnect(id: IntegrationId, label: string) {
     setPendingId(id)
@@ -91,7 +100,7 @@ function IntegrationsContent() {
       const res = await fetch("/api/settings/integrations/connect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id }),
+        body: JSON.stringify({ id, brandId }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || `Failed to connect ${label}`)
@@ -114,7 +123,7 @@ function IntegrationsContent() {
       const res = await fetch("/api/settings/integrations/disconnect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id }),
+        body: JSON.stringify({ id, brandId }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || `Failed to disconnect ${label}`)
@@ -130,6 +139,37 @@ function IntegrationsContent() {
 
   function handleManage(label: string) {
     show(`${label} settings opened`, "success")
+  }
+
+  async function handleGoAffProManage() {
+    setGoaffproSyncing(true)
+
+    try {
+      const res = await fetch(
+        `/api/settings/integrations/goaffpro/clicks?days=7&brandId=${encodeURIComponent(brandId ?? "")}`
+      )
+      const data = await res.json()
+
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to sync GoAffPro clicks")
+      }
+
+      const topAffiliate = data?.data?.affiliates?.[0]
+      const topLabel = topAffiliate
+        ? topAffiliate.name || topAffiliate.email || topAffiliate.ref_code || topAffiliate.id
+        : null
+
+      show(
+        topLabel
+          ? `GoAffPro synced: ${data.data.totalClicks} clicks in the last ${data.data.windowDays} days. Top affiliate: ${topLabel} (${topAffiliate.clicks})`
+          : `GoAffPro synced: ${data.data.totalClicks} clicks in the last ${data.data.windowDays} days`,
+        "success"
+      )
+    } catch (err: any) {
+      show(err.message || "Failed to sync GoAffPro clicks", "error")
+    } finally {
+      setGoaffproSyncing(false)
+    }
   }
 
   const ptEnabled = integrations.posttracker.connected
@@ -166,10 +206,10 @@ function IntegrationsContent() {
             name="GoAffPro"
             desc="Affiliate program management and commission tracking"
             connected={integrations.goaffpro.connected}
-            loading={pendingId === "goaffpro" || loading}
+            loading={pendingId === "goaffpro" || loading || goaffproSyncing}
             onConnect={() => handleConnect("goaffpro", "GoAffPro")}
             onDisconnect={() => handleDisconnect("goaffpro", "GoAffPro")}
-            onManage={() => handleManage("GoAffPro")}
+            onManage={handleGoAffProManage}
           />
           <IntegrationRow
             logo={<span className="text-[13px]">🔗</span>}
