@@ -39,9 +39,19 @@ import {
   IconMailForward,
   IconLayoutSidebar,
   IconBrandGmail,
+  IconBrandWindows,
   IconRefresh,
   IconAlertCircle,
 } from "@tabler/icons-react"
+
+function OutlookIcon({ size = 28 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect width="24" height="24" rx="4" fill="#0078D4" />
+      <text x="12" y="17" textAnchor="middle" fill="white" fontSize="13" fontWeight="bold" fontFamily="Arial,sans-serif">O</text>
+    </svg>
+  )
+}
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -82,6 +92,9 @@ type Email = {
   gmailThreadId?: string
   from?: string
   fromEmail?: string
+  // Source tracking for multi-provider support
+  source?: "gmail" | "outlook"
+  outlookMessageId?: string
 }
 
 type StageConfig = {
@@ -179,6 +192,52 @@ function mapGmailThreadToEmail(thread: any, index: number): Email {
     from: senderName,
     fromEmail: senderEmail,
     replies,
+    source: "gmail" as const,
+  }
+}
+
+function mapOutlookThreadToEmail(thread: any, index: number): Email {
+  const messages = thread.messages || []
+  const firstMsg = messages[0] || {}
+
+  const fromHeader = firstMsg.from || ""
+  const nameMatch = fromHeader.match(/^([^<]+)</)
+  const emailMatch = fromHeader.match(/<([^>]+)>/)
+  const senderName = nameMatch ? nameMatch[1].trim() : fromHeader.split("@")[0] || "Unknown"
+  const senderEmail = (emailMatch ? emailMatch[1] : fromHeader).toLowerCase().trim()
+
+  const replies = messages.slice(1).map((msg: any) => {
+    const replyFrom = msg.from || ""
+    const replyName = replyFrom.match(/^([^<]+)</)?.[1]?.trim() || replyFrom.split("@")[0] || "Unknown"
+    return {
+      sender: replyName,
+      message: msg.body || msg.snippet || "",
+      timestamp: msg.date || new Date().toISOString(),
+      isUser: false,
+    }
+  })
+
+  const status = getPipelineStatus(thread.brandInfluencer)
+  const timestamp = firstMsg.date || new Date().toISOString()
+
+  return {
+    id: thread.id || `outlook-${index}`,
+    name: senderName,
+    handle: senderEmail,
+    avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(senderName)}&background=0078D4&color=fff&bold=true`,
+    subject: thread.subject || firstMsg.subject || "(No subject)",
+    preview: thread.snippet || firstMsg.snippet || "",
+    message: firstMsg.body || firstMsg.snippet || "",
+    date: formatRelativeDate(timestamp),
+    timestamp,
+    status,
+    read: !thread.unread,
+    starred: false,
+    from: senderName,
+    fromEmail: senderEmail,
+    replies,
+    source: "outlook" as const,
+    outlookMessageId: thread.lastMessageId,
   }
 }
 
@@ -239,6 +298,12 @@ function InboxContent() {
   const [gmailError, setGmailError] = useState<string | undefined>()
   const [gmailConnected, setGmailConnected] = useState(false)
 
+  const [outlookSyncState, setOutlookSyncState] = useState<GmailSyncState>("checking")
+  const [outlookError, setOutlookError] = useState<string | undefined>()
+  const [outlookConnected, setOutlookConnected] = useState(false)
+
+  const [composeSource, setComposeSource] = useState<"gmail" | "outlook">("gmail")
+
   // Compose modal state
   const [composeTo, setComposeTo] = useState("")
   const [composeSubject, setComposeSubject] = useState("")
@@ -255,11 +320,12 @@ function InboxContent() {
     checkMobile()
     window.addEventListener("resize", checkMobile)
     checkGmailConnection()
+    checkOutlookConnection()
+
+    const params = new URLSearchParams(window.location.search)
 
     // Handle ?gmailConnected=1 redirect from OAuth callback
-    const params = new URLSearchParams(window.location.search)
     if (params.get("gmailConnected") === "1") {
-      // Remove the param from the URL cleanly
       const clean = new URL(window.location.href)
       clean.searchParams.delete("gmailConnected")
       window.history.replaceState({}, "", clean.toString())
@@ -272,6 +338,23 @@ function InboxContent() {
       setGmailSyncState("error")
       const clean = new URL(window.location.href)
       clean.searchParams.delete("gmailError")
+      window.history.replaceState({}, "", clean.toString())
+    }
+
+    // Handle ?outlookConnected=1 redirect from Outlook OAuth callback
+    if (params.get("outlookConnected") === "1") {
+      const clean = new URL(window.location.href)
+      clean.searchParams.delete("outlookConnected")
+      window.history.replaceState({}, "", clean.toString())
+    }
+
+    // Handle ?outlookError=... from Outlook OAuth callback
+    const outlookErr = params.get("outlookError")
+    if (outlookErr) {
+      setOutlookError(decodeURIComponent(outlookErr))
+      setOutlookSyncState("error")
+      const clean = new URL(window.location.href)
+      clean.searchParams.delete("outlookError")
       window.history.replaceState({}, "", clean.toString())
     }
 
@@ -295,20 +378,16 @@ function InboxContent() {
 
       if (res.ok) {
         const mappedEmails = (data.threads || []).map((t: any, i: number) => mapGmailThreadToEmail(t, i))
-        setEmails(mappedEmails)
+        setEmails(prev => [...prev.filter(e => e.source !== "gmail"), ...mappedEmails])
         setGmailConnected(true)
         setGmailSyncState("connected")
       } else if (data?.reauth) {
-        // Explicitly needs Gmail re-auth — tokens missing or revoked
         setGmailSyncState("not_connected")
       } else {
-        // Any other error (brand not found, network, etc.) — Gmail IS connected,
-        // just couldn't load threads. Show error state, not the connect prompt.
         setGmailError(data?.error || "Failed to load inbox.")
         setGmailSyncState("error")
       }
     } catch {
-      // Network-level failure — don't show connect prompt, show retry instead
       setGmailError("Network error. Please check your connection.")
       setGmailSyncState("error")
     }
@@ -331,14 +410,12 @@ function InboxContent() {
 
       if (res.ok) {
         const mappedEmails = (data.threads || []).map((t: any, i: number) => mapGmailThreadToEmail(t, i))
-        setEmails(mappedEmails)
+        setEmails(prev => [...prev.filter(e => e.source !== "gmail"), ...mappedEmails])
         setGmailConnected(true)
         setGmailSyncState("connected")
       } else if (data?.reauth) {
-        // Tokens missing or revoked — user needs to reconnect
         setGmailSyncState("not_connected")
       } else {
-        // Other error — Gmail is connected but something else failed
         setGmailError(data?.error || "Failed to load Gmail threads.")
         setGmailSyncState("error")
       }
@@ -348,12 +425,71 @@ function InboxContent() {
     }
   }
 
+  // ── Outlook connection check ───────────────────────────────────────────────
+
+  const checkOutlookConnection = async () => {
+    try {
+      const url = new URL("/api/outlook/threads", window.location.origin)
+      if (brandId) url.searchParams.append("brandId", brandId)
+      const res = await fetch(url.toString())
+      const data = await res.json()
+
+      if (res.ok) {
+        const mappedEmails = (data.threads || []).map((t: any, i: number) => mapOutlookThreadToEmail(t, i))
+        setEmails(prev => [...prev.filter(e => e.source !== "outlook"), ...mappedEmails])
+        setOutlookConnected(true)
+        setOutlookSyncState("connected")
+      } else if (data?.reauth) {
+        setOutlookSyncState("not_connected")
+      } else {
+        setOutlookError(data?.error || "Failed to load Outlook inbox.")
+        setOutlookSyncState("error")
+      }
+    } catch {
+      setOutlookError("Network error. Please check your connection.")
+      setOutlookSyncState("error")
+    }
+  }
+
+  // ── Connect Outlook — Microsoft OAuth flow ────────────────────────────────
+  const handleConnectOutlook = () => {
+    setOutlookSyncState("connecting")
+    const returnTo = window.location.pathname + window.location.search
+    window.location.href = `/api/outlook/connect?returnTo=${encodeURIComponent(returnTo)}`
+  }
+
+  const loadOutlookThreads = async () => {
+    setOutlookSyncState("syncing")
+    try {
+      const url = new URL("/api/outlook/threads", window.location.origin)
+      if (brandId) url.searchParams.append("brandId", brandId)
+      const res = await fetch(url.toString())
+      const data = await res.json()
+
+      if (res.ok) {
+        const mappedEmails = (data.threads || []).map((t: any, i: number) => mapOutlookThreadToEmail(t, i))
+        setEmails(prev => [...prev.filter(e => e.source !== "outlook"), ...mappedEmails])
+        setOutlookConnected(true)
+        setOutlookSyncState("connected")
+      } else if (data?.reauth) {
+        setOutlookSyncState("not_connected")
+      } else {
+        setOutlookError(data?.error || "Failed to load Outlook threads.")
+        setOutlookSyncState("error")
+      }
+    } catch (err: any) {
+      setOutlookError(err?.message || "Failed to load Outlook threads.")
+      setOutlookSyncState("error")
+    }
+  }
+
   const sendCompose = async () => {
     if (!composeTo.trim() || !composeBody.trim() || isComposeSending) return
     setComposeError(undefined)
     setIsComposeSending(true)
     try {
-      const res = await fetch("/api/gmail/send", {
+      const sendApi = composeSource === "outlook" ? "/api/outlook/send" : "/api/gmail/send"
+      const res = await fetch(sendApi, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -474,15 +610,18 @@ function InboxContent() {
     setReply("")
 
     try {
-      const res = await fetch("/api/gmail/send", {
+      const replyApi = selectedEmail.source === "outlook" ? "/api/outlook/send" : "/api/gmail/send"
+      const replyPayload: any = {
+        to: selectedEmail.fromEmail || selectedEmail.handle,
+        subject: selectedEmail.subject,
+        body: messageText,
+      }
+      if (selectedEmail.source === "gmail") replyPayload.threadId = selectedEmail.gmailThreadId
+
+      const res = await fetch(replyApi, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          to: selectedEmail.fromEmail || selectedEmail.handle,
-          subject: selectedEmail.subject,
-          body: messageText,
-          threadId: selectedEmail.gmailThreadId,
-        }),
+        body: JSON.stringify(replyPayload),
       })
 
       if (!res.ok) {
@@ -539,8 +678,11 @@ function InboxContent() {
 
   const currentStageConfig = selectedStage !== "ALL" ? stageConfigs.find((s) => s.id === selectedStage) : null
   const isGmailReady = gmailConnected && gmailSyncState === "connected"
-  const isLoading = gmailSyncState === "checking" || gmailSyncState === "syncing" || gmailSyncState === "connecting"
-  const needsConnect = gmailSyncState === "not_connected"
+  const isOutlookReady = outlookConnected && outlookSyncState === "connected"
+  const isGmailLoading = gmailSyncState === "checking" || gmailSyncState === "syncing" || gmailSyncState === "connecting"
+  const isOutlookLoading = outlookSyncState === "checking" || outlookSyncState === "syncing" || outlookSyncState === "connecting"
+  const isLoading = (isGmailLoading || isOutlookLoading) && emails.length === 0
+  const needsConnect = !gmailConnected && !outlookConnected && !isGmailLoading && !isOutlookLoading
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -649,21 +791,36 @@ function InboxContent() {
                 <span>{getStageCount("ALL")} total</span>
               </div>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
               <div
                 className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium border transition-all ${
                   isGmailReady
                     ? "bg-green-50 border-green-200 text-green-700"
-                    : needsConnect
+                    : gmailSyncState === "not_connected"
                     ? "bg-yellow-50 border-yellow-200 text-yellow-700 cursor-pointer hover:bg-yellow-100"
-                    : isLoading
+                    : isGmailLoading
                     ? "bg-gray-50 border-gray-200 text-gray-400"
                     : "bg-red-50 border-red-200 text-red-500"
                 }`}
-                onClick={needsConnect ? handleConnectGmail : undefined}
+                onClick={gmailSyncState === "not_connected" ? handleConnectGmail : undefined}
               >
                 <IconBrandGmail size={11} />
-                <span>{isGmailReady ? "Gmail synced" : needsConnect ? "Connect Gmail" : isLoading ? "Connecting…" : "Sync error"}</span>
+                <span>{isGmailReady ? "Gmail" : gmailSyncState === "not_connected" ? "Connect Gmail" : isGmailLoading ? "Gmail…" : "Gmail error"}</span>
+              </div>
+              <div
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium border transition-all ${
+                  isOutlookReady
+                    ? "bg-blue-50 border-blue-200 text-blue-700"
+                    : outlookSyncState === "not_connected"
+                    ? "bg-yellow-50 border-yellow-200 text-yellow-700 cursor-pointer hover:bg-yellow-100"
+                    : isOutlookLoading
+                    ? "bg-gray-50 border-gray-200 text-gray-400"
+                    : "bg-red-50 border-red-200 text-red-500"
+                }`}
+                onClick={outlookSyncState === "not_connected" ? handleConnectOutlook : undefined}
+              >
+                <OutlookIcon size={11} />
+                <span>{isOutlookReady ? "Outlook" : outlookSyncState === "not_connected" ? "Connect Outlook" : isOutlookLoading ? "Outlook…" : "Outlook error"}</span>
               </div>
               <div className="flex items-center gap-2 text-xs text-gray-500">
                 <span className="hidden sm:inline">Current:</span>
@@ -688,50 +845,72 @@ function InboxContent() {
                 <div className="absolute inset-0 rounded-full border-4 border-t-[#1FAE5B] animate-spin" />
               </div>
               <p className="text-sm text-gray-500 font-medium">
-                {gmailSyncState === "connecting" ? "Redirecting to Google…" : "Loading your inbox…"}
+                {gmailSyncState === "connecting" ? "Redirecting to Google…" :
+                 outlookSyncState === "connecting" ? "Redirecting to Microsoft…" :
+                 "Loading your inbox…"}
               </p>
             </div>
           ) : needsConnect ? (
             <div className="flex-1 flex flex-col items-center justify-center gap-5 p-6 text-center">
-              <div className="relative">
-                <div className="absolute inset-0 rounded-full bg-red-100 blur-xl opacity-50 scale-150" />
-                <div className="relative w-14 h-14 rounded-2xl bg-white shadow-md border border-gray-100 flex items-center justify-center">
-                  <IconBrandGmail size={28} className="text-[#EA4335]" />
+              <div className="flex items-center justify-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-white shadow-md border border-gray-100 flex items-center justify-center">
+                  <IconBrandGmail size={24} className="text-[#EA4335]" />
+                </div>
+                <span className="text-gray-300 font-light text-lg">+</span>
+                <div className="w-12 h-12 rounded-2xl bg-white shadow-md border border-gray-100 flex items-center justify-center">
+                  <OutlookIcon size={24} />
                 </div>
               </div>
               <div>
-                <p className="text-sm font-semibold text-gray-900">Connect your Gmail</p>
+                <p className="text-sm font-semibold text-gray-900">Connect your email</p>
                 <p className="text-xs text-gray-500 mt-1.5 max-w-[200px] leading-relaxed">
-                  Allow access once and your inbox will always load automatically.
+                  Connect Gmail or Outlook to start managing your influencer inbox.
                 </p>
               </div>
-              <button
-                onClick={handleConnectGmail}
-                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-[#1FAE5B] text-white text-sm rounded-xl hover:bg-[#0F6B3E] transition font-semibold shadow-md"
-              >
-                <IconBrandGmail size={15} />
-                Connect Gmail — it's free
-              </button>
+              <div className="flex flex-col gap-2.5 w-full">
+                <button
+                  onClick={handleConnectGmail}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-[#1FAE5B] text-white text-sm rounded-xl hover:bg-[#0F6B3E] transition font-semibold shadow-md"
+                >
+                  <IconBrandGmail size={15} />
+                  Connect Gmail
+                </button>
+                <button
+                  onClick={handleConnectOutlook}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-[#0078D4] text-white text-sm rounded-xl hover:bg-[#006CBE] transition font-semibold shadow-md"
+                >
+                  <OutlookIcon size={15} />
+                  Connect Outlook
+                </button>
+              </div>
               <p className="text-[10px] text-gray-400 flex items-center gap-1">
                 <IconLock size={10} />
                 Only asked once • Read &amp; send access
               </p>
             </div>
-          ) : gmailSyncState === "error" ? (
+          ) : emails.length === 0 && gmailSyncState === "error" && outlookSyncState !== "connected" ? (
             <div className="flex-1 flex flex-col items-center justify-center gap-4 p-6 text-center">
               <div className="w-12 h-12 rounded-full bg-red-50 flex items-center justify-center">
                 <IconAlertCircle size={24} className="text-red-500" />
               </div>
               <div>
                 <p className="text-sm font-semibold text-gray-800">Failed to load inbox</p>
-                <p className="text-xs text-gray-500 mt-1 max-w-[200px]">{gmailError}</p>
+                <p className="text-xs text-gray-500 mt-1 max-w-[200px]">{gmailError || outlookError}</p>
               </div>
-              <button
-                onClick={loadGmailThreads}
-                className="px-4 py-2 bg-[#1FAE5B] text-white text-sm rounded-xl hover:bg-[#0F6B3E] transition font-medium flex items-center gap-2"
-              >
-                <IconRefresh size={14} /> Retry
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={loadGmailThreads}
+                  className="px-3 py-2 bg-[#1FAE5B] text-white text-xs rounded-xl hover:bg-[#0F6B3E] transition font-medium flex items-center gap-1.5"
+                >
+                  <IconRefresh size={13} /> Gmail
+                </button>
+                <button
+                  onClick={loadOutlookThreads}
+                  className="px-3 py-2 bg-[#0078D4] text-white text-xs rounded-xl hover:bg-[#006CBE] transition font-medium flex items-center gap-1.5"
+                >
+                  <IconRefresh size={13} /> Outlook
+                </button>
+              </div>
             </div>
           ) : (
             <>
@@ -741,21 +920,32 @@ function InboxContent() {
                     <h1 className="text-lg font-semibold text-gray-900">
                       {selectedStage === "ALL" ? "All Messages" : currentStageConfig?.label}
                     </h1>
-                    <div className="flex items-center gap-1.5 mt-0.5">
-                      <div className="w-1.5 h-1.5 rounded-full bg-green-400" />
-                      <span className="text-[10px] text-gray-400">Gmail synced</span>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      {isGmailReady && <span className="text-[10px] text-gray-400 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block" />Gmail</span>}
+                      {isOutlookReady && <span className="text-[10px] text-gray-400 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-blue-400 inline-block" />Outlook</span>}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    {isGmailReady && (
+                      <button
+                        onClick={loadGmailThreads}
+                        title="Refresh Gmail"
+                        className="p-2 rounded-lg hover:bg-gray-100 transition-colors text-gray-500"
+                      >
+                        <IconRefresh size={16} />
+                      </button>
+                    )}
+                    {isOutlookReady && (
+                      <button
+                        onClick={loadOutlookThreads}
+                        title="Refresh Outlook"
+                        className="p-2 rounded-lg hover:bg-gray-100 transition-colors text-gray-500"
+                      >
+                        <IconRefresh size={16} />
+                      </button>
+                    )}
                     <button
-                      onClick={loadGmailThreads}
-                      title="Refresh inbox"
-                      className="p-2 rounded-lg hover:bg-gray-100 transition-colors text-gray-500"
-                    >
-                      <IconRefresh size={16} />
-                    </button>
-                    <button
-                      onClick={() => setOpenCompose(true)}
+                      onClick={() => { setComposeSource(isGmailReady ? "gmail" : "outlook"); setOpenCompose(true) }}
                       className="p-2 rounded-lg bg-[#1FAE5B] text-white hover:bg-[#0F6B3E] transition-all duration-200 shadow-sm"
                       title="New Message"
                     >
@@ -829,13 +1019,13 @@ function InboxContent() {
 
         {/* ── CHAT / MESSAGE AREA ── */}
         <div className="flex-1 flex flex-col bg-white">
-          {isLoading || needsConnect || gmailSyncState === "error" ? (
+          {isLoading || needsConnect || (emails.length === 0 && (gmailSyncState === "error" || outlookSyncState === "error")) ? (
             <div className="flex-1 flex flex-col items-center justify-center text-gray-300 bg-gray-50 p-4">
               <div className="bg-white rounded-full p-6 mb-4 shadow-sm border border-gray-100">
                 <IconBrandGmail size={48} stroke={1} className="text-gray-200" />
               </div>
               <p className="text-sm font-medium text-gray-400">
-                {isLoading ? "Loading your inbox…" : needsConnect ? "Connect Gmail to get started" : "Could not load inbox"}
+                {isLoading ? "Loading your inbox…" : needsConnect ? "Connect Gmail or Outlook to get started" : "Could not load inbox"}
               </p>
             </div>
           ) : selectedEmail ? (
@@ -1052,6 +1242,29 @@ function InboxContent() {
             ) : (
               <>
                 <div className="space-y-1">
+                  {isGmailReady && isOutlookReady && (
+                    <div className="flex items-center border-b border-gray-200 gap-2 py-2">
+                      <span className="text-xs text-gray-400 w-14 flex-shrink-0">From</span>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setComposeSource("gmail")}
+                          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
+                            composeSource === "gmail" ? "bg-green-50 border-green-300 text-green-700" : "border-gray-200 text-gray-500 hover:bg-gray-50"
+                          }`}
+                        >
+                          <IconBrandGmail size={12} /> Gmail
+                        </button>
+                        <button
+                          onClick={() => setComposeSource("outlook")}
+                          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
+                            composeSource === "outlook" ? "bg-blue-50 border-blue-300 text-blue-700" : "border-gray-200 text-gray-500 hover:bg-gray-50"
+                          }`}
+                        >
+                          <OutlookIcon size={12} /> Outlook
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   <div className="flex items-center border-b border-gray-200 gap-2 py-2">
                     <span className="text-xs text-gray-400 w-14 flex-shrink-0">To</span>
                     <input
