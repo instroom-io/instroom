@@ -88,6 +88,10 @@ export async function POST(
 
     return NextResponse.json({ location })
   } catch (error: any) {
+    // Race condition: two concurrent requests both passed the findUnique check above.
+    if (error?.code === "P2002") {
+      return NextResponse.json({ error: "Location already exists" }, { status: 409 })
+    }
     console.error("POST location error:", error)
     return NextResponse.json({ error: "Failed to save location" }, { status: 500 })
   }

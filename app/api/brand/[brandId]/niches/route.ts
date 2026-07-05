@@ -88,6 +88,10 @@ export async function POST(
 
     return NextResponse.json({ niche })
   } catch (error: any) {
+    // Race condition: two concurrent requests both passed the findUnique check above.
+    if (error?.code === "P2002") {
+      return NextResponse.json({ error: "Niche already exists" }, { status: 409 })
+    }
     console.error("POST niche error:", error)
     return NextResponse.json({ error: "Failed to save niche" }, { status: 500 })
   }
