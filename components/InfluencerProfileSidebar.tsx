@@ -508,6 +508,7 @@ export default function InfluencerProfileSidebar({
       <div className="pp">
         {/* ── Header ── */}
         <div className="pph">
+          <button onClick={onClose} title="Close" className="close-btn">✕</button>
           <div className="ppt">Influencer Profile</div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
             <div className="pav">{partner.firstName ? partner.firstName[0] : partner.handle[1]?.toUpperCase()}</div>
@@ -556,8 +557,6 @@ export default function InfluencerProfileSidebar({
                   ))}
                 </select>
               </div>
-
-              <button onClick={onClose} title="Close" className="close-btn">✕</button>
             </div>
           </div>
 
@@ -744,7 +743,7 @@ export default function InfluencerProfileSidebar({
 
         <style jsx>{`
           .pp { position:fixed; top:0; right:0; width:520px; max-width:100vw; height:100%; background:#fff; box-shadow:-8px 0 40px rgba(0,0,0,0.14); z-index:500; display:flex; flex-direction:column; font-family:"Inter",system-ui,sans-serif; }
-          .pph { padding:16px 20px; border-bottom:1px solid #f0f0f0; }
+          .pph { position:relative; padding:16px 20px; border-bottom:1px solid #f0f0f0; }
           .ppt { font-size:11px; font-weight:600; color:#9ca3af; letter-spacing:.1em; text-transform:uppercase; margin-bottom:12px; }
           .pav { width:44px; height:44px; border-radius:50%; background:#1fae5b; display:flex; align-items:center; justify-content:center; font-size:18px; font-weight:700; color:#fff; flex-shrink:0; box-shadow:0 0 0 3px #dcfce7; }
           .pnm { font-size:15px; font-weight:700; color:#111827; }
@@ -763,7 +762,7 @@ export default function InfluencerProfileSidebar({
           .collab-implied-sep { opacity:.4; font-size:11px; }
           .collab-implied-text { font-size:11px; opacity:.75; }
 
-          .close-btn { width:30px; height:30px; border-radius:50%; border:1.5px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; flex-shrink:0; line-height:1; margin-top:14px; transition:background .15s,border-color .15s,color .15s; }
+          .close-btn { position:absolute; top:16px; right:20px; width:30px; height:30px; border-radius:50%; border:1.5px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; flex-shrink:0; line-height:1; transition:background .15s,border-color .15s,color .15s; }
           .close-btn:hover { background:#fee2e2; color:#dc2626; border-color:#fca5a5; }
           .atag { font-size:12px; font-weight:500; padding:6px 14px; border-radius:20px; cursor:pointer; border:1px solid #e5e7eb; background:#f9fafb; color:#555; }
           .atag.plat { background:#1fae5b; color:#fff; border-color:#1fae5b; }

@@ -293,12 +293,14 @@ const getNextStages = (currentStatus: string): string[] => {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const MONTHS = ["Nov", "Dec", "Jan", "Feb", "Mar", "Apr"]
 
-function influencerToPartner(inf: PipelineInfluencer): Partner {
+function influencerToPartner(inf: PipelineInfluencer, brandId?: string): Partner {
   const nameParts = inf.influencer?.split(" ") || [""]
   const firstName = nameParts[0] || inf.handle?.slice(0, 6) || ""
   const lastName  = nameParts.slice(1).join(" ") || ""
   return {
     id:           inf.id as any,
+    brandId,
+    brandInfluencerId: inf.influencerId,
     handle:       inf.handle || "",
     firstName,
     lastName,
@@ -320,7 +322,10 @@ function influencerToPartner(inf: PipelineInfluencer): Partner {
     rev:          inf.gmv || 0,
     fol:          inf.followerCount,
     eng:          parseFloat(inf.engagementRate) || 0,
-    avgV:         0,
+    avgV:         inf.avgViews ?? 0,
+    avg_likes:    inf.avgLikes,
+    avg_comments: inf.avgComments,
+    avg_views:    inf.avgViews,
     gmv:          inf.gmv || 0,
     affiliate_id: inf.affiliateId,
     ref_code:     inf.refCode,
@@ -973,7 +978,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   }
 
   const openSidebar = (inf: PipelineInfluencer) => {
-    setSelectedPartner(influencerToPartner(inf))
+    setSelectedPartner(influencerToPartner(inf, brandId))
     setSidebarOpen(true)
   }
 

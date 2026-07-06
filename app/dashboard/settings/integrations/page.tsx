@@ -1,10 +1,9 @@
 "use client"
 // app/dashboard/settings/integrations/page.tsx
 
-import { useEffect, useState } from "react"
-import { useSearchParams } from "next/navigation"
+import { useEffect, useState, Suspense } from "react"
 import { useSession } from "next-auth/react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -17,8 +16,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Link2, BoxSelect, ShoppingCart, FolderOpen, Radio } from "lucide-react"
+import { Link2, BoxSelect, ShoppingCart, FolderOpen, Radio, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
+
+function LoadingScreen() {
+  return (
+    <div className="flex min-h-[400px] flex-col items-center justify-center gap-3">
+      <Loader2 className="h-7 w-7 animate-spin text-emerald-600" />
+      <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Loading</p>
+    </div>
+  )
+}
 
 type Toast = { message: string; type: "success" | "error" }
 
@@ -55,7 +63,7 @@ const DEFAULT_STATE: IntegrationsMap = {
   gdrive: { connected: false },
 }
 
-export default function IntegrationsPage() {
+function IntegrationsContent() {
   const { status } = useSession()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -447,6 +455,14 @@ export default function IntegrationsPage() {
         </DialogContent>
       </Dialog>
     </div>
+  )
+}
+
+export default function IntegrationsPage() {
+  return (
+    <Suspense fallback={<LoadingScreen />}>
+      <IntegrationsContent />
+    </Suspense>
   )
 }
 

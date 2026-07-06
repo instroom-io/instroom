@@ -76,6 +76,8 @@ interface Partner {
   ref_code: string | null
   coupon: string | null
   affiliate_link: string | null
+  brandId?: string
+  brandInfluencerId?: string
   _raw: BrandInfluencerRecord
 }
 
@@ -287,10 +289,12 @@ export default function BrandPartnersPage({ brandId }: Props) {
         ref_code: bi.ref_code ?? (bp as any)?.goaffpro_ref_code ?? null,
         coupon: bi.coupon ?? (bp as any)?.goaffpro_coupon ?? null,
         affiliate_link: bi.affiliate_link ?? (bp as any)?.goaffpro_link ?? null,
+        brandId,
+        brandInfluencerId: bi.influencer_id,
         _raw: bi,
       }
     },
-    [autoTier]
+    [autoTier, brandId]
   )
 
   // ── DB record → Campaign ─────────────────────────────────────────────────

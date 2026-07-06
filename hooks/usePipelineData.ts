@@ -19,6 +19,9 @@ export interface PipelineInfluencer {
   followers: string
   followerCount: number
   engagementRate: string
+  avgLikes: number | null
+  avgComments: number | null
+  avgViews: number | null
   niche: string
   location: string
   email: string
@@ -71,6 +74,9 @@ function mapItem(item: any): PipelineInfluencer {
     followers:       item.followers,
     followerCount:   item.followerCount,
     engagementRate:  item.engagementRate,
+    avgLikes:        item.avgLikes    ?? null,
+    avgComments:     item.avgComments ?? null,
+    avgViews:        item.avgViews    ?? null,
     niche:           item.niche,
     location:        item.location,
     email:           item.email,

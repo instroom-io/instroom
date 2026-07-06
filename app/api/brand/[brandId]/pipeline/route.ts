@@ -182,6 +182,9 @@ export async function GET(
             bio:               true,
             follower_count:    true,
             engagement_rate:   true,
+            avg_likes:         true,
+            avg_comments:      true,
+            avg_views:         true,
           },
         },
 
@@ -252,6 +255,9 @@ export async function GET(
           engagementRate: inf.engagement_rate
             ? `${Number(inf.engagement_rate).toFixed(1)}%`
             : "0%",
+          avgLikes:    inf.avg_likes,
+          avgComments: inf.avg_comments,
+          avgViews:    inf.avg_views,
 
           niche:           inf.niche             || "",
           location:        inf.location          || "",
