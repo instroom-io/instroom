@@ -72,6 +72,10 @@ interface Partner {
   social_link: string | null
   follower_count: number
   engagement_rate: number
+  affiliate_id: string | null
+  ref_code: string | null
+  coupon: string | null
+  affiliate_link: string | null
   _raw: BrandInfluencerRecord
 }
 
@@ -202,7 +206,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
       // ── Revenue is GMV (what the influencer actually generated in sales) ──
       // agreed_rate is what you PAY the influencer — a cost, not revenue —
       // so it's folded into totalSpend below instead of treated as rev.
-      const gmv        = bp ? Number(bp.gmv) : 0
+      const gmv        = bi.gmv != null ? Number(bi.gmv) : bp ? Number(bp.gmv) : 0
       const prodCost   = bp ? Number(bp.product_cost) : 0
       const feesPaid   = bp ? Number(bp.fees_paid) : 0
       const commPaid   = bp ? Number(bp.commission_paid) : 0
@@ -210,8 +214,8 @@ export default function BrandPartnersPage({ brandId }: Props) {
 
       const totalSpend = prodCost + feesPaid + commPaid + agreedRate
 
-      const clicks = bp?.clicks ?? 0
-      const sales  = bp?.sales_count ?? 0
+      const clicks = bi.clicks ?? bp?.clicks ?? 0
+      const sales  = bi.sales_count ?? bp?.sales_count ?? 0
       
       // ── Calculate metrics only if data exists ──────────────────────────
       // CVR: Conversion Rate = (Sales / Clicks) * 100
@@ -279,6 +283,10 @@ export default function BrandPartnersPage({ brandId }: Props) {
         social_link: inf.social_link || null,
         follower_count: inf.follower_count || 0,
         engagement_rate: Number(inf.engagement_rate) || 0,
+        affiliate_id: bi.affiliate_id ?? (bp as any)?.goaffpro_affiliate_id ?? null,
+        ref_code: bi.ref_code ?? (bp as any)?.goaffpro_ref_code ?? null,
+        coupon: bi.coupon ?? (bp as any)?.goaffpro_coupon ?? null,
+        affiliate_link: bi.affiliate_link ?? (bp as any)?.goaffpro_link ?? null,
         _raw: bi,
       }
     },

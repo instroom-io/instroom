@@ -39,6 +39,10 @@ export interface Partner {
   avg_views?: number | null
   follower_count?: number | null
   engagement_rate?: number | null
+  affiliate_id?: string | null
+  ref_code?: string | null
+  coupon?: string | null
+  affiliate_link?: string | null
   brandInfluencerId?: string
   brandId?: string
 }
@@ -408,8 +412,8 @@ export default function InfluencerProfileSidebar({
   const [orderData, setOrderData] = useState({
     firstName: partner.firstName, lastName: partner.lastName, contactNumber: "",
     productName: "", orderNumber: "", productCost: "",
-    discountCode: "CODE" + partner.firstName.toUpperCase(),
-    affiliateLink: "https://instroom.io/ref/" + partner.firstName.toLowerCase(),
+    discountCode: partner.coupon || partner.ref_code || "CODE" + partner.firstName.toUpperCase(),
+    affiliateLink: partner.affiliate_link || "https://instroom.io/ref/" + partner.firstName.toLowerCase(),
     shippingAddress: "", trackingLink: "",
   })
   const [postData, setPostData] = useState({
@@ -691,12 +695,12 @@ export default function InfluencerProfileSidebar({
             <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
               <div className="stit">Performance — all campaigns combined</div>
               <div className="skg">
-                <div className="skc"><div className="skv-dark">{(partner.hClicks || 0).toLocaleString()}</div><div className="skl">Total clicks</div></div>
-                <div className="skc"><div className="skv-blue">{partner.hCVR || 0}%</div><div className="skl">CVR</div></div>
-                <div className="skc"><div className="skv-dark">{(partner.hSales || 0).toLocaleString()}</div><div className="skl">Total sales</div></div>
-                <div className="skc"><div className="skv-green">{formatMoney(partner.hRev || 0)}</div><div className="skl">Total revenue</div></div>
+                <div className="skc"><div className="skv-dark">{(partner.clicks || partner.hClicks || 0).toLocaleString()}</div><div className="skl">Total clicks</div></div>
+                <div className="skc"><div className="skv-blue">{partner.cvr || partner.hCVR || 0}%</div><div className="skl">CVR</div></div>
+                <div className="skc"><div className="skv-dark">{(partner.sales || partner.hSales || 0).toLocaleString()}</div><div className="skl">Total sales</div></div>
+                <div className="skc"><div className="skv-green">{formatMoney(partner.rev || partner.hRev || 0)}</div><div className="skl">Total revenue</div></div>
                 <div className="skc"><div className="skv-green">{formatMoney(partner.totalSpend || 0)}</div><div className="skl">Total spend</div></div>
-                <div className="skc"><div className={partner.roas_val >= 1 ? "skv-green" : "skv-red"}>{formatROAS(partner.rev, partner.totalSpend)}</div><div className="skl">ROAS</div></div>
+                <div className="skc"><div className={(partner.roas_val || 0) >= 1 ? "skv-green" : "skv-red"}>{formatROAS(partner.rev || partner.gmv || 0, partner.totalSpend)}</div><div className="skl">ROAS</div></div>
               </div>
               <div className="breakdown-box">
                 <strong>Spend breakdown:</strong>{" "}
@@ -708,7 +712,7 @@ export default function InfluencerProfileSidebar({
                 <div className="skc"><div className="skv-blue">{engRate}</div><div className="skl">Eng. rate</div></div>
                 <div className="skc"><div className="skv-dark">{avgViews}</div><div className="skl">Avg views/post</div></div>
                 <div className="skc"><div className="skv-dark">{partner.ppm || 0}</div><div className="skl">Posts/month</div></div>
-                <div className="skc"><div className="skv-green">{formatMoney(partner.gmv || 0)}</div><div className="skl">GMV</div></div>
+                <div className="skc"><div className="skv-green">{formatMoney(partner.gmv || partner.rev || 0)}</div><div className="skl">GMV</div></div>
                 <div className="skc"><div className="skv-dark">{campCount}</div><div className="skl">Campaigns</div></div>
               </div>
               <div className="stit">Avg Metrics</div>

@@ -41,6 +41,13 @@ export interface PipelineInfluencer {
   internalRating: number | null
   lastContact: string
   createdAt: string
+  affiliateId: string | null
+  refCode: string | null
+  coupon: string | null
+  affiliateLink: string | null
+  clicks: number
+  salesCount: number
+  gmv: number
 }
 
 interface UsePipelineDataReturn {
@@ -86,6 +93,13 @@ function mapItem(item: any): PipelineInfluencer {
     internalRating:  item.internalRating ?? null,
     lastContact:     item.lastContact,
     createdAt:       item.createdAt,
+    affiliateId:     item.affiliateId    ?? null,
+    refCode:         item.refCode        ?? null,
+    coupon:          item.coupon         ?? null,
+    affiliateLink:   item.affiliateLink  ?? null,
+    clicks:          item.clicks         ?? 0,
+    salesCount:      item.salesCount     ?? 0,
+    gmv:             item.gmv            ?? 0,
   }
 }
 

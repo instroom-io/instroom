@@ -8,6 +8,18 @@ export default function InfluencerProfile({ data, close }: any) {
   const [notes, setNotes] = useState("")
   const [activeTab, setActiveTab] = useState("basic")
 
+  const affiliateId = data.affiliate_id || data.affiliateId || ""
+  const refCode = data.ref_code || data.refCode || ""
+  const coupon = data.coupon || data.couponCode || ""
+  const affiliateLink = data.affiliate_link || data.affiliateLink || ""
+  const clicks = Number(data.clicks ?? 0)
+  const salesCount = Number(data.sales_count ?? 0)
+  const revenue = Number(data.gmv ?? 0)
+  const spend = Number(data.agreed_rate ?? 0)
+  const cvr = clicks > 0 ? (salesCount / clicks) * 100 : 0
+  const roas = spend > 0 ? revenue / spend : 0
+  const hasAffiliateData = Boolean(affiliateId || refCode || coupon || affiliateLink || clicks || salesCount || revenue)
+
   const statusOptions = ["Prospect", "Reached Out", "In Conversation", "Onboarded", "Rejected"]
 
   const inputClass =
@@ -145,7 +157,7 @@ export default function InfluencerProfile({ data, close }: any) {
                 <div><p className="text-xs text-gray-500">Followers</p><p className="font-semibold">{data.followers}</p></div>
                 <div><p className="text-xs text-gray-500">Eng Rate</p><p className="font-semibold">{data.engagementRate}</p></div>
                 <div><p className="text-xs text-gray-500">Avg Views</p><p className="font-semibold">0</p></div>
-                <div><p className="text-xs text-gray-500">GMV</p><p className="font-semibold">$</p></div>
+                <div><p className="text-xs text-gray-500">GMV</p><p className="font-semibold">${revenue.toLocaleString()}</p></div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 px-6 py-6 text-sm">
@@ -175,8 +187,10 @@ export default function InfluencerProfile({ data, close }: any) {
               <input className={`${inputClass} sm:col-span-2`} placeholder="Product Name" />
               <input className={`${inputClass} sm:col-span-2`} placeholder="Order Number" />
               <input className={inputClass} placeholder="Product Cost" />
-              <input className={inputClass} placeholder="Discount Code" />
-              <input className={`${inputClass} sm:col-span-2`} placeholder="Affiliate Link" />
+              <input className={inputClass} placeholder="Coupon" value={coupon || refCode} readOnly />
+              <input className={`${inputClass} sm:col-span-2`} placeholder="Affiliate Link" value={affiliateLink} readOnly />
+              <input className={inputClass} placeholder="Ref Code" value={refCode} readOnly />
+              <input className={inputClass} placeholder="Affiliate ID" value={affiliateId} readOnly />
               <input className={`${inputClass} sm:col-span-2`} placeholder="Shipping Address" />
               <input className={`${inputClass} sm:col-span-2`} placeholder="Tracking Link" />
             </div>
@@ -200,8 +214,60 @@ export default function InfluencerProfile({ data, close }: any) {
 
           {/* STATS */}
           {activeTab === "stats" && (
-            <div className="p-6 text-gray-400 text-sm">
-              No statistics yet.
+            <div className="p-6 space-y-4">
+              {hasAffiliateData ? (
+                <>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                    <div className="rounded-xl border bg-gray-50 p-4">
+                      <p className="text-xs text-gray-500">Total clicks</p>
+                      <p className="text-xl font-semibold text-[#1E1E1E]">{clicks.toLocaleString()}</p>
+                    </div>
+                    <div className="rounded-xl border bg-gray-50 p-4">
+                      <p className="text-xs text-gray-500">CVR</p>
+                      <p className="text-xl font-semibold text-[#1FAE5B]">{clicks > 0 ? `${cvr.toFixed(2)}%` : "—"}</p>
+                    </div>
+                    <div className="rounded-xl border bg-gray-50 p-4">
+                      <p className="text-xs text-gray-500">Total sales</p>
+                      <p className="text-xl font-semibold text-[#1E1E1E]">{salesCount.toLocaleString()}</p>
+                    </div>
+                    <div className="rounded-xl border bg-gray-50 p-4">
+                      <p className="text-xs text-gray-500">Total revenue</p>
+                      <p className="text-xl font-semibold text-[#1FAE5B]">${revenue.toLocaleString()}</p>
+                    </div>
+                    <div className="rounded-xl border bg-gray-50 p-4">
+                      <p className="text-xs text-gray-500">Total spend</p>
+                      <p className="text-xl font-semibold text-[#1E1E1E]">{spend > 0 ? `$${spend.toLocaleString()}` : "—"}</p>
+                    </div>
+                    <div className="rounded-xl border bg-gray-50 p-4">
+                      <p className="text-xs text-gray-500">ROAS</p>
+                      <p className="text-xl font-semibold text-[#1FAE5B]">{spend > 0 ? `${roas.toFixed(1)}x` : "—"}</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <p className="text-xs text-gray-500 mb-1">Coupon</p>
+                      <p className="font-medium">{coupon || "—"}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500 mb-1">Affiliate link</p>
+                      <p className="font-medium break-all">{affiliateLink || "—"}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500 mb-1">Ref code</p>
+                      <p className="font-medium">{refCode || "—"}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500 mb-1">Affiliate ID</p>
+                      <p className="font-medium">{affiliateId || "—"}</p>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="rounded-xl border border-dashed bg-gray-50 p-6 text-sm text-gray-500">
+                  No GoAffPro data yet. Connect GoAffPro and add this influencer to populate affiliate stats.
+                </div>
+              )}
             </div>
           )}
 

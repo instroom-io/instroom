@@ -80,6 +80,15 @@ export function useInfluencerData(brandId: string | null): UseInfluencerDataRetu
             avg_comments: inf.avg_comments ?? "",
             avg_views: inf.avg_views ?? "",
 
+            // Affiliate / performance fields for GoAffPro-connected creators
+            affiliate_id: item.affiliate_id ?? null,
+            ref_code: item.ref_code ?? null,
+            coupon: item.coupon ?? null,
+            affiliate_link: item.affiliate_link ?? null,
+            clicks: item.clicks ?? 0,
+            sales_count: item.sales_count ?? 0,
+            gmv: item.gmv ? Number(item.gmv) : 0,
+
             // BrandInfluencer relationship fields
             contact_status: item.contact_status ?? "not_contacted",
             stage: String(item.stage ?? "1"),

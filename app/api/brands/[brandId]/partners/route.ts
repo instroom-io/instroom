@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
+import { provisionGoAffProAffiliate } from "@/lib/goaffpro-provision"
 
 export async function GET(
   req: NextRequest,
@@ -77,50 +78,25 @@ export async function POST(
     const { brandId } = await context.params
     const body = await req.json()
 
-    // ── Resolve or create the global Influencer record ──────────────────
-    let influencerId: string
+    if (!body.influencer_id) {
+      return NextResponse.json(
+        { error: "influencer_id is required" },
+        { status: 400 }
+      )
+    }
 
-    if (body.influencer_id) {
-      influencerId = body.influencer_id
-    } else {
-      if (!body.handle || !body.platform) {
-        return NextResponse.json(
-          { error: "handle and platform are required when influencer_id is not provided" },
-          { status: 400 }
-        )
-      }
+    const influencerId = body.influencer_id
 
-      const handle   = body.handle.trim().replace(/^@/, "").toLowerCase()
-      const platform = body.platform.toLowerCase()
+    const influencer = await prisma.influencer.findUnique({
+      where: { id: influencerId },
+      select: { id: true },
+    })
 
-      const existing = await prisma.influencer.findUnique({
-        where: { handle_platform: { handle, platform } },
-      })
-
-      if (existing) {
-        influencerId = existing.id
-      } else {
-        const created = await prisma.influencer.create({
-          data: {
-            handle,
-            platform,
-            full_name:         body.full_name         ?? null,
-            email:             body.email             ?? null,
-            gender:            body.gender            ?? null,
-            niche:             body.niche             ?? null,
-            location:          body.location          ?? null,
-            bio:               body.bio               ?? null,
-            profile_image_url: body.profile_image_url ?? null,
-            social_link:       body.social_link       ?? null,
-            follower_count:    body.follower_count     ?? 0,
-            engagement_rate:   body.engagement_rate    ?? 0,
-            avg_likes:         body.avg_likes          ?? 0,
-            avg_comments:      body.avg_comments       ?? 0,
-            avg_views:         body.avg_views          ?? 0,
-          },
-        })
-        influencerId = created.id
-      }
+    if (!influencer) {
+      return NextResponse.json(
+        { error: "Influencer not found" },
+        { status: 404 }
+      )
     }
 
     // ── Check for duplicate brand-influencer link ────────────────────────
@@ -164,6 +140,15 @@ export async function POST(
         brand_influencer_id: bi.id,
       },
     })
+
+    const goAffProProvision = await provisionGoAffProAffiliate({
+      brandId,
+      brandInfluencerId: bi.id,
+    })
+
+    if (!goAffProProvision.success && !goAffProProvision.skipped) {
+      console.error("GoAffPro provisioning failed:", goAffProProvision.reason)
+    }
 
     const brandInfluencer = await prisma.brandInfluencer.findUniqueOrThrow({
       where: { id: bi.id },

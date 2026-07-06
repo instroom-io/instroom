@@ -155,6 +155,9 @@ export async function PUT(
 
     return NextResponse.json({ success: true })
   } catch (err: any) {
+    if (err?.code === "P2025") {
+      return NextResponse.json({ error: "Not found", code: err.code }, { status: 404 })
+    }
     console.error("PUT /influencers/[id]:", err?.code, err?.message)
     return NextResponse.json(
       { error: err?.message ?? "error", code: err?.code },
