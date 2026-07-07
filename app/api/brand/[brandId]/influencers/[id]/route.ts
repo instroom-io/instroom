@@ -32,7 +32,7 @@ export async function PUT(
     // Snapshot BEFORE state for change tracking
     const before = await prisma.brandInfluencer.findUnique({
       where: { brand_id_influencer_id: { brand_id: brandId, influencer_id: id } },
-      select: { contact_status: true, stage: true, approval_status: true },
+      select: { id: true, contact_status: true, stage: true, approval_status: true },
     })
 
     const inf: any = {}
@@ -94,6 +94,19 @@ export async function PUT(
     const userId = session.user.id
     const logs: Promise<void>[] = []
 
+    if (before && Object.keys(inf).length > 0) {
+      logs.push(
+        logActivity({
+          brandId,
+          userId,
+          action: "influencer.updated",
+          entityType: "brand_influencer",
+          entityId: before.id,
+          details: { fields: Object.keys(inf) },
+        })
+      )
+    }
+
     if (before && bi.stage !== undefined && bi.stage !== before.stage) {
       logs.push(
         logActivity({
@@ -101,7 +114,7 @@ export async function PUT(
           userId,
           action: "pipeline.stage_changed",
           entityType: "brand_influencer",
-          entityId: id,
+          entityId: before.id,
           details: { from: before.stage, to: bi.stage },
         })
       )
@@ -118,7 +131,7 @@ export async function PUT(
           userId,
           action: "pipeline.status_changed",
           entityType: "brand_influencer",
-          entityId: id,
+          entityId: before.id,
           details: {
             from: before.contact_status,
             to: bi.contact_status,
@@ -141,7 +154,7 @@ export async function PUT(
           userId,
           action: "influencer.approval_changed",
           entityType: "brand_influencer",
-          entityId: id,
+          entityId: before.id,
           details: {
             from: before.approval_status,
             to: bi.approval_status,
