@@ -293,7 +293,7 @@ const getNextStages = (currentStatus: string): string[] => {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const MONTHS = ["Nov", "Dec", "Jan", "Feb", "Mar", "Apr"]
 
-function influencerToPartner(inf: PipelineInfluencer): Partner {
+function influencerToPartner(inf: PipelineInfluencer, brandId?: string): Partner {
   const nameParts = inf.influencer?.split(" ") || [""]
   const firstName = nameParts[0] || inf.handle?.slice(0, 6) || ""
   const lastName  = nameParts.slice(1).join(" ") || ""
@@ -337,6 +337,9 @@ function influencerToPartner(inf: PipelineInfluencer): Partner {
     hRev:         0,
     hCVR:         0,
     hPosts:       0,
+    email:              inf.email || null,
+    brandId:            brandId,
+    brandInfluencerId:  inf.id,
   }
 }
 
@@ -969,7 +972,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   }
 
   const openSidebar = (inf: PipelineInfluencer) => {
-    setSelectedPartner(influencerToPartner(inf))
+    setSelectedPartner(influencerToPartner(inf, brandId))
     setSidebarOpen(true)
   }
 
