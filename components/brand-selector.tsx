@@ -237,18 +237,6 @@ export function BrandSelector() {
     return <div className="h-8 w-36 animate-pulse rounded-lg bg-gray-100" />
   }
 
-  if (brands.length === 0) {
-    return (
-      <button
-        onClick={() => router.push("/dashboard/brand/create")}
-        className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors"
-      >
-        <Plus className="h-4 w-4 text-gray-500" />
-        <span className="text-sm text-gray-700 font-medium">Create Workspace</span>
-      </button>
-    )
-  }
-
   const currentBrand = brands.find((b) => b.id === selectedBrandId)
   const getInitials = (name: string) => name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2)
   const ownedBrands = brands.filter((b) => b.isOwner)
@@ -451,22 +439,31 @@ export function BrandSelector() {
         onClick={handleToggleDropdown}
         className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors"
       >
-        {currentBrand?.logo_url ? (
-          <img
-            src={currentBrand.logo_url}
-            alt={currentBrand.name}
-            className="h-6 w-6 rounded-md flex-shrink-0 object-cover"
-          />
+        {brands.length === 0 ? (
+          <>
+            <Plus className="h-4 w-4 text-gray-500" />
+            <span className="text-sm text-gray-700 font-medium">Create Workspace</span>
+          </>
         ) : (
-          <Avatar className="h-6 w-6 rounded-md flex-shrink-0">
-            <AvatarFallback className="rounded-md text-[10px] font-bold bg-[#0F6B3E] text-white">
-              {getInitials(currentBrand?.name || "")}
-            </AvatarFallback>
-          </Avatar>
+          <>
+            {currentBrand?.logo_url ? (
+              <img
+                src={currentBrand.logo_url}
+                alt={currentBrand.name}
+                className="h-6 w-6 rounded-md flex-shrink-0 object-cover"
+              />
+            ) : (
+              <Avatar className="h-6 w-6 rounded-md flex-shrink-0">
+                <AvatarFallback className="rounded-md text-[10px] font-bold bg-[#0F6B3E] text-white">
+                  {getInitials(currentBrand?.name || "")}
+                </AvatarFallback>
+              </Avatar>
+            )}
+            <span className="text-sm font-medium text-gray-800 max-w-[120px] truncate">
+              {currentBrand?.name}
+            </span>
+          </>
         )}
-        <span className="text-sm font-medium text-gray-800 max-w-[120px] truncate">
-          {currentBrand?.name}
-        </span>
         <ChevronDown
           className={`h-3.5 w-3.5 text-gray-400 flex-shrink-0 transition-transform ${dropdownOpen ? "rotate-180" : ""}`}
         />

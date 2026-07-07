@@ -159,6 +159,15 @@ export async function GET(
         updated_at:      true,
         created_at:      true,
 
+        // GoAffPro affiliate data
+        affiliate_id:    true,
+        ref_code:        true,
+        coupon:          true,
+        affiliate_link:  true,
+        clicks:          true,
+        sales_count:     true,
+        gmv:             true,
+
         // Influencer — only the fields the card + list view renders
         influencer: {
           select: {
@@ -173,6 +182,9 @@ export async function GET(
             bio:               true,
             follower_count:    true,
             engagement_rate:   true,
+            avg_likes:         true,
+            avg_comments:      true,
+            avg_views:         true,
           },
         },
 
@@ -243,6 +255,9 @@ export async function GET(
           engagementRate: inf.engagement_rate
             ? `${Number(inf.engagement_rate).toFixed(1)}%`
             : "0%",
+          avgLikes:    inf.avg_likes,
+          avgComments: inf.avg_comments,
+          avgViews:    inf.avg_views,
 
           niche:           inf.niche             || "",
           location:        inf.location          || "",
@@ -273,6 +288,14 @@ export async function GET(
           internalRating:  bi.internal_rating ? Number(bi.internal_rating)     : null,
           lastContact:     bi.updated_at.toISOString(),
           createdAt:       bi.created_at.toISOString(),
+
+          affiliateId:     bi.affiliate_id,
+          refCode:         bi.ref_code,
+          coupon:          bi.coupon,
+          affiliateLink:   bi.affiliate_link,
+          clicks:          bi.clicks,
+          salesCount:      bi.sales_count,
+          gmv:             bi.gmv ? Number(bi.gmv) : 0,
         }
       })
 

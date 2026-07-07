@@ -24,6 +24,14 @@ export interface BrandPartnerRecord {
   brand_id: string
   influencer_id: string
   brand_influencer_id: string
+  affiliate_id?: string | null
+  ref_code?: string | null
+  coupon?: string | null
+  affiliate_link?: string | null
+  goaffpro_affiliate_id?: string | null
+  goaffpro_ref_code?: string | null
+  goaffpro_coupon?: string | null
+  goaffpro_link?: string | null
   on_retainer: boolean
   retainer_fee: number
   default_commission: number
@@ -65,6 +73,13 @@ export interface BrandInfluencerRecord {
   internal_rating: number | null
   approval_status: string | null
   approval_notes: string | null
+  affiliate_id: string | null
+  ref_code: string | null
+  coupon: string | null
+  affiliate_link: string | null
+  clicks: number
+  sales_count: number
+  gmv: number
   created_at: string
   updated_at: string
   influencer: InfluencerRecord

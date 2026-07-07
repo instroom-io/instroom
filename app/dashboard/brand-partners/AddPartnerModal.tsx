@@ -179,25 +179,31 @@ export default function AddPartnerModal({ isOpen, onClose, brandId, onAdded }: A
           body: JSON.stringify({
             handle: handle.trim(), platform: platform.toLowerCase(),
             email: email || null, niche: niche || null,
-            location: location || null, notes: notes || null, brandId,
+            location: location || null, notes: notes || null,
           }),
         })
         const json = await res.json()
 
         if (res.status === 403) { setErrMsg(json.error || "Influencer limit reached."); setSaving(false); return }
 
-        if (res.status === 409 && json.id) {
-          const link = await fetch(`/api/brands/${brandId}/partners`, {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ influencer_id: json.id, notes: notes || null }),
-          })
-          const linkJson = await link.json()
-          if (!link.ok && link.status !== 409) {
-            setErrMsg(linkJson.error || "Failed to link influencer.")
-            setSaving(false); return
-          }
-        } else if (!res.ok) {
+        if (!res.ok) {
           setErrMsg(json.error || `Error ${res.status}`)
+          setSaving(false); return
+        }
+
+        if (!json.id) {
+          setErrMsg("Influencer was created, but no influencer id was returned.")
+          setSaving(false)
+          return
+        }
+
+        const link = await fetch(`/api/brands/${brandId}/partners`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ influencer_id: json.id, notes: notes || null }),
+        })
+        const linkJson = await link.json()
+        if (!link.ok && link.status !== 409) {
+          setErrMsg(linkJson.error || "Failed to add brand partner.")
           setSaving(false); return
         }
       }

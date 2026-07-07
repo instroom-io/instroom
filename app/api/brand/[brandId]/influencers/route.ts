@@ -3,6 +3,7 @@ import { canAddInfluencer } from "@/lib/subscription-limits"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { logActivity } from "@/lib/activity-log"
+import { provisionGoAffProAffiliate } from "@/lib/goaffpro-provision"
 import { NextRequest, NextResponse } from "next/server"
 
 export async function GET(
@@ -138,6 +139,15 @@ export async function GET(
     const combined = filteredBrandInfluencers
       .filter((bi) => influencerMap.has(bi.influencer_id))
       .map((bi) => {
+        const affiliateBi = bi as typeof bi & {
+          affiliate_id?: string | null
+          ref_code?: string | null
+          coupon?: string | null
+          affiliate_link?: string | null
+          clicks?: number
+          sales_count?: number
+          gmv?: unknown
+        }
         const inf = influencerMap.get(bi.influencer_id)!
         const addedLog = addedByMap.get(bi.id)
         const addedUser = addedLog ? userMap.get(addedLog.user_id) : null
@@ -170,6 +180,13 @@ export async function GET(
           approval_status: bi.approval_status,
           approval_notes: bi.approval_notes,
           transferred_date: bi.transferred_date?.toISOString() ?? null,
+          affiliate_id: affiliateBi.affiliate_id,
+          ref_code: affiliateBi.ref_code,
+          coupon: affiliateBi.coupon,
+          affiliate_link: affiliateBi.affiliate_link,
+          clicks: affiliateBi.clicks,
+          sales_count: affiliateBi.sales_count,
+          gmv: affiliateBi.gmv ? Number(affiliateBi.gmv) : 0,
           created_at: bi.created_at.toISOString(),
           updated_at: bi.updated_at.toISOString(),
           added_by: addedUser
@@ -264,6 +281,25 @@ export async function POST(
       include: { influencer: true },
     })
 
+    const affiliateBrandInfluencer = brandInfluencer as typeof brandInfluencer & {
+      affiliate_id?: string | null
+      ref_code?: string | null
+      coupon?: string | null
+      affiliate_link?: string | null
+      clicks?: number
+      sales_count?: number
+      gmv?: unknown
+    }
+
+    const goAffProProvision = await provisionGoAffProAffiliate({
+      brandId,
+      brandInfluencerId: brandInfluencer.id,
+    })
+
+    if (!goAffProProvision.success && !goAffProProvision.skipped) {
+      console.error("GoAffPro provisioning failed:", goAffProProvision.reason)
+    }
+
     logActivity({
       brandId,
       userId: session.user.id,
@@ -277,7 +313,12 @@ export async function POST(
       },
     }).catch(console.error)
 
-    return NextResponse.json({ influencer: brandInfluencer }, { status: 201 })
+    return NextResponse.json({
+      influencer: {
+        ...affiliateBrandInfluencer,
+        gmv: affiliateBrandInfluencer.gmv ? Number(affiliateBrandInfluencer.gmv) : 0,
+      },
+    }, { status: 201 })
   } catch (error) {
     return NextResponse.json(
       {
