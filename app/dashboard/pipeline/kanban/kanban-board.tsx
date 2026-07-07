@@ -299,8 +299,6 @@ function influencerToPartner(inf: PipelineInfluencer, brandId?: string): Partner
   const lastName  = nameParts.slice(1).join(" ") || ""
   return {
     id:           inf.id as any,
-    brandId,
-    brandInfluencerId: inf.influencerId,
     handle:       inf.handle || "",
     firstName,
     lastName,
