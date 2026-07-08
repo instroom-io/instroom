@@ -233,4 +233,6 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
     // Public refetch (e.g. retry button) — no spinner so board stays visible
     refetch: () => fetchData(false),
   }
+  
 }
+

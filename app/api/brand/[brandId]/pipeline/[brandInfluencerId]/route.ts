@@ -18,6 +18,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
+import { logActivity } from "@/lib/activity-log"
 import { sendNotification } from "@/lib/notifications"
 import type { NotifType } from "@/emails/notification"
 
@@ -93,6 +94,12 @@ export async function PATCH(
     // ── Compute DB fields from pipeline status ───────────────────────────────
     const fields = pipelineStatusToFields(pipelineStatus)
 
+    // ── Snapshot BEFORE state so the change can be logged ────────────────────
+    const before = await prisma.brandInfluencer.findUnique({
+      where: { id: brandInfluencerId, brand_id: brandId },
+      select: { contact_status: true },
+    })
+
     // ── Update — select only what we send back ────────────────────────────────
     const updated = await prisma.brandInfluencer.update({
       where: {
@@ -117,6 +124,23 @@ export async function PATCH(
         approval_status: true,
       },
     })
+
+    // ── Log activity (non-blocking) ─────────────────────────────────────────
+    if (before && before.contact_status !== fields.contact_status) {
+      logActivity({
+        brandId,
+        userId: session.user.id,
+        action: "pipeline.status_changed",
+        entityType: "brand_influencer",
+        entityId: brandInfluencerId,
+        details: {
+          from: before.contact_status,
+          to: fields.contact_status,
+          ...(pipelineStatus === "Not Interested" && niReason ? { ni_reason: niReason } : {}),
+        },
+      }).catch(console.error)
+    }
+
     // ── Send notification ───────────────────────────────────────────────────
     // Non-blocking: notify all brand members in background
     try {

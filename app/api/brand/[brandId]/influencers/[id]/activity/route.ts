@@ -8,6 +8,7 @@ const ACTION_LABELS: Record<string, string> = {
   "influencer.removed":          "Removed influencer",
   "influencer.submitted":        "Submitted for approval",
   "influencer.approval_changed": "Changed approval status",
+  "influencer.updated":          "Updated influencer info",
   "pipeline.stage_changed":      "Moved pipeline stage",
   "pipeline.status_changed":     "Updated contact status",
   "posttracker.stage_changed":   "Updated post tracker stage",
@@ -40,6 +41,9 @@ export async function GET(
       return NextResponse.json({ error: "Access denied" }, { status: 403 })
     }
 
+    const limitParam = new URL(req.url).searchParams.get("limit")
+    const limit = limitParam ? Math.max(1, parseInt(limitParam, 10) || 0) : undefined
+
     // Fetch logs without include to avoid any Prisma type issues
     const logs = await prisma.activityLog.findMany({
       where: {
@@ -48,6 +52,7 @@ export async function GET(
         entity_id: id,
       },
       orderBy: { created_at: "desc" },
+      ...(limit ? { take: limit } : {}),
       select: {
         id: true,
         action: true,
