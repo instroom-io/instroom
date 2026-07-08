@@ -1,651 +1,445 @@
 "use client"
 
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 import Image from "next/image"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { MainHeader } from "@/components/shared/main-header"
 
+const SECTIONS = ["pipeline", "email", "crm", "reporting", "brand-partners"]
+
+const NAV_LINKS: { id: string; label: string }[] = [
+  { id: "pipeline", label: "Pipeline" },
+  { id: "email", label: "Email" },
+  { id: "crm", label: "Creator CRM" },
+  { id: "reporting", label: "Reporting" },
+  { id: "brand-partners", label: "Brand Partners" },
+]
+
 export default function FeaturesPage() {
+  const [activeSection, setActiveSection] = useState<string>("")
+
   useEffect(() => {
-    const hash = window.location.hash.replace('#', '')
+    const header = document.querySelector<HTMLElement>(".nav")
+    const syncHeaderHeight = () => {
+      if (header) {
+        document.documentElement.style.setProperty("--header-h", `${header.offsetHeight}px`)
+      }
+    }
+    syncHeaderHeight()
+    window.addEventListener("resize", syncHeaderHeight)
+    return () => window.removeEventListener("resize", syncHeaderHeight)
+  }, [])
+
+  useEffect(() => {
+    const hash = window.location.hash.replace("#", "")
     if (hash) {
       setTimeout(() => {
         const target = document.getElementById(hash)
         if (target) {
-          target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          target.scrollIntoView({ behavior: "smooth", block: "start" })
         }
-        // Highlight the matching jump nav link
-        document.querySelectorAll('.jumpnav a').forEach(a => {
-          a.classList.remove('jumpnav-active')
-          if ((a as HTMLAnchorElement).getAttribute('href') === `#${hash}`) {
-            a.classList.add('jumpnav-active')
-          }
-        })
+        setActiveSection(hash)
       }, 100)
     }
 
     // Keep jump nav in sync while scrolling
-    const sections = ['pipeline', 'email', 'crm', 'reporting', 'brand-partners']
     const onScroll = () => {
-      let current = ''
-      sections.forEach(id => {
+      let current = ""
+      SECTIONS.forEach((id) => {
         const el = document.getElementById(id)
         if (el && window.scrollY >= el.offsetTop - 180) current = id
       })
-      document.querySelectorAll('.jumpnav a').forEach(a => {
-        a.classList.toggle('jumpnav-active', (a as HTMLAnchorElement).getAttribute('href') === `#${current}`)
-      })
+      setActiveSection(current)
     }
-    window.addEventListener('scroll', onScroll, { passive: true })
-    return () => window.removeEventListener('scroll', onScroll)
+    window.addEventListener("scroll", onScroll, { passive: true })
+    return () => window.removeEventListener("scroll", onScroll)
   }, [])
+
   return (
-    <div className="features-page">
-      <style jsx>{`
-        @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap');
-
-        /* ── Design tokens (hardcoded — no var() to avoid scoping issues) ── */
-
-        .features-page {
-          background: white;
-          color: #1E1E1E;
-          font-family: 'Inter', system-ui, -apple-system, sans-serif;
-        }
-
-        /* ── Container ── */
-        .container {
-          max-width: 1140px;
-          margin: 0 auto;
-          padding: 0 24px;
-        }
-
-        /* ── Page Hero ── */
-        .page-hero {
-          padding: 96px 0 72px;
-          text-align: center;
-          background: #F4F7F5;
-          background-image: radial-gradient(circle, rgba(31,174,91,0.12) 1px, transparent 1px);
-          background-size: 28px 28px;
-        }
-
-        .eyebrow {
-          font-size: 0.75rem;
-          font-weight: 700;
-          text-transform: uppercase;
-          letter-spacing: 0.12em;
-          color: #1FAE5B;
-          margin-bottom: 16px;
-          display: block;
-        }
-
-        .page-hero h1 {
-          max-width: 800px;
-          margin: 0 auto 20px;
-          font-family: 'Manrope', sans-serif;
-          font-size: clamp(2.25rem, 5vw, 3.5rem);
-          font-weight: 800;
-          line-height: 1.12;
-          letter-spacing: -0.02em;
-          color: #1E1E1E;
-        }
-
-        .page-hero .lead {
-          max-width: 620px;
-          margin: 0 auto;
-          font-size: 1.125rem;
-          color: #52525b;
-          line-height: 1.65;
-        }
-
-        /* ── Jump nav ── */
-        .jumpnav {
-          position: sticky;
-          top: 65px;
-          z-index: 50;
-          background: rgba(255,255,255,0.95);
-          backdrop-filter: blur(8px);
-          border-bottom: 1px solid rgba(30,30,30,0.09);
-          padding: 0;
-        }
-
-        .jumpnav-inner {
-          display: flex;
-          justify-content: center;
-          align-items: center;
-          gap: 4px;
-          max-width: 1140px;
-          margin: 0 auto;
-          padding: 0 24px;
-          overflow-x: auto;
-        }
-
-        .jumpnav a {
-          color: #52525b;
-          font-size: 0.875rem;
-          font-weight: 500;
-          text-decoration: none;
-          padding: 14px 16px;
-          border-bottom: 2px solid transparent;
-          transition: color 0.15s, border-color 0.15s;
-          white-space: nowrap;
-        }
-
-        .jumpnav a:hover {
-          color: #1FAE5B;
-          border-bottom-color: #1FAE5B;
-        }
-
-        .jumpnav-active {
-          color: #1FAE5B !important;
-          border-bottom-color: #1FAE5B !important;
-        }
-
-        /* ── Feature sections — alternating backgrounds ── */
-
-        /* Odd features (1, 3, 5): white bg */
-        .feat-odd {
-          padding: 96px 0;
-          scroll-margin-top: 140px;
-          background: #ffffff;
-          border-bottom: 1px solid rgba(30,30,30,0.07);
-        }
-
-        /* Even features (2, 4): light green-tinted bg */
-        .feat-even {
-          padding: 96px 0;
-          scroll-margin-top: 140px;
-          background: #F4F7F5;
-          border-bottom: 1px solid rgba(30,30,30,0.07);
-        }
-
-        .feat-grid {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 72px;
-          align-items: center;
-        }
-
-        /* Reversed layout for even features */
-        .feat-grid.reversed {
-          direction: rtl;
-        }
-
-        .feat-grid.reversed > * {
-          direction: ltr;
-        }
-
-        /* Feature label (e.g. "Feature 01 — Pipeline") */
-        .feat-label {
-          font-size: 0.6875rem;
-          font-weight: 700;
-          text-transform: uppercase;
-          letter-spacing: 0.14em;
-          color: #1FAE5B;
-          margin-bottom: 14px;
-          display: flex;
-          align-items: center;
-          gap: 8px;
-        }
-
-        .feat-label-num {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          width: 22px;
-          height: 22px;
-          border-radius: 50%;
-          background: rgba(31,174,91,0.12);
-          color: #0F6B3E;
-          font-size: 0.625rem;
-          font-weight: 800;
-          flex-shrink: 0;
-        }
-
-        .feat-text h2 {
-          font-family: 'Manrope', sans-serif;
-          font-size: clamp(1.625rem, 3vw, 2.125rem);
-          font-weight: 700;
-          line-height: 1.2;
-          color: #1E1E1E;
-          margin-bottom: 16px;
-        }
-
-        .feat-lead {
-          font-size: 1.0625rem;
-          color: #3f3f46;
-          line-height: 1.68;
-          margin-bottom: 28px;
-          font-weight: 500;
-        }
-
-        .feat-body p {
-          color: #52525b;
-          margin-bottom: 16px;
-          line-height: 1.72;
-          font-size: 0.9375rem;
-        }
-
-        .feat-bullets {
-          list-style: none;
-          padding: 0;
-          margin: 20px 0 0;
-        }
-
-        .feat-bullets li {
-          display: flex;
-          align-items: flex-start;
-          gap: 10px;
-          margin-bottom: 10px;
-          color: #3f3f46;
-          font-size: 0.9375rem;
-          line-height: 1.55;
-        }
-
-        .feat-bullets li::before {
-          content: "✓";
-          color: #1FAE5B;
-          font-weight: 700;
-          flex-shrink: 0;
-          margin-top: 1px;
-        }
-
-        /* ── Feature visual placeholder ── */
-        .feat-visual {
-          border-radius: 20px;
-          aspect-ratio: 4 / 3;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          gap: 12px;
-          padding: 32px;
-          overflow: hidden;
-          position: relative;
-        }
-
-        /* Odd sections: subtle green gradient visual */
-        .feat-visual-light {
-          background: linear-gradient(135deg, #EDF5F0 0%, #D4EDDF 100%);
-          border: 1px solid rgba(31,174,91,0.15);
-          box-shadow: 0 8px 40px rgba(15,107,62,0.07);
-        }
-
-        /* Even sections: crisp white visual */
-        .feat-visual-white {
-          background: linear-gradient(135deg, #ffffff 0%, #F4F7F5 100%);
-          border: 1px solid rgba(30,30,30,0.09);
-          box-shadow: 0 8px 40px rgba(0,0,0,0.05);
-        }
-
-        .feat-visual-icon {
-          width: 72px;
-          height: 72px;
-          border-radius: 18px;
-          background: #1FAE5B;
-          color: white;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 2rem;
-          box-shadow: 0 8px 20px rgba(31,174,91,0.3);
-        }
-
-        .feat-visual-label {
-          font-size: 0.8125rem;
-          color: #71717a;
-          font-weight: 500;
-          text-transform: uppercase;
-          letter-spacing: 0.08em;
-          margin-top: 8px;
-        }
-
-        /* ── Final CTA ── */
-        .final-cta {
-          background: #1E1E1E;
-          color: white;
-          text-align: center;
-          padding: 96px 0;
-          position: relative;
-          overflow: hidden;
-        }
-
-        .final-cta::before {
-          content: '';
-          position: absolute;
-          inset: 0;
-          background: radial-gradient(ellipse 60% 60% at 50% 50%, rgba(31,174,91,0.12) 0%, transparent 70%);
-          pointer-events: none;
-        }
-
-        .final-cta-inner {
-          position: relative;
-          z-index: 1;
-        }
-
-        .final-cta h2 {
-          font-family: 'Manrope', sans-serif;
-          font-weight: 700;
-          font-size: clamp(2rem, 4vw, 2.875rem);
-          color: white;
-          max-width: 640px;
-          margin: 0 auto 16px;
-          line-height: 1.2;
-        }
-
-        .final-cta-lead {
-          font-size: 1.0625rem;
-          color: rgba(255,255,255,0.75);
-          margin-bottom: 36px;
-        }
-
-        .final-cta-ctas {
-          display: flex;
-          gap: 12px;
-          justify-content: center;
-          flex-wrap: wrap;
-        }
-
-        .final-cta-sub {
-          margin-top: 20px;
-          font-size: 0.8125rem;
-          color: rgba(255,255,255,0.5);
-        }
-
-        /* ── Footer — matches landing page exactly ── */
-        .footer {
-          background: #111;
-          color: rgba(255,255,255,0.65);
-          padding: 56px 0 32px;
-          font-size: 0.875rem;
-        }
-
-        .footer-inner {
-          display: grid;
-          grid-template-columns: 2fr 1fr 1fr 1fr;
-          gap: 40px;
-          margin-bottom: 40px;
-          max-width: 1140px;
-          margin-left: auto;
-          margin-right: auto;
-          padding: 0 24px;
-        }
-
-        .footer h4 {
-          color: white;
-          font-size: 0.75rem;
-          text-transform: uppercase;
-          letter-spacing: 0.1em;
-          margin-bottom: 16px;
-          font-family: 'Manrope', sans-serif;
-          font-weight: 700;
-        }
-
-        .footer ul {
-          list-style: none;
-          margin: 0;
-          padding: 0;
-        }
-
-        .footer li { margin-bottom: 10px; }
-
-        .footer a {
-          color: rgba(255,255,255,0.6);
-          text-decoration: none;
-          transition: color 0.15s;
-        }
-
-        .footer a:hover { color: white; }
-
-        .footer-brand-desc {
-          color: rgba(255,255,255,0.55);
-          max-width: 260px;
-          font-size: 0.875rem;
-          line-height: 1.65;
-          margin-top: 12px;
-        }
-
-        .footer-bottom {
-          border-top: 1px solid rgba(255,255,255,0.08);
-          display: flex;
-          justify-content: space-between;
-          font-size: 0.8125rem;
-          color: rgba(255,255,255,0.4);
-          flex-wrap: wrap;
-          gap: 12px;
-          max-width: 1140px;
-          margin: 0 auto;
-          padding: 24px 24px 0;
-        }
-
-        .footer-legal {
-          display: flex;
-          gap: 24px;
-        }
-
-        .footer-legal a {
-          color: rgba(255,255,255,0.5);
-          text-decoration: none;
-        }
-
-        .footer-legal a:hover { color: white; }
-
-        /* ── Responsive ── */
-        @media (max-width: 900px) {
-          .feat-grid,
-          .feat-grid.reversed {
-            grid-template-columns: 1fr;
-            gap: 40px;
-            direction: ltr;
-          }
-
-          .footer-inner {
-            grid-template-columns: 1fr 1fr;
-          }
-        }
-
-        @media (max-width: 640px) {
-          .footer-inner { grid-template-columns: 1fr; }
-          .page-hero { padding: 64px 0 48px; }
-        }
+    <div className="bg-white text-[#1E1E1E] font-[Inter,system-ui,-apple-system,sans-serif]">
+      {/* Only Tailwind can't do font @imports, so this stays */}
+      <style jsx global>{`
+        @import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap");
       `}</style>
 
       {/* NAV */}
       <MainHeader />
 
       {/* PAGE HERO */}
-      <section className="page-hero">
-        <div className="container">
-          <p className="eyebrow">What's Inside</p>
-          <h1>Five tools that replace the stack.</h1>
-          <p className="lead">Pipeline management, embedded email, creator CRM, reporting, and Brand Partners. One workspace, built for how you actually run campaigns.</p>
+      <section
+        className="pt-24 pb-12 text-center bg-[#F4F7F5]"
+        style={{
+          backgroundImage: "radial-gradient(circle, rgba(31,174,91,0.12) 1px, transparent 1px)",
+          backgroundSize: "28px 28px",
+        }}
+      >
+        <div className="max-w-[1140px] mx-auto px-6">
+          <p className="text-xs font-bold uppercase tracking-[0.12em] text-[#1FAE5B] mb-4">
+            What&apos;s Inside
+          </p>
+          <h1 className="max-w-[800px] mx-auto mb-5 font-[Manrope,sans-serif] text-[clamp(2.25rem,5vw,3.5rem)] font-extrabold leading-[1.12] tracking-[-0.02em] text-[#1E1E1E]">
+            Five tools that replace the stack.
+          </h1>
+          <p className="max-w-[620px] mx-auto text-lg text-[#52525b] leading-relaxed">
+            Pipeline management, embedded email, creator CRM, reporting, and Brand Partners. One
+            workspace, built for how you actually run campaigns.
+          </p>
         </div>
       </section>
 
       {/* JUMP NAV */}
-      <div className="jumpnav">
-        <div className="jumpnav-inner">
-          <a href="#pipeline">Pipeline</a>
-          <a href="#email">Email</a>
-          <a href="#crm">Creator CRM</a>
-          <a href="#reporting">Reporting</a>
-          <a href="#brand-partners">Brand Partners</a>
+      <div
+        className="jumpnav sticky z-50 bg-white/95 backdrop-blur-sm border-b border-black/[0.09]"
+        style={{ top: "var(--header-h, 65px)" }}
+      >
+        <div className="flex justify-center items-center gap-1 max-w-[1140px] mx-auto px-6 overflow-x-auto">
+          {NAV_LINKS.map((link) => (
+            <a
+              key={link.id}
+              href={`#${link.id}`}
+              className={`text-sm font-medium no-underline px-4 py-3.5 border-b-2 whitespace-nowrap transition-colors ${
+                activeSection === link.id
+                  ? "text-[#1FAE5B] border-[#1FAE5B]"
+                  : "text-[#52525b] border-transparent hover:text-[#1FAE5B] hover:border-[#1FAE5B]"
+              }`}
+            >
+              {link.label}
+            </a>
+          ))}
         </div>
       </div>
 
       {/* FEATURE 1: PIPELINE — white bg, visual on right */}
-      <section className="feat-odd" id="pipeline">
-        <div className="container">
-          <div className="feat-grid">
-            <div className="feat-text">
-              <p className="feat-label">
-                <span className="feat-label-num">01</span>
+      <section className="py-24 scroll-mt-[140px] bg-white border-b border-black/[0.07]" id="pipeline">
+        <div className="max-w-[1140px] mx-auto px-6">
+          <div className="grid grid-cols-1 min-[901px]:grid-cols-2 gap-10 min-[901px]:gap-[72px] items-center">
+            <div>
+              <p className="flex items-center gap-2 text-[0.6875rem] font-bold uppercase tracking-[0.14em] text-[#1FAE5B] mb-3.5">
+                <span className="inline-flex items-center justify-center w-[22px] h-[22px] rounded-full bg-[#1FAE5B]/[0.12] text-[#0F6B3E] text-[0.625rem] font-extrabold shrink-0">
+                  01
+                </span>
                 Pipeline Management
               </p>
-              <h2>Work the way you want. List, board, or both.</h2>
-              <p className="feat-lead">The same data in two views. See everything at a glance in a Kanban board, or scan fast in a spreadsheet view. Switch between them in a single click.</p>
-              <div className="feat-body">
-                <p>Every campaign comes with pre-built pipeline stages: prospect, reached out, negotiating, confirmed, posted, paid. Customize them or use them as-is. No more setting up a new tracker for every campaign.</p>
-                <p>The list view feels exactly like the spreadsheet you already love, because it works. The board view gives you the visual read on where things stand. Same data, same updates, two perspectives.</p>
-                <ul className="feat-bullets">
-                  <li>Pre-built pipeline stages per campaign type</li>
-                  <li>Switch between List and Kanban with one click</li>
-                  <li>Drag and drop creators between stages</li>
-                  <li>Custom fields for deliverables, fees, deadlines</li>
-                  <li>Bulk actions: update, assign, or move in one move</li>
+              <h2 className="font-[Manrope,sans-serif] text-[clamp(1.625rem,3vw,2.125rem)] font-bold leading-tight text-[#1E1E1E] mb-4">
+                Work the way you want. List, board, or both.
+              </h2>
+              <p className="text-[1.0625rem] font-medium text-[#3f3f46] leading-[1.68] mb-7">
+                The same data in two views. See everything at a glance in a Kanban board, or scan
+                fast in a spreadsheet view. Switch between them in a single click.
+              </p>
+              <div>
+                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem]">
+                  Every campaign comes with pre-built pipeline stages: prospect, reached out,
+                  negotiating, confirmed, posted, paid. Customize them or use them as-is. No more
+                  setting up a new tracker for every campaign.
+                </p>
+                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem]">
+                  The list view feels exactly like the spreadsheet you already love, because it
+                  works. The board view gives you the visual read on where things stand. Same
+                  data, same updates, two perspectives.
+                </p>
+                <ul className="list-none p-0 mt-5">
+                  {[
+                    "Pre-built pipeline stages per campaign type",
+                    "Switch between List and Kanban with one click",
+                    "Drag and drop creators between stages",
+                    "Custom fields for deliverables, fees, deadlines",
+                    "Bulk actions: update, assign, or move in one move",
+                  ].map((item) => (
+                    <li
+                      key={item}
+                      className="flex items-start gap-2.5 mb-2.5 text-[#3f3f46] text-[0.9375rem] leading-[1.55]"
+                    >
+                      <span className="text-[#1FAE5B] font-bold shrink-0 mt-px">✓</span>
+                      {item}
+                    </li>
+                  ))}
                 </ul>
               </div>
             </div>
-            <div className="feat-visual feat-visual-light">
-              <div className="feat-visual-icon">📊</div>
-              <p className="feat-visual-label">Pipeline Preview</p>
+            <div className="rounded-[20px] aspect-[4/3] flex flex-col items-center justify-center gap-3 p-8 overflow-hidden relative bg-gradient-to-br from-[#EDF5F0] to-[#D4EDDF] border border-[#1FAE5B]/[0.15] shadow-[0_8px_40px_rgba(15,107,62,0.07)]">
+              <div className="w-[72px] h-[72px] rounded-[18px] bg-[#1FAE5B] text-white flex items-center justify-center text-3xl shadow-[0_8px_20px_rgba(31,174,91,0.3)]">
+                📊
+              </div>
+              <p className="text-[0.8125rem] text-[#71717a] font-medium uppercase tracking-[0.08em] mt-2">
+                Pipeline Preview
+              </p>
             </div>
           </div>
         </div>
       </section>
 
       {/* FEATURE 2: EMAIL — tinted bg, visual on left */}
-      <section className="feat-even" id="email">
-        <div className="container">
-          <div className="feat-grid reversed">
-            <div className="feat-text">
-              <p className="feat-label">
-                <span className="feat-label-num">02</span>
+      <section className="py-24 scroll-mt-[140px] bg-[#F4F7F5] border-b border-black/[0.07]" id="email">
+        <div className="max-w-[1140px] mx-auto px-6">
+          <div className="grid grid-cols-1 min-[901px]:grid-cols-2 gap-10 min-[901px]:gap-[72px] items-center">
+            <div className="min-[901px]:order-2">
+              <p className="flex items-center gap-2 text-[0.6875rem] font-bold uppercase tracking-[0.14em] text-[#1FAE5B] mb-3.5">
+                <span className="inline-flex items-center justify-center w-[22px] h-[22px] rounded-full bg-[#1FAE5B]/[0.12] text-[#0F6B3E] text-[0.625rem] font-extrabold shrink-0">
+                  02
+                </span>
                 Embedded Email
               </p>
-              <h2>Reach out, reply, and track without leaving Instroom.</h2>
-              <p className="feat-lead">Your inbox lives inside the workspace. Every email is auto-tagged to the right campaign and pipeline stage, so context never gets lost.</p>
-              <div className="feat-body">
-                <p>When a creator responds at 11pm and your teammate picks it up at 9am, they have the full thread, the campaign, and the creator's history already loaded. No forwarding. No "wait, which one is this?" No copy-pasting into a spreadsheet after the fact.</p>
-                <p>Replies update the pipeline stage automatically. Follow-up reminders live alongside the conversation. Email templates pull creator details so every outreach feels personal without writing every word.</p>
-                <ul className="feat-bullets">
-                  <li>Connect Gmail or Outlook in one click</li>
-                  <li>Every email auto-tagged to campaign and stage</li>
-                  <li>Personalized templates with creator variables</li>
-                  <li>Follow-up reminders tied to the conversation</li>
-                  <li>Full thread history visible on every creator profile</li>
+              <h2 className="font-[Manrope,sans-serif] text-[clamp(1.625rem,3vw,2.125rem)] font-bold leading-tight text-[#1E1E1E] mb-4">
+                Reach out, reply, and track without leaving Instroom.
+              </h2>
+              <p className="text-[1.0625rem] font-medium text-[#3f3f46] leading-[1.68] mb-7">
+                Your inbox lives inside the workspace. Every email is auto-tagged to the right
+                campaign and pipeline stage, so context never gets lost.
+              </p>
+              <div>
+                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem]">
+                  When a creator responds at 11pm and your teammate picks it up at 9am, they have
+                  the full thread, the campaign, and the creator&apos;s history already loaded. No
+                  forwarding. No &quot;wait, which one is this?&quot; No copy-pasting into a
+                  spreadsheet after the fact.
+                </p>
+                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem]">
+                  Replies update the pipeline stage automatically. Follow-up reminders live
+                  alongside the conversation. Email templates pull creator details so every
+                  outreach feels personal without writing every word.
+                </p>
+                <ul className="list-none p-0 mt-5">
+                  {[
+                    "Connect Gmail or Outlook in one click",
+                    "Every email auto-tagged to campaign and stage",
+                    "Personalized templates with creator variables",
+                    "Follow-up reminders tied to the conversation",
+                    "Full thread history visible on every creator profile",
+                  ].map((item) => (
+                    <li
+                      key={item}
+                      className="flex items-start gap-2.5 mb-2.5 text-[#3f3f46] text-[0.9375rem] leading-[1.55]"
+                    >
+                      <span className="text-[#1FAE5B] font-bold shrink-0 mt-px">✓</span>
+                      {item}
+                    </li>
+                  ))}
                 </ul>
               </div>
             </div>
-            <div className="feat-visual feat-visual-white">
-              <div className="feat-visual-icon">✉️</div>
-              <p className="feat-visual-label">Email Interface</p>
+            <div className="min-[901px]:order-1 rounded-[20px] aspect-[4/3] flex flex-col items-center justify-center gap-3 p-8 overflow-hidden relative bg-gradient-to-br from-white to-[#F4F7F5] border border-black/[0.09] shadow-[0_8px_40px_rgba(0,0,0,0.05)]">
+              <div className="w-[72px] h-[72px] rounded-[18px] bg-[#1FAE5B] text-white flex items-center justify-center text-3xl shadow-[0_8px_20px_rgba(31,174,91,0.3)]">
+                ✉️
+              </div>
+              <p className="text-[0.8125rem] text-[#71717a] font-medium uppercase tracking-[0.08em] mt-2">
+                Email Interface
+              </p>
             </div>
           </div>
         </div>
       </section>
 
       {/* FEATURE 3: CREATOR CRM — white bg, visual on right */}
-      <section className="feat-odd" id="crm">
-        <div className="container">
-          <div className="feat-grid">
-            <div className="feat-text">
-              <p className="feat-label">
-                <span className="feat-label-num">03</span>
+      <section className="py-24 scroll-mt-[140px] bg-white border-b border-black/[0.07]" id="crm">
+        <div className="max-w-[1140px] mx-auto px-6">
+          <div className="grid grid-cols-1 min-[901px]:grid-cols-2 gap-10 min-[901px]:gap-[72px] items-center">
+            <div>
+              <p className="flex items-center gap-2 text-[0.6875rem] font-bold uppercase tracking-[0.14em] text-[#1FAE5B] mb-3.5">
+                <span className="inline-flex items-center justify-center w-[22px] h-[22px] rounded-full bg-[#1FAE5B]/[0.12] text-[#0F6B3E] text-[0.625rem] font-extrabold shrink-0">
+                  03
+                </span>
                 Creator CRM
               </p>
-              <h2>Profiles that remember everything.</h2>
-              <p className="feat-lead">Every campaign, every post, every payment, every conversation. When you come back to a creator six months later, the full history is waiting.</p>
-              <div className="feat-body">
-                <p>Stop rebuilding context every time you reach out. A creator's profile shows you what you've done together, what worked, and what's next. The conversation from March, the product gifting in June, the post that drove 40 sales in September — all in one place.</p>
-                <p>Tags, notes, custom fields, and a shared team view mean your whole team sees the same creator the same way. No more "wait, who was handling this relationship?"</p>
-                <ul className="feat-bullets">
-                  <li>Full campaign and content history per creator</li>
-                  <li>Payment and deal history attached to the profile</li>
-                  <li>Tags, custom fields, and internal notes</li>
-                  <li>Shared across your team with role-based access</li>
-                  <li>Quick search across your entire creator database</li>
+              <h2 className="font-[Manrope,sans-serif] text-[clamp(1.625rem,3vw,2.125rem)] font-bold leading-tight text-[#1E1E1E] mb-4">
+                Profiles that remember everything.
+              </h2>
+              <p className="text-[1.0625rem] font-medium text-[#3f3f46] leading-[1.68] mb-7">
+                Every campaign, every post, every payment, every conversation. When you come back
+                to a creator six months later, the full history is waiting.
+              </p>
+              <div>
+                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem]">
+                  Stop rebuilding context every time you reach out. A creator&apos;s profile shows
+                  you what you&apos;ve done together, what worked, and what&apos;s next. The
+                  conversation from March, the product gifting in June, the post that drove 40
+                  sales in September — all in one place.
+                </p>
+                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem]">
+                  Tags, notes, custom fields, and a shared team view mean your whole team sees the
+                  same creator the same way. No more &quot;wait, who was handling this
+                  relationship?&quot;
+                </p>
+                <ul className="list-none p-0 mt-5">
+                  {[
+                    "Full campaign and content history per creator",
+                    "Payment and deal history attached to the profile",
+                    "Tags, custom fields, and internal notes",
+                    "Shared across your team with role-based access",
+                    "Quick search across your entire creator database",
+                  ].map((item) => (
+                    <li
+                      key={item}
+                      className="flex items-start gap-2.5 mb-2.5 text-[#3f3f46] text-[0.9375rem] leading-[1.55]"
+                    >
+                      <span className="text-[#1FAE5B] font-bold shrink-0 mt-px">✓</span>
+                      {item}
+                    </li>
+                  ))}
                 </ul>
               </div>
             </div>
-            <div className="feat-visual feat-visual-light">
-              <div className="feat-visual-icon">👥</div>
-              <p className="feat-visual-label">Creator Database</p>
+            <div className="rounded-[20px] aspect-[4/3] flex flex-col items-center justify-center gap-3 p-8 overflow-hidden relative bg-gradient-to-br from-[#EDF5F0] to-[#D4EDDF] border border-[#1FAE5B]/[0.15] shadow-[0_8px_40px_rgba(15,107,62,0.07)]">
+              <div className="w-[72px] h-[72px] rounded-[18px] bg-[#1FAE5B] text-white flex items-center justify-center text-3xl shadow-[0_8px_20px_rgba(31,174,91,0.3)]">
+                👥
+              </div>
+              <p className="text-[0.8125rem] text-[#71717a] font-medium uppercase tracking-[0.08em] mt-2">
+                Creator Database
+              </p>
             </div>
           </div>
         </div>
       </section>
 
       {/* FEATURE 4: REPORTING — tinted bg, visual on left */}
-      <section className="feat-even" id="reporting">
-        <div className="container">
-          <div className="feat-grid reversed">
-            <div className="feat-text">
-              <p className="feat-label">
-                <span className="feat-label-num">04</span>
+      <section className="py-24 scroll-mt-[140px] bg-[#F4F7F5] border-b border-black/[0.07]" id="reporting">
+        <div className="max-w-[1140px] mx-auto px-6">
+          <div className="grid grid-cols-1 min-[901px]:grid-cols-2 gap-10 min-[901px]:gap-[72px] items-center">
+            <div className="min-[901px]:order-2">
+              <p className="flex items-center gap-2 text-[0.6875rem] font-bold uppercase tracking-[0.14em] text-[#1FAE5B] mb-3.5">
+                <span className="inline-flex items-center justify-center w-[22px] h-[22px] rounded-full bg-[#1FAE5B]/[0.12] text-[#0F6B3E] text-[0.625rem] font-extrabold shrink-0">
+                  04
+                </span>
                 Reporting &amp; Analytics
               </p>
-              <h2>Client-ready reports, one click away.</h2>
-              <p className="feat-lead">Stop building reports the night before a client call. Pull performance by creator, by campaign, or by deliverable. Export clean PDFs or share a live link.</p>
-              <div className="feat-body">
-                <p>The data was already in Instroom. Now it's presentable. Campaign summaries, creator performance breakdowns, spend vs. return, content posted, and engagement metrics — all in a format a client can actually read.</p>
-                <p>Share a live link that updates as the campaign progresses, or export a final PDF when everything's wrapped. Either way, you stop screenshotting and copy-pasting.</p>
-                <ul className="feat-bullets">
-                  <li>One-click campaign summary reports</li>
-                  <li>Per-creator performance breakdowns</li>
-                  <li>Live-updating shareable links</li>
-                  <li>Clean PDF exports for final deliverables</li>
-                  <li>Custom date ranges and filters</li>
+              <h2 className="font-[Manrope,sans-serif] text-[clamp(1.625rem,3vw,2.125rem)] font-bold leading-tight text-[#1E1E1E] mb-4">
+                Client-ready reports, one click away.
+              </h2>
+              <p className="text-[1.0625rem] font-medium text-[#3f3f46] leading-[1.68] mb-7">
+                Stop building reports the night before a client call. Pull performance by creator,
+                by campaign, or by deliverable. Export clean PDFs or share a live link.
+              </p>
+              <div>
+                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem]">
+                  The data was already in Instroom. Now it&apos;s presentable. Campaign summaries,
+                  creator performance breakdowns, spend vs. return, content posted, and engagement
+                  metrics — all in a format a client can actually read.
+                </p>
+                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem]">
+                  Share a live link that updates as the campaign progresses, or export a final PDF
+                  when everything&apos;s wrapped. Either way, you stop screenshotting and
+                  copy-pasting.
+                </p>
+                <ul className="list-none p-0 mt-5">
+                  {[
+                    "One-click campaign summary reports",
+                    "Per-creator performance breakdowns",
+                    "Live-updating shareable links",
+                    "Clean PDF exports for final deliverables",
+                    "Custom date ranges and filters",
+                  ].map((item) => (
+                    <li
+                      key={item}
+                      className="flex items-start gap-2.5 mb-2.5 text-[#3f3f46] text-[0.9375rem] leading-[1.55]"
+                    >
+                      <span className="text-[#1FAE5B] font-bold shrink-0 mt-px">✓</span>
+                      {item}
+                    </li>
+                  ))}
                 </ul>
               </div>
             </div>
-            <div className="feat-visual feat-visual-white">
-              <div className="feat-visual-icon">📈</div>
-              <p className="feat-visual-label">Analytics Dashboard</p>
+            <div className="min-[901px]:order-1 rounded-[20px] aspect-[4/3] flex flex-col items-center justify-center gap-3 p-8 overflow-hidden relative bg-gradient-to-br from-white to-[#F4F7F5] border border-black/[0.09] shadow-[0_8px_40px_rgba(0,0,0,0.05)]">
+              <div className="w-[72px] h-[72px] rounded-[18px] bg-[#1FAE5B] text-white flex items-center justify-center text-3xl shadow-[0_8px_20px_rgba(31,174,91,0.3)]">
+                📈
+              </div>
+              <p className="text-[0.8125rem] text-[#71717a] font-medium uppercase tracking-[0.08em] mt-2">
+                Analytics Dashboard
+              </p>
             </div>
           </div>
         </div>
       </section>
 
       {/* FEATURE 5: BRAND PARTNERS — white bg, visual on right */}
-      <section className="feat-odd" id="brand-partners">
-        <div className="container">
-          <div className="feat-grid">
-            <div className="feat-text">
-              <p className="feat-label">
-                <span className="feat-label-num">05</span>
+      <section className="py-24 scroll-mt-[140px] bg-white border-b border-black/[0.07]" id="brand-partners">
+        <div className="max-w-[1140px] mx-auto px-6">
+          <div className="grid grid-cols-1 min-[901px]:grid-cols-2 gap-10 min-[901px]:gap-[72px] items-center">
+            <div>
+              <p className="flex items-center gap-2 text-[0.6875rem] font-bold uppercase tracking-[0.14em] text-[#1FAE5B] mb-3.5">
+                <span className="inline-flex items-center justify-center w-[22px] h-[22px] rounded-full bg-[#1FAE5B]/[0.12] text-[#0F6B3E] text-[0.625rem] font-extrabold shrink-0">
+                  05
+                </span>
                 Brand Partners
               </p>
-              <h2>Creators worth more than a campaign.</h2>
-              <p className="feat-lead">Some creators keep delivering, campaign after campaign. Brand Partners gives those relationships structure: tiered status, retainer tracking, and full performance history.</p>
-              <div className="feat-body">
-                <p>Set your revenue thresholds. Instroom assigns Bronze, Silver, and Gold tiers automatically as creators hit milestones. No manual updating, no missed promotions — just a tier list that reflects reality.</p>
-                <p>When the budget conversation comes up, the answer is already in the data. You know exactly who's making you money, who's consistent, and who deserves a retainer. The best influencer programs aren't built on campaigns. They're built on relationships.</p>
-                <ul className="feat-bullets">
-                  <li>Client workspace access</li>
-                  <li>Permission levels</li>
-                  <li>Real-time updates</li>
-                  <li>White-labeling ready</li>
+              <h2 className="font-[Manrope,sans-serif] text-[clamp(1.625rem,3vw,2.125rem)] font-bold leading-tight text-[#1E1E1E] mb-4">
+                Creators worth more than a campaign.
+              </h2>
+              <p className="text-[1.0625rem] font-medium text-[#3f3f46] leading-[1.68] mb-7">
+                Some creators keep delivering, campaign after campaign. Brand Partners gives those
+                relationships structure: tiered status, retainer tracking, and full performance
+                history.
+              </p>
+              <div>
+                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem]">
+                  Set your revenue thresholds. Instroom assigns Bronze, Silver, and Gold tiers
+                  automatically as creators hit milestones. No manual updating, no missed
+                  promotions — just a tier list that reflects reality.
+                </p>
+                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem]">
+                  When the budget conversation comes up, the answer is already in the data. You
+                  know exactly who&apos;s making you money, who&apos;s consistent, and who
+                  deserves a retainer. The best influencer programs aren&apos;t built on
+                  campaigns. They&apos;re built on relationships.
+                </p>
+                <ul className="list-none p-0 mt-5">
+                  {["Client workspace access", "Permission levels", "Real-time updates", "White-labeling ready"].map(
+                    (item) => (
+                      <li
+                        key={item}
+                        className="flex items-start gap-2.5 mb-2.5 text-[#3f3f46] text-[0.9375rem] leading-[1.55]"
+                      >
+                        <span className="text-[#1FAE5B] font-bold shrink-0 mt-px">✓</span>
+                        {item}
+                      </li>
+                    )
+                  )}
                 </ul>
               </div>
             </div>
-            <div className="feat-visual feat-visual-light">
-              <div className="feat-visual-icon">🤝</div>
-              <p className="feat-visual-label">Brand Portal</p>
+            <div className="rounded-[20px] aspect-[4/3] flex flex-col items-center justify-center gap-3 p-8 overflow-hidden relative bg-gradient-to-br from-[#EDF5F0] to-[#D4EDDF] border border-[#1FAE5B]/[0.15] shadow-[0_8px_40px_rgba(15,107,62,0.07)]">
+              <div className="w-[72px] h-[72px] rounded-[18px] bg-[#1FAE5B] text-white flex items-center justify-center text-3xl shadow-[0_8px_20px_rgba(31,174,91,0.3)]">
+                🤝
+              </div>
+              <p className="text-[0.8125rem] text-[#71717a] font-medium uppercase tracking-[0.08em] mt-2">
+                Brand Portal
+              </p>
             </div>
           </div>
         </div>
       </section>
 
       {/* FINAL CTA */}
-      <section className="final-cta">
-        <div className="container final-cta-inner">
-          <h2>See it for yourself.</h2>
-          <p className="final-cta-lead">30 days free. Full platform access. No credit card.</p>
-          <div className="final-cta-ctas">
+      <section className="relative overflow-hidden bg-[#1E1E1E] text-white text-center py-24">
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            backgroundImage:
+              "radial-gradient(ellipse 60% 60% at 50% 50%, rgba(31,174,91,0.12) 0%, transparent 70%)",
+          }}
+        />
+        <div className="relative z-10 max-w-[1140px] mx-auto px-6">
+          <h2 className="font-[Manrope,sans-serif] font-bold text-[clamp(2rem,4vw,2.875rem)] text-white max-w-[640px] mx-auto mb-4 leading-tight">
+            See it for yourself.
+          </h2>
+          <p className="text-[1.0625rem] text-white/75 mb-9">
+            30 days free. Full platform access. No credit card.
+          </p>
+          <div className="flex gap-3 justify-center flex-wrap">
             <Link href="/signup">
               <Button className="bg-gradient-to-r from-[#1FAE5B] to-[#28c96a] text-white font-semibold h-12 px-8 rounded-xl hover:from-[#158a48] hover:to-[#1FAE5B] shadow-lg shadow-emerald-500/30">
                 Start Free Trial
               </Button>
             </Link>
           </div>
-          <p className="final-cta-sub">No annual contracts · Cancel anytime</p>
+          <p className="mt-5 text-[0.8125rem] text-white/50">No annual contracts · Cancel anytime</p>
         </div>
       </section>
 
       {/* FOOTER — matches landing page */}
-      <footer className="footer">
-        <div className="footer-inner">
+      <footer className="bg-[#111] text-white/65 pt-14 pb-8 text-sm">
+        <div className="grid grid-cols-1 min-[641px]:grid-cols-2 min-[901px]:grid-cols-[2fr_1fr_1fr_1fr] gap-10 mb-10 max-w-[1140px] mx-auto px-6">
           <div>
             <Image
               src="/images/instroomLogoWhite.png"
@@ -654,42 +448,94 @@ export default function FeaturesPage() {
               height={120}
               style={{ marginBottom: "4px" }}
             />
-            <p className="footer-brand-desc">
+            <p className="text-white/55 max-w-[260px] text-sm leading-[1.65] mt-3">
               The influencer marketing workspace for eCommerce brands and agencies.
             </p>
           </div>
           <div>
-            <h4>Products</h4>
-            <ul>
-              <li><a href="/features">Instroom Platform</a></li>
-              <li><a href="#">Chrome Extension</a></li>
-              <li><a href="#">Post Tracker</a></li>
-              <li><a href="/features">Features</a></li>
-              <li><a href="/pricing">Pricing</a></li>
+            <h4 className="text-white text-xs uppercase tracking-[0.1em] mb-4 font-[Manrope,sans-serif] font-bold">
+              Products
+            </h4>
+            <ul className="list-none m-0 p-0">
+              <li className="mb-2.5">
+                <a href="/features" className="text-white/60 no-underline hover:text-white transition-colors">
+                  Instroom Platform
+                </a>
+              </li>
+              <li className="mb-2.5">
+                <a href="#" className="text-white/60 no-underline hover:text-white transition-colors">
+                  Chrome Extension
+                </a>
+              </li>
+              <li className="mb-2.5">
+                <a href="#" className="text-white/60 no-underline hover:text-white transition-colors">
+                  Post Tracker
+                </a>
+              </li>
+              <li className="mb-2.5">
+                <a href="/features" className="text-white/60 no-underline hover:text-white transition-colors">
+                  Features
+                </a>
+              </li>
+              <li className="mb-2.5">
+                <a href="/pricing" className="text-white/60 no-underline hover:text-white transition-colors">
+                  Pricing
+                </a>
+              </li>
             </ul>
           </div>
           <div>
-            <h4>Resources</h4>
-            <ul>
-              <li><a href="#">Blog</a></li>
-              <li><a href="#">FAQ's</a></li>
-              <li><a href="#">Demo</a></li>
+            <h4 className="text-white text-xs uppercase tracking-[0.1em] mb-4 font-[Manrope,sans-serif] font-bold">
+              Resources
+            </h4>
+            <ul className="list-none m-0 p-0">
+              <li className="mb-2.5">
+                <a href="#" className="text-white/60 no-underline hover:text-white transition-colors">
+                  Blog
+                </a>
+              </li>
+              <li className="mb-2.5">
+                <a href="#" className="text-white/60 no-underline hover:text-white transition-colors">
+                  FAQ&apos;s
+                </a>
+              </li>
+              <li className="mb-2.5">
+                <a href="#" className="text-white/60 no-underline hover:text-white transition-colors">
+                  Demo
+                </a>
+              </li>
             </ul>
           </div>
           <div>
-            <h4>Company</h4>
-            <ul>
-              <li><a href="/about">About</a></li>
-              <li><a href="#">Contact</a></li>
+            <h4 className="text-white text-xs uppercase tracking-[0.1em] mb-4 font-[Manrope,sans-serif] font-bold">
+              Company
+            </h4>
+            <ul className="list-none m-0 p-0">
+              <li className="mb-2.5">
+                <a href="/about" className="text-white/60 no-underline hover:text-white transition-colors">
+                  About
+                </a>
+              </li>
+              <li className="mb-2.5">
+                <a href="#" className="text-white/60 no-underline hover:text-white transition-colors">
+                  Contact
+                </a>
+              </li>
             </ul>
           </div>
         </div>
-        <div className="footer-bottom">
+        <div className="flex justify-between flex-wrap gap-3 text-[0.8125rem] text-white/40 max-w-[1140px] mx-auto px-6 pt-6 border-t border-white/[0.08]">
           <p>&copy; 2026 Instroom. All rights reserved.</p>
-          <div className="footer-legal">
-            <Link href="/terms-of-service" style={{ color: "rgba(255,255,255,0.5)", textDecoration: "none" }}>Terms of Service</Link>
-            <Link href="/privacy" style={{ color: "rgba(255,255,255,0.5)", textDecoration: "none" }}>Privacy Policy</Link>
-            <Link href="/refund" style={{ color: "rgba(255,255,255,0.5)", textDecoration: "none" }}>Refund Policy</Link>
+          <div className="flex gap-6">
+            <Link href="/terms-of-service" className="text-white/50 no-underline hover:text-white">
+              Terms of Service
+            </Link>
+            <Link href="/privacy" className="text-white/50 no-underline hover:text-white">
+              Privacy Policy
+            </Link>
+            <Link href="/refund" className="text-white/50 no-underline hover:text-white">
+              Refund Policy
+            </Link>
           </div>
         </div>
       </footer>

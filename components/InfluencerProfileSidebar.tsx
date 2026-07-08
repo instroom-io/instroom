@@ -445,7 +445,7 @@ export default function InfluencerProfileSidebar({
   const engRate     = partner.engagement_rate != null ? `${partner.engagement_rate}%`
                     : partner.eng != null ? `${partner.eng}%` : "—"
 
-  const TABS = ["Basic", "Order", "Post", "Stats", "History"]
+  const TABS = ["Basic", "Order", "Attribution", "Post", "Stats", "History"]
 
   // Collab type implied text (shown under the pill)
   const selectedCollabMeta = COLLAB_TYPES.find(c => c.value === collabType)
@@ -647,19 +647,27 @@ export default function InfluencerProfileSidebar({
               <div className="pfg"><div className="pfl">Contact Number</div><input className="pfi" value={orderData.contactNumber} onChange={e => setOrderData(d => ({ ...d, contactNumber: e.target.value }))} placeholder="Contact Number" /></div>
               <div className="pfg"><div className="pfl">Product Name</div><input className="pfi" value={orderData.productName} onChange={e => setOrderData(d => ({ ...d, productName: e.target.value }))} placeholder="Product Name" /></div>
               <div className="pfg"><div className="pfl">Order Number</div><input className="pfi" value={orderData.orderNumber} onChange={e => setOrderData(d => ({ ...d, orderNumber: e.target.value }))} placeholder="Order Number" /></div>
-              <div className="pfr">
-                <div className="pfg"><div className="pfl">Product Cost</div><input className="pfi" value={orderData.productCost} onChange={e => setOrderData(d => ({ ...d, productCost: e.target.value }))} /></div>
-                <div className="pfg"><div className="pfl">Discount Code</div><input className="pfi" value={orderData.discountCode} onChange={e => setOrderData(d => ({ ...d, discountCode: e.target.value }))} /></div>
-              </div>
-              <div className="pfg"><div className="pfl">Affiliate Link</div><input className="pfi" value={orderData.affiliateLink} onChange={e => setOrderData(d => ({ ...d, affiliateLink: e.target.value }))} /></div>
+              <div className="pfg"><div className="pfl">Product Cost</div><input className="pfi" value={orderData.productCost} onChange={e => setOrderData(d => ({ ...d, productCost: e.target.value }))} /></div>
               <div className="pfg"><div className="pfl">Shipping Address</div><input className="pfi" value={orderData.shippingAddress} onChange={e => setOrderData(d => ({ ...d, shippingAddress: e.target.value }))} placeholder="Shipping Address" /></div>
               <div className="pfg"><div className="pfl">Tracking Link</div><input className="pfi" value={orderData.trackingLink} onChange={e => setOrderData(d => ({ ...d, trackingLink: e.target.value }))} placeholder="Tracking Link" /></div>
               <div style={{ display: "flex", justifyContent: "flex-end" }}><button className="btn-primary">Save</button></div>
             </div>
           )}
 
-          {/* ════ POST TAB ════ */}
+          {/* ════ ATTRIBUTION TAB ════ */}
           {profileTab === 2 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div className="pfr">
+                <div className="pfg"><div className="pfl">Discount Code</div><input className="pfi" value={orderData.discountCode} onChange={e => setOrderData(d => ({ ...d, discountCode: e.target.value }))} /></div>
+                <div className="pfg"><div className="pfl">Ad Code/Spark Ads Code</div><input className="pfi" placeholder="Ad Code/Spark Ads Code" /></div>
+              </div>
+              <div className="pfg"><div className="pfl">Affiliate Link</div><input className="pfi" value={orderData.affiliateLink} onChange={e => setOrderData(d => ({ ...d, affiliateLink: e.target.value }))} /></div>
+              <div style={{ display: "flex", justifyContent: "flex-end" }}><button className="btn-primary">Save</button></div>
+            </div>
+          )}
+
+          {/* ════ POST TAB ════ */}
+          {profileTab === 3 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <div className="pfr">
                 <div className="pfg"><div className="pfl">Post Link</div><input className="pfi" value={postData.postLink} onChange={e => setPostData(d => ({ ...d, postLink: e.target.value }))} placeholder="Post Link" /></div>
@@ -690,7 +698,7 @@ export default function InfluencerProfileSidebar({
           )}
 
           {/* ════ STATS TAB ════ */}
-          {profileTab === 3 && (
+          {profileTab === 4 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
               <div className="stit">Performance — all campaigns combined</div>
               <div className="skg">
@@ -735,7 +743,7 @@ export default function InfluencerProfileSidebar({
           )}
 
           {/* ════ HISTORY TAB ════ */}
-          {profileTab === 4 && (
+          {profileTab === 5 && (
             <HistoryTab brandId={partner.brandId} biId={partner.brandInfluencerId} />
           )}
 

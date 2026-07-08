@@ -16,7 +16,7 @@ export function LandingPage() {
     tabs.forEach(tab => {
       tab.addEventListener('click', () => {
         const target = (tab as HTMLElement).dataset.tab
-        const container = tab.closest(`.${styles.insideFeatTabs}`)
+        const container = tab.closest(`.${styles.containerMd}`)
         if (!container || !target) return
         container.querySelectorAll(`.${styles.insideFeatTab}`).forEach(t => t.classList.remove(styles.tabActive))
         container.querySelectorAll(`.${styles.insideFeatPanel}`).forEach(p => p.classList.remove(styles.panelActive))
@@ -479,53 +479,6 @@ export function LandingPage() {
               </div>
             ))}
           </div>
-        </div>
-      </section>
-
-      {/* PRICING */}
-      <section className={`${styles.section} ${styles.secEven}`} id="pricing">
-        <div className={styles.containerMd}>
-          <div className={styles.sectionHeader}>
-            <h2>Simple pricing. No per-seat games.</h2>
-            <p>One workspace. Unlimited team members. No hidden fees.</p>
-          </div>
-          <div className={styles.pricingGrid}>
-            {/* Solo */}
-            <div className={styles.priceCard}>
-              <div className={styles.priceBadge}>For solo operators</div>
-              <h3>Instroom Solo</h3>
-              <p className={styles.priceDesc}>One workspace. Everything you need to run your program.</p>
-              <div className={styles.priceAmount}>$19<span className={styles.priceUnit}>/mo</span></div>
-              <p className={styles.priceAnnual}>or $15/mo billed annually</p>
-              <p className={styles.priceTrial}>30 days free · No card required</p>
-              <Link href="/signup">
-                <Button className="w-full rounded-xl border border-zinc-200 bg-white text-zinc-900 font-semibold hover:bg-zinc-50">
-                  Start free
-                </Button>
-              </Link>
-            </div>
-
-            {/* Team — featured (dark green) */}
-            <div className={`${styles.priceCard} ${styles.featured}`}>
-              <div className={styles.priceBadge}>Most popular</div>
-              <h3>Instroom Team</h3>
-              <p className={styles.priceDesc}>Three workspaces included. Built for agencies and growing brands.</p>
-              <div className={styles.priceAmount}>$49<span className={styles.priceUnit}>/mo</span></div>
-              <p className={styles.priceAnnual}>or $39/mo billed annually · +$12/mo per extra workspace</p>
-              <p className={styles.priceTrial}>30 days free · No card required</p>
-              <Link href="/signup">
-                <Button className="w-full rounded-xl bg-[#1FAE5B] text-white font-semibold hover:bg-[#158a48]">
-                  Start free
-                </Button>
-              </Link>
-            </div>
-          </div>
-          <p className="text-center text-sm text-zinc-500 font-medium" style={{ marginTop: "56px" }}>
-            Not sure which is right?{" "}
-            <a href="#" className="text-[#1FAE5B] font-semibold hover:underline">Compare plans →</a>
-            {" "}or{" "}
-            <a href="#" className="text-[#1FAE5B] font-semibold hover:underline">Talk to us →</a>
-          </p>
         </div>
       </section>
 

@@ -19,7 +19,7 @@ export function PricingPlanButton({
   currentPlanName,
   isPlanHigher,
 }: PricingPlanButtonProps) {
-  let buttonText = "Get Started"
+  let buttonText = planName === "basic" ? "Get Started Free" : "Get Started"
 
   if (isCurrentPlan) {
     buttonText = "Current Plan"

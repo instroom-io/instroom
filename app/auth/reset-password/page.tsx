@@ -12,7 +12,7 @@ export default async function PasswordResetPage({
     <div className="min-h-svh w-full bg-[#F7F9F8] text-[#1E1E1E] relative overflow-hidden">
       <div className="fixed top-6 left-12 z-50">
         <Image 
-          src="/images/Instroom Logo 1.png" 
+          src="/images/INSTROOM LOGO 1.png"
           alt="Instroom Logo" 
           width={180} 
           height={180}

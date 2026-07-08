@@ -29,7 +29,7 @@ export function Hub({ onNavigate }: { onNavigate: (page: PageId) => void }) {
         <div style={{ maxWidth: 1100, margin: "0 auto", padding: "80px 40px 64px" }}>
           <div className="fade-up" style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--green)", marginBottom: 16 }}>Solutions</div>
           <h1 className="fade-up delay-1" style={{ fontFamily: "'Manrope',sans-serif", fontWeight: 800, fontSize: "clamp(36px,5vw,58px)", lineHeight: 1.05, color: "var(--ink)", maxWidth: 700, marginBottom: 20, letterSpacing: "-0.02em" }}>
-            Instroom works differently<br />for <em style={{ color: "var(--green)", fontStyle: "italic" }}>different kinds</em> of operators.
+            Instroom works differently<br />for <span style={{ color: "var(--green)" }}>different kinds</span> of operators.
           </h1>
           <p className="fade-up delay-2" style={{ fontSize: 16, color: "var(--ink2)", lineHeight: 1.6, maxWidth: 520, marginBottom: 48 }}>
             Whether you're running campaigns solo, managing clients, or growing your own brand — Instroom fits the way you actually work. Pick your situation.
