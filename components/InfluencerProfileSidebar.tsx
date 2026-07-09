@@ -39,6 +39,10 @@ export interface Partner {
   avg_views?: number | null
   follower_count?: number | null
   engagement_rate?: number | null
+  affiliate_id?: string | null
+  ref_code?: string | null
+  coupon?: string | null
+  affiliate_link?: string | null
   brandInfluencerId?: string
   brandId?: string
   email?: string | null
@@ -609,8 +613,8 @@ export default function InfluencerProfileSidebar({
   const [orderData, setOrderData] = useState({
     firstName: partner.firstName, lastName: partner.lastName, contactNumber: "",
     productName: "", orderNumber: "", productCost: "",
-    discountCode: "CODE" + partner.firstName.toUpperCase(),
-    affiliateLink: "https://instroom.io/ref/" + partner.firstName.toLowerCase(),
+    discountCode: partner.coupon || partner.ref_code || "CODE" + partner.firstName.toUpperCase(),
+    affiliateLink: partner.affiliate_link || "https://instroom.io/ref/" + partner.firstName.toLowerCase(),
     shippingAddress: "", trackingLink: "",
   })
   const [postData, setPostData] = useState({
@@ -642,7 +646,7 @@ export default function InfluencerProfileSidebar({
   const engRate     = partner.engagement_rate != null ? `${partner.engagement_rate}%`
                     : partner.eng != null ? `${partner.eng}%` : "—"
 
-  const TABS = ["Basic", "Order", "Post", "Stats", "History"]
+  const TABS = ["Basic", "Order", "Attribution", "Post", "Stats", "History"]
 
   // Collab type implied text (shown under the pill)
   const selectedCollabMeta = COLLAB_TYPES.find(c => c.value === collabType)
@@ -717,6 +721,7 @@ export default function InfluencerProfileSidebar({
       <div className="pp">
         {/* ── Header ── */}
         <div className="pph">
+          <button onClick={onClose} title="Close" className="close-btn">✕</button>
           <div className="ppt">Influencer Profile</div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
             <div className="pav">{partner.firstName ? partner.firstName[0] : partner.handle[1]?.toUpperCase()}</div>
@@ -765,8 +770,6 @@ export default function InfluencerProfileSidebar({
                   ))}
                 </select>
               </div>
-
-              <button onClick={onClose} title="Close" className="close-btn">✕</button>
             </div>
           </div>
 
@@ -858,19 +861,27 @@ export default function InfluencerProfileSidebar({
               <div className="pfg"><div className="pfl">Contact Number</div><input className="pfi" value={orderData.contactNumber} onChange={e => setOrderData(d => ({ ...d, contactNumber: e.target.value }))} placeholder="Contact Number" /></div>
               <div className="pfg"><div className="pfl">Product Name</div><input className="pfi" value={orderData.productName} onChange={e => setOrderData(d => ({ ...d, productName: e.target.value }))} placeholder="Product Name" /></div>
               <div className="pfg"><div className="pfl">Order Number</div><input className="pfi" value={orderData.orderNumber} onChange={e => setOrderData(d => ({ ...d, orderNumber: e.target.value }))} placeholder="Order Number" /></div>
-              <div className="pfr">
-                <div className="pfg"><div className="pfl">Product Cost</div><input className="pfi" value={orderData.productCost} onChange={e => setOrderData(d => ({ ...d, productCost: e.target.value }))} /></div>
-                <div className="pfg"><div className="pfl">Discount Code</div><input className="pfi" value={orderData.discountCode} onChange={e => setOrderData(d => ({ ...d, discountCode: e.target.value }))} /></div>
-              </div>
-              <div className="pfg"><div className="pfl">Affiliate Link</div><input className="pfi" value={orderData.affiliateLink} onChange={e => setOrderData(d => ({ ...d, affiliateLink: e.target.value }))} /></div>
+              <div className="pfg"><div className="pfl">Product Cost</div><input className="pfi" value={orderData.productCost} onChange={e => setOrderData(d => ({ ...d, productCost: e.target.value }))} /></div>
               <div className="pfg"><div className="pfl">Shipping Address</div><input className="pfi" value={orderData.shippingAddress} onChange={e => setOrderData(d => ({ ...d, shippingAddress: e.target.value }))} placeholder="Shipping Address" /></div>
               <div className="pfg"><div className="pfl">Tracking Link</div><input className="pfi" value={orderData.trackingLink} onChange={e => setOrderData(d => ({ ...d, trackingLink: e.target.value }))} placeholder="Tracking Link" /></div>
               <div style={{ display: "flex", justifyContent: "flex-end" }}><button className="btn-primary">Save</button></div>
             </div>
           )}
 
-          {/* ════ POST TAB ════ */}
+          {/* ════ ATTRIBUTION TAB ════ */}
           {profileTab === 2 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div className="pfr">
+                <div className="pfg"><div className="pfl">Discount Code</div><input className="pfi" value={orderData.discountCode} onChange={e => setOrderData(d => ({ ...d, discountCode: e.target.value }))} /></div>
+                <div className="pfg"><div className="pfl">Ad Code/Spark Ads Code</div><input className="pfi" placeholder="Ad Code/Spark Ads Code" /></div>
+              </div>
+              <div className="pfg"><div className="pfl">Affiliate Link</div><input className="pfi" value={orderData.affiliateLink} onChange={e => setOrderData(d => ({ ...d, affiliateLink: e.target.value }))} /></div>
+              <div style={{ display: "flex", justifyContent: "flex-end" }}><button className="btn-primary">Save</button></div>
+            </div>
+          )}
+
+          {/* ════ POST TAB ════ */}
+          {profileTab === 3 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <div className="pfr">
                 <div className="pfg"><div className="pfl">Post Link</div><input className="pfi" value={postData.postLink} onChange={e => setPostData(d => ({ ...d, postLink: e.target.value }))} placeholder="Post Link" /></div>
@@ -901,16 +912,16 @@ export default function InfluencerProfileSidebar({
           )}
 
           {/* ════ STATS TAB ════ */}
-          {profileTab === 3 && (
+          {profileTab === 4 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
               <div className="stit">Performance — all campaigns combined</div>
               <div className="skg">
-                <div className="skc"><div className="skv-dark">{(partner.hClicks || 0).toLocaleString()}</div><div className="skl">Total clicks</div></div>
-                <div className="skc"><div className="skv-blue">{partner.hCVR || 0}%</div><div className="skl">CVR</div></div>
-                <div className="skc"><div className="skv-dark">{(partner.hSales || 0).toLocaleString()}</div><div className="skl">Total sales</div></div>
-                <div className="skc"><div className="skv-green">{formatMoney(partner.hRev || 0)}</div><div className="skl">Total revenue</div></div>
+                <div className="skc"><div className="skv-dark">{(partner.clicks || partner.hClicks || 0).toLocaleString()}</div><div className="skl">Total clicks</div></div>
+                <div className="skc"><div className="skv-blue">{partner.cvr || partner.hCVR || 0}%</div><div className="skl">CVR</div></div>
+                <div className="skc"><div className="skv-dark">{(partner.sales || partner.hSales || 0).toLocaleString()}</div><div className="skl">Total sales</div></div>
+                <div className="skc"><div className="skv-green">{formatMoney(partner.rev || partner.hRev || 0)}</div><div className="skl">Total revenue</div></div>
                 <div className="skc"><div className="skv-green">{formatMoney(partner.totalSpend || 0)}</div><div className="skl">Total spend</div></div>
-                <div className="skc"><div className={partner.roas_val >= 1 ? "skv-green" : "skv-red"}>{formatROAS(partner.rev, partner.totalSpend)}</div><div className="skl">ROAS</div></div>
+                <div className="skc"><div className={(partner.roas_val || 0) >= 1 ? "skv-green" : "skv-red"}>{formatROAS(partner.rev || partner.gmv || 0, partner.totalSpend)}</div><div className="skl">ROAS</div></div>
               </div>
               <div className="breakdown-box">
                 <strong>Spend breakdown:</strong>{" "}
@@ -922,7 +933,7 @@ export default function InfluencerProfileSidebar({
                 <div className="skc"><div className="skv-blue">{engRate}</div><div className="skl">Eng. rate</div></div>
                 <div className="skc"><div className="skv-dark">{avgViews}</div><div className="skl">Avg views/post</div></div>
                 <div className="skc"><div className="skv-dark">{partner.ppm || 0}</div><div className="skl">Posts/month</div></div>
-                <div className="skc"><div className="skv-green">{formatMoney(partner.gmv || 0)}</div><div className="skl">GMV</div></div>
+                <div className="skc"><div className="skv-green">{formatMoney(partner.gmv || partner.rev || 0)}</div><div className="skl">GMV</div></div>
                 <div className="skc"><div className="skv-dark">{campCount}</div><div className="skl">Campaigns</div></div>
               </div>
               <div className="stit">Avg Metrics</div>
@@ -946,7 +957,7 @@ export default function InfluencerProfileSidebar({
           )}
 
           {/* ════ HISTORY TAB ════ */}
-          {profileTab === 4 && (
+          {profileTab === 5 && (
             <HistoryTab brandId={partner.brandId} biId={partner.brandInfluencerId} />
           )}
 
@@ -954,7 +965,7 @@ export default function InfluencerProfileSidebar({
 
         <style jsx>{`
           .pp { position:fixed; top:0; right:0; width:520px; max-width:100vw; height:100%; background:#fff; box-shadow:-8px 0 40px rgba(0,0,0,0.14); z-index:500; display:flex; flex-direction:column; font-family:"Inter",system-ui,sans-serif; }
-          .pph { padding:16px 20px; border-bottom:1px solid #f0f0f0; }
+          .pph { position:relative; padding:16px 20px; border-bottom:1px solid #f0f0f0; }
           .ppt { font-size:11px; font-weight:600; color:#9ca3af; letter-spacing:.1em; text-transform:uppercase; margin-bottom:12px; }
           .pav { width:44px; height:44px; border-radius:50%; background:#1fae5b; display:flex; align-items:center; justify-content:center; font-size:18px; font-weight:700; color:#fff; flex-shrink:0; box-shadow:0 0 0 3px #dcfce7; }
           .pnm { font-size:15px; font-weight:700; color:#111827; }
@@ -973,7 +984,7 @@ export default function InfluencerProfileSidebar({
           .collab-implied-sep { opacity:.4; font-size:11px; }
           .collab-implied-text { font-size:11px; opacity:.75; }
 
-          .close-btn { width:30px; height:30px; border-radius:50%; border:1.5px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; flex-shrink:0; line-height:1; margin-top:14px; transition:background .15s,border-color .15s,color .15s; }
+          .close-btn { position:absolute; top:16px; right:20px; width:30px; height:30px; border-radius:50%; border:1.5px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; flex-shrink:0; line-height:1; transition:background .15s,border-color .15s,color .15s; }
           .close-btn:hover { background:#fee2e2; color:#dc2626; border-color:#fca5a5; }
           .atag { font-size:12px; font-weight:500; padding:6px 14px; border-radius:20px; cursor:pointer; border:1px solid #e5e7eb; background:#f9fafb; color:#555; }
           .atag.plat { background:#1fae5b; color:#fff; border-color:#1fae5b; }

@@ -190,7 +190,7 @@ export default function OnboardingPage() {
     <div className="relative min-h-svh overflow-hidden bg-[#F7F9F8] text-[#1E1E1E]">
       <div className="fixed top-4 sm:top-6 left-4 sm:left-12 z-50">
         <Image
-          src="/images/Instroom Logo 1.png"
+          src="/images/INSTROOM LOGO 1.png"
           alt="Instroom Logo"
           width={140}
           height={140}

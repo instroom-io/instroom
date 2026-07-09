@@ -14,7 +14,7 @@ export default function AddInfluencerModal({ setType, onClose }: Props) {
             Add Influencer
           </h2>
           <p className="text-sm text-gray-500">
-            Choose how you want to add a new influencer
+            Choose how you want to add a new influencer. This creates a brand influencer only, not a brand partner.
           </p>
         </div>
         <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>

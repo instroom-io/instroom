@@ -8,6 +8,14 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Link2, BoxSelect, ShoppingCart, FolderOpen, Radio, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -68,6 +76,15 @@ function IntegrationsContent() {
   const [pendingId, setPendingId] = useState<IntegrationId | null>(null)
   const [goaffproSyncing, setGoaffproSyncing] = useState(false)
 
+  const [goaffproModalOpen, setGoaffproModalOpen] = useState(false)
+  const [goaffproAccessToken, setGoaffproAccessToken] = useState("")
+  const [goaffproWebhookSecret, setGoaffproWebhookSecret] = useState("")
+
+  const goaffproWebhookUrl =
+    typeof window !== "undefined" && brandId
+      ? `${window.location.origin}/api/webhooks/goaffpro/orders/${brandId}`
+      : ""
+
   const [hashtags, setHashtags] = useState("")
   const [mentions, setMentions] = useState("")
 
@@ -95,6 +112,13 @@ function IntegrationsContent() {
   }, [status, brandId, router])
 
   async function handleConnect(id: IntegrationId, label: string) {
+    if (id === "goaffpro") {
+      setGoaffproAccessToken("")
+      setGoaffproWebhookSecret("")
+      setGoaffproModalOpen(true)
+      return
+    }
+
     setPendingId(id)
     try {
       const res = await fetch("/api/settings/integrations/connect", {
@@ -110,6 +134,40 @@ function IntegrationsContent() {
         [id]: { connected: true, connectedAs: data.connectedAs },
       }))
       show(`${label} connected`, "success")
+    } catch (err: any) {
+      show(err.message || "Something went wrong", "error")
+    } finally {
+      setPendingId(null)
+    }
+  }
+
+  async function handleGoAffProConnectSubmit() {
+    if (!goaffproAccessToken.trim()) {
+      show("GoAffPro access token is required", "error")
+      return
+    }
+
+    setPendingId("goaffpro")
+    try {
+      const res = await fetch("/api/settings/integrations/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: "goaffpro",
+          brandId,
+          accessToken: goaffproAccessToken.trim(),
+          webhookSecret: goaffproWebhookSecret.trim() || undefined,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "Failed to connect GoAffPro")
+
+      setIntegrations((prev) => ({
+        ...prev,
+        goaffpro: { connected: true, connectedAs: data.connectedAs },
+      }))
+      setGoaffproModalOpen(false)
+      show("GoAffPro connected", "success")
     } catch (err: any) {
       show(err.message || "Something went wrong", "error")
     } finally {
@@ -336,6 +394,66 @@ function IntegrationsContent() {
           onManage={() => handleManage("Google Drive")}
         />
       </SettingsCard>
+
+      <Dialog open={goaffproModalOpen} onOpenChange={setGoaffproModalOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Connect GoAffPro</DialogTitle>
+            <DialogDescription>
+              Paste the Access Token from your own GoAffPro account (Settings → Developer →
+              Access Tokens). Each brand connects its own GoAffPro store.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-col gap-4 py-2">
+            <div className="flex flex-col gap-1.5">
+              <Label className="text-[11px] font-semibold tracking-wide text-[#555]">
+                Access Token
+              </Label>
+              <Input
+                type="password"
+                placeholder="Paste your GoAffPro access token"
+                value={goaffproAccessToken}
+                onChange={(e) => setGoaffproAccessToken(e.target.value)}
+              />
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label className="text-[11px] font-semibold tracking-wide text-[#555]">
+                Webhook Signature Secret (optional)
+              </Label>
+              <Input
+                type="password"
+                placeholder="Only if your GoAffPro plan supports webhooks"
+                value={goaffproWebhookSecret}
+                onChange={(e) => setGoaffproWebhookSecret(e.target.value)}
+              />
+              <div className="text-[11px] text-[#888]">
+                Leave empty to sync via polling every 15 minutes. If your GoAffPro plan
+                supports webhooks, create one in GoAffPro (Settings → Developer → Webhooks)
+                pointing to the URL below with topic <code>orders/after</code>, then paste
+                the resulting signature secret here for real-time sync.
+              </div>
+              {goaffproWebhookUrl && (
+                <Input readOnly value={goaffproWebhookUrl} className="text-[11px]" />
+              )}
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setGoaffproModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-[#1FAE5B] text-white hover:bg-[#0F6B3E]"
+              onClick={handleGoAffProConnectSubmit}
+              disabled={pendingId === "goaffpro"}
+            >
+              {pendingId === "goaffpro" ? "Connecting…" : "Connect"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

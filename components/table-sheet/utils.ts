@@ -117,7 +117,7 @@ export function newEmptyRow(customCols: CustomColumn[]): InfluencerRow {
   const custom: Record<string, string> = {}
   customCols.forEach((c) => { custom[c.field_key] = c.field_type === "boolean" ? "No" : "" })
   return {
-    id: crypto.randomUUID(), handle: "", platform: "instagram", full_name: "", email: "",
+    id: `temp-${crypto.randomUUID()}`, handle: "", platform: "instagram", full_name: "", email: "",
     follower_count: "", engagement_rate: "", niche: "", contact_status: "not_contacted",
     stage: "1", agreed_rate: "", notes: "", custom, gender: "", location: "",
     social_link: "", first_name: "", contact_info: "", approval_status: "Pending",

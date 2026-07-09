@@ -12,8 +12,8 @@ import {
 } from "react-email"
 import * as React from "react"
 
-const APP_URL = process.env.NEXTAUTH_URL ?? "https://instroom.app"
-const LOGO_URL = "https://staging-instroom.vercel.app/images/INSTROOM%20LOGO%201.png"
+const APP_URL = process.env.NEXTAUTH_URL ?? "https://instroom.io"
+const LOGO_URL = `${APP_URL}/images/INSTROOM%20LOGO%201.png`
 
 interface EmailLayoutProps {
   preview: string

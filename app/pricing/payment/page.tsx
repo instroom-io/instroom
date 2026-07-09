@@ -159,7 +159,7 @@ function PaymentPageInner() {
 
       <div className="fixed top-6 left-12 z-50">
         <Image
-          src="/images/Instroom Logo 1.png"
+          src="/images/INSTROOM LOGO 1.png"
           alt="Instroom Logo"
           width={180}
           height={180}

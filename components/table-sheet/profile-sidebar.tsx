@@ -199,6 +199,13 @@ function displayMetric(val: string | number | undefined | null): string {
   return formatFollowers(n)
 }
 
+function formatMoney(val: string | number | undefined | null): string {
+  if (val === null || val === undefined || val === "") return "—"
+  const n = Number(val)
+  if (isNaN(n)) return "—"
+  return `$${n.toLocaleString()}`
+}
+
 function FieldSelect({ label, icon, value, options, onChange, readOnly }: {
   label: string; icon: string; value: string
   options: { value: string; label: string }[]
@@ -272,10 +279,12 @@ export default function ProfileSidebar({
   const [editedRow, setEditedRow] = useState<InfluencerRow | null>(row ? { ...row } : null)
   const [showDeclineModal, setShowDeclineModal] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
+  const defaultDiscountCode = row ? "CODE" + (row.first_name || row.handle).toUpperCase().replace(/[^A-Z]/g, "") : ""
+  const defaultAffiliateLink = row ? "https://instroom.io/ref/" + (row.first_name || row.handle).toLowerCase().replace(/[^a-z]/g, "") : ""
   const [orderData, setOrderData] = useState({
     productName: "", orderNumber: "", productCost: "",
-    discountCode: row ? "CODE" + (row.first_name || row.handle).toUpperCase().replace(/[^A-Z]/g, "") : "",
-    affiliateLink: row ? "https://instroom.io/ref/" + (row.first_name || row.handle).toLowerCase().replace(/[^a-z]/g, "") : "",
+    discountCode: row ? (row.coupon || row.ref_code || defaultDiscountCode) : "",
+    affiliateLink: row ? (row.affiliate_link || defaultAffiliateLink) : "",
     shippingAddress: "", trackingLink: "",
   })
   const [postData, setPostData] = useState({
@@ -288,8 +297,8 @@ export default function ProfileSidebar({
       setEditedRow({ ...row }); setProfileTab(0)
       setOrderData(d => ({
         ...d,
-        discountCode: "CODE" + (row.first_name || row.handle).toUpperCase().replace(/[^A-Z]/g, ""),
-        affiliateLink: "https://instroom.io/ref/" + (row.first_name || row.handle).toLowerCase().replace(/[^a-z]/g, ""),
+        discountCode: row.coupon || row.ref_code || defaultDiscountCode,
+        affiliateLink: row.affiliate_link || defaultAffiliateLink,
       }))
       setPostData({ postLink: "", likes: "", sales: "", driveLink: "", comments: "", amount: "", usageRights: "", views: "", clicks: "" })
     }
@@ -301,6 +310,21 @@ export default function ProfileSidebar({
   const postCVR = postData.clicks && parseFloat(postData.clicks) > 0
     ? ((parseFloat(postData.sales || "0") / parseFloat(postData.clicks)) * 100).toFixed(2) + "%"
     : ""
+  const affiliateClicks = Number(editedRow.clicks || 0)
+  const affiliateSales = Number(editedRow.sales_count || 0)
+  const affiliateRevenue = Number(editedRow.gmv || 0)
+  const affiliateSpend = Number(editedRow.agreed_rate || 0)
+  const affiliateCvr = affiliateClicks > 0 ? (affiliateSales / affiliateClicks) * 100 : 0
+  const affiliateRoas = affiliateSpend > 0 ? affiliateRevenue / affiliateSpend : 0
+  const hasAffiliateData = Boolean(
+    editedRow.affiliate_id ||
+    editedRow.ref_code ||
+    editedRow.coupon ||
+    editedRow.affiliate_link ||
+    affiliateClicks ||
+    affiliateSales ||
+    affiliateRevenue
+  )
 
   const handleFieldChange = (field: string, value: string) => {
     if (!editedRow) return
@@ -403,8 +427,8 @@ export default function ProfileSidebar({
     { value: "twitter", label: "X (Twitter)" },
   ]
 
-  // Tabs: 0=Basic, 1=Order, 2=Post, 3=Stats, 4=History
-  const TABS = ["Basic", "Order", "Post", "Stats", "History"]
+  // Tabs: 0=Basic, 1=Order, 2=Attribution, 3=Post, 4=Stats, 5=History
+  const TABS = ["Basic", "Order", "Attribution", "Post", "Stats", "History"]
 
   return (
     <>
@@ -555,11 +579,7 @@ export default function ProfileSidebar({
               <div style={S.formGroup}><div style={S.formLabel}>Email</div><input style={S.formInput} value={editedRow.contact_info || editedRow.email || ""} onChange={e => handleFieldChange("contact_info", e.target.value)} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
               <div style={S.formGroup}><div style={S.formLabel}>Product Name</div><input style={S.formInput} value={orderData.productName} onChange={e => setOrderData(d => ({ ...d, productName: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
               <div style={S.formGroup}><div style={S.formLabel}>Order Number</div><input style={S.formInput} value={orderData.orderNumber} onChange={e => setOrderData(d => ({ ...d, orderNumber: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
-              <div style={S.formRow}>
-                <div style={S.formGroup}><div style={S.formLabel}>Product Cost</div><input style={S.formInput} value={orderData.productCost} onChange={e => setOrderData(d => ({ ...d, productCost: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
-                <div style={S.formGroup}><div style={S.formLabel}>Discount Code</div><input style={S.formInput} value={orderData.discountCode} onChange={e => setOrderData(d => ({ ...d, discountCode: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
-              </div>
-              <div style={S.formGroup}><div style={S.formLabel}>Affiliate Link</div><input style={S.formInput} value={orderData.affiliateLink} onChange={e => setOrderData(d => ({ ...d, affiliateLink: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
+              <div style={S.formGroup}><div style={S.formLabel}>Product Cost</div><input style={S.formInput} value={orderData.productCost} onChange={e => setOrderData(d => ({ ...d, productCost: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
               <div style={S.formGroup}><div style={S.formLabel}>Shipping Address</div><input style={S.formInput} value={orderData.shippingAddress} onChange={e => setOrderData(d => ({ ...d, shippingAddress: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
               <div style={S.formGroup}><div style={S.formLabel}>Tracking Link</div><input style={S.formInput} value={orderData.trackingLink} onChange={e => setOrderData(d => ({ ...d, trackingLink: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
               <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
@@ -568,8 +588,22 @@ export default function ProfileSidebar({
             </div>
           )}
 
-          {/* ════ POST TAB ════ */}
+          {/* ════ ATTRIBUTION TAB ════ */}
           {profileTab === 2 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+              <div style={S.formRow}>
+                <div style={S.formGroup}><div style={S.formLabel}>Discount Code</div><input style={S.formInput} value={orderData.discountCode} placeholder="—" onChange={e => setOrderData(d => ({ ...d, discountCode: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
+                <div style={S.formGroup}><div style={S.formLabel}>Ad Code/Spark Ads Code</div><input style={S.formInput} placeholder="Ad Code/Spark Ads Code" /></div>
+              </div>
+              <div style={S.formGroup}><div style={S.formLabel}>Affiliate Link</div><input style={S.formInput} value={orderData.affiliateLink} placeholder="—" onChange={e => setOrderData(d => ({ ...d, affiliateLink: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
+              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
+                <button style={{ ...S.saveBtn, opacity: isSaving ? 0.6 : 1, cursor: isSaving ? "not-allowed" : "pointer" }} onClick={handleSave} disabled={isSaving}>{isSaving ? "Saving…" : "Save Changes"}</button>
+              </div>
+            </div>
+          )}
+
+          {/* ════ POST TAB ════ */}
+          {profileTab === 3 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
               <div style={S.formRow}><div style={S.formGroup}><div style={S.formLabel}>Post Link</div><input style={S.formInput} value={postData.postLink} onChange={e => setPostData(d => ({ ...d, postLink: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div><div style={S.formGroup}><div style={S.formLabel}>Likes</div><input style={S.formInput} value={postData.likes} onChange={e => setPostData(d => ({ ...d, likes: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div></div>
               <div style={S.formRow}><div style={S.formGroup}><div style={S.formLabel}>Sales</div><input style={S.formInput} value={postData.sales} onChange={e => setPostData(d => ({ ...d, sales: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div><div style={S.formGroup}><div style={S.formLabel}>Drive Link</div><input style={S.formInput} value={postData.driveLink} onChange={e => setPostData(d => ({ ...d, driveLink: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div></div>
@@ -583,7 +617,7 @@ export default function ProfileSidebar({
           )}
 
           {/* ════ STATS TAB ════ */}
-          {profileTab === 3 && (
+          {profileTab === 4 && (
             <div style={{ display: "flex", flexDirection: "column" }}>
               <div style={S.sectionTitle}>Performance</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 16 }}>
@@ -591,6 +625,17 @@ export default function ProfileSidebar({
                 <div style={S.metricBox}><div style={{ ...S.metricVal, color: "#2c8ec4" }}>{editedRow.engagement_rate ? `${editedRow.engagement_rate}%` : "—"}</div><div style={S.metricLabel}>Eng. Rate</div></div>
                 <div style={S.metricBox}><div style={{ ...S.metricVal, color: "#1fae5b" }}>{editedRow.agreed_rate ? "$" + Number(editedRow.agreed_rate).toLocaleString() : "—"}</div><div style={S.metricLabel}>Agreed Rate</div></div>
               </div>
+
+              <div style={S.sectionTitle}>GoAffPro</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 16 }}>
+                <div style={S.metricBox}><div style={S.metricVal}>{affiliateClicks > 0 ? affiliateClicks.toLocaleString() : "—"}</div><div style={S.metricLabel}>Total Clicks</div></div>
+                <div style={S.metricBox}><div style={S.metricVal}>{affiliateSales > 0 ? affiliateSales.toLocaleString() : "—"}</div><div style={S.metricLabel}>Total Sales</div></div>
+                <div style={S.metricBox}><div style={S.metricVal}>{affiliateRevenue > 0 ? formatMoney(affiliateRevenue) : "—"}</div><div style={S.metricLabel}>Total Revenue</div></div>
+                <div style={S.metricBox}><div style={S.metricVal}>{affiliateSpend > 0 ? formatMoney(affiliateSpend) : "—"}</div><div style={S.metricLabel}>Total Spend</div></div>
+                <div style={S.metricBox}><div style={{ ...S.metricVal, color: affiliateRoas >= 1 ? "#1fae5b" : "#e24b4a" }}>{affiliateSpend > 0 ? `${affiliateRoas.toFixed(1)}x` : "—"}</div><div style={S.metricLabel}>ROAS</div></div>
+                <div style={S.metricBox}><div style={{ ...S.metricVal, color: "#2c8ec4" }}>{affiliateClicks > 0 ? `${affiliateCvr.toFixed(2)}%` : "—"}</div><div style={S.metricLabel}>CVR</div></div>
+              </div>
+
               <div style={S.sectionTitle}>Avg Metrics</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 16 }}>
                 <div style={S.metricBox}><div style={S.metricVal}>{displayMetric(editedRow.avg_likes)}</div><div style={S.metricLabel}>Avg Likes</div></div>
@@ -613,7 +658,7 @@ export default function ProfileSidebar({
           )}
 
           {/* ════ HISTORY TAB ════ */}
-          {profileTab === 4 && (
+          {profileTab === 5 && (
             <HistoryTab
               brandId={brandId}
               biId={row.id}

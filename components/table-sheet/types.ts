@@ -12,6 +12,13 @@ export type InfluencerRow = {
   avg_likes?: string | number; avg_comments?: string | number; avg_views?: string | number;
   created_at?: string;
   updated_at?: string;
+  affiliate_id?: string | null;
+  ref_code?: string | null;
+  coupon?: string | null;
+  affiliate_link?: string | null;
+  clicks?: number | string;
+  sales_count?: number | string;
+  gmv?: number | string;
   post_url?: string | null;
   post_caption?: string | null;
   likes_count?: number | string;
