@@ -30,20 +30,38 @@ export function SectionLabel({ children }: { children: React.ReactNode }) {
 
 export function CtaBand({ headline, sub }: { headline: string; sub: string }) {
   return (
-    <div style={{ background: "linear-gradient(135deg,#0f5c2e 0%,#1a8a46 50%,#1FAE5B 100%)", padding: "80px 40px" }}>
-      <div style={{ maxWidth: 680, margin: "0 auto", textAlign: "center" }}>
-        <h2 style={{ fontFamily: "'Manrope',sans-serif", fontSize: "clamp(28px,4vw,44px)", color: "#fff", lineHeight: 1.15, marginBottom: 16 }}>{headline}</h2>
-        <p style={{ fontSize: 16, color: "rgba(255,255,255,0.75)", lineHeight: 1.6, marginBottom: 36 }}>{sub}</p>
-        <Link href="/signup">
-          <button style={{ fontSize: 15, fontWeight: 700, padding: "14px 36px", borderRadius: 10, border: "none", background: "#fff", color: "var(--green)", cursor: "pointer", fontFamily: "'Inter',sans-serif", transition: "all 0.15s" }}
-            onMouseEnter={e => (e.currentTarget.style.background = "var(--green-light)")}
-            onMouseLeave={e => (e.currentTarget.style.background = "#fff")}
+    <section style={{ background: "#1E1E1E", position: "relative", overflow: "hidden", padding: "100px 32px" }}>
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background: "radial-gradient(ellipse at 70% 50%, rgba(31,174,91,0.15) 0%, transparent 70%)",
+        }}
+      />
+      <div style={{ maxWidth: 680, margin: "0 auto", textAlign: "center", position: "relative", zIndex: 1 }}>
+        <p style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "#1FAE5B", marginBottom: 16 }}>
+          Ready to Simplify?
+        </p>
+        <h2 style={{ fontFamily: "'Manrope',sans-serif", fontSize: "clamp(28px,4vw,44px)", fontWeight: 900, letterSpacing: "-0.03em", color: "#fff", lineHeight: 1.15, marginBottom: 16 }}>{headline}</h2>
+        <p style={{ fontSize: 16, color: "rgba(255,255,255,0.6)", lineHeight: 1.6, marginBottom: 32 }}>{sub}</p>
+        <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap", marginBottom: 16 }}>
+          <Link href="/signup">
+            <button style={{ fontSize: 15, fontWeight: 700, padding: "14px 32px", borderRadius: 10, border: "none", background: "#fff", color: "#1FAE5B", cursor: "pointer", fontFamily: "'Inter',sans-serif", transition: "all 0.15s" }}
+              onMouseEnter={e => (e.currentTarget.style.background = "#f0fdf4")}
+              onMouseLeave={e => (e.currentTarget.style.background = "#fff")}
+            >
+              Start free trial
+            </button>
+          </Link>
+          <button style={{ fontSize: 15, fontWeight: 600, padding: "14px 32px", borderRadius: 10, border: "0.5px solid rgba(255,255,255,0.35)", background: "transparent", color: "rgba(255,255,255,0.8)", cursor: "pointer", fontFamily: "'Inter',sans-serif", transition: "all 0.15s" }}
+            onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.1)")}
+            onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
           >
-            Start free trial
+            Book a Demo
           </button>
-        </Link>
-        <p style={{ fontSize: 12, color: "rgba(255,255,255,0.55)", marginTop: 14 }}>No credit card required · 30-day free trial</p>
+        </div>
+        <p style={{ fontSize: 12, color: "rgba(255,255,255,0.4)" }}>No credit card required · 30-day free trial</p>
       </div>
-    </div>
+    </section>
   )
 }

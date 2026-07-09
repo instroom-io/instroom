@@ -79,16 +79,16 @@ const otpLabel = {
 const digitBox: React.CSSProperties = {
   backgroundColor: colors.white,
   border:          `1px solid ${colors.border}`,
-  borderRadius:    "8px",
+  borderRadius:    "6px",
   color:           colors.brand,
   display:         "inline-block",
   fontFamily:      "monospace",
-  fontSize:        "28px",
+  fontSize:        "20px",
   fontWeight:      "700",
   lineHeight:      "1",
-  margin:          "0 4px",
-  padding:         "12px 14px",
-  minWidth:        "40px",
+  margin:          "0 3px",
+  padding:         "10px 8px",
+  minWidth:        "26px",
   textAlign:       "center",
 }
 

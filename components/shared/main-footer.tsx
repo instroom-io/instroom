@@ -37,8 +37,6 @@ function FooterInner() {
               <li><Link href="/features" className="hover:text-white transition">Instroom Platform</Link></li>
               <li><Link href="https://chromewebstore.google.com" target="_blank" rel="noopener noreferrer" className="hover:text-white transition">Chrome Extension</Link></li>
               <li><Link href="https://posttracker.instroom.io" target="_blank" rel="noopener noreferrer" className="hover:text-white transition">Post Tracker</Link></li>
-              <li><Link href="/features" className="hover:text-white transition">Features</Link></li>
-              <li><Link href="/pricing" className="hover:text-white transition">Pricing</Link></li>
             </ul>
           </div>
           <div>
@@ -55,6 +53,8 @@ function FooterInner() {
               <li><Link href="/blog" className="hover:text-white transition">Blog</Link></li>
               <li><Link href="/#faq" className="hover:text-white transition">FAQs</Link></li>
               <li><Link href="/demo" className="hover:text-white transition">Demo</Link></li>
+              <li><Link href="/features" className="hover:text-white transition">Features</Link></li>
+              <li><Link href="/pricing" className="hover:text-white transition">Pricing</Link></li>
             </ul>
           </div>
           <div>
