@@ -3,7 +3,26 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
-import { provisionGoAffProAffiliate } from "@/lib/goaffpro-provision"
+
+// Re-flattens the Attribution relation back onto the response object so
+// consumers (BrandPartnersPage.tsx etc.) keep reading these as top-level
+// fields, exactly as when they lived directly on BrandInfluencer.
+function flattenAttribution<T extends { attribution?: { affiliate_id: string | null; ref_code: string | null; coupon: string | null; spark_ads: string | null; affiliate_link: string | null; clicks: number; sales_count: number; gmv: unknown } | null }>(
+  bi: T
+) {
+  const { attribution, ...rest } = bi
+  return {
+    ...rest,
+    affiliate_id:   attribution?.affiliate_id   ?? null,
+    ref_code:       attribution?.ref_code       ?? null,
+    coupon:         attribution?.coupon         ?? null,
+    spark_ads:      attribution?.spark_ads      ?? null,
+    affiliate_link: attribution?.affiliate_link ?? null,
+    clicks:         attribution?.clicks         ?? 0,
+    sales_count:    attribution?.sales_count    ?? 0,
+    gmv:            attribution?.gmv ? Number(attribution.gmv as any) : 0,
+  }
+}
 
 export async function GET(
   req: NextRequest,
@@ -54,11 +73,12 @@ export async function GET(
           select: { id: true, name: true, status: true },
         },
         partner: true,
+        attribution: true,
       },
       orderBy: { created_at: "desc" },
     })
 
-    return NextResponse.json({ data: brandInfluencers })
+    return NextResponse.json({ data: brandInfluencers.map(flattenAttribution) })
   } catch (error) {
     console.error("[GET /partners]", error)
     return NextResponse.json({ error: "Failed to fetch partners" }, { status: 500 })
@@ -141,25 +161,17 @@ export async function POST(
       },
     })
 
-    const goAffProProvision = await provisionGoAffProAffiliate({
-      brandId,
-      brandInfluencerId: bi.id,
-    })
-
-    if (!goAffProProvision.success && !goAffProProvision.skipped) {
-      console.error("GoAffPro provisioning failed:", goAffProProvision.reason)
-    }
-
     const brandInfluencer = await prisma.brandInfluencer.findUniqueOrThrow({
       where: { id: bi.id },
       include: {
         influencer: true,
         campaign: { select: { id: true, name: true, status: true } },
         partner: true,
+        attribution: true,
       },
     })
 
-    return NextResponse.json({ data: brandInfluencer }, { status: 201 })
+    return NextResponse.json({ data: flattenAttribution(brandInfluencer) }, { status: 201 })
   } catch (error) {
     console.error("[POST /partners]", error)
     return NextResponse.json({ error: "Failed to add partner" }, { status: 500 })

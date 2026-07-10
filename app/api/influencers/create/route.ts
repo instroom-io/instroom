@@ -4,7 +4,6 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { canAddInfluencer } from "@/lib/subscription-limits"
 import { logActivity } from "@/lib/activity-log"
-import { provisionGoAffProAffiliate } from "@/lib/goaffpro-provision"
 
 export async function POST(req: Request) {
   try {
@@ -31,7 +30,7 @@ export async function POST(req: Request) {
         return NextResponse.json(
           {
             error: limitCheck.message || "Influencer limit reached",
-            requiresSubscription: true,
+            requiresSubscription: limitCheck.requiresSubscription ?? false,
             current: limitCheck.current,
             max: limitCheck.max,
             subscriptionStatus: limitCheck.subscriptionStatus,
@@ -84,15 +83,6 @@ export async function POST(req: Request) {
               stage: 1,
             },
           })
-
-          const goAffProProvision = await provisionGoAffProAffiliate({
-            brandId: data.brandId,
-            brandInfluencerId: brandInfluencer.id,
-          })
-
-          if (!goAffProProvision.success && !goAffProProvision.skipped) {
-            console.error("GoAffPro provisioning failed:", goAffProProvision.reason)
-          }
 
           logActivity({
             brandId: data.brandId,

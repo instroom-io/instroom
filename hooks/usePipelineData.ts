@@ -47,6 +47,7 @@ export interface PipelineInfluencer {
   affiliateId: string | null
   refCode: string | null
   coupon: string | null
+  sparkAds: string | null
   affiliateLink: string | null
   clicks: number
   salesCount: number
@@ -102,6 +103,7 @@ function mapItem(item: any): PipelineInfluencer {
     affiliateId:     item.affiliateId    ?? null,
     refCode:         item.refCode        ?? null,
     coupon:          item.coupon         ?? null,
+    sparkAds:        item.sparkAds       ?? null,
     affiliateLink:   item.affiliateLink  ?? null,
     clicks:          item.clicks         ?? 0,
     salesCount:      item.salesCount     ?? 0,

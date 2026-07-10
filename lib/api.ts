@@ -24,14 +24,6 @@ export interface BrandPartnerRecord {
   brand_id: string
   influencer_id: string
   brand_influencer_id: string
-  affiliate_id?: string | null
-  ref_code?: string | null
-  coupon?: string | null
-  affiliate_link?: string | null
-  goaffpro_affiliate_id?: string | null
-  goaffpro_ref_code?: string | null
-  goaffpro_coupon?: string | null
-  goaffpro_link?: string | null
   on_retainer: boolean
   retainer_fee: number
   default_commission: number
@@ -39,9 +31,6 @@ export interface BrandPartnerRecord {
   product_cost: number
   fees_paid: number
   commission_paid: number
-  clicks: number
-  sales_count: number
-  gmv: number
   created_at: string
   updated_at: string
 }
@@ -76,6 +65,7 @@ export interface BrandInfluencerRecord {
   affiliate_id: string | null
   ref_code: string | null
   coupon: string | null
+  spark_ads: string | null
   affiliate_link: string | null
   clicks: number
   sales_count: number
@@ -223,10 +213,8 @@ export const partnersApi = {
         | "product_cost"
         | "fees_paid"
         | "commission_paid"
-        | "clicks"
-        | "sales_count"
-        | "gmv"
-      >
+      > &
+        Pick<BrandInfluencerRecord, "clicks" | "sales_count" | "gmv">
     >
   ) =>
     apiFetch<BrandInfluencerRecord>(

@@ -160,13 +160,18 @@ export async function GET(
         created_at:      true,
 
         // GoAffPro affiliate data
-        affiliate_id:    true,
-        ref_code:        true,
-        coupon:          true,
-        affiliate_link:  true,
-        clicks:          true,
-        sales_count:     true,
-        gmv:             true,
+        attribution: {
+          select: {
+            affiliate_id:   true,
+            ref_code:       true,
+            coupon:         true,
+            spark_ads:      true,
+            affiliate_link: true,
+            clicks:         true,
+            sales_count:    true,
+            gmv:            true,
+          },
+        },
 
         // Influencer — only the fields the card + list view renders
         influencer: {
@@ -289,13 +294,14 @@ export async function GET(
           lastContact:     bi.updated_at.toISOString(),
           createdAt:       bi.created_at.toISOString(),
 
-          affiliateId:     bi.affiliate_id,
-          refCode:         bi.ref_code,
-          coupon:          bi.coupon,
-          affiliateLink:   bi.affiliate_link,
-          clicks:          bi.clicks,
-          salesCount:      bi.sales_count,
-          gmv:             bi.gmv ? Number(bi.gmv) : 0,
+          affiliateId:     bi.attribution?.affiliate_id   ?? null,
+          refCode:         bi.attribution?.ref_code       ?? null,
+          coupon:          bi.attribution?.coupon         ?? null,
+          sparkAds:        bi.attribution?.spark_ads      ?? null,
+          affiliateLink:   bi.attribution?.affiliate_link ?? null,
+          clicks:          bi.attribution?.clicks         ?? 0,
+          salesCount:      bi.attribution?.sales_count    ?? 0,
+          gmv:             bi.attribution?.gmv ? Number(bi.attribution.gmv) : 0,
         }
       })
 

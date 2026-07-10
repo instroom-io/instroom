@@ -11,11 +11,11 @@ import {
 type TrackedAffiliate = { id: string; affiliate_id: string }
 
 async function getTrackedAffiliates(brandId: string): Promise<TrackedAffiliate[]> {
-  const rows = await prisma.brandInfluencer.findMany({
+  const rows = await prisma.attribution.findMany({
     where: { brand_id: brandId, affiliate_id: { not: null } },
-    select: { id: true, affiliate_id: true },
+    select: { brand_influencer_id: true, affiliate_id: true },
   })
-  return rows as TrackedAffiliate[]
+  return rows.map((r) => ({ id: r.brand_influencer_id, affiliate_id: r.affiliate_id as string }))
 }
 
 async function syncClicksForBrand(
@@ -37,8 +37,11 @@ async function syncClicksForBrand(
 
   for (const bi of tracked) {
     const clicks = clickCounts.get(bi.affiliate_id) ?? 0
-    await prisma.brandInfluencer.update({ where: { id: bi.id }, data: { clicks } })
-    await prisma.brandPartner.updateMany({ where: { brand_influencer_id: bi.id }, data: { clicks } })
+    await prisma.attribution.upsert({
+      where: { brand_influencer_id: bi.id },
+      update: { clicks },
+      create: { brand_id: brandId, brand_influencer_id: bi.id, affiliate_id: bi.affiliate_id, clicks },
+    })
   }
 
   return { trafficEntries: traffic.length, influencersUpdated: tracked.length }

@@ -285,8 +285,10 @@ export default function ProfileSidebar({
     productName: "", orderNumber: "", productCost: "",
     discountCode: row ? (row.coupon || row.ref_code || defaultDiscountCode) : "",
     affiliateLink: row ? (row.affiliate_link || defaultAffiliateLink) : "",
+    sparkAds: row ? (row.spark_ads || "") : "",
     shippingAddress: "", trackingLink: "",
   })
+  const [attributionSaveMessage, setAttributionSaveMessage] = useState<string | null>(null)
   const [postData, setPostData] = useState({
     postLink: "", likes: "", sales: "", driveLink: "",
     comments: "", amount: "", usageRights: "", views: "", clicks: "",
@@ -299,6 +301,7 @@ export default function ProfileSidebar({
         ...d,
         discountCode: row.coupon || row.ref_code || defaultDiscountCode,
         affiliateLink: row.affiliate_link || defaultAffiliateLink,
+        sparkAds: row.spark_ads || "",
       }))
       setPostData({ postLink: "", likes: "", sales: "", driveLink: "", comments: "", amount: "", usageRights: "", views: "", clicks: "" })
     }
@@ -377,6 +380,28 @@ export default function ProfileSidebar({
       const response = await fetch(url, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
       if (response.ok) {
         const synced = { ...editedRow, full_name: rebuiltFullName || editedRow.full_name }
+
+        setAttributionSaveMessage(null)
+        if (brandId && row.brand_influencer_id) {
+          try {
+            const attrRes = await fetch(`/api/brand/${brandId}/attribution/${row.brand_influencer_id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                coupon: orderData.discountCode || null,
+                affiliateLink: orderData.affiliateLink || null,
+                sparkAds: orderData.sparkAds || null,
+              }),
+            })
+            if (attrRes.ok) {
+              const attrJson = await attrRes.json()
+              if (attrJson.goAffPro?.synced === false && attrJson.goAffPro?.reason) {
+                setAttributionSaveMessage(`GoAffPro sync skipped: ${attrJson.goAffPro.reason}`)
+              }
+            }
+          } catch { /* non-critical — main influencer save already succeeded */ }
+        }
+
         setEditedRow(synced); onUpdate(synced); onToast?.("success", "Saved successfully")
       } else if (response.status === 404) {
         onToast?.("error", "Influencer not found. Try refreshing.")
@@ -593,10 +618,11 @@ export default function ProfileSidebar({
             <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
               <div style={S.formRow}>
                 <div style={S.formGroup}><div style={S.formLabel}>Discount Code</div><input style={S.formInput} value={orderData.discountCode} placeholder="—" onChange={e => setOrderData(d => ({ ...d, discountCode: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
-                <div style={S.formGroup}><div style={S.formLabel}>Ad Code/Spark Ads Code</div><input style={S.formInput} placeholder="Ad Code/Spark Ads Code" /></div>
+                <div style={S.formGroup}><div style={S.formLabel}>Ad Code/Spark Ads Code</div><input style={S.formInput} value={orderData.sparkAds} placeholder="Ad Code/Spark Ads Code" onChange={e => setOrderData(d => ({ ...d, sparkAds: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
               </div>
               <div style={S.formGroup}><div style={S.formLabel}>Affiliate Link</div><input style={S.formInput} value={orderData.affiliateLink} placeholder="—" onChange={e => setOrderData(d => ({ ...d, affiliateLink: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
-              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
+              <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, marginTop: 4 }}>
+                {attributionSaveMessage && <div style={{ fontSize: 12, color: "#667085" }}>{attributionSaveMessage}</div>}
                 <button style={{ ...S.saveBtn, opacity: isSaving ? 0.6 : 1, cursor: isSaving ? "not-allowed" : "pointer" }} onClick={handleSave} disabled={isSaving}>{isSaving ? "Saving…" : "Save Changes"}</button>
               </div>
             </div>
