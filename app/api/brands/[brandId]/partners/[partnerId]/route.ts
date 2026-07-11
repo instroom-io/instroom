@@ -4,6 +4,26 @@ import { prisma } from "@/lib/prisma"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 
+// Re-flattens the Attribution relation back onto the response object so
+// consumers keep reading these as top-level fields, exactly as when they
+// lived directly on BrandInfluencer.
+function flattenAttribution<T extends { attribution?: { affiliate_id: string | null; ref_code: string | null; coupon: string | null; spark_ads: string | null; affiliate_link: string | null; clicks: number; sales_count: number; gmv: unknown } | null }>(
+  bi: T
+) {
+  const { attribution, ...rest } = bi
+  return {
+    ...rest,
+    affiliate_id:   attribution?.affiliate_id   ?? null,
+    ref_code:       attribution?.ref_code       ?? null,
+    coupon:         attribution?.coupon         ?? null,
+    spark_ads:      attribution?.spark_ads      ?? null,
+    affiliate_link: attribution?.affiliate_link ?? null,
+    clicks:         attribution?.clicks         ?? 0,
+    sales_count:    attribution?.sales_count    ?? 0,
+    gmv:            attribution?.gmv ? Number(attribution.gmv as any) : 0,
+  }
+}
+
 export async function GET(
   req: NextRequest,
   context: { params: Promise<{ brandId: string; partnerId: string }> }
@@ -22,6 +42,7 @@ export async function GET(
         influencer: true,
         campaign: true,
         partner: true, // ← added: financial/commercial layer (BrandPartner)
+        attribution: true,
       },
     })
 
@@ -29,7 +50,7 @@ export async function GET(
       return NextResponse.json({ error: "Partner not found" }, { status: 404 })
     }
 
-    return NextResponse.json({ data: bi })
+    return NextResponse.json({ data: flattenAttribution(bi) })
   } catch (error) {
     console.error("[GET /partners/:id]", error)
     return NextResponse.json({ error: "Failed to fetch partner" }, { status: 500 })
@@ -89,10 +110,11 @@ export async function PATCH(
         influencer: true,
         campaign: { select: { id: true, name: true } },
         partner: true, // ← added: keep financials in the response shape consistent with GET
+        attribution: true,
       },
     })
 
-    return NextResponse.json({ data: updated })
+    return NextResponse.json({ data: flattenAttribution(updated) })
   } catch (error) {
     console.error("[PATCH /partners/:id]", error)
     return NextResponse.json({ error: "Failed to update partner" }, { status: 500 })

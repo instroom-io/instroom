@@ -28,16 +28,60 @@ export const FIELD_TYPE_INFO: Record<string, { description: string; example: str
 
 // Badge style maps
 export const STATUS_STYLE: Record<string, string> = {
-  not_contacted: "bg-gray-100 text-gray-600",
-  contacted:     "bg-blue-100 text-blue-700",
-  interested:    "bg-yellow-100 text-yellow-700",
-  agreed:        "bg-green-100 text-green-700",
+  not_contacted:      "bg-gray-100 text-gray-600",
+  pending:            "bg-gray-100 text-gray-600",
+  contacted:          "bg-blue-100 text-blue-700",
+  interested:         "bg-yellow-100 text-yellow-700",
+  negotiating:        "bg-indigo-100 text-indigo-700",
+  agreed:             "bg-green-100 text-green-700",
+  for_order_creation: "bg-emerald-100 text-emerald-700",
+  not_interested:     "bg-red-100 text-red-600",
 }
 export const STATUS_LABEL: Record<string, string> = {
-  not_contacted: "Not Contacted",
-  contacted:     "Contacted",
-  interested:    "Interested",
-  agreed:        "Agreed",
+  not_contacted:      "Not Contacted",
+  pending:            "For Outreach",
+  contacted:          "Contacted",
+  interested:         "Interested",
+  negotiating:        "In Conversation",
+  agreed:             "Agreed",
+  for_order_creation: "For Order Creation",
+  not_interested:     "Not Interested",
+}
+// Full funnel stage — the single source of truth for where an influencer
+// actually is, shared across Manage Influencers, Pipeline, and Post Tracker.
+// Pipeline board writes stages 0-5, Post Tracker writes stages 5-8.
+export const STAGE_LABEL: Record<number, string> = {
+  0: "Not Interested",
+  1: "For Outreach",
+  2: "Contacted",
+  3: "In Conversation",
+  4: "Deal Agreed",
+  5: "For Order Creation",
+  6: "In-Transit",
+  7: "Delivered",
+  8: "Posted",
+}
+export const STAGE_AREA: Record<number, string> = {
+  0: "Closed",
+  1: "Pipeline",
+  2: "Pipeline",
+  3: "Pipeline",
+  4: "Pipeline",
+  5: "Post Tracker",
+  6: "Post Tracker",
+  7: "Post Tracker",
+  8: "Post Tracker",
+}
+export const STAGE_STYLE: Record<number, string> = {
+  0: "bg-red-100 text-red-700",
+  1: "bg-gray-100 text-gray-600",
+  2: "bg-blue-100 text-blue-700",
+  3: "bg-indigo-100 text-indigo-700",
+  4: "bg-green-100 text-green-700",
+  5: "bg-emerald-100 text-emerald-700",
+  6: "bg-yellow-100 text-yellow-700",
+  7: "bg-cyan-100 text-cyan-700",
+  8: "bg-[#0F6B3E]/15 text-[#0F6B3E]",
 }
 export const APPROVAL_STYLE: Record<string, string> = {
   Approved: "bg-green-100 text-green-700",

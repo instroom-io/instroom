@@ -9,6 +9,7 @@ const ALLOWED_HOSTS = [
   "p16-common",
   "p19-common",
   "muscdn.com",
+  "tikwm.com",
 ]
 
 export async function GET(req: NextRequest) {

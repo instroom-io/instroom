@@ -328,6 +328,7 @@ function influencerToPartner(inf: PipelineInfluencer, brandId?: string): Partner
     affiliate_id: inf.affiliateId,
     ref_code:     inf.refCode,
     coupon:       inf.coupon,
+    spark_ads:    inf.sparkAds,
     affiliate_link: inf.affiliateLink,
     added:        inf.createdAt ? new Date(inf.createdAt) : new Date(),
     prods:        [],

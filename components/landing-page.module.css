@@ -248,7 +248,6 @@
   text-align: center;
   font-size: 0.75rem;
   font-weight: 700;
-  text-transform: capitalize;
   letter-spacing: 0.04em;
   color: #52525b;
   margin-bottom: 28px;
@@ -801,6 +800,14 @@
 .faqItem:first-child { padding-top: 0; }
 .faqItem:last-child { border-bottom: none; padding-bottom: 0; }
 
+.faqItem.open {
+  border: 1.5px solid #1FAE5B;
+  border-radius: 12px;
+  background: rgba(31, 174, 91, 0.05);
+  margin: 0 -20px;
+  padding: 24px 20px;
+}
+
 .faqQ {
   display: flex;
   justify-content: space-between;
@@ -832,10 +839,13 @@
 .faqItem.open .faqQIcon { transform: rotate(45deg); }
 
 .faqA {
-  margin-top: 14px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(31, 174, 91, 0.2);
   color: #52525b;
   font-size: 0.9375rem;
   line-height: 1.72;
+  text-align: justify;
 }
 
 /* ── Pricing ── */

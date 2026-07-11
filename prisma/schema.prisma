@@ -187,8 +187,9 @@ model Brand {
   influencers  BrandInfluencer[]
   campaigns    Campaign[]
   activityLogs ActivityLog[]
-  partners     BrandPartner[]    
-  tierSettings BrandTierSettings? 
+  partners     BrandPartner[]
+  tierSettings BrandTierSettings?
+  attributions Attribution[]
 
   @@index([owner_id])
   @@index([slug])
@@ -306,13 +307,6 @@ model BrandInfluencer {
   approval_status  String?   @db.VarChar(20)
   approval_notes   String?   @db.Text
   transferred_date DateTime?
-  affiliate_id     String?   @db.VarChar(100)
-  ref_code         String?   @db.VarChar(100)
-  coupon           String?   @db.VarChar(100)
-  affiliate_link   String?   @db.Text
-  clicks           Int       @default(0)
-  sales_count      Int       @default(0)
-  gmv              Decimal   @default(0)
   created_at       DateTime  @default(now())
   updated_at       DateTime  @updatedAt
 
@@ -321,6 +315,7 @@ model BrandInfluencer {
   campaign   Campaign?  @relation(fields: [campaign_id], references: [id], onDelete: SetNull)
   partner    BrandPartner? // new (1:1 back-relation)
   goaffproOrders GoAffProOrder[]
+  attribution    Attribution?
 
   @@unique([brand_id, influencer_id])
   @@index([brand_id])
@@ -329,7 +324,28 @@ model BrandInfluencer {
   @@index([brand_id, contact_status])
   @@index([campaign_id])
   @@index([brand_id, order_status])
-  @@index([affiliate_id])
+}
+
+model Attribution {
+  id                  String   @id @default(cuid()) @db.VarChar(30)
+  brand_id            String   @db.VarChar(30)
+  brand_influencer_id String   @unique @db.VarChar(30)
+  affiliate_id        String?  @db.VarChar(100)
+  ref_code            String?  @db.VarChar(100)
+  coupon              String?  @db.VarChar(100)
+  spark_ads           String?  @db.VarChar(100)
+  affiliate_link      String?  @db.Text
+  clicks              Int      @default(0)
+  sales_count         Int      @default(0)
+  gmv                 Decimal  @default(0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  brand           Brand           @relation(fields: [brand_id], references: [id], onDelete: Cascade)
+  brandInfluencer BrandInfluencer @relation(fields: [brand_influencer_id], references: [id], onDelete: Cascade)
+
+  @@index([brand_id, affiliate_id])
+  @@index([brand_id])
 }
 
 model GoAffProOrder {
@@ -520,11 +536,6 @@ model BrandPartner {
   influencer_id       String   @db.VarChar(30)
   brand_influencer_id String   @unique @db.VarChar(30)
 
-  goaffpro_affiliate_id String? @db.VarChar(100)
-  goaffpro_ref_code     String? @db.VarChar(100)
-  goaffpro_coupon       String? @db.VarChar(100)
-  goaffpro_link         String? @db.Text
-
   on_retainer        Boolean  @default(false)
   retainer_fee       Decimal  @default(0)
   default_commission Decimal  @default(0)
@@ -535,10 +546,6 @@ model BrandPartner {
   fees_paid       Decimal @default(0)
   commission_paid Decimal @default(0)
 
-  clicks      Int     @default(0)
-  sales_count Int     @default(0)
-  gmv         Decimal @default(0)
-
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
@@ -548,7 +555,6 @@ model BrandPartner {
 
   @@index([brand_id])
   @@index([influencer_id])
-  @@index([goaffpro_affiliate_id])
 }
 
 model BrandTierSettings {

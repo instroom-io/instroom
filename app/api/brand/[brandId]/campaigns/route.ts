@@ -16,12 +16,22 @@ export async function GET(
 
     const { brandId } = await params
 
-    // Verify user owns this brand
     const brand = await prisma.brand.findUnique({
       where: { id: brandId },
     })
 
-    if (!brand || brand.owner_id !== session.user.id) {
+    if (!brand) {
+      return NextResponse.json({ error: "Brand not found or access denied" }, { status: 404 })
+    }
+
+    const isOwner = brand.owner_id === session.user.id
+    const isMember = isOwner
+      ? true
+      : !!(await prisma.brandMember.findFirst({
+          where: { brand_id: brandId, user_id: session.user.id },
+        }))
+
+    if (!isMember) {
       return NextResponse.json({ error: "Brand not found or access denied" }, { status: 404 })
     }
 
@@ -62,12 +72,22 @@ export async function POST(
       return NextResponse.json({ error: "Campaign name is required" }, { status: 400 })
     }
 
-    // Verify user owns this brand
     const brand = await prisma.brand.findUnique({
       where: { id: brandId },
     })
 
-    if (!brand || brand.owner_id !== session.user.id) {
+    if (!brand) {
+      return NextResponse.json({ error: "Brand not found or access denied" }, { status: 404 })
+    }
+
+    const isOwner = brand.owner_id === session.user.id
+    const isMember = isOwner
+      ? true
+      : !!(await prisma.brandMember.findFirst({
+          where: { brand_id: brandId, user_id: session.user.id },
+        }))
+
+    if (!isMember) {
       return NextResponse.json({ error: "Brand not found or access denied" }, { status: 404 })
     }
 
@@ -81,6 +101,7 @@ export async function POST(
             error: limitCheck.message,
             current: limitCheck.current,
             max: limitCheck.max,
+            requiresSubscription: limitCheck.requiresSubscription ?? false,
           },
           { status: 403 }
         )

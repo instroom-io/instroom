@@ -121,7 +121,7 @@ export function LandingPage() {
             {/* TRUST BAR */}
       <section className={`${styles.trust} ${styles.secEven}`}>
         <div className={styles.containerMd}>
-          <p className={styles.trustLabel}>Loved by 1000+ big and small brands around the worlds</p>
+          <p className={styles.trustLabel}>Built from 200+ brands, campaigns, and hard-won lessons</p>
           <div className={styles.trustLogos}>
             <div className={styles.trustCarousel}>
               {[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17].map((num) => (

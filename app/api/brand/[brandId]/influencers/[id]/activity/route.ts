@@ -44,12 +44,23 @@ export async function GET(
     const limitParam = new URL(req.url).searchParams.get("limit")
     const limit = limitParam ? Math.max(1, parseInt(limitParam, 10) || 0) : undefined
 
+    // `id` here is the Influencer.id (matches every other route in this
+    // resource), but activity logs are keyed by BrandInfluencer.id — resolve it first.
+    const brandInfluencer = await prisma.brandInfluencer.findUnique({
+      where: { brand_id_influencer_id: { brand_id: brandId, influencer_id: id } },
+      select: { id: true },
+    })
+
+    if (!brandInfluencer) {
+      return NextResponse.json({ logs: [] })
+    }
+
     // Fetch logs without include to avoid any Prisma type issues
     const logs = await prisma.activityLog.findMany({
       where: {
         brand_id: brandId,
         entity_type: "brand_influencer",
-        entity_id: id,
+        entity_id: brandInfluencer.id,
       },
       orderBy: { created_at: "desc" },
       ...(limit ? { take: limit } : {}),
