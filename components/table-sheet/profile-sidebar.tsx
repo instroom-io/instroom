@@ -8,6 +8,16 @@ import { STATUS_LABEL } from "./constants"
 import { getProfileUrl, handleApprovalChange, formatFollowers } from "./utils"
 import { ProfilePicture } from "./ui-atoms"
 import { DeclineConfirmationModal } from "./modals"
+import { EmailModal } from "@/components/shared/email-modal"
+
+// Instagram's official "message me" shortlink opens a DM composer directly.
+// No platform exposes an equivalent deep link for an arbitrary handle, so
+// everywhere else we just open the profile and let the user hit Message there.
+function getDmUrl(platform: string, handle: string): string {
+  const clean = handle.replace(/^@/, "")
+  if (platform === "instagram") return `https://ig.me/m/${clean}`
+  return getProfileUrl(platform, handle)
+}
 
 // ─── Activity log types ───────────────────────────────────────────────────────
 interface ActivityLog {
@@ -278,6 +288,7 @@ export default function ProfileSidebar({
   const [profileTab, setProfileTab] = useState(0)
   const [editedRow, setEditedRow] = useState<InfluencerRow | null>(row ? { ...row } : null)
   const [showDeclineModal, setShowDeclineModal] = useState(false)
+  const [showEmailModal, setShowEmailModal] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const defaultDiscountCode = row ? "CODE" + (row.first_name || row.handle).toUpperCase().replace(/[^A-Z]/g, "") : ""
   const defaultAffiliateLink = row ? "https://instroom.io/ref/" + (row.first_name || row.handle).toLowerCase().replace(/[^a-z]/g, "") : ""
@@ -461,6 +472,17 @@ export default function ProfileSidebar({
         onConfirm={r => { if (editedRow) setEditedRow(handleApprovalChange(editedRow, "Declined", r)) }}
         influencerName={editedRow.full_name || editedRow.handle || "this influencer"} />
 
+      {showEmailModal && (
+        <EmailModal
+          partnerName={editedRow.full_name || editedRow.first_name || editedRow.handle}
+          handle={editedRow.handle}
+          platform={editedRow.platform}
+          brandId={brandId}
+          defaultTo={editedRow.contact_info || editedRow.email || ""}
+          onClose={() => setShowEmailModal(false)}
+        />
+      )}
+
       <div style={S.overlay} onClick={onClose} />
 
       <div style={S.panel}>
@@ -504,9 +526,21 @@ export default function ProfileSidebar({
             </div>
           </div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            <button style={S.atagPlat}>{platformLabel}</button>
-            <button style={S.atag}>Send Email</button>
-            <button style={S.atag}>Send DM</button>
+            <button
+              style={S.atagPlat}
+              onClick={() => {
+                const url = getProfileUrl(editedRow.platform, editedRow.handle)
+                if (url) window.open(url, "_blank", "noopener,noreferrer")
+              }}
+            >{platformLabel}</button>
+            <button style={S.atag} onClick={() => setShowEmailModal(true)}>Send Email</button>
+            <button
+              style={S.atag}
+              onClick={() => {
+                const url = getDmUrl(editedRow.platform, editedRow.handle)
+                if (url) window.open(url, "_blank", "noopener,noreferrer")
+              }}
+            >Send DM</button>
             <button style={S.atag}>Follow up</button>
           </div>
         </div>
