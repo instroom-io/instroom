@@ -55,6 +55,7 @@ function FooterInner() {
               <li><Link href="/demo" className="hover:text-white transition">Demo</Link></li>
               <li><Link href="/features" className="hover:text-white transition">Features</Link></li>
               <li><Link href="/pricing" className="hover:text-white transition">Pricing</Link></li>
+              <li><Link href="/tools/tiktok-downloader" className="hover:text-white transition">Free Tools</Link></li>
             </ul>
           </div>
           <div>
