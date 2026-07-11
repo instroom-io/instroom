@@ -15,7 +15,9 @@ export type InfluencerRow = {
   affiliate_id?: string | null;
   ref_code?: string | null;
   coupon?: string | null;
+  spark_ads?: string | null;
   affiliate_link?: string | null;
+  brand_influencer_id?: string;
   clicks?: number | string;
   sales_count?: number | string;
   gmv?: number | string;

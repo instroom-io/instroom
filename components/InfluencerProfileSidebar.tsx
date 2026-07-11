@@ -42,6 +42,7 @@ export interface Partner {
   affiliate_id?: string | null
   ref_code?: string | null
   coupon?: string | null
+  spark_ads?: string | null
   affiliate_link?: string | null
   brandInfluencerId?: string
   brandId?: string
@@ -615,8 +616,41 @@ export default function InfluencerProfileSidebar({
     productName: "", orderNumber: "", productCost: "",
     discountCode: partner.coupon || partner.ref_code || "CODE" + partner.firstName.toUpperCase(),
     affiliateLink: partner.affiliate_link || "https://instroom.io/ref/" + partner.firstName.toLowerCase(),
+    sparkAds: partner.spark_ads || "",
     shippingAddress: "", trackingLink: "",
   })
+  const [attributionSaveState, setAttributionSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle")
+  const [attributionSaveMessage, setAttributionSaveMessage] = useState<string | null>(null)
+
+  const handleAttributionSave = async () => {
+    if (!partner.brandId || !partner.brandInfluencerId) return
+    setAttributionSaveState("saving")
+    setAttributionSaveMessage(null)
+    try {
+      const res = await fetch(`/api/brand/${partner.brandId}/attribution/${partner.brandInfluencerId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          coupon: orderData.discountCode || null,
+          affiliateLink: orderData.affiliateLink || null,
+          sparkAds: orderData.sparkAds || null,
+        }),
+      })
+      if (!res.ok) throw new Error("Failed to save")
+      const json = await res.json()
+      setAttributionSaveState("saved")
+      if (json.goAffPro?.synced === false && json.goAffPro?.reason) {
+        setAttributionSaveMessage(`Saved — GoAffPro sync skipped: ${json.goAffPro.reason}`)
+      } else if (json.goAffPro?.synced) {
+        setAttributionSaveMessage("Saved and synced to GoAffPro")
+      }
+    } catch {
+      setAttributionSaveState("error")
+      setAttributionSaveMessage("Failed to save")
+    } finally {
+      setTimeout(() => setAttributionSaveState("idle"), 3000)
+    }
+  }
   const [postData, setPostData] = useState({
     postLink: "", likes: "", sales: "", driveLink: "",
     comments: "", amount: "", usageRights: "", views: "", clicks: "",
@@ -873,10 +907,24 @@ export default function InfluencerProfileSidebar({
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <div className="pfr">
                 <div className="pfg"><div className="pfl">Discount Code</div><input className="pfi" value={orderData.discountCode} onChange={e => setOrderData(d => ({ ...d, discountCode: e.target.value }))} /></div>
-                <div className="pfg"><div className="pfl">Ad Code/Spark Ads Code</div><input className="pfi" placeholder="Ad Code/Spark Ads Code" /></div>
+                <div className="pfg"><div className="pfl">Ad Code/Spark Ads Code</div><input className="pfi" value={orderData.sparkAds} onChange={e => setOrderData(d => ({ ...d, sparkAds: e.target.value }))} placeholder="Ad Code/Spark Ads Code" /></div>
               </div>
               <div className="pfg"><div className="pfl">Affiliate Link</div><input className="pfi" value={orderData.affiliateLink} onChange={e => setOrderData(d => ({ ...d, affiliateLink: e.target.value }))} /></div>
-              <div style={{ display: "flex", justifyContent: "flex-end" }}><button className="btn-primary">Save</button></div>
+              <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10 }}>
+                {attributionSaveMessage && (
+                  <div style={{ fontSize: 12, color: attributionSaveState === "error" ? "#B42318" : "#667085" }}>
+                    {attributionSaveMessage}
+                  </div>
+                )}
+                <button
+                  className="btn-primary"
+                  onClick={handleAttributionSave}
+                  disabled={attributionSaveState === "saving"}
+                  style={{ opacity: attributionSaveState === "saving" ? 0.6 : 1 }}
+                >
+                  {attributionSaveState === "saving" ? "Saving…" : attributionSaveState === "saved" ? "Saved" : "Save"}
+                </button>
+              </div>
             </div>
           )}
 

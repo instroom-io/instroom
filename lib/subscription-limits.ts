@@ -117,14 +117,14 @@ export async function canAddInfluencer(
   max: number | null
   message?: string
   subscriptionStatus?: string
+  requiresSubscription?: boolean
 }> {
   try {
-    // Verify user owns the brand
     const brand = await prisma.brand.findUnique({
       where: { id: brandId },
     })
 
-    if (!brand || brand.owner_id !== userId) {
+    if (!brand) {
       return {
         allowed: false,
         current: 0,
@@ -133,18 +133,39 @@ export async function canAddInfluencer(
       }
     }
 
+    const isOwner = brand.owner_id === userId
+    const isMember = isOwner
+      ? true
+      : !!(await prisma.brandMember.findFirst({
+          where: { brand_id: brandId, user_id: userId },
+        }))
+
+    if (!isMember) {
+      return {
+        allowed: false,
+        current: 0,
+        max: 0,
+        message: "Brand not found or you don't have permission",
+      }
+    }
+
+    // Entitlements always belong to the brand (its owner's plan), not the
+    // calling user — a team member has no subscription of their own.
     const subscription = await prisma.userSubscription.findUnique({
-      where: { user_id: userId },
+      where: { user_id: brand.owner_id },
       include: { plan: true },
     })
 
-    // Free users (no active subscription) cannot add influencers at all
+    // No active subscription on the brand — can't add influencers at all
     if (!subscription || (subscription.status !== "active" && subscription.status !== "trialing")) {
       return {
         allowed: false,
         current: 0,
         max: 0,
-        message: "Upgrade to a paid plan to add influencers. You can add team members to your workspace for free.",
+        message: isOwner
+          ? "Upgrade to a paid plan to add influencers. You can add team members to your workspace for free."
+          : "This workspace's subscription is inactive. Ask the brand owner to upgrade or renew.",
+        requiresSubscription: isOwner,
       }
     }
 
@@ -202,14 +223,14 @@ export async function canCreateCampaign(
   current: number
   max: number | null
   message?: string
+  requiresSubscription?: boolean
 }> {
   try {
-    // Verify user owns the brand
     const brand = await prisma.brand.findUnique({
       where: { id: brandId },
     })
 
-    if (!brand || brand.owner_id !== userId) {
+    if (!brand) {
       return {
         allowed: false,
         current: 0,
@@ -218,8 +239,26 @@ export async function canCreateCampaign(
       }
     }
 
+    const isOwner = brand.owner_id === userId
+    const isMember = isOwner
+      ? true
+      : !!(await prisma.brandMember.findFirst({
+          where: { brand_id: brandId, user_id: userId },
+        }))
+
+    if (!isMember) {
+      return {
+        allowed: false,
+        current: 0,
+        max: 0,
+        message: "Workspace not found or you don't have permission",
+      }
+    }
+
+    // Entitlements always belong to the brand (its owner's plan), not the
+    // calling user — a team member has no subscription of their own.
     const subscription = await prisma.userSubscription.findUnique({
-      where: { user_id: userId },
+      where: { user_id: brand.owner_id },
       include: { plan: true },
     })
 
@@ -228,17 +267,20 @@ export async function canCreateCampaign(
         allowed: false,
         current: 0,
         max: 0,
-        message: "No active subscription found",
+        message: isOwner
+          ? "No active subscription found"
+          : "This workspace's subscription is inactive. Ask the brand owner to upgrade or renew.",
+        requiresSubscription: isOwner,
       }
     }
 
     const maxCampaigns = subscription.plan.max_campaigns ?? 0
 
-    // Count TOTAL active campaigns across ALL workspaces for this user
+    // Count TOTAL active campaigns across ALL workspaces owned by the brand's owner
     const activeCampaignCount = await prisma.campaign.count({
       where: {
         brand: {
-          owner_id: userId,
+          owner_id: brand.owner_id,
         },
         status: "active"
       },

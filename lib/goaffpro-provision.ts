@@ -4,9 +4,14 @@ import { getGoAffProConnection } from "@/lib/goaffpro-connection"
 
 const GOAFFPRO_BASE_URL = "https://api.goaffpro.com/v1/"
 
-async function goAffProRequest(accessToken: string, path: string, body: Record<string, unknown>) {
+async function goAffProRequest(
+  accessToken: string,
+  path: string,
+  body: Record<string, unknown>,
+  method: "POST" | "PATCH" | "PUT" = "POST"
+) {
   const res = await fetch(new URL(path.replace(/^\//, ""), GOAFFPRO_BASE_URL).toString(), {
-    method: "POST",
+    method,
     headers: {
       "Content-Type": "application/json",
       "x-goaffpro-access-token": accessToken,
@@ -45,21 +50,21 @@ export async function provisionGoAffProAffiliate(params: {
 
   const brandInfluencer = await prisma.brandInfluencer.findUnique({
     where: { id: brandInfluencerId },
-    include: { influencer: true },
+    include: { influencer: true, attribution: true },
   })
 
   if (!brandInfluencer) {
     return { success: false, skipped: false as const, reason: "Brand influencer not found" }
   }
 
-  if (brandInfluencer.affiliate_id) {
+  if (brandInfluencer.attribution?.affiliate_id) {
     return {
       success: true,
       alreadyProvisioned: true,
-      affiliateId: brandInfluencer.affiliate_id,
-      refCode: brandInfluencer.ref_code,
-      coupon: brandInfluencer.coupon,
-      referralLink: brandInfluencer.affiliate_link,
+      affiliateId: brandInfluencer.attribution.affiliate_id,
+      refCode: brandInfluencer.attribution.ref_code,
+      coupon: brandInfluencer.attribution.coupon,
+      referralLink: brandInfluencer.attribution.affiliate_link,
     }
   }
 
@@ -113,9 +118,17 @@ export async function provisionGoAffProAffiliate(params: {
     console.error("[GoAffPro] no affiliateId extracted from create response", JSON.stringify(createdAffiliate))
   }
 
-  await prisma.brandInfluencer.update({
-    where: { id: brandInfluencerId },
-    data: {
+  await prisma.attribution.upsert({
+    where: { brand_influencer_id: brandInfluencerId },
+    update: {
+      affiliate_id: affiliateId || null,
+      ref_code: refCode,
+      coupon: coupon,
+      affiliate_link: referralLink,
+    },
+    create: {
+      brand_id: brandId,
+      brand_influencer_id: brandInfluencerId,
       affiliate_id: affiliateId || null,
       ref_code: refCode,
       coupon: coupon,
@@ -129,5 +142,30 @@ export async function provisionGoAffProAffiliate(params: {
     refCode,
     coupon,
     referralLink,
+  }
+}
+
+export async function assignGoAffProCoupon(params: {
+  brandId: string
+  affiliateId: string
+  coupon: string
+}) {
+  const { brandId, affiliateId, coupon } = params
+
+  const connection = await getGoAffProConnection(brandId)
+  if (!connection) {
+    return { success: false, reason: "GoAffPro is not connected" }
+  }
+
+  try {
+    await goAffProRequest(
+      connection.accessToken,
+      `/admin/affiliates/${affiliateId}/coupons`,
+      { coupon },
+      "POST"
+    )
+    return { success: true }
+  } catch (error: any) {
+    return { success: false, reason: error?.message || "GoAffPro coupon assignment failed" }
   }
 }

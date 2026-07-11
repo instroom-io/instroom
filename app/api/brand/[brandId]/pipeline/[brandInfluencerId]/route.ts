@@ -21,6 +21,7 @@ import { prisma } from "@/lib/prisma"
 import { logActivity } from "@/lib/activity-log"
 import { sendNotification } from "@/lib/notifications"
 import type { NotifType } from "@/emails/notification"
+import { provisionGoAffProAffiliate } from "@/lib/goaffpro-provision"
 
 // ─── Status → DB field mapping ────────────────────────────────────────────────
 function pipelineStatusToFields(pipelineStatus: string): {
@@ -97,7 +98,7 @@ export async function PATCH(
     // ── Snapshot BEFORE state so the change can be logged ────────────────────
     const before = await prisma.brandInfluencer.findUnique({
       where: { id: brandInfluencerId, brand_id: brandId },
-      select: { contact_status: true },
+      select: { contact_status: true, stage: true },
     })
 
     // ── Update — select only what we send back ────────────────────────────────
@@ -124,6 +125,15 @@ export async function PATCH(
         approval_status: true,
       },
     })
+
+    // ── Provision GoAffPro affiliate on first transition into Deal Agreed ────
+    if (before && before.stage !== 4 && fields.stage === 4) {
+      provisionGoAffProAffiliate({ brandId, brandInfluencerId }).then((result) => {
+        if (!result.success && !result.skipped) {
+          console.error("GoAffPro provisioning failed:", result.reason)
+        }
+      }).catch(console.error)
+    }
 
     // ── Log activity (non-blocking) ─────────────────────────────────────────
     if (before && before.contact_status !== fields.contact_status) {

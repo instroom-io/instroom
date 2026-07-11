@@ -2,6 +2,7 @@
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { logActivity } from "@/lib/activity-log"
+import { provisionGoAffProAffiliate } from "@/lib/goaffpro-provision"
 import { NextRequest, NextResponse } from "next/server"
 
 const VALID_CONTACT_STATUSES = new Set([
@@ -89,6 +90,15 @@ export async function PUT(
       )
     }
     if (updates.length > 0) await Promise.all(updates)
+
+    // ── Provision GoAffPro affiliate on first transition into Deal Agreed ────
+    if (before && bi.stage !== undefined && before.stage !== 4 && bi.stage === 4) {
+      provisionGoAffProAffiliate({ brandId, brandInfluencerId: before.id }).then((result) => {
+        if (!result.success && !result.skipped) {
+          console.error("GoAffPro provisioning failed:", result.reason)
+        }
+      }).catch(console.error)
+    }
 
     // Log only what actually changed
     const userId = session.user.id

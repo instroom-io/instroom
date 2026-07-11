@@ -8,10 +8,11 @@ export async function syncGoAffProOrder(params: { brandId: string; order: GoAffP
   const affiliateId = String(order.affiliate_id)
   const status = String(order.status)
 
-  const brandInfluencer = await prisma.brandInfluencer.findFirst({
+  const attribution = await prisma.attribution.findFirst({
     where: { brand_id: brandId, affiliate_id: affiliateId },
-    select: { id: true },
+    select: { brand_influencer_id: true },
   })
+  const brandInfluencer = attribution ? { id: attribution.brand_influencer_id } : null
 
   await prisma.goAffProOrder.upsert({
     where: { brand_id_goaffpro_order_id: { brand_id: brandId, goaffpro_order_id: orderId } },
@@ -51,14 +52,10 @@ export async function syncGoAffProOrder(params: { brandId: string; order: GoAffP
   const salesCount = agg._count._all
   const gmv = agg._sum.total ?? 0
 
-  await prisma.brandInfluencer.update({
-    where: { id: brandInfluencer.id },
-    data: { sales_count: salesCount, gmv },
-  })
-
-  await prisma.brandPartner.updateMany({
+  await prisma.attribution.upsert({
     where: { brand_influencer_id: brandInfluencer.id },
-    data: { sales_count: salesCount, gmv },
+    update: { sales_count: salesCount, gmv },
+    create: { brand_id: brandId, brand_influencer_id: brandInfluencer.id, sales_count: salesCount, gmv },
   })
 
   return { success: true, orderId, affiliateId, brandInfluencerId: brandInfluencer.id }

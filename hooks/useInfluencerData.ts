@@ -64,6 +64,7 @@ export function useInfluencerData(brandId: string | null): UseInfluencerDataRetu
             // Core identity — use BrandInfluencer.id as the row ID so updates
             // hit the right record. The actual Influencer.id is inf.id.
             id: inf.id,
+            brand_influencer_id: item.id,
             handle: (inf.handle ?? "").replace(/^@/, ""), // strip @ — stored inconsistently in older records
             platform: inf.platform ?? "instagram",
             full_name: fullName,
@@ -84,6 +85,7 @@ export function useInfluencerData(brandId: string | null): UseInfluencerDataRetu
             affiliate_id: item.affiliate_id ?? null,
             ref_code: item.ref_code ?? null,
             coupon: item.coupon ?? null,
+            spark_ads: item.spark_ads ?? null,
             affiliate_link: item.affiliate_link ?? null,
             clicks: item.clicks ?? 0,
             sales_count: item.sales_count ?? 0,
