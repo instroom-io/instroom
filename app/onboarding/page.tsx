@@ -173,8 +173,7 @@ export default function OnboardingPage() {
         throw new Error(data.error || 'Failed to save onboarding data')
       }
 
-      // Redirect to dashboard
-      router.push('/dashboard')
+      router.push('/pricing')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred')
     } finally {
