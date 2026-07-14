@@ -61,6 +61,27 @@ export default function FeaturesPage() {
       {/* Only Tailwind can't do font @imports, so this stays */}
       <style jsx global>{`
         @import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap");
+
+        @keyframes cardDrag {
+          0%{opacity:0;left:5%;top:56%;transform:rotate(0) scale(1);box-shadow:0 2px 6px rgba(0,0,0,.10)}
+          7%{opacity:1}
+          16%{transform:translateY(-9px) rotate(-3deg) scale(1.05);box-shadow:0 16px 30px rgba(15,107,62,.30)}
+          46%{left:37%;top:30%;transform:translateY(-6px) rotate(-2deg) scale(1.04);box-shadow:0 16px 30px rgba(15,107,62,.30)}
+          58%{left:37%;top:42%;transform:rotate(0) scale(1);box-shadow:0 2px 6px rgba(0,0,0,.10)}
+          86%{opacity:1;left:37%;top:42%}
+          94%{opacity:0;left:37%;top:42%}
+          95%{opacity:0;left:5%;top:56%}
+          100%{opacity:0}
+        }
+        @keyframes emailIn {0%{opacity:0;transform:translateY(-16px)}12%{opacity:1;transform:translateY(0)}84%{opacity:1;transform:translateY(0)}95%{opacity:0;transform:translateY(-8px)}100%{opacity:0}}
+        @keyframes tagPop {0%,26%{opacity:0;transform:scale(.5)}36%{opacity:1;transform:scale(1.12)}44%,88%{opacity:1;transform:scale(1)}95%,100%{opacity:0}}
+        @keyframes dotPulse {0%,100%{opacity:.35}50%{opacity:1}}
+        @keyframes tlIn {0%{opacity:0;transform:translateY(7px)}12%{opacity:1;transform:translateY(0)}84%{opacity:1;transform:translateY(0)}96%{opacity:0;transform:translateY(-4px)}100%{opacity:0}}
+        @keyframes barGrow {0%{transform:scaleY(0)}22%{transform:scaleY(1)}80%{transform:scaleY(1)}100%{transform:scaleY(0)}}
+        @keyframes climb {0%{opacity:0;top:72%}8%{opacity:1}30%{top:72%}50%{top:44%}72%{top:16%}90%{opacity:1;top:16%}96%{opacity:0;top:16%}100%{opacity:0;top:72%}}
+        @keyframes fillGold {0%,50%{width:0}72%,90%{width:100%}96%,100%{width:0}}
+        @keyframes fillSilver {0%,30%{width:0}50%,90%{width:72%}96%,100%{width:0}}
+        @keyframes fillBronze {0%,8%{width:0}30%,90%{width:44%}96%,100%{width:0}}
       `}</style>
 
       {/* NAV */}
@@ -158,13 +179,43 @@ export default function FeaturesPage() {
                 </ul>
               </div>
             </div>
-            <div className="rounded-[20px] aspect-[4/3] flex flex-col items-center justify-center gap-3 p-8 overflow-hidden relative bg-gradient-to-br from-[#EDF5F0] to-[#D4EDDF] border border-[#1FAE5B]/[0.15] shadow-[0_8px_40px_rgba(15,107,62,0.07)]">
-              <div className="w-[72px] h-[72px] rounded-[18px] bg-[#1FAE5B] text-white flex items-center justify-center text-3xl shadow-[0_8px_20px_rgba(31,174,91,0.3)]">
-                📊
+            <div className="rounded-[20px] aspect-[4/3] overflow-hidden relative bg-gradient-to-br from-[#EDF5F0] to-[#D4EDDF] border border-[#1FAE5B]/[0.15] shadow-[0_8px_40px_rgba(15,107,62,0.07)]">
+              <div className="absolute inset-5 bg-white rounded-[14px] overflow-hidden shadow-[0_4px_18px_rgba(16,24,40,0.08)]">
+                <div className="flex items-center gap-2 px-3.5 py-3 border-b border-[#eef1f0]">
+                  <span className="w-2 h-2 rounded-full bg-[#e3e7e5]" />
+                  <span className="w-2 h-2 rounded-full bg-[#e3e7e5]" />
+                  <span className="w-2 h-2 rounded-full bg-[#e3e7e5]" />
+                  <div className="ml-2 flex bg-[#f1f4f2] rounded-full p-[3px]">
+                    <span className="text-[10px] font-bold text-[#9aa4a0] px-2.5 py-[3px] rounded-full">List</span>
+                    <span className="text-[10px] font-bold text-white px-2.5 py-[3px] rounded-full bg-[#1FAE5B]">Board</span>
+                  </div>
+                </div>
+                <div className="absolute left-0 right-0 bottom-0 flex gap-[2%] px-[4%] py-3.5" style={{ top: "47px" }}>
+                  <div className="flex-1 bg-[#f7faf8] rounded-[10px] p-2">
+                    <div className="h-1.5 w-[60%] bg-[#c8d4ce] rounded mb-2" />
+                    <div className="h-[34px] bg-white border border-[#eef1f0] rounded-lg mb-1.5" />
+                    <div className="h-[34px] bg-white border border-[#eef1f0] rounded-lg" />
+                  </div>
+                  <div className="flex-1 bg-[#f7faf8] rounded-[10px] p-2">
+                    <div className="h-1.5 w-[70%] bg-[#c8d4ce] rounded mb-2" />
+                    <div className="h-[34px] bg-white border border-[#eef1f0] rounded-lg" />
+                  </div>
+                  <div className="flex-1 bg-[#f7faf8] rounded-[10px] p-2">
+                    <div className="h-1.5 w-[55%] bg-[#c8d4ce] rounded mb-2" />
+                    <div className="h-[34px] bg-white border border-[#eef1f0] rounded-lg" />
+                  </div>
+                </div>
+                <div
+                  className="absolute p-2 rounded-lg bg-white border-[1.5px] border-[#1FAE5B]"
+                  style={{ width: "26%", animation: "cardDrag 5.5s cubic-bezier(.22,1,.36,1) infinite" }}
+                >
+                  <div className="flex items-center gap-1.5 mb-1.5">
+                    <span className="w-4 h-4 rounded-full" style={{ background: "linear-gradient(135deg,#22c55e,#0F6B3E)" }} />
+                    <span className="h-[5px] w-[60%] bg-[#d5dbd8] rounded" />
+                  </div>
+                  <span className="inline-block h-[5px] w-[40%] bg-[#eaeeec] rounded" />
+                </div>
               </div>
-              <p className="text-[0.8125rem] text-[#71717a] font-medium uppercase tracking-[0.08em] mt-2">
-                Pipeline Preview
-              </p>
             </div>
           </div>
         </div>
@@ -219,13 +270,44 @@ export default function FeaturesPage() {
                 </ul>
               </div>
             </div>
-            <div className="min-[901px]:order-1 rounded-[20px] aspect-[4/3] flex flex-col items-center justify-center gap-3 p-8 overflow-hidden relative bg-gradient-to-br from-white to-[#F4F7F5] border border-black/[0.09] shadow-[0_8px_40px_rgba(0,0,0,0.05)]">
-              <div className="w-[72px] h-[72px] rounded-[18px] bg-[#1FAE5B] text-white flex items-center justify-center text-3xl shadow-[0_8px_20px_rgba(31,174,91,0.3)]">
-                ✉️
+            <div className="min-[901px]:order-1 rounded-[20px] aspect-[4/3] overflow-hidden relative bg-gradient-to-br from-white to-[#F4F7F5] border border-black/[0.09] shadow-[0_8px_40px_rgba(0,0,0,0.05)]">
+              <div className="absolute inset-5 bg-white rounded-[14px] overflow-hidden shadow-[0_4px_18px_rgba(16,24,40,0.08)]">
+                <div className="flex items-center gap-2 px-3.5 py-3 border-b border-[#eef1f0]">
+                  <span className="w-2 h-2 rounded-full bg-[#e3e7e5]" />
+                  <span className="w-2 h-2 rounded-full bg-[#e3e7e5]" />
+                  <span className="ml-1.5 text-[10px] font-bold text-[#9aa4a0] uppercase tracking-[0.08em]">Inbox</span>
+                </div>
+                <div className="p-2.5">
+                  <div
+                    className="flex items-center gap-2 p-2.5 rounded-[9px] bg-[#f0faf5] border border-[#c8f0db] mb-[7px]"
+                    style={{ animation: "emailIn 5s cubic-bezier(.22,1,.36,1) infinite" }}
+                  >
+                    <span className="w-[26px] h-[26px] rounded-full shrink-0" style={{ background: "linear-gradient(135deg,#22c55e,#0F6B3E)" }} />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 mb-[5px]">
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#1FAE5B]" style={{ animation: "dotPulse 1.4s ease-in-out infinite" }} />
+                        <span className="h-1.5 w-[42%] rounded" style={{ background: "#0F6B3E", opacity: 0.55 }} />
+                      </div>
+                      <span className="inline-block h-[5px] w-[70%] bg-[#c3d6cc] rounded" />
+                    </div>
+                    <span
+                      className="text-[9px] font-extrabold text-[#0F6B3E] bg-[#d9f5e6] border border-[#c8f0db] px-2 py-[3px] rounded-full whitespace-nowrap"
+                      style={{ animation: "tagPop 5s ease-in-out infinite" }}
+                    >
+                      Negotiating
+                    </span>
+                  </div>
+                  {[38, 46, 32].map((w, i) => (
+                    <div key={i} className={`flex items-center gap-2 p-2.5 ${i < 2 ? "mb-[7px]" : ""}`}>
+                      <span className="w-[26px] h-[26px] rounded-full bg-[#e8ecea] shrink-0" />
+                      <div className="flex-1">
+                        <div className="h-1.5 bg-[#d5dbd8] rounded mb-[5px]" style={{ width: `${w}%` }} />
+                        <span className="inline-block h-[5px] w-[60%] bg-[#eaeeec] rounded" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <p className="text-[0.8125rem] text-[#71717a] font-medium uppercase tracking-[0.08em] mt-2">
-                Email Interface
-              </p>
             </div>
           </div>
         </div>
@@ -280,13 +362,45 @@ export default function FeaturesPage() {
                 </ul>
               </div>
             </div>
-            <div className="rounded-[20px] aspect-[4/3] flex flex-col items-center justify-center gap-3 p-8 overflow-hidden relative bg-gradient-to-br from-[#EDF5F0] to-[#D4EDDF] border border-[#1FAE5B]/[0.15] shadow-[0_8px_40px_rgba(15,107,62,0.07)]">
-              <div className="w-[72px] h-[72px] rounded-[18px] bg-[#1FAE5B] text-white flex items-center justify-center text-3xl shadow-[0_8px_20px_rgba(31,174,91,0.3)]">
-                👥
+            <div className="rounded-[20px] aspect-[4/3] overflow-hidden relative bg-gradient-to-br from-[#EDF5F0] to-[#D4EDDF] border border-[#1FAE5B]/[0.15] shadow-[0_8px_40px_rgba(15,107,62,0.07)]">
+              <div className="absolute inset-5 bg-white rounded-[14px] overflow-hidden shadow-[0_4px_18px_rgba(16,24,40,0.08)] p-4">
+                <div className="flex items-center gap-3 pb-3.5 border-b border-[#eef1f0]">
+                  <span className="w-11 h-11 rounded-full shrink-0" style={{ background: "linear-gradient(135deg,#22c55e,#0F6B3E)" }} />
+                  <div className="flex-1">
+                    <div className="h-2 w-[44%] rounded mb-[7px]" style={{ background: "#1E1E1E", opacity: 0.8 }} />
+                    <div className="h-1.5 w-[30%] bg-[#c3d6cc] rounded" />
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[15px] font-extrabold text-[#0F6B3E]">128K</div>
+                    <div className="text-[8px] font-bold text-[#9aa4a0] uppercase tracking-[0.06em]">followers</div>
+                  </div>
+                </div>
+                <div className="text-[9px] font-bold text-[#9aa4a0] uppercase tracking-[0.08em] mt-3 mb-1">History</div>
+                <div className="relative pl-3.5">
+                  <span className="absolute left-[3px] top-1 bottom-1 w-0.5 bg-[#eaefec]" />
+                  {[
+                    { w: 64, d: "Sep", delay: 0, active: true },
+                    { w: 52, d: "Jun", delay: 0.4, active: true },
+                    { w: 70, d: "Mar", delay: 0.8, active: true },
+                    { w: 46, d: "Jan", delay: 1.2, active: false },
+                  ].map((it, i) => (
+                    <div
+                      key={i}
+                      className="relative flex items-center gap-2 py-[7px]"
+                      style={{ animation: "tlIn 5s ease-in-out infinite", animationDelay: `${it.delay}s` }}
+                    >
+                      <span
+                        className="absolute -left-3.5 w-2 h-2 rounded-full"
+                        style={{ background: it.active ? "#1FAE5B" : "#c3d6cc", boxShadow: `0 0 0 3px ${it.active ? "#e5f6ed" : "#eef4f1"}` }}
+                      />
+                      <div className="flex-1">
+                        <div className="h-1.5 rounded" style={{ width: `${it.w}%`, background: it.active ? "#d5dbd8" : "#e2e7e5" }} />
+                      </div>
+                      <span className="text-[9px] font-bold" style={{ color: it.active ? "#9aa4a0" : "#c3ccc8" }}>{it.d}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <p className="text-[0.8125rem] text-[#71717a] font-medium uppercase tracking-[0.08em] mt-2">
-                Creator Database
-              </p>
             </div>
           </div>
         </div>
@@ -340,13 +454,40 @@ export default function FeaturesPage() {
                 </ul>
               </div>
             </div>
-            <div className="min-[901px]:order-1 rounded-[20px] aspect-[4/3] flex flex-col items-center justify-center gap-3 p-8 overflow-hidden relative bg-gradient-to-br from-white to-[#F4F7F5] border border-black/[0.09] shadow-[0_8px_40px_rgba(0,0,0,0.05)]">
-              <div className="w-[72px] h-[72px] rounded-[18px] bg-[#1FAE5B] text-white flex items-center justify-center text-3xl shadow-[0_8px_20px_rgba(31,174,91,0.3)]">
-                📈
+            <div className="min-[901px]:order-1 rounded-[20px] aspect-[4/3] overflow-hidden relative bg-gradient-to-br from-white to-[#F4F7F5] border border-black/[0.09] shadow-[0_8px_40px_rgba(0,0,0,0.05)]">
+              <div className="absolute inset-5 bg-white rounded-[14px] overflow-hidden shadow-[0_4px_18px_rgba(16,24,40,0.08)] p-4">
+                <div className="flex items-center justify-between mb-3.5">
+                  <div className="h-[7px] w-[38%] bg-[#d5dbd8] rounded" />
+                  <span className="text-[9px] font-extrabold text-white px-2.5 py-1 rounded-full" style={{ background: "linear-gradient(135deg,#22c55e,#0F6B3E)" }}>Export PDF</span>
+                </div>
+                <div className="flex gap-3.5 mb-4">
+                  <div><div className="text-base font-extrabold text-[#0F6B3E]">$48.2K</div><div className="text-[8px] font-bold text-[#9aa4a0] uppercase tracking-[0.06em]">Return</div></div>
+                  <div><div className="text-base font-extrabold text-[#1E1E1E]">3.4M</div><div className="text-[8px] font-bold text-[#9aa4a0] uppercase tracking-[0.06em]">Reach</div></div>
+                  <div><div className="text-base font-extrabold text-[#1E1E1E]">6.1%</div><div className="text-[8px] font-bold text-[#9aa4a0] uppercase tracking-[0.06em]">Eng.</div></div>
+                </div>
+                <div className="absolute left-4 right-4 bottom-4 flex items-end gap-[8%] border-b border-[#eef1f0]" style={{ height: "38%" }}>
+                  {[
+                    { h: 52, d: 0, dark: false },
+                    { h: 74, d: 0.12, dark: false },
+                    { h: 46, d: 0.24, dark: false },
+                    { h: 88, d: 0.36, dark: true },
+                    { h: 64, d: 0.48, dark: false },
+                    { h: 96, d: 0.6, dark: true },
+                  ].map((b, i) => (
+                    <div
+                      key={i}
+                      className="flex-1 rounded-t-[5px]"
+                      style={{
+                        height: `${b.h}%`,
+                        transformOrigin: "bottom",
+                        background: b.dark ? "linear-gradient(#39c46f,#0F6B3E)" : "linear-gradient(#39c46f,#1FAE5B)",
+                        animation: "barGrow 4.5s cubic-bezier(.22,1,.36,1) infinite",
+                        animationDelay: `${b.d}s`,
+                      }}
+                    />
+                  ))}
+                </div>
               </div>
-              <p className="text-[0.8125rem] text-[#71717a] font-medium uppercase tracking-[0.08em] mt-2">
-                Analytics Dashboard
-              </p>
             </div>
           </div>
         </div>
@@ -398,13 +539,43 @@ export default function FeaturesPage() {
                 </ul>
               </div>
             </div>
-            <div className="rounded-[20px] aspect-[4/3] flex flex-col items-center justify-center gap-3 p-8 overflow-hidden relative bg-gradient-to-br from-[#EDF5F0] to-[#D4EDDF] border border-[#1FAE5B]/[0.15] shadow-[0_8px_40px_rgba(15,107,62,0.07)]">
-              <div className="w-[72px] h-[72px] rounded-[18px] bg-[#1FAE5B] text-white flex items-center justify-center text-3xl shadow-[0_8px_20px_rgba(31,174,91,0.3)]">
-                🤝
+            <div className="rounded-[20px] aspect-[4/3] overflow-hidden relative bg-gradient-to-br from-[#EDF5F0] to-[#D4EDDF] border border-[#1FAE5B]/[0.15] shadow-[0_8px_40px_rgba(15,107,62,0.07)]">
+              <div className="absolute inset-5 bg-white rounded-[14px] overflow-hidden shadow-[0_4px_18px_rgba(16,24,40,0.08)] p-[18px]">
+                <div className="text-[9px] font-bold text-[#9aa4a0] uppercase tracking-[0.08em] mb-3">Partner tiers</div>
+                <div className="relative">
+                  <div className="flex items-center gap-2.5 mb-3.5">
+                    <span className="w-[30px] h-[30px] rounded-full shrink-0" style={{ background: "linear-gradient(135deg,#F4C24A,#D99A17)" }} />
+                    <div className="flex-1">
+                      <div className="text-[11px] font-extrabold text-[#1E1E1E] mb-[5px]">Gold</div>
+                      <div className="h-[7px] bg-[#f1f4f2] rounded-full overflow-hidden">
+                        <div className="h-full rounded-full" style={{ background: "linear-gradient(90deg,#F4C24A,#D99A17)", animation: "fillGold 6s cubic-bezier(.22,1,.36,1) infinite" }} />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2.5 mb-3.5">
+                    <span className="w-[30px] h-[30px] rounded-full shrink-0" style={{ background: "linear-gradient(135deg,#D6DBDE,#9AA3AA)" }} />
+                    <div className="flex-1">
+                      <div className="text-[11px] font-extrabold text-[#1E1E1E] mb-[5px]">Silver</div>
+                      <div className="h-[7px] bg-[#f1f4f2] rounded-full overflow-hidden">
+                        <div className="h-full rounded-full" style={{ background: "linear-gradient(90deg,#D6DBDE,#9AA3AA)", animation: "fillSilver 6s cubic-bezier(.22,1,.36,1) infinite" }} />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2.5">
+                    <span className="w-[30px] h-[30px] rounded-full shrink-0" style={{ background: "linear-gradient(135deg,#D89B6A,#A9663B)" }} />
+                    <div className="flex-1">
+                      <div className="text-[11px] font-extrabold text-[#1E1E1E] mb-[5px]">Bronze</div>
+                      <div className="h-[7px] bg-[#f1f4f2] rounded-full overflow-hidden">
+                        <div className="h-full rounded-full" style={{ background: "linear-gradient(90deg,#D89B6A,#A9663B)", animation: "fillBronze 6s cubic-bezier(.22,1,.36,1) infinite" }} />
+                      </div>
+                    </div>
+                  </div>
+                  <div
+                    className="absolute right-0 w-[34px] h-[34px] -mt-0.5 rounded-full border-[2.5px] border-white"
+                    style={{ background: "linear-gradient(135deg,#22c55e,#0F6B3E)", boxShadow: "0 6px 16px rgba(15,107,62,.35)", animation: "climb 6s cubic-bezier(.22,1,.36,1) infinite" }}
+                  />
+                </div>
               </div>
-              <p className="text-[0.8125rem] text-[#71717a] font-medium uppercase tracking-[0.08em] mt-2">
-                Brand Portal
-              </p>
             </div>
           </div>
         </div>

@@ -1,6 +1,5 @@
 import { Button } from "@/components/ui/button"
 import Image from "next/image"
-import { useRouter } from "next/navigation"
 import {
   Card,
   CardContent,
@@ -55,7 +54,6 @@ export function OnboardingForm({
   imageWidth = '250px',
   imageHeight = '90%',
 }: OnboardingFormProps) {
-  const router = useRouter()
   const currentStep = STEPS[step - 1]
 
   const validateStep = (): string | null => {
@@ -151,7 +149,7 @@ export function OnboardingForm({
 
           <div className="flex flex-col gap-3 w-full">
             <Button
-              onClick={() => router.push("/pricing")}
+              onClick={onSubmit}
               disabled={isLoading}
               className="h-10 sm:h-12 px-8 sm:px-12 text-sm sm:text-base bg-[#1FAE5B] text-white font-semibold hover:bg-[#17a04e] rounded-full"
             >
