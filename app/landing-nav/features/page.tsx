@@ -5,6 +5,18 @@ import Image from "next/image"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { MainHeader } from "@/components/shared/main-header"
+import { MainFooter } from "@/components/shared/main-footer"
+import {
+  IconSearch,
+  IconMail,
+  IconUsers,
+  IconGitBranch,
+  IconCircleCheck,
+  IconBuildingStore,
+  IconChartBar,
+  IconFilter,
+  IconRefresh,
+} from "@tabler/icons-react"
 
 const SECTIONS = ["pipeline", "email", "crm", "reporting", "brand-partners"]
 
@@ -15,6 +27,32 @@ const NAV_LINKS: { id: string; label: string }[] = [
   { id: "reporting", label: "Reporting" },
   { id: "brand-partners", label: "Brand Partners" },
 ]
+
+const FEATURE_NAV_ICONS = [
+  { key: "discovery", Icon: IconSearch },
+  { key: "email", Icon: IconMail },
+  { key: "crm", Icon: IconUsers },
+  { key: "pipeline", Icon: IconGitBranch },
+  { key: "post-tracker", Icon: IconCircleCheck },
+  { key: "brand-partners", Icon: IconBuildingStore },
+  { key: "reporting", Icon: IconChartBar },
+]
+
+function FeatureSidebar({ active }: { active: string }) {
+  return (
+    <div className="w-[54px] shrink-0 bg-[#0F6B3E] flex flex-col items-center pt-2.5 pb-2 gap-2">
+      <Image src="/INSTROOM WHITE.png" alt="Instroom" width={36} height={8} className="object-contain mb-1" />
+      {FEATURE_NAV_ICONS.map(({ key, Icon }) => (
+        <div
+          key={key}
+          className={`w-7 h-7 rounded-lg flex items-center justify-center ${active === key ? "bg-[#1FAE5B]" : ""}`}
+        >
+          <Icon size={14} stroke={1.75} className="text-white" />
+        </div>
+      ))}
+    </div>
+  )
+}
 
 export default function FeaturesPage() {
   const [activeSection, setActiveSection] = useState<string>("")
@@ -63,22 +101,20 @@ export default function FeaturesPage() {
         @import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap");
 
         @keyframes cardDrag {
-          0%{opacity:0;left:5%;top:56%;transform:rotate(0) scale(1);box-shadow:0 2px 6px rgba(0,0,0,.10)}
-          7%{opacity:1}
-          16%{transform:translateY(-9px) rotate(-3deg) scale(1.05);box-shadow:0 16px 30px rgba(15,107,62,.30)}
-          46%{left:37%;top:30%;transform:translateY(-6px) rotate(-2deg) scale(1.04);box-shadow:0 16px 30px rgba(15,107,62,.30)}
-          58%{left:37%;top:42%;transform:rotate(0) scale(1);box-shadow:0 2px 6px rgba(0,0,0,.10)}
-          86%{opacity:1;left:37%;top:42%}
-          94%{opacity:0;left:37%;top:42%}
-          95%{opacity:0;left:5%;top:56%}
+          0%{opacity:0;left:3%;top:34%;transform:rotate(0) scale(1);box-shadow:0 2px 6px rgba(0,0,0,.10)}
+          6%{opacity:1}
+          30%{left:23%;top:20%;transform:translateY(-6px) rotate(-3deg) scale(1.05);box-shadow:0 12px 24px rgba(15,107,62,.28)}
+          55%{left:43%;top:14%;transform:translateY(-6px) rotate(-2deg) scale(1.04);box-shadow:0 12px 24px rgba(15,107,62,.28)}
+          75%{left:63%;top:38%;transform:rotate(0) scale(1);box-shadow:0 2px 6px rgba(0,0,0,.10)}
+          90%{opacity:1;left:63%;top:38%}
+          96%{opacity:0;left:63%;top:38%}
+          97%{opacity:0;left:3%;top:34%}
           100%{opacity:0}
         }
         @keyframes emailIn {0%{opacity:0;transform:translateY(-16px)}12%{opacity:1;transform:translateY(0)}84%{opacity:1;transform:translateY(0)}95%{opacity:0;transform:translateY(-8px)}100%{opacity:0}}
         @keyframes tagPop {0%,26%{opacity:0;transform:scale(.5)}36%{opacity:1;transform:scale(1.12)}44%,88%{opacity:1;transform:scale(1)}95%,100%{opacity:0}}
         @keyframes dotPulse {0%,100%{opacity:.35}50%{opacity:1}}
         @keyframes tlIn {0%{opacity:0;transform:translateY(7px)}12%{opacity:1;transform:translateY(0)}84%{opacity:1;transform:translateY(0)}96%{opacity:0;transform:translateY(-4px)}100%{opacity:0}}
-        @keyframes barGrow {0%{transform:scaleY(0)}22%{transform:scaleY(1)}80%{transform:scaleY(1)}100%{transform:scaleY(0)}}
-        @keyframes climb {0%{opacity:0;top:72%}8%{opacity:1}30%{top:72%}50%{top:44%}72%{top:16%}90%{opacity:1;top:16%}96%{opacity:0;top:16%}100%{opacity:0;top:72%}}
         @keyframes fillGold {0%,50%{width:0}72%,90%{width:100%}96%,100%{width:0}}
         @keyframes fillSilver {0%,30%{width:0}50%,90%{width:72%}96%,100%{width:0}}
         @keyframes fillBronze {0%,8%{width:0}30%,90%{width:44%}96%,100%{width:0}}
@@ -145,17 +181,17 @@ export default function FeaturesPage() {
               <h2 className="font-[Manrope,sans-serif] text-[clamp(1.625rem,3vw,2.125rem)] font-bold leading-tight text-[#1E1E1E] mb-4">
                 Work the way you want. List, board, or both.
               </h2>
-              <p className="text-[1.0625rem] font-medium text-[#3f3f46] leading-[1.68] mb-7">
+              <p className="text-[1.0625rem] font-medium text-[#3f3f46] leading-[1.68] mb-7 text-justify">
                 The same data in two views. See everything at a glance in a Kanban board, or scan
                 fast in a spreadsheet view. Switch between them in a single click.
               </p>
               <div>
-                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem]">
+                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem] text-justify">
                   Every campaign comes with pre-built pipeline stages: prospect, reached out,
                   negotiating, confirmed, posted, paid. Customize them or use them as-is. No more
                   setting up a new tracker for every campaign.
                 </p>
-                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem]">
+                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem] text-justify">
                   The list view feels exactly like the spreadsheet you already love, because it
                   works. The board view gives you the visual read on where things stand. Same
                   data, same updates, two perspectives.
@@ -180,40 +216,115 @@ export default function FeaturesPage() {
               </div>
             </div>
             <div className="rounded-[20px] aspect-[4/3] overflow-hidden relative bg-gradient-to-br from-[#EDF5F0] to-[#D4EDDF] border border-[#1FAE5B]/[0.15] shadow-[0_8px_40px_rgba(15,107,62,0.07)]">
-              <div className="absolute inset-5 bg-white rounded-[14px] overflow-hidden shadow-[0_4px_18px_rgba(16,24,40,0.08)]">
-                <div className="flex items-center gap-2 px-3.5 py-3 border-b border-[#eef1f0]">
-                  <span className="w-2 h-2 rounded-full bg-[#e3e7e5]" />
-                  <span className="w-2 h-2 rounded-full bg-[#e3e7e5]" />
-                  <span className="w-2 h-2 rounded-full bg-[#e3e7e5]" />
-                  <div className="ml-2 flex bg-[#f1f4f2] rounded-full p-[3px]">
-                    <span className="text-[10px] font-bold text-[#9aa4a0] px-2.5 py-[3px] rounded-full">List</span>
-                    <span className="text-[10px] font-bold text-white px-2.5 py-[3px] rounded-full bg-[#1FAE5B]">Board</span>
+              <div className="absolute inset-5 bg-white rounded-[14px] overflow-hidden shadow-[0_4px_18px_rgba(16,24,40,0.08)] flex">
+                <FeatureSidebar active="pipeline" />
+                <div className="flex-1 min-w-0 flex flex-col">
+                  <div className="flex items-center gap-1.5 px-3 py-2 border-b border-[#eef1f0]">
+                    <div className="flex items-center gap-1 h-5 px-1.5 rounded-md border border-[#0F6B3E]/15 text-[8px] text-[#9aa4a0]">
+                      <IconSearch size={10} stroke={2} />
+                      Search...
+                    </div>
+                    <div className="flex items-center gap-1 h-5 px-1.5 rounded-md border border-[#0F6B3E]/15 text-[8px] text-[#52525b] font-semibold">
+                      <IconFilter size={10} stroke={2} />
+                      Filters
+                    </div>
+                    <span className="text-[8px] text-[#9aa4a0] font-medium">12 influencers</span>
                   </div>
-                </div>
-                <div className="absolute left-0 right-0 bottom-0 flex gap-[2%] px-[4%] py-3.5" style={{ top: "47px" }}>
-                  <div className="flex-1 bg-[#f7faf8] rounded-[10px] p-2">
-                    <div className="h-1.5 w-[60%] bg-[#c8d4ce] rounded mb-2" />
-                    <div className="h-[34px] bg-white border border-[#eef1f0] rounded-lg mb-1.5" />
-                    <div className="h-[34px] bg-white border border-[#eef1f0] rounded-lg" />
+                  <div className="relative flex-1 flex items-start gap-1 px-2.5 py-3">
+                    {[
+                      {
+                        title: "For Outreach",
+                        headerClass: "bg-yellow-400 text-white",
+                        badgeClass: "bg-white/25 text-white",
+                        actionType: "flow" as const,
+                        cards: [{ name: "Alex Rivera", handle: "@alexcreates", loc: "IG · Philippines", stats: "1.0K · 0.4% eng", next: "Contacted", blur: true }],
+                      },
+                      {
+                        title: "Contacted",
+                        headerClass: "bg-orange-400 text-white",
+                        badgeClass: "bg-white/25 text-white",
+                        actionType: "flow" as const,
+                        cards: [{ name: "Taylor Brooks", handle: "@taylorbrooks", loc: "IG · Netherlands", stats: "2.1K · 1.0% eng", next: "In Conversation", blur: true }],
+                      },
+                      {
+                        title: "In Conversation",
+                        headerClass: "bg-blue-400 text-white",
+                        badgeClass: "bg-white/25 text-white",
+                        actionType: "flow" as const,
+                        cards: [{ name: "Devon Cruz", handle: "@devoncruz", loc: "IG · —", stats: "3 · 0.0% eng", next: "Deal Agreed", blur: true }],
+                      },
+                      {
+                        title: "Deal Agreed",
+                        headerClass: "bg-green-500 text-white",
+                        badgeClass: "bg-white/25 text-white",
+                        actionType: "dealAgreed" as const,
+                        cards: [
+                          { name: "Jordan Lee", handle: "@jordanleeco", loc: "IG · Philippines", stats: "1.8K · 2.7% eng", blur: true },
+                          { name: "Sharon Wells", handle: "@liefssharon", loc: "IG · Netherlands", stats: "3.0K · 0.0% eng", blur: false },
+                        ],
+                      },
+                      {
+                        title: "Not Interested",
+                        headerClass: "bg-red-100 text-red-700 border border-red-200",
+                        badgeClass: "bg-red-200 text-red-700",
+                        actionType: "notInterested" as const,
+                        cards: [
+                          { name: "Suzanne K.", handle: "@suzannek", loc: "IG · —", stats: "1 · 0.0% eng", reason: "Fully booked", blur: true },
+                        ],
+                      },
+                    ].map((col) => (
+                      <div key={col.title} className="flex-1 min-w-0 flex flex-col gap-1">
+                        <div className={`rounded-[5px] px-1.5 py-1 text-[7px] font-bold flex items-center justify-between gap-1 ${col.headerClass}`}>
+                          <span className="truncate">{col.title}</span>
+                          <span className={`rounded-full px-1 py-px text-[6.5px] shrink-0 ${col.badgeClass}`}>{col.cards.length}</span>
+                        </div>
+                        {col.cards.map((card, i) => (
+                          <div key={i} className="bg-white border border-[#eef1f0] rounded-lg p-1.5 flex flex-col gap-[2px]">
+                            <div
+                              className="text-[7.5px] font-semibold text-[#1E1E1E] truncate"
+                              style={card.blur ? { filter: "blur(2px)" } : undefined}
+                            >
+                              {card.name}
+                            </div>
+                            <div
+                              className="text-[6.5px] text-[#9aa4a0] truncate"
+                              style={card.blur ? { filter: "blur(2px)" } : undefined}
+                            >
+                              {card.handle}
+                            </div>
+                            <div className="text-[6px] text-[#9aa4a0] truncate">{card.loc}</div>
+                            <div className="text-[6px] text-[#9aa4a0] truncate">{card.stats}</div>
+                            {col.actionType === "flow" && (
+                              <div className="flex items-center gap-1 mt-px">
+                                <span className="text-[5.5px] font-semibold text-[#0F6B3E] bg-green-50 border border-green-200 rounded px-1 py-px truncate">
+                                  → {"next" in card ? card.next : ""}
+                                </span>
+                                <span className="text-[5.5px] font-semibold text-red-500 bg-red-50 border border-red-100 rounded px-1 py-px">✕</span>
+                              </div>
+                            )}
+                            {col.actionType === "dealAgreed" && (
+                              <div className="text-[5.5px] font-semibold text-white bg-[#1FAE5B] rounded px-1 py-[2px] text-center mt-px truncate">
+                                Move to Post Tracker
+                              </div>
+                            )}
+                            {col.actionType === "notInterested" && (
+                              <div className="text-[5.5px] font-semibold text-red-600 bg-red-50 border border-red-100 rounded px-1 py-px mt-px truncate">
+                                {"reason" in card ? card.reason : ""}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                    <div
+                      className="absolute p-1.5 rounded-lg bg-white border-[1.5px] border-[#1FAE5B] flex flex-col gap-[2px]"
+                      style={{ width: "17%", animation: "cardDrag 6s cubic-bezier(.22,1,.36,1) infinite" }}
+                    >
+                      <div className="text-[7.5px] font-semibold text-[#1E1E1E] truncate">Sharon Wells</div>
+                      <div className="text-[6.5px] text-[#9aa4a0] truncate">@liefssharon</div>
+                      <div className="text-[6px] text-[#9aa4a0] truncate">IG · Netherlands</div>
+                    </div>
                   </div>
-                  <div className="flex-1 bg-[#f7faf8] rounded-[10px] p-2">
-                    <div className="h-1.5 w-[70%] bg-[#c8d4ce] rounded mb-2" />
-                    <div className="h-[34px] bg-white border border-[#eef1f0] rounded-lg" />
-                  </div>
-                  <div className="flex-1 bg-[#f7faf8] rounded-[10px] p-2">
-                    <div className="h-1.5 w-[55%] bg-[#c8d4ce] rounded mb-2" />
-                    <div className="h-[34px] bg-white border border-[#eef1f0] rounded-lg" />
-                  </div>
-                </div>
-                <div
-                  className="absolute p-2 rounded-lg bg-white border-[1.5px] border-[#1FAE5B]"
-                  style={{ width: "26%", animation: "cardDrag 5.5s cubic-bezier(.22,1,.36,1) infinite" }}
-                >
-                  <div className="flex items-center gap-1.5 mb-1.5">
-                    <span className="w-4 h-4 rounded-full" style={{ background: "linear-gradient(135deg,#22c55e,#0F6B3E)" }} />
-                    <span className="h-[5px] w-[60%] bg-[#d5dbd8] rounded" />
-                  </div>
-                  <span className="inline-block h-[5px] w-[40%] bg-[#eaeeec] rounded" />
                 </div>
               </div>
             </div>
@@ -235,18 +346,18 @@ export default function FeaturesPage() {
               <h2 className="font-[Manrope,sans-serif] text-[clamp(1.625rem,3vw,2.125rem)] font-bold leading-tight text-[#1E1E1E] mb-4">
                 Reach out, reply, and track without leaving Instroom.
               </h2>
-              <p className="text-[1.0625rem] font-medium text-[#3f3f46] leading-[1.68] mb-7">
+              <p className="text-[1.0625rem] font-medium text-[#3f3f46] leading-[1.68] mb-7 text-justify">
                 Your inbox lives inside the workspace. Every email is auto-tagged to the right
                 campaign and pipeline stage, so context never gets lost.
               </p>
               <div>
-                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem]">
+                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem] text-justify">
                   When a creator responds at 11pm and your teammate picks it up at 9am, they have
                   the full thread, the campaign, and the creator&apos;s history already loaded. No
                   forwarding. No &quot;wait, which one is this?&quot; No copy-pasting into a
                   spreadsheet after the fact.
                 </p>
-                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem]">
+                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem] text-justify">
                   Replies update the pipeline stage automatically. Follow-up reminders live
                   alongside the conversation. Email templates pull creator details so every
                   outreach feels personal without writing every word.
@@ -271,41 +382,92 @@ export default function FeaturesPage() {
               </div>
             </div>
             <div className="min-[901px]:order-1 rounded-[20px] aspect-[4/3] overflow-hidden relative bg-gradient-to-br from-white to-[#F4F7F5] border border-black/[0.09] shadow-[0_8px_40px_rgba(0,0,0,0.05)]">
-              <div className="absolute inset-5 bg-white rounded-[14px] overflow-hidden shadow-[0_4px_18px_rgba(16,24,40,0.08)]">
-                <div className="flex items-center gap-2 px-3.5 py-3 border-b border-[#eef1f0]">
-                  <span className="w-2 h-2 rounded-full bg-[#e3e7e5]" />
-                  <span className="w-2 h-2 rounded-full bg-[#e3e7e5]" />
-                  <span className="ml-1.5 text-[10px] font-bold text-[#9aa4a0] uppercase tracking-[0.08em]">Inbox</span>
-                </div>
-                <div className="p-2.5">
-                  <div
-                    className="flex items-center gap-2 p-2.5 rounded-[9px] bg-[#f0faf5] border border-[#c8f0db] mb-[7px]"
-                    style={{ animation: "emailIn 5s cubic-bezier(.22,1,.36,1) infinite" }}
-                  >
-                    <span className="w-[26px] h-[26px] rounded-full shrink-0" style={{ background: "linear-gradient(135deg,#22c55e,#0F6B3E)" }} />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5 mb-[5px]">
-                        <span className="w-1.5 h-1.5 rounded-full bg-[#1FAE5B]" style={{ animation: "dotPulse 1.4s ease-in-out infinite" }} />
-                        <span className="h-1.5 w-[42%] rounded" style={{ background: "#0F6B3E", opacity: 0.55 }} />
-                      </div>
-                      <span className="inline-block h-[5px] w-[70%] bg-[#c3d6cc] rounded" />
-                    </div>
-                    <span
-                      className="text-[9px] font-extrabold text-[#0F6B3E] bg-[#d9f5e6] border border-[#c8f0db] px-2 py-[3px] rounded-full whitespace-nowrap"
-                      style={{ animation: "tagPop 5s ease-in-out infinite" }}
-                    >
-                      Negotiating
-                    </span>
+              <div className="absolute inset-5 bg-white rounded-[14px] overflow-hidden shadow-[0_4px_18px_rgba(16,24,40,0.08)] flex">
+                <FeatureSidebar active="email" />
+                <div className="flex-1 min-w-0 flex flex-col">
+                  <div className="flex flex-wrap gap-1 px-3 py-2 border-b border-[#eef1f0]">
+                    <span className="text-[7px] font-bold px-1.5 py-[3px] rounded-full bg-[#1E1E1E] text-white shrink-0">42 All</span>
+                    {[
+                      { label: "Prospects", count: 8, cls: "bg-gray-100 text-gray-700" },
+                      { label: "Reached Out", count: 12, cls: "bg-blue-100 text-blue-700" },
+                      { label: "In Conversation", count: 6, cls: "bg-purple-100 text-purple-700" },
+                      { label: "Onboarded", count: 4, cls: "bg-indigo-100 text-indigo-700" },
+                      { label: "For Order", count: 3, cls: "bg-orange-100 text-orange-700" },
+                      { label: "In-Transit", count: 2, cls: "bg-yellow-100 text-yellow-700" },
+                      { label: "Delivered", count: 5, cls: "bg-teal-100 text-teal-700" },
+                      { label: "Posted", count: 1, cls: "bg-pink-100 text-pink-700" },
+                      { label: "Completed", count: 9, cls: "bg-green-100 text-green-700" },
+                      { label: "Rejected", count: 2, cls: "bg-red-100 text-red-700" },
+                    ].map((s) => (
+                      <span
+                        key={s.label}
+                        className={`text-[7px] font-bold px-1.5 py-[3px] rounded-full truncate max-w-[62px] shrink-0 ${s.cls}`}
+                      >
+                        {s.count} {s.label}
+                      </span>
+                    ))}
                   </div>
-                  {[38, 46, 32].map((w, i) => (
-                    <div key={i} className={`flex items-center gap-2 p-2.5 ${i < 2 ? "mb-[7px]" : ""}`}>
-                      <span className="w-[26px] h-[26px] rounded-full bg-[#e8ecea] shrink-0" />
-                      <div className="flex-1">
-                        <div className="h-1.5 bg-[#d5dbd8] rounded mb-[5px]" style={{ width: `${w}%` }} />
-                        <span className="inline-block h-[5px] w-[60%] bg-[#eaeeec] rounded" />
+                  <div className="flex items-center justify-between px-3 py-2 border-b border-[#eef1f0]">
+                    <div>
+                      <div className="text-[9px] font-bold text-[#1E1E1E]">All Messages</div>
+                      <div className="flex items-center gap-1 mt-px">
+                        <span className="w-1 h-1 rounded-full bg-[#1FAE5B] shrink-0" />
+                        <span className="text-[6.5px] text-[#9aa4a0]">Gmail</span>
                       </div>
                     </div>
-                  ))}
+                    <div className="flex items-center gap-1.5">
+                      <IconRefresh size={11} stroke={2} className="text-[#9aa4a0]" />
+                      <span className="w-5 h-5 rounded-md bg-[#1FAE5B] flex items-center justify-center shrink-0">
+                        <IconMail size={10} stroke={2} className="text-white" />
+                      </span>
+                    </div>
+                  </div>
+                  <div className="px-3 pt-2">
+                    <div className="flex items-center gap-1 h-5 px-1.5 rounded-md border border-[#0F6B3E]/15 text-[7px] text-[#9aa4a0]">
+                      <IconSearch size={9} stroke={2} />
+                      Search conversations...
+                    </div>
+                  </div>
+                  <div className="p-2.5">
+                    <div
+                      className="flex items-center gap-2 p-2.5 rounded-[9px] bg-[#f0faf5] border border-[#c8f0db] mb-[7px]"
+                      style={{ animation: "emailIn 5s cubic-bezier(.22,1,.36,1) infinite" }}
+                    >
+                      <span
+                        className="w-[26px] h-[26px] rounded-full shrink-0 flex items-center justify-center text-white text-[8px] font-bold"
+                        style={{ background: "linear-gradient(135deg,#22c55e,#0F6B3E)" }}
+                      >
+                        AR
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 mb-[3px]">
+                          <span className="w-1.5 h-1.5 rounded-full bg-[#1FAE5B] shrink-0" style={{ animation: "dotPulse 1.4s ease-in-out infinite" }} />
+                          <span className="text-[9px] font-semibold text-[#1E1E1E] truncate" style={{ filter: "blur(2px)" }}>Alex Rivera</span>
+                        </div>
+                        <span className="block text-[8px] text-[#9aa4a0] truncate">Loved the brief — sending drafts Friday</span>
+                      </div>
+                      <span
+                        className="text-[8px] font-extrabold text-[#0F6B3E] bg-[#d9f5e6] border border-[#c8f0db] px-1.5 py-[2px] rounded-full whitespace-nowrap shrink-0"
+                        style={{ animation: "tagPop 5s ease-in-out infinite" }}
+                      >
+                        Negotiating
+                      </span>
+                    </div>
+                    {[
+                      { init: "TB", name: "Taylor Brooks", subj: "Following up on the collab rate" },
+                      { init: "DC", name: "Devon Cruz", subj: "Can we push the posting date?" },
+                    ].map((row, i) => (
+                      <div key={i} className={`flex items-center gap-2 p-2.5 ${i < 1 ? "mb-[7px]" : ""}`}>
+                        <span className="w-[26px] h-[26px] rounded-full bg-[#e8ecea] shrink-0 flex items-center justify-center text-[#9aa4a0] text-[8px] font-bold">
+                          {row.init}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <span className="block text-[9px] font-medium text-[#3f3f46] truncate" style={{ filter: "blur(2px)" }}>{row.name}</span>
+                          <span className="block text-[8px] text-[#9aa4a0] truncate">{row.subj}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
@@ -327,18 +489,18 @@ export default function FeaturesPage() {
               <h2 className="font-[Manrope,sans-serif] text-[clamp(1.625rem,3vw,2.125rem)] font-bold leading-tight text-[#1E1E1E] mb-4">
                 Profiles that remember everything.
               </h2>
-              <p className="text-[1.0625rem] font-medium text-[#3f3f46] leading-[1.68] mb-7">
+              <p className="text-[1.0625rem] font-medium text-[#3f3f46] leading-[1.68] mb-7 text-justify">
                 Every campaign, every post, every payment, every conversation. When you come back
                 to a creator six months later, the full history is waiting.
               </p>
               <div>
-                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem]">
+                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem] text-justify">
                   Stop rebuilding context every time you reach out. A creator&apos;s profile shows
                   you what you&apos;ve done together, what worked, and what&apos;s next. The
                   conversation from March, the product gifting in June, the post that drove 40
                   sales in September — all in one place.
                 </p>
-                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem]">
+                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem] text-justify">
                   Tags, notes, custom fields, and a shared team view mean your whole team sees the
                   same creator the same way. No more &quot;wait, who was handling this
                   relationship?&quot;
@@ -363,42 +525,82 @@ export default function FeaturesPage() {
               </div>
             </div>
             <div className="rounded-[20px] aspect-[4/3] overflow-hidden relative bg-gradient-to-br from-[#EDF5F0] to-[#D4EDDF] border border-[#1FAE5B]/[0.15] shadow-[0_8px_40px_rgba(15,107,62,0.07)]">
-              <div className="absolute inset-5 bg-white rounded-[14px] overflow-hidden shadow-[0_4px_18px_rgba(16,24,40,0.08)] p-4">
-                <div className="flex items-center gap-3 pb-3.5 border-b border-[#eef1f0]">
-                  <span className="w-11 h-11 rounded-full shrink-0" style={{ background: "linear-gradient(135deg,#22c55e,#0F6B3E)" }} />
-                  <div className="flex-1">
-                    <div className="h-2 w-[44%] rounded mb-[7px]" style={{ background: "#1E1E1E", opacity: 0.8 }} />
-                    <div className="h-1.5 w-[30%] bg-[#c3d6cc] rounded" />
-                  </div>
-                  <div className="text-right">
-                    <div className="text-[15px] font-extrabold text-[#0F6B3E]">128K</div>
-                    <div className="text-[8px] font-bold text-[#9aa4a0] uppercase tracking-[0.06em]">followers</div>
-                  </div>
-                </div>
-                <div className="text-[9px] font-bold text-[#9aa4a0] uppercase tracking-[0.08em] mt-3 mb-1">History</div>
-                <div className="relative pl-3.5">
-                  <span className="absolute left-[3px] top-1 bottom-1 w-0.5 bg-[#eaefec]" />
-                  {[
-                    { w: 64, d: "Sep", delay: 0, active: true },
-                    { w: 52, d: "Jun", delay: 0.4, active: true },
-                    { w: 70, d: "Mar", delay: 0.8, active: true },
-                    { w: 46, d: "Jan", delay: 1.2, active: false },
-                  ].map((it, i) => (
-                    <div
-                      key={i}
-                      className="relative flex items-center gap-2 py-[7px]"
-                      style={{ animation: "tlIn 5s ease-in-out infinite", animationDelay: `${it.delay}s` }}
+              <div className="absolute inset-5 bg-white rounded-[14px] overflow-hidden shadow-[0_4px_18px_rgba(16,24,40,0.08)] flex">
+                <FeatureSidebar active="crm" />
+                <div className="flex-1 min-w-0 p-4 flex flex-col">
+                  <div className="flex items-center gap-3 pb-3.5 border-b border-[#eef1f0]">
+                    <span
+                      className="w-11 h-11 rounded-full shrink-0 flex items-center justify-center text-white text-[13px] font-bold"
+                      style={{ background: "linear-gradient(135deg,#22c55e,#0F6B3E)" }}
                     >
-                      <span
-                        className="absolute -left-3.5 w-2 h-2 rounded-full"
-                        style={{ background: it.active ? "#1FAE5B" : "#c3d6cc", boxShadow: `0 0 0 3px ${it.active ? "#e5f6ed" : "#eef4f1"}` }}
-                      />
-                      <div className="flex-1">
-                        <div className="h-1.5 rounded" style={{ width: `${it.w}%`, background: it.active ? "#d5dbd8" : "#e2e7e5" }} />
+                      SW
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[12px] font-bold text-[#1E1E1E] truncate" style={{ filter: "blur(2px)" }}>
+                        Sharon Wells
                       </div>
-                      <span className="text-[9px] font-bold" style={{ color: it.active ? "#9aa4a0" : "#c3ccc8" }}>{it.d}</span>
+                      <div className="text-[9px] text-[#9aa4a0] truncate" style={{ filter: "blur(2px)" }}>
+                        @liefssharon · Instagram
+                      </div>
                     </div>
-                  ))}
+                    <div className="text-right shrink-0">
+                      <div className="text-[15px] font-extrabold text-[#0F6B3E]">128K</div>
+                      <div className="text-[8px] font-bold text-[#9aa4a0] uppercase tracking-[0.06em]">followers</div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 mt-2.5">
+                    <span className="text-[6.5px] font-bold px-1.5 py-px rounded-full bg-blue-100 text-blue-700">Agreed</span>
+                    <span className="text-[6.5px] font-bold px-1.5 py-px rounded-full bg-green-100 text-green-700">Approved</span>
+                  </div>
+                  <div className="flex items-center gap-1 mt-1.5 flex-wrap">
+                    <span className="text-[6.5px] font-semibold px-1.5 py-[3px] rounded-full bg-[#1FAE5B] text-white">Instagram</span>
+                    <span className="text-[6.5px] font-semibold px-1.5 py-[3px] rounded-full border border-gray-200 text-gray-600">Send Email</span>
+                    <span className="text-[6.5px] font-semibold px-1.5 py-[3px] rounded-full border border-gray-200 text-gray-600">Send DM</span>
+                    <span className="text-[6.5px] font-semibold px-1.5 py-[3px] rounded-full border border-gray-200 text-gray-600">Follow up</span>
+                  </div>
+                  <div className="flex items-center gap-2.5 mt-2.5 border-b border-[#eef1f0] pb-1.5">
+                    {["Basic", "Order", "Attribution", "Post", "Stats", "History"].map((t) => (
+                      <span
+                        key={t}
+                        className={`text-[6.5px] font-semibold pb-1 shrink-0 ${
+                          t === "History" ? "text-[#1FAE5B] border-b-2 border-[#1FAE5B]" : "text-[#9aa4a0]"
+                        }`}
+                      >
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="relative pl-3.5 mt-1.5">
+                    <span className="absolute left-[3px] top-1 bottom-1 w-0.5 bg-[#eaefec]" />
+                    {[
+                      { actor: "Jordan M.", label: "Post approved", tag: "bg-[#dcfce7] text-[#166534]", detail: undefined, d: "Sep", delay: 0 },
+                      { actor: "Jordan M.", label: "Updated status", tag: "bg-[#fff8e1] text-[#854F0B]", detail: "negotiating → agreed", d: "Jun", delay: 0.4 },
+                      { actor: "Jordan M.", label: "Note added", tag: "bg-[#f3e8ff] text-[#6b21a8]", detail: undefined, d: "Mar", delay: 0.8 },
+                    ].map((it, i) => (
+                      <div
+                        key={i}
+                        className="relative py-[6px]"
+                        style={{ animation: "tlIn 5s ease-in-out infinite", animationDelay: `${it.delay}s` }}
+                      >
+                        <span
+                          className="absolute -left-3.5 w-2 h-2 rounded-full bg-[#1FAE5B]"
+                          style={{ boxShadow: "0 0 0 3px #e5f6ed" }}
+                        />
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[7px] font-semibold text-[#3f3f46] shrink-0" style={{ filter: "blur(2px)" }}>
+                            {it.actor}
+                          </span>
+                          <span className={`text-[7px] font-semibold px-1.5 py-px rounded-full truncate ${it.tag}`}>{it.label}</span>
+                          <span className="text-[7.5px] font-bold text-[#9aa4a0] ml-auto shrink-0">{it.d}</span>
+                        </div>
+                        {it.detail && (
+                          <div className="text-[6.5px] text-[#9aa4a0] bg-[#f9fafb] rounded px-1.5 py-px mt-1 inline-block">
+                            {it.detail}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
@@ -420,17 +622,17 @@ export default function FeaturesPage() {
               <h2 className="font-[Manrope,sans-serif] text-[clamp(1.625rem,3vw,2.125rem)] font-bold leading-tight text-[#1E1E1E] mb-4">
                 Client-ready reports, one click away.
               </h2>
-              <p className="text-[1.0625rem] font-medium text-[#3f3f46] leading-[1.68] mb-7">
+              <p className="text-[1.0625rem] font-medium text-[#3f3f46] leading-[1.68] mb-7 text-justify">
                 Stop building reports the night before a client call. Pull performance by creator,
                 by campaign, or by deliverable. Export clean PDFs or share a live link.
               </p>
               <div>
-                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem]">
+                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem] text-justify">
                   The data was already in Instroom. Now it&apos;s presentable. Campaign summaries,
                   creator performance breakdowns, spend vs. return, content posted, and engagement
                   metrics — all in a format a client can actually read.
                 </p>
-                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem]">
+                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem] text-justify">
                   Share a live link that updates as the campaign progresses, or export a final PDF
                   when everything&apos;s wrapped. Either way, you stop screenshotting and
                   copy-pasting.
@@ -455,37 +657,44 @@ export default function FeaturesPage() {
               </div>
             </div>
             <div className="min-[901px]:order-1 rounded-[20px] aspect-[4/3] overflow-hidden relative bg-gradient-to-br from-white to-[#F4F7F5] border border-black/[0.09] shadow-[0_8px_40px_rgba(0,0,0,0.05)]">
-              <div className="absolute inset-5 bg-white rounded-[14px] overflow-hidden shadow-[0_4px_18px_rgba(16,24,40,0.08)] p-4">
-                <div className="flex items-center justify-between mb-3.5">
-                  <div className="h-[7px] w-[38%] bg-[#d5dbd8] rounded" />
-                  <span className="text-[9px] font-extrabold text-white px-2.5 py-1 rounded-full" style={{ background: "linear-gradient(135deg,#22c55e,#0F6B3E)" }}>Export PDF</span>
-                </div>
-                <div className="flex gap-3.5 mb-4">
-                  <div><div className="text-base font-extrabold text-[#0F6B3E]">$48.2K</div><div className="text-[8px] font-bold text-[#9aa4a0] uppercase tracking-[0.06em]">Return</div></div>
-                  <div><div className="text-base font-extrabold text-[#1E1E1E]">3.4M</div><div className="text-[8px] font-bold text-[#9aa4a0] uppercase tracking-[0.06em]">Reach</div></div>
-                  <div><div className="text-base font-extrabold text-[#1E1E1E]">6.1%</div><div className="text-[8px] font-bold text-[#9aa4a0] uppercase tracking-[0.06em]">Eng.</div></div>
-                </div>
-                <div className="absolute left-4 right-4 bottom-4 flex items-end gap-[8%] border-b border-[#eef1f0]" style={{ height: "38%" }}>
-                  {[
-                    { h: 52, d: 0, dark: false },
-                    { h: 74, d: 0.12, dark: false },
-                    { h: 46, d: 0.24, dark: false },
-                    { h: 88, d: 0.36, dark: true },
-                    { h: 64, d: 0.48, dark: false },
-                    { h: 96, d: 0.6, dark: true },
-                  ].map((b, i) => (
-                    <div
-                      key={i}
-                      className="flex-1 rounded-t-[5px]"
-                      style={{
-                        height: `${b.h}%`,
-                        transformOrigin: "bottom",
-                        background: b.dark ? "linear-gradient(#39c46f,#0F6B3E)" : "linear-gradient(#39c46f,#1FAE5B)",
-                        animation: "barGrow 4.5s cubic-bezier(.22,1,.36,1) infinite",
-                        animationDelay: `${b.d}s`,
-                      }}
-                    />
-                  ))}
+              <div className="absolute inset-5 bg-white rounded-[14px] overflow-hidden shadow-[0_4px_18px_rgba(16,24,40,0.08)] flex">
+                <FeatureSidebar active="reporting" />
+                <div className="flex-1 min-w-0 p-4 flex flex-col">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-[10px] font-bold text-[#1E1E1E]">Campaign Summary</span>
+                    <span className="text-[8px] font-bold text-[#1FAE5B] border border-[#1FAE5B] px-2 py-[3px] rounded-full">Export CSV</span>
+                  </div>
+                  <div className="flex gap-2 mb-4">
+                    <div className="flex-1 border border-[#eef1f0] rounded-lg px-2 py-1.5">
+                      <div className="text-[7px] text-[#9aa4a0]">Total outreach</div>
+                      <div className="text-[13px] font-extrabold text-[#1E1E1E]">248</div>
+                    </div>
+                    <div className="flex-1 border border-[#eef1f0] rounded-lg px-2 py-1.5">
+                      <div className="text-[7px] text-[#9aa4a0]">Response rate</div>
+                      <div className="text-[13px] font-extrabold text-[#1FAE5B]">61%</div>
+                    </div>
+                    <div className="flex-1 border border-[#eef1f0] rounded-lg px-2 py-1.5">
+                      <div className="text-[7px] text-[#9aa4a0]">Closed deals</div>
+                      <div className="text-[13px] font-extrabold text-[#1E1E1E]">86</div>
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-3 mt-1">
+                    {[
+                      { label: "Reached out", val: "248", color: "#1FAE5B", anim: "fillGold 6s cubic-bezier(.22,1,.36,1) infinite" },
+                      { label: "Responded", val: "151", color: "#5BC98A", anim: "fillSilver 6s cubic-bezier(.22,1,.36,1) infinite" },
+                      { label: "Closed", val: "86", color: "#2C8EC4", anim: "fillBronze 6s cubic-bezier(.22,1,.36,1) infinite" },
+                    ].map((row, i) => (
+                      <div key={i}>
+                        <div className="flex justify-between text-[8px] mb-1">
+                          <span className="text-[#3f3f46] font-medium">{row.label}</span>
+                          <span className="text-[#9aa4a0]">{row.val}</span>
+                        </div>
+                        <div className="w-full bg-[#f1f4f2] rounded-full h-1.5 overflow-hidden">
+                          <div className="h-full rounded-full" style={{ background: row.color, animation: row.anim }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
@@ -507,18 +716,18 @@ export default function FeaturesPage() {
               <h2 className="font-[Manrope,sans-serif] text-[clamp(1.625rem,3vw,2.125rem)] font-bold leading-tight text-[#1E1E1E] mb-4">
                 Creators worth more than a campaign.
               </h2>
-              <p className="text-[1.0625rem] font-medium text-[#3f3f46] leading-[1.68] mb-7">
+              <p className="text-[1.0625rem] font-medium text-[#3f3f46] leading-[1.68] mb-7 text-justify">
                 Some creators keep delivering, campaign after campaign. Brand Partners gives those
                 relationships structure: tiered status, retainer tracking, and full performance
                 history.
               </p>
               <div>
-                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem]">
+                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem] text-justify">
                   Set your revenue thresholds. Instroom assigns Bronze, Silver, and Gold tiers
                   automatically as creators hit milestones. No manual updating, no missed
                   promotions — just a tier list that reflects reality.
                 </p>
-                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem]">
+                <p className="text-[#52525b] mb-4 leading-[1.72] text-[0.9375rem] text-justify">
                   When the budget conversation comes up, the answer is already in the data. You
                   know exactly who&apos;s making you money, who&apos;s consistent, and who
                   deserves a retainer. The best influencer programs aren&apos;t built on
@@ -540,40 +749,43 @@ export default function FeaturesPage() {
               </div>
             </div>
             <div className="rounded-[20px] aspect-[4/3] overflow-hidden relative bg-gradient-to-br from-[#EDF5F0] to-[#D4EDDF] border border-[#1FAE5B]/[0.15] shadow-[0_8px_40px_rgba(15,107,62,0.07)]">
-              <div className="absolute inset-5 bg-white rounded-[14px] overflow-hidden shadow-[0_4px_18px_rgba(16,24,40,0.08)] p-[18px]">
-                <div className="text-[9px] font-bold text-[#9aa4a0] uppercase tracking-[0.08em] mb-3">Partner tiers</div>
-                <div className="relative">
-                  <div className="flex items-center gap-2.5 mb-3.5">
-                    <span className="w-[30px] h-[30px] rounded-full shrink-0" style={{ background: "linear-gradient(135deg,#F4C24A,#D99A17)" }} />
-                    <div className="flex-1">
-                      <div className="text-[11px] font-extrabold text-[#1E1E1E] mb-[5px]">Gold</div>
-                      <div className="h-[7px] bg-[#f1f4f2] rounded-full overflow-hidden">
-                        <div className="h-full rounded-full" style={{ background: "linear-gradient(90deg,#F4C24A,#D99A17)", animation: "fillGold 6s cubic-bezier(.22,1,.36,1) infinite" }} />
-                      </div>
-                    </div>
+              <div className="absolute inset-5 bg-white rounded-[14px] overflow-hidden shadow-[0_4px_18px_rgba(16,24,40,0.08)] flex">
+                <FeatureSidebar active="brand-partners" />
+                <div className="flex-1 min-w-0 p-4 flex flex-col">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-[10px] font-bold text-[#1E1E1E]">Brand Partners</span>
+                    <span className="text-[7.5px] text-[#9aa4a0]">18 total · 4 Gold</span>
                   </div>
-                  <div className="flex items-center gap-2.5 mb-3.5">
-                    <span className="w-[30px] h-[30px] rounded-full shrink-0" style={{ background: "linear-gradient(135deg,#D6DBDE,#9AA3AA)" }} />
-                    <div className="flex-1">
-                      <div className="text-[11px] font-extrabold text-[#1E1E1E] mb-[5px]">Silver</div>
-                      <div className="h-[7px] bg-[#f1f4f2] rounded-full overflow-hidden">
-                        <div className="h-full rounded-full" style={{ background: "linear-gradient(90deg,#D6DBDE,#9AA3AA)", animation: "fillSilver 6s cubic-bezier(.22,1,.36,1) infinite" }} />
+                  <div className="flex flex-col gap-1.5">
+                    {[
+                      { init: "SW", name: "Sharon Wells", retainer: "$1,200/mo", tier: "🥇 Gold", tierClass: "bg-[#fff8e1] text-[#854F0B]", rev: "$18.4K", delay: 0 },
+                      { init: "JL", name: "Jordan Lee", retainer: "$600/mo", tier: "🥈 Silver", tierClass: "bg-[#f0f0f0] text-[#444]", rev: "$6.2K", delay: 0.4 },
+                      { init: "AR", name: "Alex Rivera", retainer: "—", tier: "🥉 Bronze", tierClass: "bg-[#fdf0e8] text-[#7a3e1a]", rev: "$2.1K", delay: 0.8 },
+                    ].map((p, i) => (
+                      <div
+                        key={i}
+                        className="flex items-center gap-2 border border-[#eef1f0] rounded-lg px-2 py-1.5"
+                        style={{ animation: "tlIn 5s ease-in-out infinite", animationDelay: `${p.delay}s` }}
+                      >
+                        <span
+                          className="w-6 h-6 rounded-full shrink-0 flex items-center justify-center text-white text-[7px] font-bold"
+                          style={{ background: "linear-gradient(135deg,#22c55e,#0F6B3E)" }}
+                        >
+                          {p.init}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[9px] font-semibold text-[#1E1E1E] truncate" style={{ filter: "blur(2px)" }}>
+                            {p.name}
+                          </div>
+                          <div className="text-[7.5px] text-[#9aa4a0] truncate">Retainer {p.retainer}</div>
+                        </div>
+                        <span className={`text-[8px] font-bold px-1.5 py-[2px] rounded-full shrink-0 whitespace-nowrap ${p.tierClass}`}>
+                          {p.tier}
+                        </span>
+                        <span className="text-[9px] font-extrabold text-[#1FAE5B] shrink-0">{p.rev}</span>
                       </div>
-                    </div>
+                    ))}
                   </div>
-                  <div className="flex items-center gap-2.5">
-                    <span className="w-[30px] h-[30px] rounded-full shrink-0" style={{ background: "linear-gradient(135deg,#D89B6A,#A9663B)" }} />
-                    <div className="flex-1">
-                      <div className="text-[11px] font-extrabold text-[#1E1E1E] mb-[5px]">Bronze</div>
-                      <div className="h-[7px] bg-[#f1f4f2] rounded-full overflow-hidden">
-                        <div className="h-full rounded-full" style={{ background: "linear-gradient(90deg,#D89B6A,#A9663B)", animation: "fillBronze 6s cubic-bezier(.22,1,.36,1) infinite" }} />
-                      </div>
-                    </div>
-                  </div>
-                  <div
-                    className="absolute right-0 w-[34px] h-[34px] -mt-0.5 rounded-full border-[2.5px] border-white"
-                    style={{ background: "linear-gradient(135deg,#22c55e,#0F6B3E)", boxShadow: "0 6px 16px rgba(15,107,62,.35)", animation: "climb 6s cubic-bezier(.22,1,.36,1) infinite" }}
-                  />
                 </div>
               </div>
             </div>
@@ -591,6 +803,7 @@ export default function FeaturesPage() {
           }}
         />
         <div className="relative z-10 max-w-[1140px] mx-auto px-6">
+          <p className="text-xs font-bold uppercase tracking-widest text-emerald-500 mb-4">Ready to Get Started?</p>
           <h2 className="font-[Manrope,sans-serif] font-bold text-[clamp(2rem,4vw,2.875rem)] text-white max-w-[640px] mx-auto mb-4 leading-tight">
             See it for yourself.
           </h2>
@@ -599,117 +812,25 @@ export default function FeaturesPage() {
           </p>
           <div className="flex gap-3 justify-center flex-wrap">
             <Link href="/signup">
-              <Button className="bg-gradient-to-r from-[#1FAE5B] to-[#28c96a] text-white font-semibold h-12 px-8 rounded-xl hover:from-[#158a48] hover:to-[#1FAE5B] shadow-lg shadow-emerald-500/30">
+              <Button
+                style={{ background: "#fff", color: "#1FAE5B", fontWeight: 700 }}
+                className="h-12 px-8 rounded-xl hover:bg-emerald-50"
+              >
                 Start Free Trial
               </Button>
             </Link>
+            <Button
+              style={{ background: "transparent", border: "0.5px solid rgba(255,255,255,0.35)", color: "rgba(255,255,255,0.8)" }}
+              className="h-12 px-8 rounded-xl hover:bg-white/10 font-medium"
+            >
+              Book a Demo
+            </Button>
           </div>
           <p className="mt-5 text-[0.8125rem] text-white/50">No annual contracts · Cancel anytime</p>
         </div>
       </section>
 
-      {/* FOOTER — matches landing page */}
-      <footer className="bg-[#111] text-white/65 pt-14 pb-8 text-sm">
-        <div className="grid grid-cols-1 min-[641px]:grid-cols-2 min-[901px]:grid-cols-[2fr_1fr_1fr_1fr] gap-10 mb-10 max-w-[1140px] mx-auto px-6">
-          <div>
-            <Image
-              src="/images/instroomLogoWhite.png"
-              alt="Instroom logo"
-              width={120}
-              height={120}
-              style={{ marginBottom: "4px" }}
-            />
-            <p className="text-white/55 max-w-[260px] text-sm leading-[1.65] mt-3">
-              The influencer marketing workspace for eCommerce brands and agencies.
-            </p>
-          </div>
-          <div>
-            <h4 className="text-white text-xs uppercase tracking-[0.1em] mb-4 font-[Manrope,sans-serif] font-bold">
-              Products
-            </h4>
-            <ul className="list-none m-0 p-0">
-              <li className="mb-2.5">
-                <a href="/features" className="text-white/60 no-underline hover:text-white transition-colors">
-                  Instroom Platform
-                </a>
-              </li>
-              <li className="mb-2.5">
-                <a href="#" className="text-white/60 no-underline hover:text-white transition-colors">
-                  Chrome Extension
-                </a>
-              </li>
-              <li className="mb-2.5">
-                <a href="#" className="text-white/60 no-underline hover:text-white transition-colors">
-                  Post Tracker
-                </a>
-              </li>
-              <li className="mb-2.5">
-                <a href="/features" className="text-white/60 no-underline hover:text-white transition-colors">
-                  Features
-                </a>
-              </li>
-              <li className="mb-2.5">
-                <a href="/pricing" className="text-white/60 no-underline hover:text-white transition-colors">
-                  Pricing
-                </a>
-              </li>
-            </ul>
-          </div>
-          <div>
-            <h4 className="text-white text-xs uppercase tracking-[0.1em] mb-4 font-[Manrope,sans-serif] font-bold">
-              Resources
-            </h4>
-            <ul className="list-none m-0 p-0">
-              <li className="mb-2.5">
-                <a href="#" className="text-white/60 no-underline hover:text-white transition-colors">
-                  Blog
-                </a>
-              </li>
-              <li className="mb-2.5">
-                <a href="#" className="text-white/60 no-underline hover:text-white transition-colors">
-                  FAQ&apos;s
-                </a>
-              </li>
-              <li className="mb-2.5">
-                <a href="#" className="text-white/60 no-underline hover:text-white transition-colors">
-                  Demo
-                </a>
-              </li>
-            </ul>
-          </div>
-          <div>
-            <h4 className="text-white text-xs uppercase tracking-[0.1em] mb-4 font-[Manrope,sans-serif] font-bold">
-              Company
-            </h4>
-            <ul className="list-none m-0 p-0">
-              <li className="mb-2.5">
-                <a href="/about" className="text-white/60 no-underline hover:text-white transition-colors">
-                  About
-                </a>
-              </li>
-              <li className="mb-2.5">
-                <a href="#" className="text-white/60 no-underline hover:text-white transition-colors">
-                  Contact
-                </a>
-              </li>
-            </ul>
-          </div>
-        </div>
-        <div className="flex justify-between flex-wrap gap-3 text-[0.8125rem] text-white/40 max-w-[1140px] mx-auto px-6 pt-6 border-t border-white/[0.08]">
-          <p>&copy; 2026 Instroom. All rights reserved.</p>
-          <div className="flex gap-6">
-            <Link href="/terms-of-service" className="text-white/50 no-underline hover:text-white">
-              Terms of Service
-            </Link>
-            <Link href="/privacy" className="text-white/50 no-underline hover:text-white">
-              Privacy Policy
-            </Link>
-            <Link href="/refund" className="text-white/50 no-underline hover:text-white">
-              Refund Policy
-            </Link>
-          </div>
-        </div>
-      </footer>
+      <MainFooter />
     </div>
   )
 }
