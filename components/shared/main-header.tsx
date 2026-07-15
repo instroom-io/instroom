@@ -314,61 +314,6 @@ function NavDropdown({
               <span style={{ fontSize: "0.7125rem", color: "#6b7280" }}>{item.desc}</span>
             </Link>
           ))}
-
-          {label === "Resources" && (
-            <>
-              <hr style={{ border: "none", borderTop: "1px solid #e5e7eb", margin: "6px 4px" }} />
-              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#9ca3af", padding: "6px 14px 4px" }}>
-                Free Tools
-              </div>
-
-              <Link
-                href="/tools/tiktok-downloader"
-                onClick={() => setOpen(false)}
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 2,
-                  padding: "10px 14px",
-                  borderRadius: 8,
-                  textDecoration: "none",
-                  color: "var(--charcoal)",
-                  transition: "background 0.15s",
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = "#f4faf7")}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-              >
-                <span style={{ fontWeight: 600, fontSize: "0.9375rem" }}>TikTok Downloader Without Watermark</span>
-                <span style={{ fontSize: "0.7125rem", color: "#6b7280" }}>Save TikTok videos in HD, no watermark</span>
-              </Link>
-
-              {[
-                { title: "Transcribe TikTok & Instagram to Text", desc: "Turn videos into text captions instantly" },
-                { title: "Influencer Rate Calculator", desc: "Estimate fair rates for sponsored content" },
-              ].map((tool) => (
-                <div
-                  key={tool.title}
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 2,
-                    padding: "10px 14px",
-                    borderRadius: 8,
-                    cursor: "default",
-                    opacity: 0.55,
-                  }}
-                >
-                  <span style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, fontSize: "0.9375rem" }}>
-                    {tool.title}
-                    <span style={{ fontSize: 9, background: "#f0f0f0", color: "#6b7280", borderRadius: 4, padding: "1px 5px", fontWeight: 700, letterSpacing: "0.03em", textTransform: "uppercase" }}>
-                      Soon
-                    </span>
-                  </span>
-                  <span style={{ fontSize: "0.7125rem", color: "#9ca3af" }}>{tool.desc}</span>
-                </div>
-              ))}
-            </>
-          )}
         </div>
       )}
     </li>
