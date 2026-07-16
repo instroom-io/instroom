@@ -25,16 +25,24 @@ export function Hub({ onNavigate }: { onNavigate: (page: PageId) => void }) {
 
   return (
     <>
-      <div style={{ background: "#fff", borderBottom: "0.5px solid var(--border)" }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "80px 40px 64px" }}>
-          <div className="fade-up" style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--green)", marginBottom: 16 }}>Solutions</div>
-          <h1 className="fade-up delay-1" style={{ fontFamily: "'Manrope',sans-serif", fontWeight: 800, fontSize: "clamp(36px,5vw,58px)", lineHeight: 1.05, color: "var(--ink)", maxWidth: 700, marginBottom: 20, letterSpacing: "-0.02em" }}>
-            Instroom works differently<br />for <span style={{ color: "var(--green)" }}>different kinds</span> of operators.
+      <div style={{ background: "#F4F7F5", backgroundImage: "radial-gradient(circle, rgba(31,174,91,0.12) 1px, transparent 1px)", backgroundSize: "28px 28px" }}>
+        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "56px 40px 0", textAlign: "center" }}>
+          <div className="sol-eyebrow fade-up" style={{ margin: "0 auto 16px" }}>
+            <span className="sol-eyebrow-dot" />
+            Solutions
+          </div>
+          <h1 className="fade-up delay-1" style={{ fontFamily: "'Manrope',sans-serif", fontWeight: 800, fontSize: "clamp(2.25rem, 5vw, 3.5rem)", lineHeight: 1.12, color: "var(--ink)", margin: "0 auto 20px", letterSpacing: "-0.02em" }}>
+            <span style={{ whiteSpace: "nowrap" }}>Instroom works differently</span><br />
+            <span style={{ whiteSpace: "nowrap" }}>for <span style={{ color: "var(--green)" }}>different kinds</span> of operators.</span>
           </h1>
-          <p className="fade-up delay-2" style={{ fontSize: 16, color: "var(--ink2)", lineHeight: 1.6, maxWidth: 520, marginBottom: 48 }}>
+          <p className="fade-up delay-2" style={{ fontSize: 18, color: "var(--ink2)", lineHeight: 1.625, maxWidth: 620, margin: "0 auto 48px" }}>
             Whether you're running campaigns solo, managing clients, or growing your own brand — Instroom fits the way you actually work. Pick your situation.
           </p>
+        </div>
+      </div>
 
+      <div style={{ background: "#fff", borderBottom: "0.5px solid var(--border)" }}>
+        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "40px 40px 64px" }}>
           <div className="hub-cards-grid fade-up delay-3" style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 16 }}>
             {cards.map(card => (
               <button key={card.id} onClick={() => onNavigate(card.id)} className="hub-card" style={{ textAlign: "left", width: "100%", fontFamily: "inherit" }}>

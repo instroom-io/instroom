@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Caveat:wght@600;700&family=Patrick+Hand&family=Alex+Brush&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=Patrick+Hand&family=Alex+Brush&display=swap');
 
 :root {
   --green: #1FAE5B;
@@ -33,7 +33,6 @@
 }
 
 .section { padding: 96px 0; }
-.sectionAlt { background: var(--off-white); }
 
 /* ── Alternating section backgrounds ── */
 .secOdd { background: #ffffff; }
@@ -62,24 +61,22 @@
 
 /* ── Hero ── */
 .hero {
-  padding: 0;
+  padding: 72px 0 64px;
   background-image: radial-gradient(circle, rgba(31,174,91,0.12) 1px, transparent 1px);
   background-size: 28px 28px;
 }
 
 .heroInner {
-  max-width: 1140px;
+  max-width: 1280px;
   margin: 0 auto;
-  padding: 0 24px;
+  padding: 0 32px;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1.3fr;
   align-items: center;
-  gap: 64px;
-  min-height: 580px;
+  gap: 48px;
 }
 
 .heroLeft {
-  padding: 80px 32px;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -90,16 +87,16 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  background: rgba(31,174,91,0.1);
-  border: 1px solid rgba(31,174,91,0.28);
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
   border-radius: 100px;
-  padding: 5px 14px 5px 10px;
-  font-size: 0.6875rem;
+  padding: 8px 16px;
+  font-size: 0.75rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: #0F6B3E;
-  margin-bottom: 28px;
+  letter-spacing: 0.1em;
+  color: #047857;
+  margin-bottom: 24px;
   width: fit-content;
 }
 
@@ -107,24 +104,8 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #1FAE5B;
-  animation: heroPulse 1.6s ease-in-out infinite;
+  background: #059669;
   flex-shrink: 0;
-}
-
-@keyframes heroPulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.35; transform: scale(0.7); }
-}
-
-.heroTitle {
-  font-family: 'Manrope', sans-serif;
-  font-weight: 800;
-  font-size: clamp(1.875rem, 3.2vw, 2.875rem);
-  line-height: 1.1;
-  letter-spacing: -0.025em;
-  color: #1E1E1E;
-  margin-bottom: 20px;
 }
 
 .heroLead {
@@ -132,14 +113,14 @@
   font-size: 1.0625rem;
   color: #3f3f46;
   line-height: 1.68;
-  margin-bottom: 36px;
+  margin-bottom: 28px;
 }
 
 .heroCtas {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .heroSub {
@@ -148,41 +129,30 @@
 }
 
 .heroRight {
-  padding: 40px 0;
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-.heroRight::before {
-  content: '';
-  position: absolute;
-  left: -32px;
-  top: 10%;
-  bottom: 10%;
-  width: 1px;
-  background: linear-gradient(to bottom, transparent, rgba(31,174,91,0.3), transparent);
+  align-self: start;
 }
 
 .heroMockup {
-  width: 100%;
+  width: calc(100% - 25px);
+  height: 440px;
+  margin-left: 25px;
   border-radius: 16px;
   overflow: hidden;
   box-shadow: 0 24px 64px rgba(15,107,62,0.14), 0 0 0 1px var(--border);
   background: white;
-  aspect-ratio: 16 / 9;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--muted);
-  font-size: 0.875rem;
+  position: relative;
+  transform: scale(1.04);
+  transform-origin: right center;
 }
 
 .heroBadge {
   position: absolute;
-  bottom: 36px;
-  left: -16px;
+  bottom: -7px;
+  left: 1px;
   background: white;
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -203,6 +173,43 @@
   border-radius: 50%;
   background: #1FAE5B;
   flex-shrink: 0;
+}
+
+.heroFloatBadge {
+  position: absolute;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 12px;
+  box-shadow: 0 8px 24px rgba(15,107,62,0.12);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: #1E1E1E;
+  white-space: nowrap;
+  animation: heroFloat 3.4s ease-in-out infinite;
+}
+
+.heroFloatTop {
+  top: -14px;
+  right: 92px;
+}
+
+.heroFloatBottom {
+  bottom: -22px;
+  right: 150px;
+  animation-delay: 1.2s;
+}
+
+@keyframes heroFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+@media (max-width: 900px) {
+  .heroFloatBadge { display: none; }
 }
 
 /* ── Stats ── */
@@ -1237,12 +1244,18 @@
 
   .heroLead { max-width: 100%; }
 
+  .heroH1 { font-size: clamp(1.75rem, 7vw, 3.25rem) !important; }
+
   .heroRight {
     padding: 0 0 56px;
   }
 
-  .heroRight::before { display: none; }
   .heroBadge { display: none; }
+
+  .heroMockup {
+    height: auto;
+    aspect-ratio: 16 / 9;
+  }
 
   .insideFeatGrid {
     grid-template-columns: 1fr;
@@ -1310,4 +1323,3 @@
   .trustLogos { gap: 16px; }
   .footerInner { grid-template-columns: 1fr; }
 }
-

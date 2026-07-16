@@ -6,7 +6,121 @@ import { Button } from "@/components/ui/button"
 import { useState, useEffect } from "react"
 import { MainHeader } from "@/components/shared/main-header"
 import { MainFooter } from "@/components/shared/main-footer"
+import {
+  PipelineMockup,
+  EmailMockup,
+  CrmMockup,
+  ReportingMockup,
+  BrandPartnersMockup,
+} from "@/components/shared/feature-mockups"
 import styles from "./landing-page.module.css"
+import {
+  IconSearch,
+  IconMail,
+  IconUsers,
+  IconGitBranch,
+  IconCircleCheck,
+  IconBuildingStore,
+  IconChartBar,
+  IconFilter,
+  IconStarFilled,
+  IconArrowsMove,
+} from "@tabler/icons-react"
+
+const HERO_SIDEBAR_ICONS = [
+  { Icon: IconSearch, label: "Discovery", active: false },
+  { Icon: IconMail, label: "Inbox", active: false },
+  { Icon: IconUsers, label: "Influencers List", active: false },
+  { Icon: IconGitBranch, label: "Pipeline", active: true },
+  { Icon: IconCircleCheck, label: "Post Tracker", active: false },
+  { Icon: IconBuildingStore, label: "Brand Partners", active: false },
+  { Icon: IconChartBar, label: "Analytics", active: false },
+]
+
+type HeroPipelineCard = {
+  empty?: boolean
+  name?: string
+  handle?: string
+  blur?: boolean
+  platform?: string
+  location?: string
+  followers?: string
+  eng?: string
+  reason?: string
+}
+
+const HERO_PIPELINE_COLUMNS: {
+  key: string
+  title: string
+  count: number
+  headerClass: string
+  badgeClass: string
+  actionType: "flow" | "dealAgreed" | "notInterested"
+  nextLabel?: string
+  cards: HeroPipelineCard[]
+}[] = [
+  {
+    key: "outreach",
+    title: "For Outreach",
+    count: 1,
+    headerClass: "bg-yellow-400 text-white",
+    badgeClass: "bg-white/25 text-white",
+    actionType: "flow",
+    nextLabel: "Contacted",
+    cards: [
+      { name: "Alex Rivera", handle: "@alexcreates", blur: true, platform: "IG", location: "Philippines", followers: "1.0K", eng: "0.4%" },
+    ],
+  },
+  {
+    key: "contacted",
+    title: "Contacted",
+    count: 1,
+    headerClass: "bg-orange-400 text-white",
+    badgeClass: "bg-white/25 text-white",
+    actionType: "flow",
+    nextLabel: "In Conversation",
+    cards: [
+      { name: "Taylor Brooks", handle: "@taylorbrooks", blur: true, platform: "IG", location: "Netherlands", followers: "2.1K", eng: "1.0%" },
+    ],
+  },
+  {
+    key: "conversation",
+    title: "In Conversation",
+    count: 1,
+    headerClass: "bg-blue-400 text-white",
+    badgeClass: "bg-white/25 text-white",
+    actionType: "flow",
+    nextLabel: "Deal Agreed",
+    cards: [
+      { name: "Devon Cruz", handle: "@devoncruz", blur: true, platform: "IG", location: "—", followers: "3", eng: "0.0%" },
+    ],
+  },
+  {
+    key: "deal-agreed",
+    title: "Deal Agreed",
+    count: 3,
+    headerClass: "bg-green-500 text-white",
+    badgeClass: "bg-white/25 text-white",
+    actionType: "dealAgreed",
+    cards: [
+      { name: "Jordan Lee", handle: "@jordanlee.co", blur: true, platform: "IG", location: "Philippines", followers: "1.8K", eng: "2.7%" },
+      { name: "Sharon Wells", handle: "@liefssharon", blur: false, platform: "IG", location: "Netherlands", followers: "3.0K", eng: "0.0%" },
+      { name: "Priya N.", handle: "@priyanco", blur: true, platform: "IG", location: "—", followers: "13.0K", eng: "0.0%" },
+    ],
+  },
+  {
+    key: "not-interested",
+    title: "Not Interested",
+    count: 2,
+    headerClass: "bg-red-100 text-red-700 border border-red-200",
+    badgeClass: "bg-red-200 text-red-700",
+    actionType: "notInterested",
+    cards: [
+      { name: "Suzanne K.", handle: "@suzannek", blur: true, platform: "IG", location: "—", followers: "1", eng: "0.0%", reason: "Fully booked" },
+      { name: "Morgan T.", handle: "@morgant", blur: true, platform: "IG", location: "—", followers: "7", eng: "0.0%", reason: "Wrong audience fit" },
+    ],
+  },
+]
 
 export function LandingPage() {
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null)
@@ -67,6 +181,37 @@ export function LandingPage() {
 
   return (
     <div className="font-sans text-zinc-900 bg-white">
+      <style jsx global>{`
+        @keyframes dotPulse {0%,100%{opacity:.35}50%{opacity:1}}
+        @keyframes tagPop {0%,26%{opacity:0;transform:scale(.5)}36%{opacity:1;transform:scale(1.12)}44%,88%{opacity:1;transform:scale(1)}95%,100%{opacity:0}}
+        @keyframes heroCardDrag {
+          0%{opacity:0;left:3%;top:34%;transform:rotate(0) scale(1);box-shadow:0 2px 6px rgba(0,0,0,.10)}
+          6%{opacity:1}
+          30%{left:23%;top:20%;transform:translateY(-6px) rotate(-3deg) scale(1.05);box-shadow:0 12px 24px rgba(15,107,62,.28)}
+          55%{left:43%;top:14%;transform:translateY(-6px) rotate(-2deg) scale(1.04);box-shadow:0 12px 24px rgba(15,107,62,.28)}
+          75%{left:59%;top:26%;transform:rotate(0) scale(1);box-shadow:0 2px 6px rgba(0,0,0,.10)}
+          90%{opacity:1;left:59%;top:26%}
+          96%{opacity:0;left:59%;top:26%}
+          97%{opacity:0;left:3%;top:34%}
+          100%{opacity:0}
+        }
+        @keyframes cardDrag {
+          0%{opacity:0;left:3%;top:34%;transform:rotate(0) scale(1);box-shadow:0 2px 6px rgba(0,0,0,.10)}
+          6%{opacity:1}
+          30%{left:23%;top:20%;transform:translateY(-6px) rotate(-3deg) scale(1.05);box-shadow:0 12px 24px rgba(15,107,62,.28)}
+          55%{left:43%;top:14%;transform:translateY(-6px) rotate(-2deg) scale(1.04);box-shadow:0 12px 24px rgba(15,107,62,.28)}
+          75%{left:59%;top:26%;transform:rotate(0) scale(1);box-shadow:0 2px 6px rgba(0,0,0,.10)}
+          90%{opacity:1;left:59%;top:26%}
+          96%{opacity:0;left:59%;top:26%}
+          97%{opacity:0;left:3%;top:34%}
+          100%{opacity:0}
+        }
+        @keyframes emailIn {0%{opacity:0;transform:translateY(-16px)}12%{opacity:1;transform:translateY(0)}84%{opacity:1;transform:translateY(0)}95%{opacity:0;transform:translateY(-8px)}100%{opacity:0}}
+        @keyframes tlIn {0%{opacity:0;transform:translateY(7px)}12%{opacity:1;transform:translateY(0)}84%{opacity:1;transform:translateY(0)}96%{opacity:0;transform:translateY(-4px)}100%{opacity:0}}
+        @keyframes fillGold {0%,50%{width:0}72%,90%{width:100%}96%,100%{width:0}}
+        @keyframes fillSilver {0%,30%{width:0}50%,90%{width:72%}96%,100%{width:0}}
+        @keyframes fillBronze {0%,8%{width:0}30%,90%{width:44%}96%,100%{width:0}}
+      `}</style>
 
       {/* NAV */}
       <MainHeader />
@@ -81,7 +226,7 @@ export function LandingPage() {
               <div className={styles.heroEyebrowDot} />
               Influencer marketing, organized
             </div>
-            <h1 style={{ fontSize: "clamp(1.75rem, 3vw, 2.25rem)", fontWeight: 900, lineHeight: 1.15 }}>Influencer marketing isn't <span style={{ textDecoration: "line-through", textDecorationColor: "#a1a1aa", textDecorationThickness: "3px", color: "#a1a1aa" }}>complicated</span>.<br />Managing it without the <span style={{ color: "#1FAE5B" }}>right system</span> is.</h1>
+            <h1 className={styles.heroH1} style={{ fontFamily: "'Manrope', sans-serif", fontSize: "52px", fontWeight: 800, lineHeight: 1.08, letterSpacing: "-0.03em", marginBottom: "24px" }}>Influencer marketing isn't <span style={{ textDecoration: "line-through", textDecorationColor: "#a1a1aa", textDecorationThickness: "3px", color: "#a1a1aa" }}>complicated</span>.<br />Managing it without the <span style={{ color: "#1FAE5B" }}>right system</span> is.</h1>
             <p className={styles.heroLead}>
               Instroom is the system. Every creator, every campaign, every result — in one workspace. Built by people who've done the work.
             </p>
@@ -106,12 +251,136 @@ export function LandingPage() {
         {/* RIGHT: product mockup */}
         <div className={styles.heroRight}>
           <div className={styles.heroMockup}>
-            Mockup coming soon
+            <div className="h-full w-full flex font-[Inter,system-ui,-apple-system,sans-serif] overflow-hidden">
+              {/* Sidebar */}
+              <div className="w-[128px] shrink-0 bg-[#0F6B3E] flex flex-col pt-3 pb-2 px-2 gap-3">
+                <Image src="/INSTROOM WHITE.png" alt="Instroom" width={72} height={15} className="object-contain self-center" />
+                <div className="w-full h-px bg-white/20" />
+                <div className="flex flex-col gap-1">
+                  {HERO_SIDEBAR_ICONS.map(({ Icon, label, active }, i) => (
+                    <div
+                      key={i}
+                      className={`h-5.5 px-1.5 rounded-md flex items-center gap-1.5 ${active ? "bg-[#1FAE5B]" : ""}`}
+                    >
+                      <Icon size={10} stroke={1.75} className="text-white shrink-0" />
+                      <span className="text-[7.5px] font-medium text-white truncate">{label}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Main panel */}
+              <div className="flex-1 min-w-0 bg-white flex flex-col">
+                {/* Toolbar */}
+                <div className="flex items-center gap-1.5 px-2.5 py-2 border-b border-[#eef1f0] shrink-0">
+                  <div className="flex items-center gap-1 h-5 px-1.5 rounded-md border border-[#0F6B3E]/15 text-[7px] text-[#9aa4a0]">
+                    <IconSearch size={9} stroke={2} />
+                    Search...
+                  </div>
+                  <div className="flex items-center gap-1 h-5 px-1.5 rounded-md border border-[#0F6B3E]/15 text-[7px] text-[#52525b] font-semibold">
+                    <IconFilter size={9} stroke={2} />
+                    Filters
+                  </div>
+                  <span className="text-[7px] text-[#9aa4a0] font-medium">12 influencers</span>
+                  <div className="ml-auto flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#1FAE5B]" style={{ animation: "dotPulse 1.4s ease-in-out infinite" }} />
+                    <span className="text-[7px] font-semibold text-[#9aa4a0]">Live</span>
+                  </div>
+                </div>
+
+                {/* Kanban board */}
+                <div className="relative flex-1 min-h-0 flex gap-1.5 p-2">
+                  {HERO_PIPELINE_COLUMNS.map((col) => (
+                    <div key={col.key} className="flex flex-col gap-1 flex-1 min-w-0">
+                      <div className={`rounded-[5px] px-1.5 py-1 text-[6.5px] font-bold flex items-center justify-between gap-1 ${col.headerClass}`}>
+                        <span className="truncate">{col.title}</span>
+                        <span className={`rounded-full px-1 shrink-0 ${col.badgeClass}`}>{col.cards.length}</span>
+                      </div>
+                      <div className="flex flex-col gap-1 flex-1 min-h-0">
+                        {col.cards.map((card, i) =>
+                          card.empty ? (
+                            <div key={i} className="flex-1 min-h-[22px] rounded-[5px] border border-dashed border-[#e3e7e5]" />
+                          ) : (
+                            <div key={i} className="bg-white border border-[#eef1f0] rounded-[5px] p-1.5 flex flex-col gap-[3px]">
+                              <div>
+                                <div
+                                  className="text-[6.5px] font-semibold text-[#1E1E1E] leading-tight truncate"
+                                  style={card.blur ? { filter: "blur(2.5px)" } : undefined}
+                                >
+                                  {card.name}
+                                </div>
+                                <div
+                                  className="text-[6px] text-[#9aa4a0] leading-tight truncate"
+                                  style={card.blur ? { filter: "blur(2.5px)" } : undefined}
+                                >
+                                  {card.handle}
+                                </div>
+                              </div>
+                              <div className="text-[5.5px] text-[#9aa4a0] leading-tight truncate">
+                                {card.platform} · {card.location}
+                              </div>
+                              <div className="text-[5.5px] text-[#9aa4a0] leading-tight truncate">
+                                {card.followers} · {card.eng} eng
+                              </div>
+                              {col.actionType === "flow" && (
+                                <div className="flex items-center gap-1 mt-px">
+                                  <span className="text-[5px] font-semibold text-[#0F6B3E] bg-green-50 border border-green-200 rounded px-1 py-px truncate">
+                                    → {col.nextLabel}
+                                  </span>
+                                  <span className="text-[5px] font-semibold text-red-500 bg-red-50 border border-red-100 rounded px-1 py-px">
+                                    ✕
+                                  </span>
+                                </div>
+                              )}
+                              {col.actionType === "dealAgreed" && (
+                                <div className="text-[5px] font-semibold text-white bg-[#1FAE5B] rounded px-1 py-[2px] text-center mt-px truncate">
+                                  Move to Post Tracker
+                                </div>
+                              )}
+                              {col.actionType === "notInterested" && (
+                                <div className="text-[5px] font-semibold text-red-600 bg-red-50 border border-red-100 rounded px-1 py-px mt-px truncate">
+                                  {card.reason}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        )}
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* Animated gliding card */}
+                  <div
+                    className="absolute p-1.5 rounded-[5px] bg-white border-[1.5px] border-[#1FAE5B]"
+                    style={{ width: "17%", animation: "heroCardDrag 6s cubic-bezier(.22,1,.36,1) infinite" }}
+                  >
+                    <div className="text-[6.5px] font-semibold text-[#1E1E1E] truncate">Sharon Wells</div>
+                    <div className="text-[6px] text-[#9aa4a0] truncate">@liefssharon</div>
+                  </div>
+
+                  {/* Revenue stat chip, docked in the open corner beside the board */}
+                  <div className={styles.heroFloatBadge} style={{ bottom: "2%", right: "1%" }}>
+                    <div className={styles.heroBadgeDot} style={{ animation: "dotPulse 1.4s ease-in-out infinite" }} />
+                    $48.2K tracked this month
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className={styles.heroBadge}>
             <div className={styles.heroBadgeDot} />
             200+ campaigns managed
+          </div>
+
+          <div className={`${styles.heroFloatBadge} ${styles.heroFloatTop}`}>
+            <IconStarFilled size={12} className="text-[#F4C24A]" />
+            4.9/5 average rating
+          </div>
+
+          <div className={`${styles.heroFloatBadge} ${styles.heroFloatBottom}`}>
+            <IconArrowsMove size={12} className="text-[#1FAE5B]" />
+            Drag &amp; drop pipeline
           </div>
         </div>
 
@@ -221,10 +490,7 @@ export function LandingPage() {
             {/* Pipeline */}
             <div className={`${styles.insideFeatPanel} ${styles.panelActive}`} data-panel="pipeline">
               <div className={styles.insideFeatGrid}>
-                <div className={styles.insideFeatVisual}>
-                  <div className={styles.insideFeatVisualIcon}>⊞</div>
-                  <div className={styles.insideFeatVisualLabel}>Pipeline management preview coming soon</div>
-                </div>
+                <PipelineMockup />
                 <div>
                   <div className={styles.insideFeatEyebrow}>Pipeline management</div>
                   <h3>Work the way you want. List, board, or both.</h3>
@@ -243,10 +509,7 @@ export function LandingPage() {
             {/* Email */}
             <div className={styles.insideFeatPanel} data-panel="email">
               <div className={styles.insideFeatGrid}>
-                <div className={styles.insideFeatVisual}>
-                  <div className={styles.insideFeatVisualIcon}>✉</div>
-                  <div className={styles.insideFeatVisualLabel}>Embedded email preview coming soon</div>
-                </div>
+                <EmailMockup />
                 <div>
                   <div className={styles.insideFeatEyebrow}>Embedded Email</div>
                   <h3>Reach out, reply, and track without leaving Instroom.</h3>
@@ -265,10 +528,7 @@ export function LandingPage() {
             {/* Creator CRM */}
             <div className={styles.insideFeatPanel} data-panel="crm">
               <div className={styles.insideFeatGrid}>
-                <div className={styles.insideFeatVisual}>
-                  <div className={styles.insideFeatVisualIcon}>👤</div>
-                  <div className={styles.insideFeatVisualLabel}>Creator CRM preview coming soon</div>
-                </div>
+                <CrmMockup />
                 <div>
                   <div className={styles.insideFeatEyebrow}>Creator CRM</div>
                   <h3>Profiles that remember everything.</h3>
@@ -287,10 +547,7 @@ export function LandingPage() {
             {/* Reporting */}
             <div className={styles.insideFeatPanel} data-panel="reporting">
               <div className={styles.insideFeatGrid}>
-                <div className={styles.insideFeatVisual}>
-                  <div className={styles.insideFeatVisualIcon}>⚑</div>
-                  <div className={styles.insideFeatVisualLabel}>Reporting preview coming soon</div>
-                </div>
+                <ReportingMockup />
                 <div>
                   <div className={styles.insideFeatEyebrow}>Reporting</div>
                   <h3>Client-ready reports, one click away.</h3>
@@ -309,10 +566,7 @@ export function LandingPage() {
             {/* Brand Partners */}
             <div className={styles.insideFeatPanel} data-panel="brand-partners">
               <div className={styles.insideFeatGrid}>
-                <div className={styles.insideFeatVisual}>
-                  <div className={styles.insideFeatVisualIcon}>★</div>
-                  <div className={styles.insideFeatVisualLabel}>Brand Partners preview coming soon</div>
-                </div>
+                <BrandPartnersMockup />
                 <div>
                   <div className={styles.insideFeatEyebrow}>Brand Partners</div>
                   <h3>Creators worth more than a campaign.</h3>

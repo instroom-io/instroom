@@ -2,8 +2,15 @@ import Image from "next/image";
 
 export function AboutHero() {
   return (
-    <section style={{ paddingTop: "32px", background: "#F7F9F8" }}>
-      <div className="max-w-7xl mx-auto px-8 py-16 grid grid-cols-[1fr_1.3fr] gap-12 items-center">
+    <section
+      style={{
+        paddingTop: "72px",
+        background: "#F7F9F8",
+        backgroundImage: "radial-gradient(circle, rgba(31,174,91,0.12) 1px, transparent 1px)",
+        backgroundSize: "28px 28px",
+      }}
+    >
+      <div className="max-w-7xl mx-auto px-8 pb-16 grid grid-cols-[1fr_1.3fr] gap-12 items-center">
         <div>
           <div className="inline-flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-full px-4 py-2 mb-6">
             <span className="w-1.5 h-1.5 bg-emerald-600 rounded-full" />
@@ -16,7 +23,7 @@ export function AboutHero() {
             style={{
               fontFamily: "'Manrope', sans-serif",
               fontSize: "52px",
-              fontWeight: 900,
+              fontWeight: 800,
               lineHeight: 1.08,
               letterSpacing: "-0.03em",
             }}
@@ -86,8 +93,11 @@ export function AboutHero() {
           </div>
         </div>
 
-        {/* Visual column — matches the "team-card" treatment from the About page */}
-        <div className="relative">
+        {/* Visual column — sized and positioned exactly like .heroRight/.heroMockup on the homepage hero */}
+        <div
+          className="relative"
+          style={{ display: "flex", alignItems: "center", justifyContent: "center", alignSelf: "start" }}
+        >
           {/* floating accent circles, sit behind the card */}
           <div
             className="absolute rounded-full pointer-events-none"
@@ -113,14 +123,19 @@ export function AboutHero() {
           />
 
           <div
-            className="bg-white overflow-hidden"
+            className="bg-white overflow-hidden flex flex-col"
             style={{
-              borderRadius: "20px",
-              border: "0.5px solid rgba(0,0,0,0.08)",
-              boxShadow: "0 20px 60px rgba(0,0,0,0.08)",
+              width: "calc(100% - 25px)",
+              height: "440px",
+              marginLeft: "-35px",
+              borderRadius: "16px",
+              boxShadow: "0 24px 64px rgba(15,107,62,0.14), 0 0 0 1px rgba(30,30,30,0.09)",
+              position: "relative",
+              transform: "scale(1.04)",
+              transformOrigin: "right center",
             }}
           >
-            <div className="relative" style={{ height: "360px" }}>
+            <div className="relative flex-1 min-h-0">
               <Image
                 src="/images/team-photo.jpg"
                 alt="Instroom Team"
@@ -132,7 +147,7 @@ export function AboutHero() {
             </div>
 
             <div
-              className="flex items-center justify-between"
+              className="flex items-center justify-between shrink-0"
               style={{ padding: "20px 24px" }}
             >
               <div>
