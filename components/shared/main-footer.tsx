@@ -3,13 +3,27 @@
 import Link from "next/link"
 import Image from "next/image"
 import { usePathname, useSearchParams } from "next/navigation"
-import { Suspense } from "react"
+import { Suspense, useState, useRef, useEffect } from "react"
+import { FreeToolsTooltip } from "./free-tools-tooltip"
 
 function FooterInner() {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const solutionType = searchParams.get("type")
   const isOnSolutions = pathname === "/solutions"
+  const [showFreeTools, setShowFreeTools] = useState(false)
+  const freeToolsRef = useRef<HTMLLIElement>(null)
+
+  useEffect(() => {
+    if (!showFreeTools) return
+    function handleClickOutside(e: MouseEvent) {
+      if (freeToolsRef.current && !freeToolsRef.current.contains(e.target as Node)) {
+        setShowFreeTools(false)
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside)
+    return () => document.removeEventListener("mousedown", handleClickOutside)
+  }, [showFreeTools])
 
   const getSolutionColor = (type: string) => {
     if (!isOnSolutions) return "text-zinc-400"
@@ -55,7 +69,16 @@ function FooterInner() {
               <li><Link href="/demo" className="hover:text-white transition">Demo</Link></li>
               <li><Link href="/features" className="hover:text-white transition">Features</Link></li>
               <li><Link href="/pricing" className="hover:text-white transition">Pricing</Link></li>
-              <li><Link href="/tools/tiktok-downloader" className="hover:text-white transition">Free Tools</Link></li>
+              <li ref={freeToolsRef} style={{ position: "relative" }}>
+                <button
+                  onClick={() => setShowFreeTools((v) => !v)}
+                  className="hover:text-white transition bg-transparent border-none p-0 cursor-pointer text-left"
+                  style={{ font: "inherit", color: "inherit" }}
+                >
+                  Free Tools
+                </button>
+                {showFreeTools && <FreeToolsTooltip onClose={() => setShowFreeTools(false)} />}
+              </li>
             </ul>
           </div>
           <div>

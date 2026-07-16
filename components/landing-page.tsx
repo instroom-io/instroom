@@ -382,6 +382,16 @@ export function LandingPage() {
             <IconArrowsMove size={12} className="text-[#1FAE5B]" />
             Drag &amp; drop pipeline
           </div>
+
+          <div className={`${styles.heroFloatBadge} ${styles.heroFloatTop}`}>
+            <IconStarFilled size={12} className="text-[#F4C24A]" />
+            4.9/5 average rating
+          </div>
+
+          <div className={`${styles.heroFloatBadge} ${styles.heroFloatBottom}`}>
+            <IconArrowsMove size={12} className="text-[#1FAE5B]" />
+            Drag &amp; drop pipeline
+          </div>
         </div>
 
         </div>
