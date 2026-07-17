@@ -6,6 +6,7 @@ import { NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
+import { checkBrandAccess } from "@/lib/brand-access"
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions)
@@ -22,6 +23,10 @@ export async function GET(req: Request) {
 
   if (!brandId) {
     return NextResponse.json({ error: "brandId is required" }, { status: 400 })
+  }
+
+  if (!(await checkBrandAccess(brandId, session.user.id))) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 })
   }
 
   try {

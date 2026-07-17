@@ -23,6 +23,7 @@ import {
   IconLayoutList, IconLink, IconArrowRight,
 } from "@tabler/icons-react"
 import { useClosedData, type ClosedInfluencer, type ClosedColumn } from "@/hooks/useClosedData"
+import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { SubscriptionGate } from "@/components/ui/subscription-gate"
 import { HistoryTab } from "@/components/InfluencerProfileSidebar"
 
@@ -136,10 +137,11 @@ function ColumnInfoTooltip({ colKey, variant }: { colKey: ClosedColumn; variant:
 }
 
 // ─── Post Tracker Card — consistent with pipeline card ────────────────────────
-function PostTrackerCard({ inf, onOpen, onMove }: {
+function PostTrackerCard({ inf, onOpen, onMove, canApproveInfluencers }: {
   inf: ClosedInfluencer
   onOpen: (inf: ClosedInfluencer) => void
   onMove: (id: string, col: ClosedColumn) => void
+  canApproveInfluencers: boolean
 }) {
   const nextStage  = NEXT_STAGE[inf.closedStatus]
   const isExit     = inf.closedStatus === "No post"
@@ -200,15 +202,19 @@ function PostTrackerCard({ inf, onOpen, onMove }: {
         <div className="flex gap-2 mt-3 pt-2 border-t border-gray-100 flex-wrap">
           {nextStage && (
             <button
-              onClick={e => { e.stopPropagation(); onMove(inf.id, nextStage) }}
-              className="text-xs px-2 py-1 rounded bg-gray-100 text-gray-700 hover:bg-gray-200 transition flex items-center gap-1"
+              onClick={e => { e.stopPropagation(); if (!canApproveInfluencers) return; onMove(inf.id, nextStage) }}
+              disabled={!canApproveInfluencers}
+              title={!canApproveInfluencers ? "Only Owners and Managers can update post status" : undefined}
+              className="text-xs px-2 py-1 rounded bg-gray-100 text-gray-700 hover:bg-gray-200 transition flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <IconArrowRight size={11}/> {nextStage}
             </button>
           )}
           <button
-            onClick={e => { e.stopPropagation(); onMove(inf.id, "No post") }}
-            className="text-xs px-2 py-1 rounded bg-red-50 text-red-600 hover:bg-red-100 transition"
+            onClick={e => { e.stopPropagation(); if (!canApproveInfluencers) return; onMove(inf.id, "No post") }}
+            disabled={!canApproveInfluencers}
+            title={!canApproveInfluencers ? "Only Owners and Managers can update post status" : undefined}
+            className="text-xs px-2 py-1 rounded bg-red-50 text-red-600 hover:bg-red-100 transition disabled:opacity-40 disabled:cursor-not-allowed"
           >
             ✕ No post
           </button>
@@ -230,12 +236,13 @@ function DroppableColumn({ id, children, isExit }: { id: string; children: React
     </div>
   )
 }
-function DraggableCard({ id, children, onClick }: { id: string; children: React.ReactNode; onClick: () => void }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id })
+function DraggableCard({ id, children, onClick, disabled }: { id: string; children: React.ReactNode; onClick: () => void; disabled?: boolean }) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id, disabled })
   const style = transform ? { transform: `translate(${transform.x}px, ${transform.y}px)` } : undefined
   return (
     <div ref={setNodeRef} style={style}
-      className={`cursor-grab active:cursor-grabbing ${isDragging ? "opacity-50" : ""}`}
+      title={disabled ? "Only Owners and Managers can update post status" : undefined}
+      className={`${disabled ? "cursor-not-allowed opacity-60" : "cursor-grab active:cursor-grabbing"} ${isDragging ? "opacity-50" : ""}`}
       onClick={onClick} {...listeners} {...attributes}>
       {children}
     </div>
@@ -247,10 +254,11 @@ function DraggableCard({ id, children, onClick }: { id: string; children: React.
 const STAGE_OPTIONS: ClosedColumn[] = ["For Order Creation", "In-Transit", "Delivered", "Posted", "No post"]
 const PROFILE_TABS = ["Basic", "Order", "Post", "Stats", "History"]
 
-function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCampaignTypeChange }: {
+function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCampaignTypeChange, canApproveInfluencers }: {
   inf: ClosedInfluencer; brandId?: string; onClose: () => void
   onColumnChange: (id: string, col: ClosedColumn) => Promise<boolean>
   onCampaignTypeChange: (id: string, type: string) => Promise<boolean>
+  canApproveInfluencers: boolean
 }) {
   const [profileTab, setProfileTab] = useState(0)
   const [drawerToast, setDT]        = useState("")
@@ -307,10 +315,14 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCampaignTypeCh
                   className="ssel"
                   value={inf.closedStatus}
                   onChange={(e) => handleStageChange(e.target.value as ClosedColumn)}
+                  disabled={!canApproveInfluencers}
+                  title={!canApproveInfluencers ? "Only Owners and Managers can update post status" : undefined}
                   style={{
                     borderColor: inf.closedStatus === "No post" ? "#fca5a5" : undefined,
                     background:  inf.closedStatus === "No post" ? "#fef2f2" : undefined,
                     color:       inf.closedStatus === "No post" ? "#dc2626" : undefined,
+                    opacity:     canApproveInfluencers ? undefined : 0.5,
+                    cursor:      canApproveInfluencers ? undefined : "not-allowed",
                   }}
                 >
                   {STAGE_OPTIONS.map((s) => (
@@ -323,7 +335,14 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCampaignTypeCh
 
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 <span style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em" }}>Campaign Type</span>
-                <select className="csel" value={campaignType} onChange={(e) => handleCampaignTypeChange(e.target.value)}>
+                <select
+                  className="csel"
+                  value={campaignType}
+                  onChange={(e) => handleCampaignTypeChange(e.target.value)}
+                  disabled={!canApproveInfluencers}
+                  title={!canApproveInfluencers ? "Only Owners and Managers can update campaign type" : undefined}
+                  style={{ opacity: canApproveInfluencers ? undefined : 0.5, cursor: canApproveInfluencers ? undefined : "not-allowed" }}
+                >
                   {CAMPAIGN_TYPES.map((ct) => (
                     <option key={ct.value} value={ct.value}>{ct.label}</option>
                   ))}
@@ -559,13 +578,15 @@ function PostTrackerContent() {
   const session = useSession()
   const searchParams = useSearchParams()
   const brandId = searchParams.get("brandId") ?? undefined
+  const { canApproveInfluencers, loading: capabilitiesLoading } = useBrandCapabilities(brandId)
+  const canApprove = !capabilitiesLoading && canApproveInfluencers
   const [isSubscribed, setIsSubscribed] = useState<boolean | null>(null)
   const [subscriptionStatus, setSubscriptionStatus] = useState<string>("inactive")
 
   useEffect(() => {
     const checkSubscription = async () => {
       try {
-        const response = await fetch("/api/subscription/status")
+        const response = await fetch(brandId ? `/api/subscription/status?brandId=${brandId}` : "/api/subscription/status")
         const data = await response.json()
         setSubscriptionStatus(data.status || "inactive")
         setIsSubscribed((data.status === "active" || data.status === "trialing") && !data.isExpired)
@@ -579,7 +600,7 @@ function PostTrackerContent() {
     if (session.status === "authenticated") {
       checkSubscription()
     }
-  }, [session.status])
+  }, [session.status, brandId])
 
   const { data, isLoading, error, updateColumn, updateCampaignType, refetch } = useClosedData(brandId)
 
@@ -597,6 +618,10 @@ function PostTrackerContent() {
   const sensors   = useSensors(useSensor(PointerSensor,{activationConstraint:{distance:5}}))
 
   const handleMove = useCallback(async (id: string, col: ClosedColumn) => {
+    if (!canApprove) {
+      showToast("Only Owners and Managers can update post status")
+      return false
+    }
     const inf = data.find(d=>d.id===id)
     const ok  = await updateColumn(id, col)
     if (ok) {
@@ -606,7 +631,7 @@ function PostTrackerContent() {
       showToast("Failed to move")
     }
     return ok
-  }, [data, updateColumn])
+  }, [data, updateColumn, canApprove])
 
   let filteredData = data.filter(inf =>
     inf.influencer.toLowerCase().includes(search.toLowerCase()) ||
@@ -641,11 +666,15 @@ function PostTrackerContent() {
   }
 
   const handleCampaignTypeChange = useCallback(async (id: string, type: string): Promise<boolean> => {
+    if (!canApprove) {
+      showToast("Only Owners and Managers can update campaign type")
+      return false
+    }
     const ok = await updateCampaignType(id, type)
     if (ok) { setSelectedInf(p=>p?.id===id?{...p,campaignType:type}:p); showToast("Campaign type updated") }
     else showToast("Failed to update campaign type")
     return ok
-  }, [updateCampaignType])
+  }, [updateCampaignType, canApprove])
 
   const handleColumnClick = (column: typeof COLUMNS[0]) => {
     setSelectedColumnStatus(column.key)
@@ -694,7 +723,7 @@ function PostTrackerContent() {
 
       {selectedInf&&(
         <ProfileDrawer inf={selectedInf} brandId={brandId} onClose={()=>setSelectedInf(null)}
-          onColumnChange={handleMove} onCampaignTypeChange={handleCampaignTypeChange}/>
+          onColumnChange={handleMove} onCampaignTypeChange={handleCampaignTypeChange} canApproveInfluencers={canApprove}/>
       )}
 
       {/* ── Single inline toolbar row — matches Manage Influencers layout ── */}
@@ -817,8 +846,8 @@ function PostTrackerContent() {
                         {items.length===0?(
                           <div className="border-2 border-dashed border-gray-200 rounded-lg p-4 text-center text-xs text-gray-400">Drop here</div>
                         ):items.map(inf=>(
-                          <DraggableCard key={inf.id} id={inf.id} onClick={()=>setSelectedInf(inf)}>
-                            <PostTrackerCard inf={inf} onOpen={setSelectedInf} onMove={handleMove}/>
+                          <DraggableCard key={inf.id} id={inf.id} onClick={()=>setSelectedInf(inf)} disabled={!canApprove}>
+                            <PostTrackerCard inf={inf} onOpen={setSelectedInf} onMove={handleMove} canApproveInfluencers={canApprove}/>
                           </DraggableCard>
                         ))}
                       </div>
@@ -858,8 +887,8 @@ function PostTrackerContent() {
                         {items.length===0?(
                           <div className="border-2 border-dashed border-red-200 rounded-lg p-4 text-center text-xs text-gray-400">Drop here</div>
                         ):items.map(inf=>(
-                          <DraggableCard key={inf.id} id={inf.id} onClick={()=>setSelectedInf(inf)}>
-                            <PostTrackerCard inf={inf} onOpen={setSelectedInf} onMove={handleMove}/>
+                          <DraggableCard key={inf.id} id={inf.id} onClick={()=>setSelectedInf(inf)} disabled={!canApprove}>
+                            <PostTrackerCard inf={inf} onOpen={setSelectedInf} onMove={handleMove} canApproveInfluencers={canApprove}/>
                           </DraggableCard>
                         ))}
                       </div>
@@ -908,7 +937,7 @@ function PostTrackerContent() {
                     <td className="px-4 py-3">{inf.engagementRate||"—"}</td>
                     <td className="px-4 py-3"><span className="px-2 py-1 rounded text-xs bg-gray-100 text-gray-700">{inf.niche||"—"}</span></td>
                     <td className="px-4 py-3"><CampaignBadge type={inf.campaignType}/></td>
-                    <td className="px-4 py-3"><div onClick={e=>e.stopPropagation()}><select className="text-[11px] px-2 py-1 rounded-lg border border-gray-200 bg-gray-50 text-gray-700 font-medium outline-none cursor-pointer" value={inf.closedStatus} onChange={async e=>{await handleMove(inf.id,e.target.value as ClosedColumn)}}>{COLUMNS.map(c=><option key={c.key} value={c.key}>{c.title}</option>)}</select></div></td>
+                    <td className="px-4 py-3"><div onClick={e=>e.stopPropagation()}><select className="text-[11px] px-2 py-1 rounded-lg border border-gray-200 bg-gray-50 text-gray-700 font-medium outline-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed" value={inf.closedStatus} disabled={!canApprove} title={!canApprove ? "Only Owners and Managers can update post status" : undefined} onChange={async e=>{if(!canApprove)return;await handleMove(inf.id,e.target.value as ClosedColumn)}}>{COLUMNS.map(c=><option key={c.key} value={c.key}>{c.title}</option>)}</select></div></td>
                   </tr>
                 ))}
               </tbody>

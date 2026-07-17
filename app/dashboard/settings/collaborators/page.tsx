@@ -53,7 +53,7 @@ function LoadingScreen() {
 
 function CollaboratorsContent() {
   const searchParams = useSearchParams()
-  useSession()
+  const { data: session } = useSession()
 
   const brandId = searchParams.get("brandId")
 
@@ -77,6 +77,8 @@ function CollaboratorsContent() {
   const [buyingSeats, setBuyingSeats] = useState(false)
   const [paypalLoaded, setPaypalLoaded] = useState(false)
   const paypalRef = useRef<HTMLDivElement>(null)
+
+  const isOwner = !!session?.user?.id && owner?.id === session.user.id
 
   // brandId is read directly from searchParams above — no effect needed.
 
@@ -323,57 +325,59 @@ function CollaboratorsContent() {
             </Card>
           )}
 
-          {/* Invite form */}
-          <Card>
-            <div className="flex items-center gap-3 border-b px-5 py-3">
-              <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-emerald-50">
-                <Mail className="h-4 w-4 text-emerald-600" />
+          {/* Invite form — owner only */}
+          {isOwner && (
+            <Card>
+              <div className="flex items-center gap-3 border-b px-5 py-3">
+                <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-emerald-50">
+                  <Mail className="h-4 w-4 text-emerald-600" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold leading-tight text-foreground">Invite team member</p>
+                  <p className="text-xs leading-tight text-muted-foreground">Send an invite by email</p>
+                </div>
               </div>
-              <div>
-                <p className="text-sm font-semibold leading-tight text-foreground">Invite team member</p>
-                <p className="text-xs leading-tight text-muted-foreground">Send an invite by email</p>
-              </div>
-            </div>
-            <form onSubmit={handleInvite}>
-              <CardContent className="space-y-3.5 pt-4">
-                <div className="space-y-1">
-                  <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                    Email address
-                  </Label>
-                  <Input
-                    type="email"
-                    placeholder="collaborator@example.com"
-                    value={inviteEmail}
-                    onChange={(e) => setInviteEmail(e.target.value)}
-                    required
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">Role</Label>
-                  <Select value={inviteRole} onValueChange={setInviteRole}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="manager">Manager</SelectItem>
-                      <SelectItem value="researcher">Researcher</SelectItem>
-                      <SelectItem value="viewer">Viewer</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex justify-end border-t pt-3">
-                  <Button
-                    type="submit"
-                    disabled={inviting || !inviteEmail.trim()}
-                    className="gap-1.5 bg-[#15803d] text-white hover:bg-[#166534]"
-                  >
-                    <Mail className="h-3.5 w-3.5" />
-                    {inviting ? "Sending…" : "Send invite"}
-                  </Button>
-                </div>
-              </CardContent>
-            </form>
-          </Card>
+              <form onSubmit={handleInvite}>
+                <CardContent className="space-y-3.5 pt-4">
+                  <div className="space-y-1">
+                    <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                      Email address
+                    </Label>
+                    <Input
+                      type="email"
+                      placeholder="collaborator@example.com"
+                      value={inviteEmail}
+                      onChange={(e) => setInviteEmail(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">Role</Label>
+                    <Select value={inviteRole} onValueChange={setInviteRole}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="manager">Manager</SelectItem>
+                        <SelectItem value="researcher">Researcher</SelectItem>
+                        <SelectItem value="viewer">Viewer</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex justify-end border-t pt-3">
+                    <Button
+                      type="submit"
+                      disabled={inviting || !inviteEmail.trim()}
+                      className="gap-1.5 bg-[#15803d] text-white hover:bg-[#166534]"
+                    >
+                      <Mail className="h-3.5 w-3.5" />
+                      {inviting ? "Sending…" : "Send invite"}
+                    </Button>
+                  </div>
+                </CardContent>
+              </form>
+            </Card>
+          )}
         </div>
 
         {/* Right column — members list */}
@@ -418,13 +422,15 @@ function CollaboratorsContent() {
                       <span className="whitespace-nowrap rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold capitalize text-emerald-800">
                         {member.role}
                       </span>
-                      <button
-                        onClick={() => handleRemove(member.id)}
-                        disabled={removing === member.id}
-                        className="rounded-md p-1.5 text-red-500 opacity-0 transition-all hover:bg-red-50 group-hover:opacity-100"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                      {isOwner && (
+                        <button
+                          onClick={() => handleRemove(member.id)}
+                          disabled={removing === member.id}
+                          className="rounded-md p-1.5 text-red-500 opacity-0 transition-all hover:bg-red-50 group-hover:opacity-100"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}

@@ -16,7 +16,7 @@ export async function PUT(
     const { brandId, userId } = await params
     const { role } = await req.json()
 
-    if (!["owner", "collaborator", "viewer"].includes(role)) {
+    if (!["manager", "researcher", "viewer"].includes(role)) {
       return NextResponse.json(
         { error: "Invalid role" },
         { status: 400 }
