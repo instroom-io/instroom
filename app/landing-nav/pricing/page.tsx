@@ -45,7 +45,7 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
 
         /* ── Page Hero ── */
         .page-hero {
-          padding: 96px 0 72px;
+          padding: 56px 0 48px;
           text-align: center;
           background: #F4F7F5;
           background-image: radial-gradient(circle, rgba(31,174,91,0.12) 1px, transparent 1px);
@@ -53,13 +53,33 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
         }
 
         .eyebrow {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          background: rgba(31,174,91,0.1);
+          border: 1px solid rgba(31,174,91,0.28);
+          border-radius: 100px;
+          padding: 6px 14px 6px 10px;
           font-size: 0.75rem;
           font-weight: 700;
           text-transform: uppercase;
           letter-spacing: 0.12em;
-          color: #1FAE5B;
+          color: #0F6B3E;
           margin-bottom: 16px;
-          display: block;
+        }
+
+        .eyebrow-dot {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background: #1FAE5B;
+          animation: eyebrowPulse 1.6s ease-in-out infinite;
+          flex-shrink: 0;
+        }
+
+        @keyframes eyebrowPulse {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50% { opacity: 0.35; transform: scale(0.7); }
         }
 
         .page-hero h1 {
@@ -440,7 +460,10 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
       {/* PAGE HERO */}
       <section className="page-hero">
         <div className="container">
-          <p className="eyebrow">Pricing</p>
+          <div className="eyebrow">
+            <span className="eyebrow-dot" />
+            Pricing
+          </div>
           <h1>Simple, transparent pricing.</h1>
           <p className="lead">
             Choose the perfect plan for your influencer marketing needs. No hidden fees. Cancel anytime.

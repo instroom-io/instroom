@@ -8,6 +8,7 @@ import InfluencerProfileSidebar from "./InfluencerProfileSidebar"
 import { IconSearch, IconFilter } from "@tabler/icons-react"
 import { ReactNode } from "react"
 import { useBrandTaxonomy } from "@/hooks/useBrandTaxonomy"
+import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 
 import {
   partnersApi,
@@ -156,6 +157,7 @@ interface Props {
 }
 
 export default function BrandPartnersPage({ brandId }: Props) {
+  const { canManageCampaigns, canApproveInfluencers, isOwner } = useBrandCapabilities(brandId)
   const [partners, setPartners] = useState<Partner[]>([])
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   const [loading, setLoading] = useState(true)
@@ -695,9 +697,30 @@ export default function BrandPartnersPage({ brandId }: Props) {
           </div>
         </div>
         <div className="topbar-actions">
-          <button className="btn-outline" onClick={() => setShowTierModal(true)}>⚙ Tier Settings</button>
-          <button className="btn-outline" onClick={() => setShowCampaignModal(true)}>+ New Campaign</button>
-          <button className="btn-primary" onClick={() => setShowAddPartnerModal(true)}>+ Add Partner</button>
+          <button
+            className="btn-outline"
+            onClick={() => setShowTierModal(true)}
+            disabled={!isOwner}
+            title={!isOwner ? "Only the workspace owner can manage tier settings" : undefined}
+          >
+            ⚙ Tier Settings
+          </button>
+          <button
+            className="btn-outline"
+            onClick={() => setShowCampaignModal(true)}
+            disabled={!canManageCampaigns}
+            title={!canManageCampaigns ? "Only Owners and Managers can create campaigns" : undefined}
+          >
+            + New Campaign
+          </button>
+          <button
+            className="btn-primary"
+            onClick={() => setShowAddPartnerModal(true)}
+            disabled={!canManageCampaigns}
+            title={!canManageCampaigns ? "Only Owners and Managers can add partners" : undefined}
+          >
+            + Add Partner
+          </button>
         </div>
       </div>
 
@@ -903,8 +926,9 @@ export default function BrandPartnersPage({ brandId }: Props) {
                         <td>
                           <button
                             className="abt del"
-                            onClick={(e) => { e.stopPropagation(); handleRemovePartner(p.id) }}
-                            title="Remove partner"
+                            onClick={(e) => { e.stopPropagation(); if (!canManageCampaigns) return; handleRemovePartner(p.id) }}
+                            disabled={!canManageCampaigns}
+                            title={!canManageCampaigns ? "Only Owners and Managers can remove partners" : "Remove partner"}
                           >
                             ✕
                           </button>
@@ -940,7 +964,14 @@ export default function BrandPartnersPage({ brandId }: Props) {
         <div className="content">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
             <div style={{ fontSize: 11, fontWeight: 600, color: "#888", textTransform: "uppercase", letterSpacing: "0.07em" }}>All campaigns</div>
-            <button className="btn-primary" onClick={() => setShowCampaignModal(true)}>+ New Campaign</button>
+            <button
+              className="btn-primary"
+              onClick={() => setShowCampaignModal(true)}
+              disabled={!canManageCampaigns}
+              title={!canManageCampaigns ? "Only Owners and Managers can create campaigns" : undefined}
+            >
+              + New Campaign
+            </button>
           </div>
           {campaigns.length === 0 ? (
             <div style={{ textAlign: "center", padding: "60px 20px", color: "#888" }}>

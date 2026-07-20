@@ -22,6 +22,7 @@ import { logActivity } from "@/lib/activity-log"
 import { sendNotification } from "@/lib/notifications"
 import type { NotifType } from "@/emails/notification"
 import { provisionGoAffProAffiliate } from "@/lib/goaffpro-provision"
+import { hasBrandCapability } from "@/lib/permissions"
 
 // ─── Status → DB field mapping ────────────────────────────────────────────────
 function pipelineStatusToFields(pipelineStatus: string): {
@@ -74,22 +75,19 @@ export async function PATCH(
       )
     }
 
-    // ── Access check (COUNT — faster than findFirst) ─────────────────────────
-    // prisma.brand.count returns a number (0 or 1 here) without loading
-    // any fields — the DB executes SELECT COUNT(1) and stops early.
-    const accessCount = await prisma.brand.count({
-      where: {
-        id:        brandId,
-        is_active: true,
-        OR: [
-          { owner_id: session.user.id },
-          { members: { some: { user_id: session.user.id } } },
-        ],
-      },
-    })
-
-    if (accessCount === 0) {
+    // ── Access check ───────────────────────────────────────────────────────
+    // Every pipeline status transition sets approval_status to "Approved" or
+    // "Declined" (see pipelineStatusToFields below), so this whole action is
+    // an approval decision — gated to owners and managers only. The brand
+    // must also be active (owner's subscription in good standing).
+    const activeCount = await prisma.brand.count({ where: { id: brandId, is_active: true } })
+    if (activeCount === 0) {
       return NextResponse.json({ error: "Not found" }, { status: 403 })
+    }
+
+    const canApprove = await hasBrandCapability(brandId, session.user.id, "approveInfluencers")
+    if (!canApprove) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
     // ── Compute DB fields from pipeline status ───────────────────────────────

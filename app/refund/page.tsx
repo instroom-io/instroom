@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
 import Image from "next/image";
+import Link from "next/link";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -288,7 +289,7 @@ export default function RefundPolicy() {
 
       {/* ── Topbar ── */}
       <nav className="bg-[#0d2b1a] px-12 h-16 flex items-center justify-between sticky top-0 z-50 border-b border-[#1f3d28]">
-        <a href="#" className="flex items-center gap-2.5 no-underline">
+        <Link href="/" className="flex items-center gap-2.5 no-underline">
           <Image
             src="/images/instroomLogo.png"
             alt="Instroom Logo"
@@ -297,8 +298,8 @@ export default function RefundPolicy() {
             className="w-9 h-9 rounded-full object-cover"
             priority
           />
-          <span className="font-semibold text-lg text-white tracking-[-0.3px]">instroom</span>
-        </a>
+          <span className="font-semibold text-lg text-white tracking-[-0.3px]">Instroom</span>
+        </Link>
         <span className="text-[12px] font-medium text-[#a8e6c1] tracking-[0.08em] uppercase bg-[rgba(61,189,114,0.12)] px-3 py-1 rounded-full border border-[rgba(61,189,114,0.25)]">
           Refund Policy
         </span>

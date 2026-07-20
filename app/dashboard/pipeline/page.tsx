@@ -34,14 +34,14 @@ function PipelineContent() {
 
   useEffect(() => {
     if (!session?.user?.id) return
-    fetch("/api/subscription/status")
+    fetch(brandId ? `/api/subscription/status?brandId=${brandId}` : "/api/subscription/status")
       .then(res => res.json())
       .then(data => {
         // Allow access if active OR trialing
         setIsSubscribed((data.status === "active" || data.status === "trialing") && !data.isExpired)
       })
       .catch(() => setIsSubscribed(false))
-  }, [session?.user?.id])
+  }, [session?.user?.id, brandId])
   // ──────────────────────────────────────────────────────────────────────────
 
   // SubscriptionGate wraps everything so the lock modal always shows

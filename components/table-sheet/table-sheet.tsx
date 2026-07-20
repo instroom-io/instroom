@@ -157,7 +157,7 @@ export default function TableSheet({
   initialRows = [], initialCustomColumns = [],
   onRowsChange, onDeleteRow, onFetchComplete, onRegisterIdSwap,
   onCustomColumnsChange, onImportRows, readOnly = false, brandId,
-  subscriptionStatus, onShowTrialModal,
+  subscriptionStatus, onShowTrialModal, canApproveInfluencers = true,
 }: {
   initialRows?: InfluencerRow[]
   initialCustomColumns?: CustomColumn[]
@@ -171,6 +171,7 @@ export default function TableSheet({
   brandId?: string
   subscriptionStatus?: { status: string; isExpired: boolean } | null
   onShowTrialModal?: () => void
+  canApproveInfluencers?: boolean
 }) {
   const [rows, setRows] = useState<InfluencerRow[]>(initialRows)
   const [customCols, setCustomCols] = useState<CustomColumn[]>(initialCustomColumns)
@@ -726,6 +727,7 @@ export default function TableSheet({
 
   const applyCellValue = useCallback((rowIdx: number, colKey: string, value: string) => {
     const actualRow = filteredRows[rowIdx]; const actualRowIdx = rows.findIndex(r => r.id === actualRow.id); if (actualRowIdx === -1) return
+    if (colKey === "approval_status" && !canApproveInfluencers) return
     if (actualRow.approval_status === "Declined" && isOutreachField(colKey)) return
     if (colKey === "approval_status" && value === "Declined") { setPendingDeclineRowIdx(rowIdx); setShowDeclineModal(true); return }
     const currentRow = rows[actualRowIdx]
@@ -760,7 +762,7 @@ export default function TableSheet({
       next[actualRowIdx] = row; onRowsChange?.(next); return next
     })
     if (shouldFetch) autoFetchInfluencer(fetchRowId, fetchHandle, fetchPlatform)
-  }, [onRowsChange, customCols, filteredRows, rows, isOutreachField, nicheOptions, locationOptions, autoFetchInfluencer])
+  }, [onRowsChange, customCols, filteredRows, rows, isOutreachField, nicheOptions, locationOptions, autoFetchInfluencer, canApproveInfluencers])
 
   const addOptionToCol = useCallback((fk: string, no: string) => {
     setCustomCols(prev => { const n = prev.map(c => c.field_key !== fk ? c : { ...c, field_options: [...(c.field_options ?? []), no] }); onCustomColumnsChange?.(n); return n })
@@ -769,6 +771,7 @@ export default function TableSheet({
   const startEdit = useCallback((ri: number, ci: number) => {
     if (readOnly) return
     const col = allCols[ci]; const row = filteredRows[ri]
+    if (col.key === "approval_status" && !canApproveInfluencers) return
     if (row.approval_status === "Declined" && isOutreachField(col.key)) return
     if (col.type === "boolean") { applyCellValue(ri, col.key, getCellValue(row, col.key) === "Yes" ? "No" : "Yes"); setActiveCell({ rowIdx: ri, colIdx: ci }); return }
     if (col.key === "platform" || col.key === "niche" || col.key === "location" ||
@@ -779,7 +782,7 @@ export default function TableSheet({
     const rawVal = getCellValue(row, col.key)
     const editVal = col.key === "handle" ? cleanHandle(rawVal) : rawVal
     setActiveCell({ rowIdx: ri, colIdx: ci }); setPopupCell(null); setEditCell({ rowIdx: ri, colIdx: ci }); setEditValue(editVal)
-  }, [allCols, getCellValue, readOnly, filteredRows, applyCellValue, isOutreachField])
+  }, [allCols, getCellValue, readOnly, filteredRows, applyCellValue, isOutreachField, canApproveInfluencers])
 
   const commitEdit = useCallback(() => {
     if (!editCell || commitGuardRef.current) return
@@ -890,9 +893,11 @@ export default function TableSheet({
     const ringCls    = isActive ? "ring-2 ring-inset ring-blue-500 z-[1]" : ""
     const isDuplicate = duplicateRowIds.has(row.id)
     const disabled   = (row.approval_status === "Declined" && isOutreachField(col.key)) || isDuplicate
+      || (col.key === "approval_status" && !canApproveInfluencers)
 
     if (disabled) return (
-      <td key={col.key} className="border border-gray-200 px-1.5 py-1 text-xs bg-gray-100 text-gray-400 cursor-not-allowed" style={{ minWidth: col.minWidth }}>
+      <td key={col.key} className="border border-gray-200 px-1.5 py-1 text-xs bg-gray-100 text-gray-400 cursor-not-allowed" style={{ minWidth: col.minWidth }}
+        title={col.key === "approval_status" && !canApproveInfluencers ? "Only Owners and Managers can approve or decline influencers" : undefined}>
         {col.key === "contact_status"  ? <StatusBadge value={value} />
           : col.key === "approval_status" ? <ApprovalBadge value={value} />
           : col.key === "handle" ? (
