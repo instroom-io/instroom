@@ -268,17 +268,17 @@ function InboxContent() {
 
   useEffect(() => {
     if (!session?.user?.id) return
-    fetch("/api/subscription/status")
+    fetch(brandId ? `/api/subscription/status?brandId=${brandId}` : "/api/subscription/status")
       .then(res => res.json())
       .then(data => {
         setSubscriptionStatus(data)
-        setIsSubscribed(data.status === "active" && !data.isExpired ? true : false)
+        setIsSubscribed((data.status === "active" || data.status === "trialing") && !data.isExpired)
       })
       .catch(() => {
         setSubscriptionStatus({ status: "inactive", isExpired: false })
         setIsSubscribed(false)
       })
-  }, [session?.user?.id])
+  }, [session?.user?.id, brandId])
 
   const [emails, setEmails] = useState<Email[]>([])
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null)

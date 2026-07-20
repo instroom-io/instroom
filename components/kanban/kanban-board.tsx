@@ -8,6 +8,7 @@ import {
   IconPlus,
   IconAlertCircle
 } from "@tabler/icons-react"
+import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 
 type Campaign = {
   id: string
@@ -37,6 +38,7 @@ interface KanbanBoardProps {
 }
 
 export default function KanbanBoard({ brandId }: KanbanBoardProps) {
+  const { canManageCampaigns } = useBrandCapabilities(brandId)
   const [view, setView] = useState<"kanban" | "list">("kanban")
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   const [loading, setLoading] = useState(true)
@@ -226,7 +228,9 @@ export default function KanbanBoard({ brandId }: KanbanBoardProps) {
 
           <button
             onClick={() => setShowCreateModal(true)}
-            className="px-3 py-2 rounded-lg text-sm flex items-center gap-2 bg-[#1FAE5B] text-white hover:bg-[#0F6B3E] transition"
+            disabled={!canManageCampaigns}
+            title={!canManageCampaigns ? "Only Owners and Managers can create campaigns" : undefined}
+            className="px-3 py-2 rounded-lg text-sm flex items-center gap-2 bg-[#1FAE5B] text-white hover:bg-[#0F6B3E] transition disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <IconPlus size={16} />
             New Campaign

@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
+import { checkBrandAccess } from "@/lib/brand-access"
 
 const DEFAULTS = { bronze_max: 2000, silver_max: 10000 }
 
@@ -21,6 +22,12 @@ export async function GET(
     }
 
     const { brandId } = await context.params
+
+    // Viewing tier thresholds is needed by every brand member to render tier
+    // badges — only changing them (PUT, below) is restricted to the owner.
+    if (!(await checkBrandAccess(brandId, session.user.id))) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
 
     const settings = await prisma.brandTierSettings.findUnique({
       where: { brand_id: brandId },
@@ -46,6 +53,12 @@ export async function PUT(
     }
 
     const { brandId } = await context.params
+
+    const brand = await prisma.brand.findUnique({ where: { id: brandId } })
+    if (!brand || brand.owner_id !== session.user.id) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
+    }
+
     const body = await req.json()
     const { bronze_max, silver_max } = body
 
