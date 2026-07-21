@@ -672,7 +672,16 @@ export function LandingPage() {
                 <p>Not everything is ready yet. We're still building, still improving, still listening to the people using it. But it's getting there, and we'd love for you to come along.</p>
               </div>
               <div className={styles.founderSign}>
-                <div className={`${styles.founderName} ${styles.fontHand}`}>Armand Mañibo</div>
+                <div className={styles.founderNameWrap}>
+                  <Image
+                    src="/images/sign.png"
+                    alt="Armand Mañibo's signature"
+                    width={472}
+                    height={778}
+                    className={styles.founderSignature}
+                  />
+                  <div className={`${styles.founderName} ${styles.fontHand}`}>Armand Mañibo</div>
+                </div>
                 <div className={styles.founderTitle}>Founder & CEO, Instroom</div>
               </div>
             </div>

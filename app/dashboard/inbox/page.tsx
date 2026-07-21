@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation"
 import { useSession } from "next-auth/react"
 import { SubscriptionGate } from "@/components/ui/subscription-gate"
 import {
-  IconMail,
+  IconMailPlus,
   IconSearch,
   IconX,
   IconSend,
@@ -154,16 +154,24 @@ function mapGmailThreadToEmail(thread: any, index: number): Email {
   const firstMsg = messages[0] || {}
   const lastMsg = messages[messages.length - 1] || {}
 
-  const fromHeader = firstMsg.from || firstMsg.sender || ""
+  // messages[0] is the oldest message in the thread, which is often the outbound
+  // message the user sent (cold outreach) rather than something from the contact.
+  // Prefer the first message that isn't one the user sent; otherwise fall back to
+  // who the first message was addressed to.
+  const contactMsg = messages.find((m: any) => !(m.labelIds || []).includes("SENT"))
+  const fromHeader = contactMsg ? contactMsg.from || contactMsg.sender || "" : firstMsg.to || firstMsg.from || firstMsg.sender || ""
   const nameMatch = fromHeader.match(/^([^<]+)</)
   const emailMatch = fromHeader.match(/<([^>]+)>/)
   const senderName = nameMatch ? nameMatch[1].trim() : fromHeader.split("@")[0] || "Unknown"
   const senderEmail = (emailMatch ? emailMatch[1] : fromHeader).toLowerCase().trim()
 
-  const replies = messages.slice(1).map((msg: any) => {
+  // Tag each message with who actually sent it (via Gmail's SENT label) instead of
+  // assuming the first message is always from the contact — the user may have sent
+  // the first message themselves (cold outreach).
+  const replies = messages.map((msg: any) => {
     const replyFrom = msg.from || msg.sender || ""
     const replyName = replyFrom.match(/^([^<]+)</)?.[1]?.trim() || replyFrom.split("@")[0] || "Unknown"
-    const isUser = replyFrom.toLowerCase().includes("me") || msg.isUser
+    const isUser = (msg.labelIds || []).includes("SENT")
     return {
       sender: isUser ? "You" : replyName,
       message: msg.body || msg.snippet || msg.text || "",
@@ -206,7 +214,9 @@ function mapOutlookThreadToEmail(thread: any, index: number): Email {
   const senderName = nameMatch ? nameMatch[1].trim() : fromHeader.split("@")[0] || "Unknown"
   const senderEmail = (emailMatch ? emailMatch[1] : fromHeader).toLowerCase().trim()
 
-  const replies = messages.slice(1).map((msg: any) => {
+  // Outlook is fetched only from the inbox folder, so every message here is
+  // genuinely from the contact (never something the user sent).
+  const replies = messages.map((msg: any) => {
     const replyFrom = msg.from || ""
     const replyName = replyFrom.match(/^([^<]+)</)?.[1]?.trim() || replyFrom.split("@")[0] || "Unknown"
     return {
@@ -254,6 +264,37 @@ function formatRelativeDate(timestamp: string): string {
   }
 }
 
+// Splits a plain-text email body into the new reply text and the quoted
+// history beneath it (e.g. "On ... wrote:" followed by "> " lines), so the
+// quoted part can be collapsed behind a toggle instead of always shown.
+function splitQuotedText(body: string): { main: string; quoted: string | null } {
+  const onWroteMatch = body.match(/\n?On [\s\S]*?wrote:\s*\n?/)
+  if (onWroteMatch && onWroteMatch.index !== undefined) {
+    const idx = onWroteMatch.index
+    return { main: body.slice(0, idx).trim(), quoted: body.slice(idx).trim() }
+  }
+  const quoteLineMatch = body.match(/^>.*$/m)
+  if (quoteLineMatch && quoteLineMatch.index !== undefined) {
+    const idx = quoteLineMatch.index
+    return { main: body.slice(0, idx).trim(), quoted: body.slice(idx).trim() }
+  }
+  return { main: body, quoted: null }
+}
+
+// Separates the "On ... wrote:" attribution line (which may itself be wrapped
+// across multiple lines) from the actual quoted body, and strips the leading
+// "> " markers from each quoted line so it reads as normal text once indented.
+function parseQuotedBlock(quoted: string): { attribution: string | null; text: string } {
+  const match = quoted.match(/^(On [\s\S]*?wrote:)\s*\n?([\s\S]*)$/)
+  const attribution = match ? match[1].replace(/\s+/g, " ").trim() : null
+  const rest = match ? match[2] : quoted
+  const text = rest
+    .split("\n")
+    .map((line) => line.replace(/^>\s?/, ""))
+    .join("\n")
+    .trim()
+  return { attribution, text }
+}
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
@@ -303,6 +344,7 @@ function InboxContent() {
   const [outlookConnected, setOutlookConnected] = useState(false)
 
   const [composeSource, setComposeSource] = useState<"gmail" | "outlook">("gmail")
+  const [expandedQuotes, setExpandedQuotes] = useState<Set<string>>(new Set())
 
   // Compose modal state
   const [composeTo, setComposeTo] = useState("")
@@ -366,6 +408,10 @@ function InboxContent() {
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" })
     }
   }, [selectedEmail?.replies])
+
+  useEffect(() => {
+    setExpandedQuotes(new Set())
+  }, [selectedEmail?.id])
 
   // ── Gmail connection check ─────────────────────────────────────────────────
 
@@ -945,11 +991,11 @@ function InboxContent() {
                       </button>
                     )}
                     <button
-                      onClick={() => { setComposeSource(isGmailReady ? "gmail" : "outlook"); setOpenCompose(true) }}
+                      onClick={() => { setComposeSource(gmailConnected ? "gmail" : outlookConnected ? "outlook" : "gmail"); setOpenCompose(true) }}
                       className="p-2 rounded-lg bg-[#1FAE5B] text-white hover:bg-[#0F6B3E] transition-all duration-200 shadow-sm"
                       title="New Message"
                     >
-                      <IconMail size={18} />
+                      <IconMailPlus size={18} />
                     </button>
                   </div>
                 </div>
@@ -1109,36 +1155,87 @@ function InboxContent() {
 
               {/* Messages */}
               <div className="flex-1 overflow-y-auto p-4 md:p-6 bg-gray-50">
-                <div className="max-w-3xl mx-auto">
-                  <div className="flex gap-3 mb-6">
-                    <img src={selectedEmail.avatar} alt={selectedEmail.name} className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <span className="text-sm font-medium text-gray-900">{selectedEmail.name}</span>
-                        <span className="text-xs text-gray-400">{formatTime(selectedEmail.timestamp)}</span>
-                      </div>
-                      <div className="bg-white rounded-2xl rounded-tl-none px-4 md:px-5 py-3 shadow-sm border border-gray-100">
-                        <p className="text-xs text-gray-400 mb-1 font-medium">{selectedEmail.subject}</p>
-                        <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{selectedEmail.message || selectedEmail.preview}</p>
-                      </div>
-                    </div>
-                  </div>
+                <div className="max-w-3xl">
+                  <p className="text-xs text-gray-400 mb-3 font-medium">{selectedEmail.subject}</p>
+                  {(() => {
+                    const allMessages = selectedEmail.replies?.length
+                      ? selectedEmail.replies
+                      : [{ sender: selectedEmail.name, message: selectedEmail.message || selectedEmail.preview, timestamp: selectedEmail.timestamp, isUser: false }]
 
-                  {selectedEmail.replies?.map((r, idx) => (
-                    <div key={idx} className={`flex gap-3 mb-6 ${r.isUser ? "flex-row-reverse" : ""}`}>
-                      {!r.isUser && <img src={selectedEmail.avatar} alt={selectedEmail.name} className="w-8 h-8 rounded-full object-cover flex-shrink-0" />}
-                      {r.isUser && <div className="w-8 h-8 rounded-full bg-[#1FAE5B] flex items-center justify-center text-white text-xs font-medium flex-shrink-0 shadow-sm">ME</div>}
-                      <div className={`flex-1 max-w-[85%] md:max-w-[70%] ${r.isUser ? "items-end" : ""}`}>
-                        <div className={`flex items-center gap-2 mb-1 ${r.isUser ? "justify-end" : ""}`}>
-                          <span className="text-sm font-medium text-gray-900">{r.sender}</span>
-                          <span className="text-xs text-gray-400">{formatTime(r.timestamp)}</span>
-                        </div>
-                        <div className={`rounded-2xl px-4 md:px-5 py-3 shadow-sm ${r.isUser ? "bg-[#1FAE5B] text-white rounded-tr-none" : "bg-white border border-gray-100 text-gray-700 rounded-tl-none"}`}>
-                          <p className="text-sm whitespace-pre-wrap leading-relaxed">{r.message}</p>
+                    const groups: { sender: string; isUser: boolean; items: typeof allMessages }[] = []
+                    for (const msg of allMessages) {
+                      const lastGroup = groups[groups.length - 1]
+                      if (lastGroup && lastGroup.isUser === !!msg.isUser && lastGroup.sender === msg.sender) {
+                        lastGroup.items.push(msg)
+                      } else {
+                        groups.push({ sender: msg.sender, isUser: !!msg.isUser, items: [msg] })
+                      }
+                    }
+
+                    return groups.map((group, gIdx) => (
+                      <div key={gIdx} className={`flex gap-3 mb-6 ${group.isUser ? "flex-row-reverse" : ""}`}>
+                        {!group.isUser && <img src={selectedEmail.avatar} alt={selectedEmail.name} className="w-8 h-8 rounded-full object-cover flex-shrink-0" />}
+                        {group.isUser && <div className="w-8 h-8 rounded-full bg-[#1FAE5B] flex items-center justify-center text-white text-xs font-medium flex-shrink-0 shadow-sm">ME</div>}
+                        <div className={`flex-1 max-w-[85%] md:max-w-[70%] ${group.isUser ? "items-end" : ""}`}>
+                          <div className={`flex items-center gap-2 mb-1 ${group.isUser ? "justify-end" : ""}`}>
+                            <span className="text-sm font-medium text-gray-900">{group.sender}</span>
+                            <span className="text-xs text-gray-400">{formatTime(group.items[0].timestamp)}</span>
+                          </div>
+                          <div className={`flex flex-col gap-1 ${group.isUser ? "items-end" : "items-start"}`}>
+                            {group.items.map((msg, mIdx) => {
+                              const { main, quoted } = splitQuotedText(msg.message)
+                              const quoteKey = `${gIdx}-${mIdx}`
+                              const isExpanded = expandedQuotes.has(quoteKey)
+                              return (
+                                <div
+                                  key={mIdx}
+                                  className={`rounded-2xl px-4 md:px-5 py-3 shadow-sm ${group.isUser ? "bg-[#1FAE5B] text-white rounded-tr-none" : "bg-white border border-gray-100 text-gray-700 rounded-tl-none"}`}
+                                >
+                                  <p className="text-sm whitespace-pre-wrap leading-relaxed">{main}</p>
+                                  {quoted && (
+                                    <div className="mt-2">
+                                      <button
+                                        onClick={() =>
+                                          setExpandedQuotes((prev) => {
+                                            const next = new Set(prev)
+                                            if (next.has(quoteKey)) next.delete(quoteKey)
+                                            else next.add(quoteKey)
+                                            return next
+                                          })
+                                        }
+                                        className={`text-xs underline underline-offset-2 ${group.isUser ? "text-white/70 hover:text-white" : "text-gray-400 hover:text-gray-600"}`}
+                                      >
+                                        {isExpanded ? "Hide quoted text" : "Show quoted text"}
+                                      </button>
+                                      {isExpanded && (() => {
+                                        const { attribution, text } = parseQuotedBlock(quoted)
+                                        return (
+                                          <div
+                                            className={`mt-2 rounded-lg px-3 py-2 text-xs leading-relaxed ${group.isUser ? "bg-white/10" : "bg-gray-50 border border-gray-100"}`}
+                                          >
+                                            {attribution && (
+                                              <p className={`mb-1.5 italic ${group.isUser ? "text-white/60" : "text-gray-400"}`}>
+                                                {attribution}
+                                              </p>
+                                            )}
+                                            <div
+                                              className={`pl-2.5 border-l-2 whitespace-pre-wrap ${group.isUser ? "border-white/30 text-white/80" : "border-gray-300 text-gray-500"}`}
+                                            >
+                                              {text}
+                                            </div>
+                                          </div>
+                                        )
+                                      })()}
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    ))
+                  })()}
                   <div ref={messagesEndRef} />
                 </div>
               </div>
@@ -1271,6 +1368,7 @@ function InboxContent() {
                       value={composeTo}
                       onChange={(e) => setComposeTo(e.target.value)}
                       placeholder="recipient@email.com"
+                      autoComplete="off"
                       className="flex-1 outline-none text-sm text-gray-800 placeholder:text-gray-300"
                     />
                   </div>
