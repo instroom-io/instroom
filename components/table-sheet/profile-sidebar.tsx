@@ -542,6 +542,19 @@ export default function ProfileSidebar({
               }}
             >Send DM</button>
             <button style={S.atag}>Follow up</button>
+            <button
+              style={S.atag}
+              onClick={async () => {
+                const url = getProfileUrl(editedRow.platform, editedRow.handle)
+                if (!url) return
+                try {
+                  await navigator.clipboard.writeText(url)
+                  onToast?.("success", "Profile link copied")
+                } catch {
+                  onToast?.("error", "Couldn't copy link")
+                }
+              }}
+            >Copy Link</button>
           </div>
         </div>
 

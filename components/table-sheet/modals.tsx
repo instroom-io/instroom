@@ -3,7 +3,7 @@
 // All modal dialogs: Confirm, AddRows, Decline, ManageOptions, AddColumn, FilterPopover
 
 import React, { useState, useEffect, useRef, type ReactNode } from "react"
-import { IconX, IconAlertTriangle, IconAlertCircle, IconCheck, IconPlus, IconEdit, IconTrash, IconBulb } from "@tabler/icons-react"
+import { IconX, IconAlertTriangle, IconAlertCircle, IconCheck, IconPlus, IconEdit, IconTrash, IconBulb, IconSearch } from "@tabler/icons-react"
 import { DEFAULT_PLATFORMS, DEFAULT_GENDERS, FIELD_TYPE_INFO } from "./constants"
 import type { CustomColumn, FilterState } from "./types"
 
@@ -210,9 +210,10 @@ export function ManageOptionsModal({ isOpen, onClose, title, options, onAdd, onR
   const [ei, setEi] = useState<number | null>(null)
   const [ev, setEv] = useState("")
   const [busy, setBusy] = useState(false)
+  const [query, setQuery] = useState("")
   const ir = useRef<HTMLInputElement>(null)
 
-  useEffect(() => { if (isOpen) { setLo([...options]); setNo(""); setEi(null) } }, [isOpen, options])
+  useEffect(() => { if (isOpen) { setLo([...options]); setNo(""); setEi(null); setQuery("") } }, [isOpen, options])
   if (!isOpen) return null
 
   const add = async () => {
@@ -231,44 +232,75 @@ export function ManageOptionsModal({ isOpen, onClose, title, options, onAdd, onR
     await onRemove(name)
   }
 
+  const filtered = query.trim() ? lo.filter(o => o.toLowerCase().includes(query.trim().toLowerCase())) : lo
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="bg-white rounded-xl shadow-xl w-[380px] p-5 max-h-[80vh] flex flex-col">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-base font-semibold text-gray-900">{title}</h3>
-          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600"><IconX size={20} /></button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[1px]" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="bg-white rounded-2xl shadow-2xl w-[400px] max-h-[80vh] flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-gray-100">
+          <div>
+            <h3 className="text-base font-semibold text-gray-900">{title}</h3>
+            <p className="text-xs text-gray-400 mt-0.5">{lo.length} {lo.length === 1 ? "option" : "options"}</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition"><IconX size={18} /></button>
         </div>
-        <div className="flex gap-1.5 mb-3">
-          <input ref={ir} type="text" value={no} onChange={e => setNo(e.target.value)} onKeyDown={e => { if (e.key === "Enter") add() }}
-            placeholder={`Add new ${title.toLowerCase()}…`}
-            className="flex-1 px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-400 outline-none" />
-          <button onClick={add} disabled={!no.trim() || busy} className="px-2.5 py-1.5 text-xs bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-40 transition"><IconPlus size={12} /></button>
-        </div>
-        <div className="flex-1 overflow-y-auto space-y-1 min-h-0">
-          {lo.map((opt, idx) => (
-            <div key={opt} className="flex items-center gap-2 group px-2 py-1.5 rounded-lg hover:bg-gray-50">
-              {ei === idx ? (
-                <>
-                  <input type="text" value={ev} onChange={e => setEv(e.target.value)}
-                    onKeyDown={e => { if (e.key === "Enter") { const v = ev.trim(); if (v) setLo(p => p.map((o, i) => i === ei ? v : o)); setEi(null) }; if (e.key === "Escape") setEi(null) }}
-                    className="flex-1 px-2 py-1 text-sm border border-green-300 rounded outline-none" autoFocus />
-                  <button onClick={() => { const v = ev.trim(); if (v) setLo(p => p.map((o, i) => i === ei ? v : o)); setEi(null) }} className="p-1 text-green-600"><IconCheck size={12} /></button>
-                  <button onClick={() => setEi(null)} className="p-1 text-gray-400"><IconX size={12} /></button>
-                </>
-              ) : (
-                <>
-                  <span className="flex-1 text-sm text-gray-700">{opt}</span>
-                  <button onClick={() => { setEi(idx); setEv(lo[idx]) }} className="p-1 text-gray-400 hover:text-blue-600 opacity-0 group-hover:opacity-100"><IconEdit size={12} /></button>
-                  <button onClick={() => remove(opt, idx)} className="p-1 text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100"><IconTrash size={12} /></button>
-                </>
-              )}
+
+        <div className="px-5 pt-4">
+          <div className="flex gap-2">
+            <input ref={ir} type="text" value={no} onChange={e => setNo(e.target.value)} onKeyDown={e => { if (e.key === "Enter") add() }}
+              placeholder={`Add new ${title.toLowerCase().replace("manage ", "")}…`}
+              className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-400 focus:border-green-400 outline-none transition" />
+            <button onClick={add} disabled={!no.trim() || busy} className="flex items-center justify-center w-9 h-9 flex-shrink-0 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-40 disabled:hover:bg-green-600 transition"><IconPlus size={15} /></button>
+          </div>
+          {lo.length > 5 && (
+            <div className="relative mt-2">
+              <IconSearch size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-300 pointer-events-none" />
+              <input type="text" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search…"
+                className="w-full pl-8 pr-2.5 py-1.5 text-xs border border-gray-100 rounded-lg bg-gray-50 focus:bg-white focus:ring-2 focus:ring-green-200 outline-none transition" />
             </div>
-          ))}
-          {lo.length === 0 && <p className="text-center text-sm text-gray-400 py-4">No options yet</p>}
+          )}
         </div>
-        <div className="flex gap-3 mt-3 pt-4 border-t border-gray-100">
+
+        <div className="flex-1 overflow-y-auto min-h-0 px-5 py-3 mt-1">
+          <div className="space-y-0.5">
+            {filtered.map((opt) => {
+              const idx = lo.indexOf(opt)
+              return (
+                <div key={opt} className="flex items-center gap-2 group px-2.5 py-2 rounded-lg hover:bg-gray-50 transition">
+                  {ei === idx ? (
+                    <>
+                      <input type="text" value={ev} onChange={e => setEv(e.target.value)}
+                        onKeyDown={e => { if (e.key === "Enter") { const v = ev.trim(); if (v) setLo(p => p.map((o, i) => i === ei ? v : o)); setEi(null) }; if (e.key === "Escape") setEi(null) }}
+                        className="flex-1 px-2 py-1 text-sm border border-green-300 rounded-md outline-none" autoFocus />
+                      <button onClick={() => { const v = ev.trim(); if (v) setLo(p => p.map((o, i) => i === ei ? v : o)); setEi(null) }} className="p-1 text-green-600 hover:bg-green-50 rounded"><IconCheck size={13} /></button>
+                      <button onClick={() => setEi(null)} className="p-1 text-gray-400 hover:bg-gray-100 rounded"><IconX size={13} /></button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="w-1.5 h-1.5 rounded-full bg-gray-300 flex-shrink-0" />
+                      <span className="flex-1 text-sm text-gray-700 truncate">{opt}</span>
+                      <button onClick={() => { setEi(idx); setEv(lo[idx]) }} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-md opacity-0 group-hover:opacity-100 transition"><IconEdit size={13} /></button>
+                      <button onClick={() => remove(opt, idx)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md opacity-0 group-hover:opacity-100 transition"><IconTrash size={13} /></button>
+                    </>
+                  )}
+                </div>
+              )
+            })}
+            {filtered.length === 0 && lo.length > 0 && (
+              <p className="text-center text-sm text-gray-400 py-8">No matches for "{query}"</p>
+            )}
+            {lo.length === 0 && (
+              <div className="text-center py-10">
+                <p className="text-sm text-gray-400">No options yet</p>
+                <p className="text-xs text-gray-300 mt-1">Add one above to get started</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="flex gap-3 px-5 py-4 border-t border-gray-100">
           <button onClick={onClose} className="flex-1 px-4 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 transition">Cancel</button>
-          <button onClick={onClose} className="flex-1 px-4 py-2 rounded-lg bg-green-600 text-white text-sm hover:bg-green-700 transition">Done</button>
+          <button onClick={onClose} className="flex-1 px-4 py-2 rounded-lg bg-green-600 text-white text-sm font-medium hover:bg-green-700 transition">Done</button>
         </div>
       </div>
     </div>

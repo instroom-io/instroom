@@ -13,6 +13,7 @@ import TableSheet, {
 import { useInfluencerData } from "@/hooks/useInfluencerData"
 import { LimitExceededDialog } from "@/components/limit-exceeded-dialog"
 import { WorkspaceUnavailableModal } from "@/components/workspace-unavailable-modal"
+import { TableSkeleton } from "@/components/shared/skeletons"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -639,12 +640,7 @@ function InfluencersContent() {
   return (
     <div className="flex flex-col gap-4 p-4 relative min-h-screen">
       {isLoading ? (
-        <div className="flex items-center justify-center py-16">
-          <div className="flex flex-col items-center gap-3">
-            <div className="w-8 h-8 border-2 border-green-500 border-t-transparent rounded-full animate-spin" />
-            <p className="text-sm text-gray-500">Loading influencers…</p>
-          </div>
-        </div>
+        <TableSkeleton rows={10} cols={7} label="Fetching data..." />
       ) : (
         <TableSheet
           initialRows={rows}
@@ -782,13 +778,7 @@ function InfluencersContent() {
 
 export default function InfluencersPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="flex items-center justify-center min-h-screen">
-          <div className="w-8 h-8 border-2 border-green-500 border-t-transparent rounded-full animate-spin" />
-        </div>
-      }
-    >
+    <Suspense fallback={<TableSkeleton rows={10} cols={7} label="Fetching data..." />}>
       <InfluencersContent />
     </Suspense>
   )

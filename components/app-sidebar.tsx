@@ -1,7 +1,8 @@
 "use client"
 
 import * as React from "react"
-import { useEffect, useState } from "react"
+import { Suspense, useEffect, useState } from "react"
+import { useSearchParams } from "next/navigation"
 import {
   IconChartBar,
   IconDashboard,
@@ -36,19 +37,23 @@ const navData = {
   ],
 }
 
-export function AppSidebar({
+function AppSidebarInner({
   setView,
   ...props
 }: React.ComponentProps<typeof Sidebar> & {
   setView?: (view: string) => void
 }) {
   const [mounted, setMounted] = useState(false)
-  const [brandId, setBrandId] = useState<string | null>(null)
+  // useSearchParams is reactive to query-string-only changes (unlike usePathname),
+  // which matters here: the brand selector often adds/updates ?brandId on the
+  // SAME route (no pathname change) right after a first-time login. Reading it
+  // once on mount via window.location.search would otherwise get stuck null
+  // forever, and every sidebar link would keep losing brandId thereafter.
+  const searchParams = useSearchParams()
+  const brandId = searchParams.get("brandId")
 
   useEffect(() => {
     setMounted(true)
-    const params = new URLSearchParams(window.location.search)
-    setBrandId(params.get("brandId"))
   }, [])
 
   if (!mounted) return null
@@ -81,5 +86,15 @@ export function AppSidebar({
         <NavMain items={navData.navMain} brandId={brandId} />
       </SidebarContent>
     </Sidebar>
+  )
+}
+
+export function AppSidebar(
+  props: React.ComponentProps<typeof Sidebar> & { setView?: (view: string) => void }
+) {
+  return (
+    <Suspense fallback={null}>
+      <AppSidebarInner {...props} />
+    </Suspense>
   )
 }

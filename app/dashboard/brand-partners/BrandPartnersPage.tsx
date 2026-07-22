@@ -8,6 +8,7 @@ import InfluencerProfileSidebar from "./InfluencerProfileSidebar"
 import { IconSearch, IconFilter } from "@tabler/icons-react"
 import { ReactNode } from "react"
 import { useBrandTaxonomy } from "@/hooks/useBrandTaxonomy"
+import { TableSkeleton } from "@/components/shared/skeletons"
 
 import {
   partnersApi,
@@ -640,11 +641,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
 
   // ── Loading / error ──────────────────────────────────────────────────────
   if (loading) {
-    return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh", fontFamily: "'Inter', sans-serif", color: "#888" }}>
-        Loading…
-      </div>
-    )
+    return <TableSkeleton rows={8} cols={6} label="Fetching data..." />
   }
 
   if (error) {

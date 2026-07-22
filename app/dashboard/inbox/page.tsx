@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, Suspense } from "react"
 import { useSearchParams } from "next/navigation"
 import { useSession } from "next-auth/react"
 import { SubscriptionGate } from "@/components/ui/subscription-gate"
+import { ListSkeleton } from "@/components/shared/skeletons"
 import {
   IconMail,
   IconSearch,
@@ -1019,13 +1020,15 @@ function InboxContent() {
 
         {/* ── CHAT / MESSAGE AREA ── */}
         <div className="flex-1 flex flex-col bg-white">
-          {isLoading || needsConnect || (emails.length === 0 && (gmailSyncState === "error" || outlookSyncState === "error")) ? (
+          {isLoading ? (
+            <ListSkeleton rows={6} label="Fetching data..." />
+          ) : needsConnect || (emails.length === 0 && (gmailSyncState === "error" || outlookSyncState === "error")) ? (
             <div className="flex-1 flex flex-col items-center justify-center text-gray-300 bg-gray-50 p-4">
               <div className="bg-white rounded-full p-6 mb-4 shadow-sm border border-gray-100">
                 <IconBrandGmail size={48} stroke={1} className="text-gray-200" />
               </div>
               <p className="text-sm font-medium text-gray-400">
-                {isLoading ? "Loading your inbox…" : needsConnect ? "Connect Gmail or Outlook to get started" : "Could not load inbox"}
+                {needsConnect ? "Connect Gmail or Outlook to get started" : "Could not load inbox"}
               </p>
             </div>
           ) : selectedEmail ? (

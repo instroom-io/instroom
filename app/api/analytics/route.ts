@@ -27,47 +27,49 @@ export async function GET(req: Request) {
   try {
     const dateFilter = buildDateFilter(dateRange)
 
-    // ── Fetch pipeline records ────────────────────────────────────────────────
-    const pipelineRecords = await prisma.brandInfluencer.findMany({
-      where: {
-        brand_id: brandId,
-        ...(dateFilter ? { created_at: dateFilter } : {}),
-      },
-      include: {
-        influencer: {
-          select: { platform: true, niche: true, location: true, handle: true },
-        },
-      },
-    })
+    // Push the platform/niche/location filters into the query itself — instead
+    // of pulling every row for the brand and filtering in JS afterward — so
+    // the DB does less work and less data crosses the wire.
+    const influencerFilter = {
+      ...(platform !== "all" ? { platform } : {}),
+      ...(niche    !== "all" ? { niche }    : {}),
+      ...(location !== "all" ? { location } : {}),
+    }
+    const whereClause = {
+      brand_id: brandId,
+      ...(dateFilter ? { created_at: dateFilter } : {}),
+      ...(Object.keys(influencerFilter).length ? { influencer: { is: influencerFilter } } : {}),
+    }
 
-    // ── Fetch closed records (graceful fallback if model doesn't exist yet) ──
-    let closedRecords: any[] = []
-    try {
-      closedRecords = await (prisma as any).closedInfluencer.findMany({
-        where: {
-          brand_id: brandId,
-          ...(dateFilter ? { created_at: dateFilter } : {}),
-        },
+    // These two queries are independent of each other — run them concurrently
+    // instead of one after the other.
+    const [pipelineRecords, closedRecords] = await Promise.all([
+      prisma.brandInfluencer.findMany({
+        where: whereClause,
         include: {
           influencer: {
             select: { platform: true, niche: true, location: true, handle: true },
           },
         },
-      })
-    } catch {
-      // closedInfluencer model not yet in schema — skip silently
-    }
+      }),
+      // Graceful fallback if the closedInfluencer model doesn't exist yet.
+      (async () => {
+        try {
+          return await (prisma as any).closedInfluencer.findMany({
+            where: whereClause,
+            include: {
+              influencer: {
+                select: { platform: true, niche: true, location: true, handle: true },
+              },
+            },
+          })
+        } catch {
+          return []
+        }
+      })(),
+    ])
 
-    // ── Merge + apply filters ─────────────────────────────────────────────────
-    const allRecords = [...pipelineRecords, ...closedRecords]
-
-    const filtered = allRecords.filter((bi) => {
-      const inf = (bi as any).influencer
-      if (platform !== "all" && inf?.platform !== platform) return false
-      if (niche    !== "all" && inf?.niche    !== niche)    return false
-      if (location !== "all" && inf?.location !== location) return false
-      return true
-    })
+    const filtered = [...pipelineRecords, ...closedRecords]
 
     // ── Shape rows ────────────────────────────────────────────────────────────
     const rows = filtered.map((bi) => {

@@ -32,7 +32,6 @@ import {
   IconX,
   IconLayoutList,
   IconChevronDown,
-  IconLoader2,
   IconAlertCircle,
   IconArrowRight,
   IconPackage,
@@ -51,6 +50,7 @@ import InfluencerProfileSidebar, {
 } from "@/components/InfluencerProfileSidebar"
 
 import { usePipelineData, type PipelineInfluencer } from "@/hooks/usePipelineData"
+import { BoardSkeleton } from "@/components/shared/skeletons"
 
 // ─── Platform Icons ──────────────────────────────────────────────────────────
 export const PLATFORM_ICONS: Record<string, ReactNode> = {
@@ -1039,12 +1039,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
 
   const visibleColumns = columns.filter((c) => c.visible)
 
-  if (isLoading) return (
-    <div className="flex flex-col items-center justify-center gap-3 p-12 text-gray-500">
-      <IconLoader2 size={32} className="animate-spin text-[#1FAE5B]" />
-      <span className="text-sm">Loading pipeline data...</span>
-    </div>
-  )
+  if (isLoading) return <BoardSkeleton columns={visibleColumns.length || 4} label="Fetching data..." />
 
   if (error) return (
     <div className="flex flex-col items-center justify-center gap-3 p-12">

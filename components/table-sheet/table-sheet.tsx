@@ -408,6 +408,14 @@ export default function TableSheet({
     } else { setSelectedRowId(id); setSelectedRowIds(new Set([id])) }
   }
 
+  // Checkbox click always toggles that row into/out of the current selection —
+  // no modifier key needed, since ticking a checkbox is already an explicit
+  // multi-select gesture (unlike clicking the row itself, which selects only it).
+  const handleCheckboxToggle = (id: string) => {
+    setSelectedRowIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+    setSelectedRowId(id)
+  }
+
   const allPageSelected = pageRows.length > 0 && pageRows.every(r => selectedRowIds.has(r.id))
   const someSelected    = selectedRowIds.size > 0
 
@@ -917,15 +925,21 @@ export default function TableSheet({
       )
       const socialLink = row.social_link || getProfileUrl(row.platform, row.handle)
       return (
-        <td key={col.key} className={`border border-gray-200 px-1.5 py-1 text-xs cursor-cell select-none relative hover:bg-blue-50/20 ${ringCls}`} style={{ minWidth: col.minWidth }} onClick={() => startEdit(rowIdx, colIdx)} onFocus={() => setActiveCell({ rowIdx, colIdx })}>
+        <td key={col.key} className={`group border border-gray-200 px-1.5 py-1 text-xs cursor-cell select-none relative hover:bg-blue-50/20 ${ringCls}`} style={{ minWidth: col.minWidth }} onClick={() => startEdit(rowIdx, colIdx)} onFocus={() => setActiveCell({ rowIdx, colIdx })} title="Double-click to view profile">
           <div className="flex items-center gap-2">
-            <ProfilePicture src={row.profile_image_url} socialLink={socialLink} name={row.full_name} handle={row.handle} size={24}
-              onExpired={() => {
-                setRows(prev => prev.map(r => r.id === row.id ? { ...r, profile_image_url: "" } : r))
-                if (row.handle && (row.platform === "instagram" || row.platform === "tiktok") && !Number(row.follower_count))
-                  autoFetchInfluencer(row.id, row.handle, row.platform)
-              }} />
-            <span className="truncate text-sm text-gray-800 font-medium">{cleanHandle(value) || <span className="text-gray-300">Enter username</span>}</span>
+            <div
+              className="rounded-full ring-2 ring-transparent group-hover:ring-blue-400 hover:!ring-blue-500 transition cursor-pointer flex-shrink-0"
+              onClick={e => { e.stopPropagation(); setSidebarRowId(row.id) }}
+              title="Click to view profile"
+            >
+              <ProfilePicture src={row.profile_image_url} socialLink={socialLink} name={row.full_name} handle={row.handle} size={24}
+                onExpired={() => {
+                  setRows(prev => prev.map(r => r.id === row.id ? { ...r, profile_image_url: "" } : r))
+                  if (row.handle && (row.platform === "instagram" || row.platform === "tiktok") && !Number(row.follower_count))
+                    autoFetchInfluencer(row.id, row.handle, row.platform)
+                }} />
+            </div>
+            <span className="truncate text-sm text-gray-800 font-medium group-hover:text-blue-700 group-hover:underline decoration-blue-300 underline-offset-2 transition">{cleanHandle(value) || <span className="text-gray-300">Enter username</span>}</span>
           </div>
         </td>
       )
@@ -945,7 +959,7 @@ export default function TableSheet({
       const closeP = () => { setPopupCell(null); containerRef.current?.focus() }
       if (col.key === "platform") return (
         <td key={col.key} className={`border border-gray-200 px-1.5 py-1 text-xs relative ${ringCls}`} style={{ minWidth: col.minWidth }}>
-          <div className="flex items-center gap-2"><PlatformIcon platform={value} size={14} /><span className="text-sm text-gray-700">{platforms.find(p => p.value === value)?.name || value}</span></div>
+          <div className="flex items-center gap-2"><PlatformIcon platform={value} size={16} /></div>
           <PlatformEditor value={value} onChange={v => applyCellValue(rowIdx, col.key, v)} onClose={closeP} />
         </td>
       )
@@ -971,7 +985,7 @@ export default function TableSheet({
 
     if (col.key === "platform") return (
       <td key={col.key} className={tdCls} style={{ minWidth: col.minWidth }} onClick={onClick} onFocus={onFocus}>
-        <div className="flex items-center gap-2"><PlatformIcon platform={value} size={14} /><span className="text-sm text-gray-700">{platforms.find(p => p.value === value)?.name || value}</span></div>
+        <div className="flex items-center justify-center"><PlatformIcon platform={value} size={18} /></div>
       </td>
     )
     if (col.type === "boolean") { const y = value === "Yes"; return <td key={col.key} className={`${tdCls} cursor-pointer`} style={{ minWidth: col.minWidth }} onClick={onClick} onFocus={onFocus}><span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold ${y ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>{y ? "Yes" : "No"}</span></td> }
@@ -1104,6 +1118,9 @@ export default function TableSheet({
 
           {/* Right-side controls */}
           <div className="flex items-center gap-1.5 ml-auto">
+            {!readOnly && (
+              <button onClick={addRow} className="flex items-center gap-1.5 px-2.5 py-2 text-xs font-medium border border-gray-200 rounded-lg text-gray-700 hover:bg-green-50 hover:text-green-700 hover:border-green-200 transition" title="Add a new row"><IconPlus size={14} /> Add Row</button>
+            )}
             <button onClick={() => setShowManageNiches(true)} className="flex items-center gap-1.5 px-2.5 py-2 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 transition" title="Manage niches"><IconTags size={13} /> Niches</button>
             <button onClick={() => setShowManageLocations(true)} className="flex items-center gap-1.5 px-2.5 py-2 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 transition" title="Manage locations"><IconMapPin size={13} /> Locations</button>
 
@@ -1257,7 +1274,7 @@ export default function TableSheet({
                     <td className="border border-gray-100 text-center bg-gray-50/40 select-none py-0.5">
                       <div className="flex flex-col items-center justify-center gap-0.5">
                         {isFetching ? <IconLoader2 size={12} className="text-green-600 animate-spin" />
-                          : !readOnly ? <input type="checkbox" checked={isSel} onChange={() => handleRowSelect(row.id)} onClick={e => e.stopPropagation()} className="w-3 h-3 rounded accent-blue-600 cursor-pointer" />
+                          : !readOnly ? <input type="checkbox" checked={isSel} onChange={() => handleCheckboxToggle(row.id)} onClick={e => e.stopPropagation()} className="w-3 h-3 rounded accent-blue-600 cursor-pointer" />
                           : null}
                         <span className="text-[9px] text-gray-400 leading-none">{ri + 1}</span>
                       </div>
