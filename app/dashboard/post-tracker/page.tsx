@@ -25,6 +25,7 @@ import {
 import { useClosedData, type ClosedInfluencer, type ClosedColumn } from "@/hooks/useClosedData"
 import { SubscriptionGate } from "@/components/ui/subscription-gate"
 import { HistoryTab } from "@/components/InfluencerProfileSidebar"
+import { PaidCollabTab } from "@/components/table-sheet/profile-sidebar"
 import { BoardSkeleton } from "@/components/shared/skeletons"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -246,7 +247,7 @@ function DraggableCard({ id, children, onClick }: { id: string; children: React.
 // ─── Profile Drawer — structure mirrors Pipeline's InfluencerProfileSidebar ──
 // Tabs: Basic, Order, Post, Stats, History (same names/order/behavior as Pipeline).
 const STAGE_OPTIONS: ClosedColumn[] = ["For Order Creation", "In-Transit", "Delivered", "Posted", "No post"]
-const PROFILE_TABS = ["Basic", "Order", "Post", "Stats", "History"]
+const PROFILE_TABS = ["Basic", "Order", "Post", "Stats", "Paid collab details", "History"]
 
 function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCampaignTypeChange }: {
   inf: ClosedInfluencer; brandId?: string; onClose: () => void
@@ -481,8 +482,13 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCampaignTypeCh
             </div>
           )}
 
-          {/* ════ HISTORY TAB ════ */}
+          {/* ════ PAID COLLAB DETAILS TAB ════ */}
           {profileTab === 4 && (
+            <PaidCollabTab influencerName={inf.influencer} rateHint={inf.agreedRate ?? undefined} />
+          )}
+
+          {/* ════ HISTORY TAB ════ */}
+          {profileTab === 5 && (
             <HistoryTab brandId={brandId} biId={inf.id} />
           )}
 

@@ -201,6 +201,369 @@ function HistoryTab({ brandId, biId }: { brandId?: string; biId: string }) {
   )
 }
 
+// ─── Paid Collab Details tab ────────────────────────────────────────────────────
+type StepStatus = "pending" | "submitted" | "revision_requested" | "resubmitted" | "approved"
+type ContractStatus = "not_started" | "draft" | "sent" | "signed"
+type PostStatus = "pending" | "submitted" | "live"
+type PayStructure = "upfront" | "5050" | "after" | "custom"
+type MilestoneStatus = "unpaid" | "due" | "paid"
+
+interface PaidDeliverable {
+  id: number
+  name: string
+  scriptStatus: StepStatus
+  scriptLink: string
+  contentStatus: StepStatus
+  contentLink: string
+  postUrl: string
+  postDate: string
+}
+
+const PC_STATUS_STYLE: Record<string, { bg: string; color: string; border: string }> = {
+  not_started: { bg: "#f1f0eb", color: "#888888", border: "#e8e7e0" },
+  draft: { bg: "#f1f0eb", color: "#888888", border: "#e8e7e0" },
+  sent: { bg: "#e6f1fb", color: "#185fa5", border: "#b5d4f4" },
+  signed: { bg: "#eaf3de", color: "#3b6d11", border: "#c0dd97" },
+  pending: { bg: "#f1f0eb", color: "#888888", border: "#e8e7e0" },
+  submitted: { bg: "#e6f1fb", color: "#185fa5", border: "#b5d4f4" },
+  revision_requested: { bg: "#faeeda", color: "#854f0b", border: "#fac775" },
+  resubmitted: { bg: "#ddeeff", color: "#185fa5", border: "#aaccee" },
+  approved: { bg: "#eaf3de", color: "#3b6d11", border: "#c0dd97" },
+  live: { bg: "#eaf3de", color: "#3b6d11", border: "#c0dd97" },
+  paid: { bg: "#eaf3de", color: "#3b6d11", border: "#c0dd97" },
+  due: { bg: "#faeeda", color: "#854f0b", border: "#fac775" },
+  unpaid: { bg: "#fcebeb", color: "#a32d2d", border: "#f7c1c1" },
+  off: { bg: "#f1f0eb", color: "#aaaaaa", border: "#e8e7e0" },
+}
+
+const PC_STATUS_LABEL: Record<string, string> = {
+  not_started: "Not started", draft: "Draft", sent: "Sent — awaiting signature", signed: "Signed",
+  pending: "Pending", submitted: "Submitted", revision_requested: "Revision requested",
+  resubmitted: "Resubmitted", approved: "Approved", live: "All live", paid: "Paid", due: "Due", unpaid: "Pending",
+}
+
+function pcStatusSelectStyle(status: string, disabled?: boolean) {
+  const c = PC_STATUS_STYLE[status] || PC_STATUS_STYLE.pending
+  return {
+    fontSize: 11, fontWeight: 500, padding: "4px 22px 4px 9px", borderRadius: 20,
+    border: `1px solid ${c.border}`, background: c.bg, color: c.color,
+    cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1,
+    outline: "none", appearance: "none" as const,
+  }
+}
+
+export function PaidCollabTab({ influencerName, rateHint }: { influencerName: string; rateHint?: number }) {
+  const [contractEnabled, setContractEnabled] = useState(false)
+  const [contractStatus, setContractStatus] = useState<ContractStatus>("not_started")
+  const [contractLink, setContractLink] = useState("")
+  const [contractNotes, setContractNotes] = useState("")
+
+  const [scriptEnabled, setScriptEnabled] = useState(true)
+  const [postStatus, setPostStatus] = useState<PostStatus>("pending")
+
+  const [deliverables, setDeliverables] = useState<PaidDeliverable[]>(() => [
+    { id: 1, name: "", scriptStatus: "pending", scriptLink: "", contentStatus: "pending", contentLink: "", postUrl: "", postDate: "" },
+    { id: 2, name: "", scriptStatus: "pending", scriptLink: "", contentStatus: "pending", contentLink: "", postUrl: "", postDate: "" },
+  ])
+  const nextIdRef = React.useRef(3)
+
+  const [rate, setRate] = useState(String(rateHint ?? 500))
+  const [paymentMethod, setPaymentMethod] = useState("Bank transfer")
+  const [paymentStatus, setPaymentStatus] = useState("Partially paid")
+  const [payStructure, setPayStructure] = useState<PayStructure>("5050")
+  const [milestoneStatuses, setMilestoneStatuses] = useState<MilestoneStatus[]>(["paid", "due"])
+
+  const updateDeliverable = (id: number, patch: Partial<PaidDeliverable>) =>
+    setDeliverables(ds => ds.map(d => d.id === id ? { ...d, ...patch } : d))
+
+  const addDeliverable = () => {
+    const id = nextIdRef.current++
+    setDeliverables(ds => [...ds, { id, name: "", scriptStatus: "pending", scriptLink: "", contentStatus: "pending", contentLink: "", postUrl: "", postDate: "" }])
+  }
+  const removeDeliverable = (id: number) => setDeliverables(ds => ds.filter(d => d.id !== id))
+  const setDeliverableCount = (n: number) => {
+    if (n > deliverables.length) { for (let i = deliverables.length; i < n; i++) addDeliverable() }
+    else if (n < deliverables.length) { setDeliverables(ds => ds.slice(0, n)) }
+  }
+
+  const anyPostUrl = deliverables.some(d => d.postUrl.trim().length > 0)
+  const anyContractLink = contractLink.trim().length > 0
+  const n = deliverables.length
+  const scriptAllApproved = n > 0 && deliverables.every(d => d.scriptStatus === "approved")
+  const contentAllApproved = n > 0 && deliverables.every(d => d.contentStatus === "approved")
+
+  const steps: boolean[] = []
+  if (contractEnabled) steps.push(contractStatus === "signed")
+  if (scriptEnabled) steps.push(scriptAllApproved)
+  steps.push(contentAllApproved)
+  steps.push(postStatus === "live")
+  const doneSteps = steps.filter(Boolean).length
+  const pct = steps.length > 0 ? Math.round((doneSteps / steps.length) * 100) : 0
+
+  const rateNum = parseFloat(rate) || 0
+  const milestones: { label: string; amount: number; dot: string }[] =
+    payStructure === "upfront" ? [{ label: "100% upfront — before shoot", amount: rateNum, dot: "#1fae5b" }]
+    : payStructure === "5050" ? [{ label: "50% upfront — before shoot", amount: rateNum / 2, dot: "#1fae5b" }, { label: "50% — after post goes live", amount: rateNum / 2, dot: "#ef9f27" }]
+    : payStructure === "after" ? [{ label: "100% — after all deliverables", amount: rateNum, dot: "#ef9f27" }]
+    : (() => {
+        const p1 = Math.round(rateNum * 0.4), p2 = Math.round(rateNum * 0.4), p3 = rateNum - p1 - p2
+        return [
+          { label: "Payment 1 — upfront", amount: p1, dot: "#1fae5b" },
+          { label: "Payment 2 — after content approved", amount: p2, dot: "#ef9f27" },
+          { label: "Payment 3 — after post goes live", amount: p3, dot: "#aaaaaa" },
+        ]
+      })()
+
+  useEffect(() => {
+    setMilestoneStatuses(prev => {
+      const next = milestones.map((_, i) => prev[i] ?? "unpaid")
+      return next
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payStructure])
+
+  const totalPaid = milestones.reduce((sum, m, i) => sum + (milestoneStatuses[i] === "paid" ? m.amount : 0), 0)
+
+  const P = {
+    label: { fontSize: 10, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase" as const, letterSpacing: "0.06em" },
+    card: { border: "1px solid #eee", borderRadius: 10, background: "#fafafa", marginBottom: 8 },
+    cardHead: { display: "flex", alignItems: "center", gap: 10, padding: "12px 14px" },
+    input: { flex: 1, fontSize: 12, padding: "7px 10px", borderRadius: 7, border: "1px solid #e0e0e0", background: "#fff", color: "#333", outline: "none" as const },
+    smallInput: { width: "100%", fontSize: 12, padding: "7px 10px", borderRadius: 7, border: "1px solid #e0e0e0", background: "#fff", color: "#333", outline: "none" as const, boxSizing: "border-box" as const },
+    toggle: (on: boolean) => ({ position: "relative" as const, width: 34, height: 18, flexShrink: 0, borderRadius: 9, background: on ? "#1fae5b" : "#ccc", cursor: "pointer", transition: "background 0.2s" }),
+    knob: (on: boolean) => ({ position: "absolute" as const, width: 14, height: 14, top: 2, left: on ? 18 : 2, background: "#fff", borderRadius: "50%", transition: "left 0.2s" }),
+  }
+
+  return (
+    <div>
+      {/* Progress */}
+      <div style={{ marginBottom: 18 }}>
+        <div style={{ height: 5, background: "#eee", borderRadius: 3, overflow: "hidden" }}>
+          <div style={{ height: 5, background: "#1fae5b", borderRadius: 3, width: `${pct}%`, transition: "width 0.3s" }} />
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 5 }}>
+          <span style={{ fontSize: 11, color: "#aaa" }}>{doneSteps} of {steps.length} steps complete</span>
+          <span style={{ fontSize: 11, color: "#aaa" }}>{pct}%</span>
+        </div>
+      </div>
+
+      <div style={P.label}>Deliverables checklist</div>
+
+      {/* Deliverables setup */}
+      <div style={{ border: "1px solid #eee", borderRadius: 10, background: "#fafafa", margin: "10px 0 12px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 14px" }}>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "#333" }}>Define deliverables</div>
+            <div style={{ fontSize: 11, color: "#aaa", marginTop: 1 }}>
+              {n === 0 ? "Name each deliverable — they'll appear in every step below" : `${deliverables.map((d, i) => d.name || `Deliverable ${i + 1}`).join(", ").slice(0, 55)}${deliverables.map(d => d.name).join("").length > 55 ? "…" : ""} · ${n} total`}
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <label style={{ fontSize: 11, color: "#888", whiteSpace: "nowrap" as const }}>How many?</label>
+            <select value={n} onChange={e => setDeliverableCount(parseInt(e.target.value))} style={{ fontSize: 12, padding: "4px 8px", borderRadius: 7, border: "1px solid #e0e0e0", background: "#fff", cursor: "pointer" }}>
+              {Array.from({ length: 11 }, (_, i) => i).map(v => <option key={v} value={v}>{v === 0 ? "Select…" : v}</option>)}
+            </select>
+          </div>
+        </div>
+        <div style={{ padding: "0 14px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
+          {deliverables.map((d, i) => (
+            <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", background: "#fff", border: "1px solid #eee", borderRadius: 7 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: "#aaa", minWidth: 16 }}>{i + 1}</span>
+              <input
+                value={d.name} placeholder="e.g. 1x IG Reel, 3x Stories, TikTok video…"
+                onChange={e => updateDeliverable(d.id, { name: e.target.value })}
+                style={{ flex: 1, fontSize: 12, color: "#333", border: "none", background: "transparent", outline: "none" }}
+              />
+              <button onClick={() => removeDeliverable(d.id)} style={{ fontSize: 10, padding: "3px 7px", borderRadius: 5, border: "1px solid #f7c1c1", background: "#fff", color: "#a32d2d", cursor: "pointer" }}>✕</button>
+            </div>
+          ))}
+          <button onClick={addDeliverable} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 5, fontSize: 12, padding: "7px 14px", borderRadius: 7, border: "1px dashed #ccc", background: "#fff", color: "#888", cursor: "pointer" }}>+ Add one more</button>
+        </div>
+      </div>
+
+      {/* Contract */}
+      <div style={P.card}>
+        <div style={P.cardHead}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#222" }}>Contract <span style={{ fontSize: 10, color: "#bbb", fontWeight: 400 }}>optional</span></div>
+            <div style={{ fontSize: 11, color: "#aaa", marginTop: 2 }}>{contractEnabled ? (PC_STATUS_LABEL[contractStatus] || contractStatus) : "Not required for this collab"}</div>
+          </div>
+          <select value={contractStatus} disabled={!contractEnabled || !anyContractLink} onChange={e => setContractStatus(e.target.value as ContractStatus)} style={pcStatusSelectStyle(contractStatus, !contractEnabled || !anyContractLink)}>
+            <option value="not_started">Not started</option>
+            <option value="draft">Draft</option>
+            <option value="sent">Sent — awaiting signature</option>
+            <option value="signed">Signed</option>
+          </select>
+          <div style={P.toggle(contractEnabled)} onClick={() => setContractEnabled(v => !v)}><div style={P.knob(contractEnabled)} /></div>
+        </div>
+        {contractEnabled && (
+          <div style={{ borderTop: "1px solid #eee", padding: 14 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 10 }}>
+              <label style={{ fontSize: 11, color: "#888" }}>Contract link / file</label>
+              <input style={P.smallInput} placeholder="Paste contract link…" value={contractLink} onChange={e => setContractLink(e.target.value)} />
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label style={{ fontSize: 11, color: "#888" }}>Contract notes <span style={{ color: "#bbb" }}>(optional)</span></label>
+              <textarea style={{ ...P.smallInput, minHeight: 60, resize: "vertical" as const }} placeholder="e.g. Usage rights: 6 months only. Exclusivity: 30 days." value={contractNotes} onChange={e => setContractNotes(e.target.value)} />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Script review */}
+      <div style={P.card}>
+        <div style={P.cardHead}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#222" }}>Script review <span style={{ fontSize: 10, color: "#bbb", fontWeight: 400 }}>optional</span></div>
+            <div style={{ fontSize: 11, color: "#aaa", marginTop: 2 }}>One script per deliverable</div>
+          </div>
+          <span style={pcStatusSelectStyle(scriptEnabled ? (scriptAllApproved ? "approved" : "submitted") : "off")}>
+            {!scriptEnabled ? "Off" : n === 0 ? "—" : `${deliverables.filter(d => d.scriptStatus === "approved").length}/${n} approved`}
+          </span>
+          <div style={P.toggle(scriptEnabled)} onClick={() => setScriptEnabled(v => !v)}><div style={P.knob(scriptEnabled)} /></div>
+        </div>
+        {scriptEnabled && (
+          <div style={{ borderTop: "1px solid #eee", padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+            {n === 0 && <div style={{ fontSize: 12, color: "#ccc" }}>Add deliverables above first.</div>}
+            {deliverables.map((d, i) => (
+              <div key={d.id} style={{ border: "1px solid #eee", borderRadius: 8, background: "#f9f9f9" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: "#fff", borderBottom: "1px solid #f0f0f0" }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "#333" }}>{i + 1}. {d.name || `Deliverable ${i + 1}`}</span>
+                  <select value={d.scriptStatus} disabled={!d.scriptLink} onChange={e => updateDeliverable(d.id, { scriptStatus: e.target.value as StepStatus })} style={pcStatusSelectStyle(d.scriptStatus, !d.scriptLink)}>
+                    <option value="pending">Pending</option><option value="submitted">Submitted</option>
+                    <option value="revision_requested">Revision requested</option><option value="resubmitted">Resubmitted</option>
+                    <option value="approved">Approved</option>
+                  </select>
+                </div>
+                <div style={{ padding: "10px 12px" }}>
+                  <input style={P.smallInput} placeholder="Paste script link…" value={d.scriptLink} onChange={e => updateDeliverable(d.id, { scriptLink: e.target.value })} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Content review */}
+      <div style={P.card}>
+        <div style={P.cardHead}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#222" }}>Content review</div>
+            <div style={{ fontSize: 11, color: "#aaa", marginTop: 2 }}>One content file per deliverable</div>
+          </div>
+          <span style={pcStatusSelectStyle(contentAllApproved ? "approved" : "submitted")}>
+            {n === 0 ? "—" : `${deliverables.filter(d => d.contentStatus === "approved").length}/${n} approved`}
+          </span>
+        </div>
+        <div style={{ borderTop: "1px solid #eee", padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+          {n === 0 && <div style={{ fontSize: 12, color: "#ccc" }}>Add deliverables above first.</div>}
+          {deliverables.map((d, i) => {
+            const scriptDone = !scriptEnabled || d.scriptStatus === "approved"
+            return (
+              <div key={d.id} style={{ border: "1px solid #eee", borderRadius: 8, background: "#f9f9f9" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: "#fff", borderBottom: "1px solid #f0f0f0" }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "#333" }}>{i + 1}. {d.name || `Deliverable ${i + 1}`}</span>
+                  <select value={d.contentStatus} disabled={!scriptDone || !d.contentLink} onChange={e => updateDeliverable(d.id, { contentStatus: e.target.value as StepStatus })} style={pcStatusSelectStyle(d.contentStatus, !scriptDone || !d.contentLink)}>
+                    <option value="pending">Pending</option><option value="submitted">Submitted</option>
+                    <option value="revision_requested">Revision requested</option><option value="resubmitted">Resubmitted</option>
+                    <option value="approved">Approved</option>
+                  </select>
+                </div>
+                <div style={{ padding: "10px 12px", opacity: scriptDone ? 1 : 0.45, pointerEvents: scriptDone ? "auto" : "none" }}>
+                  <input style={P.smallInput} placeholder="Paste content link (Drive, Dropbox, WeTransfer…)" value={d.contentLink} onChange={e => updateDeliverable(d.id, { contentLink: e.target.value })} />
+                  {!scriptDone && <div style={{ fontSize: 11, color: "#ef9f27", marginTop: 6 }}>Approve the script above to unlock content review.</div>}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Post links */}
+      <div style={P.card}>
+        <div style={P.cardHead}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#222" }}>Post links</div>
+            <div style={{ fontSize: 11, color: "#aaa", marginTop: 2 }}>One live URL + date per deliverable</div>
+          </div>
+          <select value={postStatus} disabled={!anyPostUrl} onChange={e => setPostStatus(e.target.value as PostStatus)} style={pcStatusSelectStyle(postStatus, !anyPostUrl)}>
+            <option value="pending">Pending</option><option value="submitted">Submitted</option><option value="live">All live</option>
+          </select>
+        </div>
+        <div style={{ borderTop: "1px solid #eee", padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+          {n === 0 && <div style={{ fontSize: 12, color: "#ccc" }}>Add deliverables above first.</div>}
+          {deliverables.map((d, i) => (
+            <div key={d.id} style={{ padding: "10px 12px", border: "1px solid #eee", borderRadius: 8, background: "#fafafa" }}>
+              <div style={{ fontSize: 11, fontWeight: 500, color: "#555", marginBottom: 6 }}>{i + 1}. {d.name || `Deliverable ${i + 1}`}</div>
+              <input style={{ ...P.smallInput, marginBottom: 6 }} placeholder="Paste live post URL…" value={d.postUrl} onChange={e => updateDeliverable(d.id, { postUrl: e.target.value })} />
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <label style={{ fontSize: 11, color: "#888" }}>Date posted</label>
+                <input type="date" style={{ fontSize: 12, padding: "5px 8px", borderRadius: 6, border: "1px solid #e0e0e0" }} value={d.postDate} onChange={e => updateDeliverable(d.id, { postDate: e.target.value })} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ height: 1, background: "#eee", margin: "18px 0" }} />
+
+      {/* Payment */}
+      <div style={P.label}>Payment</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, margin: "10px 0 14px" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <label style={{ fontSize: 11, color: "#888" }}>Rate agreed ($)</label>
+          <input type="number" style={P.smallInput} value={rate} onChange={e => setRate(e.target.value)} />
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <label style={{ fontSize: 11, color: "#888" }}>Payment method</label>
+          <select style={P.smallInput} value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)}>
+            <option>Bank transfer</option><option>PayPal</option><option>Wise</option><option>GCash</option><option>Other</option>
+          </select>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <label style={{ fontSize: 11, color: "#888" }}>Overall payment status</label>
+          <select style={P.smallInput} value={paymentStatus} onChange={e => setPaymentStatus(e.target.value)}>
+            <option>Unpaid</option><option>Partially paid</option><option>Fully paid</option>
+          </select>
+        </div>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, maxWidth: 260, marginBottom: 14 }}>
+        <label style={{ fontSize: 11, color: "#888" }}>Payment structure</label>
+        <select style={P.smallInput} value={payStructure} onChange={e => setPayStructure(e.target.value as PayStructure)}>
+          <option value="upfront">100% upfront</option>
+          <option value="5050">50% / 50%</option>
+          <option value="after">After all deliverables</option>
+          <option value="custom">Custom milestones</option>
+        </select>
+      </div>
+      <div style={{ border: "1px solid #eee", borderRadius: 10, marginBottom: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "#f8f9fb", borderBottom: "1px solid #eee" }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "#333" }}>Payment milestones</span>
+          <span style={{ fontSize: 11, color: "#888" }}>Agreed fee: <strong>${rateNum.toLocaleString()}</strong></span>
+        </div>
+        {milestones.map((m, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", borderBottom: i < milestones.length - 1 ? "1px solid #f5f5f5" : "none", flexWrap: "wrap" as const }}>
+            <div style={{ width: 8, height: 8, borderRadius: "50%", background: m.dot, flexShrink: 0 }} />
+            <div style={{ flex: 1, fontSize: 12, color: "#333", minWidth: 100 }}>{m.label}</div>
+            <span style={{ fontSize: 13, fontWeight: 600, color: "#222" }}>${m.amount.toLocaleString()}</span>
+            <select
+              value={milestoneStatuses[i] || "unpaid"}
+              onChange={e => setMilestoneStatuses(s => s.map((v, idx) => idx === i ? e.target.value as MilestoneStatus : v))}
+              style={pcStatusSelectStyle(milestoneStatuses[i] || "unpaid")}
+            >
+              <option value="unpaid">Pending</option><option value="due">Due</option><option value="paid">Paid</option>
+            </select>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", background: "#f0faf5", borderRadius: 8, border: "1px solid #d0ead9" }}>
+        <span style={{ fontSize: 12, color: "#555" }}>Total paid to {influencerName || "creator"}</span>
+        <span style={{ fontSize: 14, fontWeight: 700, color: "#1fae5b" }}>${totalPaid.toLocaleString()} of ${rateNum.toLocaleString()}</span>
+      </div>
+    </div>
+  )
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function displayMetric(val: string | number | undefined | null): string {
   if (val === null || val === undefined || val === "") return "—"
