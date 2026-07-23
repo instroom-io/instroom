@@ -41,13 +41,15 @@ function FooterInner() {
       <div className="max-w-6xl mx-auto">
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:flex lg:justify-between gap-8 sm:gap-10 mb-12">
           <div className="lg:max-w-[220px]">
-            <Image
-              src="/images/instroomLogoWhiteFooter.png"
-              alt="Instroom logo"
-              width={180}
-              height={67}
-              style={{ marginBottom: "12px" }}
-            />
+            <Link href="/" style={{ display: "inline-block" }}>
+              <Image
+                src="/images/instroomLogoWhiteFooter.png"
+                alt="Instroom logo"
+                width={180}
+                height={67}
+                style={{ marginBottom: "12px" }}
+              />
+            </Link>
             <p className="text-sm text-zinc-500">The influencer marketing workspace for eCommerce brands and agencies.</p>
             <div className="flex items-center gap-3 mt-5">
               {SOCIAL_LINKS.map(({ label, href, Icon }) => (
@@ -120,7 +122,7 @@ function FooterInner() {
             <h4 className="text-white text-xs font-bold uppercase tracking-widest mb-4">Company</h4>
             <ul className="space-y-4 text-sm">
               <li><Link href="/about" className="hover:text-white transition">About</Link></li>
-              <li><Link href="#" className="hover:text-white transition">Contact</Link></li>
+              <li><Link href="mailto:support@instroom.io" className="hover:text-white transition">Contact</Link></li>
             </ul>
           </div>
         </div>

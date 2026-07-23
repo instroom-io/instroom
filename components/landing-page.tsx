@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { useState, useEffect } from "react"
 import { MainHeader } from "@/components/shared/main-header"
 import { MainFooter } from "@/components/shared/main-footer"
+import { BookDemoModal } from "@/components/shared/book-demo-modal"
 import {
   PipelineMockup,
   EmailMockup,
@@ -124,6 +125,7 @@ const HERO_PIPELINE_COLUMNS: {
 
 export function LandingPage() {
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null)
+  const [showBookDemo, setShowBookDemo] = useState(false)
 
   useEffect(() => {
     const tabs = document.querySelectorAll(`.${styles.insideFeatTab}`)
@@ -226,14 +228,36 @@ export function LandingPage() {
               <div className={styles.heroEyebrowDot} />
               Influencer marketing, organized
             </div>
-            <h1 className={styles.heroH1} style={{ fontFamily: "'Manrope', sans-serif", fontSize: "52px", fontWeight: 800, lineHeight: 1.08, letterSpacing: "-0.03em", marginBottom: "24px" }}>Influencer marketing isn't <span style={{ textDecoration: "line-through", textDecorationColor: "#a1a1aa", textDecorationThickness: "3px", color: "#a1a1aa" }}>complicated</span>.<br />Managing it without the <span style={{ color: "#1FAE5B" }}>right system</span> is.</h1>
+            <h1 className={styles.heroH1} style={{ fontFamily: "'Manrope', sans-serif", fontSize: "52px", fontWeight: 800, lineHeight: 1.08, letterSpacing: "-0.03em", marginBottom: "24px" }}>Influencer marketing isn't{" "}
+            <span style={{ position: "relative", display: "inline-block" }}>
+              <span style={{ position: "relative", zIndex: 1 }}>complicated</span>
+              <svg
+                viewBox="0 0 200 100"
+                preserveAspectRatio="none"
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  width: "100%",
+                  height: "100%",
+                  pointerEvents: "none",
+                }}
+              >
+                <path
+                  d="M4,60 C36,66 62,54 92,62 C118,69 142,56 168,64 C182,68 190,64 196,58"
+                  fill="none"
+                  stroke="#E4483C"
+                  strokeWidth="8"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </span>.<br />Managing it without the <span style={{ color: "#1FAE5B" }}>right system</span> is.</h1>
             <p className={styles.heroLead}>
               Instroom is the system. Every creator, every campaign, every result — in one workspace. Built by people who've done the work.
             </p>
             <div className={styles.heroCtas}>
               <Link href="/signup">
                 <Button className="bg-gradient-to-r from-[#0F6B3E] to-[#1FAE5B] text-white font-semibold h-12 px-8 hover:from-[#0a5a2f] hover:to-[#158a48] shadow-lg shadow-emerald-500/25 rounded-xl">
-                  Start Free Trial
+                  Try it for Free
                 </Button>
               </Link>
               <a href="#features">
@@ -721,7 +745,7 @@ export function LandingPage() {
           </p>
           <Link href="/signup">
             <Button className="bg-gradient-to-r from-[#0F6B3E] to-[#1FAE5B] text-white font-semibold h-12 px-8 hover:from-[#0a5a2f] hover:to-[#158a48] rounded-xl shadow-lg shadow-emerald-600/20">
-              Start free for 30 days
+              Try it for Free
             </Button>
           </Link>
         </div>
@@ -763,17 +787,16 @@ export function LandingPage() {
           <div className={styles.heroCtas} style={{ justifyContent: "center" }}>
             <Link href="/signup">
               <Button className="bg-[#1FAE5B] text-white font-bold h-13 px-9 rounded-xl hover:bg-[#158a48] shadow-lg shadow-emerald-500/40 text-base transition-all duration-150" style={{ height: "52px", fontSize: "1rem" }}>
-                Start free for 30 days
+                Try it for Free
               </Button>
             </Link>
-            <a href="#faq">
-              <Button
-                variant="outline"
-                className="h-13 px-9 rounded-xl border-2 border-white/40 text-white bg-transparent hover:bg-white/10 hover:border-white/60 font-semibold text-base transition-all duration-150" style={{ height: "52px", fontSize: "1rem" }}
-              >
-                Book a demo
-              </Button>
-            </a>
+            <Button
+              variant="outline"
+              onClick={() => setShowBookDemo(true)}
+              className="h-13 px-9 rounded-xl border-2 border-white/40 text-white bg-transparent hover:bg-white/10 hover:border-white/60 font-semibold text-base transition-all duration-150" style={{ height: "52px", fontSize: "1rem" }}
+            >
+              Book a Demo
+            </Button>
           </div>
           <p className={styles.finalCtaSub}>No credit card required · No annual contracts · Cancel anytime</p>
         </div>
@@ -781,6 +804,7 @@ export function LandingPage() {
 
       {/* FOOTER */}
       <MainFooter />
+      <BookDemoModal open={showBookDemo} onClose={() => setShowBookDemo(false)} />
     </div>
   )
 }

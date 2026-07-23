@@ -4,7 +4,7 @@ import { getActivePlans } from "@/prisma/plans";
 import { MainHeader } from "@/components/shared/main-header";
 
 function getPlanSummary(plan: any) {
-  if (plan.name === "basic") return "1 workspace (30-day free trial)";
+  if (plan.name === "basic") return "1 workspace (free)";
   if (plan.name === "solo") return "1 workspace (cannot add more)";
   if (plan.name === "team") return "3 workspaces included (can buy more)";
   if (plan.name === "agency") return "10 workspaces included (can buy more)";

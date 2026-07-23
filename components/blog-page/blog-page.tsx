@@ -384,7 +384,7 @@ function ArticleView({
               >
                 ← Back to Blog
               </button>
-              <div style={{ display: "inline-block", fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#1FAE5B", marginBottom: 12 }}>
+              <div style={{ display: "block", fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#1FAE5B", marginBottom: 12 }}>
                 {art.cat}
               </div>
               <h1 style={{

@@ -1,4 +1,9 @@
+"use client"
+
 import Link from "next/link"
+import { useState } from "react"
+import { Button } from "@/components/ui/button"
+import { BookDemoModal } from "@/components/shared/book-demo-modal"
 
 export const CheckSVG = () => (
   <svg viewBox="0 0 10 10" fill="none">
@@ -29,6 +34,7 @@ export function SectionLabel({ children }: { children: React.ReactNode }) {
 }
 
 export function CtaBand({ headline, sub }: { headline: string; sub: string }) {
+  const [showBookDemo, setShowBookDemo] = useState(false)
   return (
     <section style={{ background: "#1E1E1E", position: "relative", overflow: "hidden", padding: "100px 32px" }}>
       <div
@@ -46,22 +52,21 @@ export function CtaBand({ headline, sub }: { headline: string; sub: string }) {
         <p style={{ fontSize: 16, color: "rgba(255,255,255,0.6)", lineHeight: 1.6, marginBottom: 32 }}>{sub}</p>
         <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap", marginBottom: 16 }}>
           <Link href="/signup">
-            <button style={{ fontSize: 15, fontWeight: 700, padding: "14px 32px", borderRadius: 10, border: "none", background: "#fff", color: "#1FAE5B", cursor: "pointer", fontFamily: "'Inter',sans-serif", transition: "all 0.15s" }}
-              onMouseEnter={e => (e.currentTarget.style.background = "#f0fdf4")}
-              onMouseLeave={e => (e.currentTarget.style.background = "#fff")}
-            >
-              Start free trial
-            </button>
+            <Button className="bg-[#1FAE5B] text-white font-bold h-13 px-9 rounded-xl hover:bg-[#158a48] shadow-lg shadow-emerald-500/40 text-base transition-all duration-150" style={{ height: "52px", fontSize: "1rem" }}>
+              Try it for Free
+            </Button>
           </Link>
-          <button style={{ fontSize: 15, fontWeight: 600, padding: "14px 32px", borderRadius: 10, border: "0.5px solid rgba(255,255,255,0.35)", background: "transparent", color: "rgba(255,255,255,0.8)", cursor: "pointer", fontFamily: "'Inter',sans-serif", transition: "all 0.15s" }}
-            onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.1)")}
-            onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+          <Button
+            variant="outline"
+            onClick={() => setShowBookDemo(true)}
+            className="h-13 px-9 rounded-xl border-2 border-white/40 text-white bg-transparent hover:bg-white/10 hover:border-white/60 font-semibold text-base transition-all duration-150" style={{ height: "52px", fontSize: "1rem" }}
           >
             Book a Demo
-          </button>
+          </Button>
         </div>
         <p style={{ fontSize: 12, color: "rgba(255,255,255,0.4)" }}>No credit card required · 30-day free trial</p>
       </div>
+      <BookDemoModal open={showBookDemo} onClose={() => setShowBookDemo(false)} />
     </section>
   )
 }

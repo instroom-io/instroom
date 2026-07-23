@@ -6,6 +6,7 @@ import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { MainHeader } from "@/components/shared/main-header"
 import { MainFooter } from "@/components/shared/main-footer"
+import { BookDemoModal } from "@/components/shared/book-demo-modal"
 import {
   IconSearch,
   IconMail,
@@ -61,6 +62,7 @@ function FeatureSidebar({ active }: { active: string }) {
 
 export default function FeaturesPage() {
   const [activeSection, setActiveSection] = useState<string>("")
+  const [showBookDemo, setShowBookDemo] = useState(false)
 
   useEffect(() => {
     const header = document.querySelector<HTMLElement>(".nav")
@@ -459,16 +461,14 @@ export default function FeaturesPage() {
           </p>
           <div className="flex gap-3 justify-center flex-wrap">
             <Link href="/signup">
-              <Button
-                style={{ background: "#fff", color: "#1FAE5B", fontWeight: 700 }}
-                className="h-12 px-8 rounded-xl hover:bg-emerald-50"
-              >
-                Start Free Trial
+              <Button className="bg-[#1FAE5B] text-white font-bold h-13 px-9 rounded-xl hover:bg-[#158a48] shadow-lg shadow-emerald-500/40 text-base transition-all duration-150" style={{ height: "52px", fontSize: "1rem" }}>
+                Try it for Free
               </Button>
             </Link>
             <Button
-              style={{ background: "transparent", border: "0.5px solid rgba(255,255,255,0.35)", color: "rgba(255,255,255,0.8)" }}
-              className="h-12 px-8 rounded-xl hover:bg-white/10 font-medium"
+              variant="outline"
+              onClick={() => setShowBookDemo(true)}
+              className="h-13 px-9 rounded-xl border-2 border-white/40 text-white bg-transparent hover:bg-white/10 hover:border-white/60 font-semibold text-base transition-all duration-150" style={{ height: "52px", fontSize: "1rem" }}
             >
               Book a Demo
             </Button>
@@ -478,6 +478,7 @@ export default function FeaturesPage() {
       </section>
 
       <MainFooter />
+      <BookDemoModal open={showBookDemo} onClose={() => setShowBookDemo(false)} />
     </div>
   )
 }
