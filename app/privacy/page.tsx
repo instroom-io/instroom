@@ -85,7 +85,7 @@ export default function InstroomPrivacyPolicy() {
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap');`}</style>
 
       {/* Nav */}
-      <nav className="bg-[#0d2b1a] px-12 h-16 flex items-center justify-between sticky top-0 z-50 border-b border-[#1f3d28]">
+      <nav className="bg-[#0d2b1a] px-6 sm:px-8 lg:px-12 h-16 flex items-center justify-between sticky top-0 z-50 border-b border-[#1f3d28]">
         <Link href="/" className="flex items-center gap-2.5 cursor-pointer">
           <Image
             src="/images/instroomLogo.png"
@@ -104,7 +104,7 @@ export default function InstroomPrivacyPolicy() {
       </nav>
 
       {/* Hero */}
-      <header className="bg-[#0d2b1a] px-12 pt-[72px] pb-16 relative overflow-hidden">
+      <header className="bg-[#0d2b1a] px-6 sm:px-8 lg:px-12 pt-12 sm:pt-16 lg:pt-[72px] pb-12 lg:pb-16 relative overflow-hidden">
         <div className="absolute top-[-60px] right-[-60px] w-[320px] h-[320px] rounded-full border border-[rgba(61,189,114,0.08)]" />
         <div className="absolute top-5 right-10 w-[180px] h-[180px] rounded-full border border-[rgba(61,189,114,0.12)]" />
         <div className="max-w-[760px] relative z-10">
@@ -138,7 +138,7 @@ export default function InstroomPrivacyPolicy() {
       </header>
 
       {/* Layout */}
-      <div className="max-w-[1100px] mx-auto px-12 pt-[60px] pb-20 grid grid-cols-[220px_1fr] gap-16 items-start">
+      <div className="max-w-[1100px] mx-auto px-6 sm:px-8 lg:px-12 pt-10 md:pt-[60px] pb-12 md:pb-20 grid grid-cols-1 md:grid-cols-[220px_1fr] gap-8 md:gap-16 items-start">
 
         {/* TOC */}
         <aside className="sticky top-[88px] hidden md:block">
@@ -327,7 +327,7 @@ export default function InstroomPrivacyPolicy() {
             <SectionNum>Section 10</SectionNum>
             <SectionHeading>Your Privacy Rights</SectionHeading>
             <p className="text-[15px] text-[#2e3d34] font-light mb-3">Under the Data Privacy Act of 2012, you have the following rights with respect to your personal information:</p>
-            <div className="grid grid-cols-2 gap-3 my-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 my-5">
               {[
                 { title: "Right to be Informed", desc: "You have the right to know whether your personal data is being collected and processed, and for what purpose." },
                 { title: "Right to Access", desc: "You may request a copy of the personal information we hold about you at any time." },
@@ -382,7 +382,7 @@ export default function InstroomPrivacyPolicy() {
       </div>
 
       {/* Footer */}
-      <footer className="bg-[#0d2b1a] px-12 py-9 flex items-center justify-between flex-wrap gap-4">
+      <footer className="bg-[#0d2b1a] px-6 sm:px-8 lg:px-12 py-9 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <p className="text-[13px] text-white/40 font-light m-0">
           © 2026 Armful OPC, trading as Armful Media (SEC Reg. No. 2024090169123-01). Instroom is a product of Armful OPC. 2/F Armful Media Bldg., Santiago, Naujan, Oriental Mindoro, Philippines 5204. Compliant with RA 10173.
         </p>

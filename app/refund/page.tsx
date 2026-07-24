@@ -22,28 +22,34 @@ interface ProcessStep {
   description: string;
 }
 
-interface PricingRow {
+interface PlanRow {
   plan: string;
   price: string;
-  refund: "7-day window" | "If unused" | "No";
+  billing: string;
 }
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
 const tocItems: TocItem[] = [
   { id: "s1", label: "1. Overview" },
-  { id: "s2", label: "2. Subscription Billing" },
-  { id: "s3", label: "3. Eligible Refunds" },
-  { id: "s4", label: "4. Non-Refundable Cases" },
-  { id: "s5", label: "5. Add-ons & Extra Workspaces" },
+  { id: "s2", label: "2. Plans & Billing Model" },
+  { id: "s3", label: "3. Free Plan" },
+  { id: "s4", label: "4. Eligible Refunds" },
+  { id: "s5", label: "5. Non-Refundable Cases" },
   { id: "s6", label: "6. Annual Plans" },
-  { id: "s7", label: "7. Chrome Extension" },
-  { id: "s8", label: "8. Free Tier" },
-  { id: "s9", label: "9. How to Request a Refund" },
-  { id: "s10", label: "10. Processing & Timeline" },
-  { id: "s11", label: "11. Chargebacks & Disputes" },
-  { id: "s12", label: "12. Consumer Rights" },
-  { id: "s13", label: "13. Contact Us" },
+  { id: "s7", label: "7. Companion Tools & Upcoming Features" },
+  { id: "s8", label: "8. How to Request a Refund" },
+  { id: "s9", label: "9. Processing & Timeline" },
+  { id: "s10", label: "10. Chargebacks & Disputes" },
+  { id: "s11", label: "11. Consumer Rights" },
+  { id: "s12", label: "12. Contact" },
+];
+
+const plansBilling: PlanRow[] = [
+  { plan: "Basic", price: "Free forever", billing: "No charge, no card required" },
+  { plan: "Solo", price: "$19/mo, or $15/mo billed annually ($180/year)", billing: "Monthly or annual, in advance" },
+  { plan: "Team", price: "$49/mo, or $39/mo billed annually ($468/year)", billing: "Monthly or annual, in advance" },
+  { plan: "Agency", price: "Custom", billing: "Quoted per agreement" },
 ];
 
 const eligibleScenarios: ScenarioCard[] = [
@@ -57,13 +63,13 @@ const eligibleScenarios: ScenarioCard[] = [
     eligible: true,
     title: "Unauthorized Transaction",
     description:
-      "A charge was made to your payment method without your authorization and you notify us promptly.",
+      "A charge was made to your payment method without your authorization, and you notify us promptly.",
   },
   {
     eligible: true,
     title: "Extended Service Outage",
     description:
-      "The Service was unavailable for more than 72 consecutive hours due to issues on our side, not attributable to third-party platforms or scheduled maintenance.",
+      "The Service was unavailable for more than 72 consecutive hours due to issues on our side — not third-party platforms or scheduled maintenance.",
   },
   {
     eligible: true,
@@ -74,7 +80,7 @@ const eligibleScenarios: ScenarioCard[] = [
     eligible: true,
     title: "First-Time Subscriber — 7-Day Window",
     description:
-      "New subscribers who have not previously held a paid Instroom subscription may request a refund within 7 days of their first charge if they are unsatisfied with the Service.",
+      "New subscribers who have not previously held a paid Instroom subscription may request a full refund within 7 days of their first charge if unsatisfied.",
   },
   {
     eligible: true,
@@ -88,7 +94,7 @@ const ineligibleScenarios: ScenarioCard[] = [
     eligible: false,
     title: "Change of Mind",
     description:
-      "You no longer wish to use the Service after your billing period has commenced, beyond the 7-day new subscriber window.",
+      "You no longer wish to use the Service after your billing period has begun, beyond the 7-day new-subscriber window.",
   },
   {
     eligible: false,
@@ -97,27 +103,20 @@ const ineligibleScenarios: ScenarioCard[] = [
   },
   {
     eligible: false,
-    title: "Partial Month Usage",
+    title: "Partial-Period Usage",
     description:
-      "You cancel mid-billing-period. Access continues until period end; no prorated refund is issued.",
+      "You cancel mid-period. Access continues until the period ends; no prorated refund is issued.",
   },
   {
     eligible: false,
-    title: "Account Termination for Violations",
-    description:
-      "Your account was suspended or terminated due to a violation of our Terms of Service.",
+    title: "Termination for Violations",
+    description: "Your account was suspended or terminated for a breach of our Terms of Service.",
   },
   {
     eligible: false,
-    title: "Third-Party API Limitations",
+    title: "Third-Party Limitations",
     description:
-      "A feature was impacted by Instagram, TikTok, Shopify, or another third-party platform restricting API access, as this is outside our control.",
-  },
-  {
-    eligible: false,
-    title: "Add-ons Already Used",
-    description:
-      "You have actively used an add-on feature (e.g., Discovery, Affiliate Tracking) during the billing period for which a refund is claimed.",
+      "A feature was affected by Instagram, TikTok, Google, or another third party restricting API access — outside our control.",
   },
 ];
 
@@ -125,37 +124,26 @@ const processSteps: ProcessStep[] = [
   {
     number: 1,
     title: "Contact Support",
-    description: 'Email us at billing@instroom.io with the subject line "Refund Request."',
+    description: 'Email billing@instroom.io with the subject line "Refund Request."',
   },
   {
     number: 2,
-    title: "Include Required Information",
+    title: "Include the Details",
     description:
-      "Your registered email address, the date of the charge, the amount charged, and the reason for your refund request.",
+      "Your registered email address, the date and amount of the charge, and the reason for your request.",
   },
   {
     number: 3,
     title: "Await Confirmation",
     description:
-      "We will acknowledge your request within 2 business days and communicate our decision within 5 business days.",
+      "We acknowledge requests within 2 business days and communicate a decision within 5 business days.",
   },
   {
     number: 4,
     title: "Refund Issued",
     description:
-      "If approved, the refund is processed back to your original payment method within 7–14 business days, depending on your bank or card issuer.",
+      "If approved, the refund is returned to your original payment method within 7–14 business days, depending on your bank or card issuer.",
   },
-];
-
-const pricingRows: PricingRow[] = [
-  { plan: "Solo Base Plan", price: "$19/mo", refund: "7-day window" },
-  { plan: "Team Base Plan", price: "$49/mo", refund: "7-day window" },
-  { plan: "Chrome Extension add-on", price: "$6/ws/mo", refund: "If unused" },
-  { plan: "Post Tracker Pro add-on", price: "$12/ws/mo", refund: "If unused" },
-  { plan: "Discovery add-on", price: "$29/ws/mo", refund: "If unused" },
-  { plan: "Shopify Connect add-on", price: "$19/ws/mo", refund: "If unused" },
-  { plan: "Affiliate Tracking add-on", price: "$19/ws/mo", refund: "If unused" },
-  { plan: "Extra workspace (Team)", price: "$12/ws/mo", refund: "No" },
 ];
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -227,21 +215,6 @@ function ScenarioCardComponent({ card }: { card: ScenarioCard }) {
   );
 }
 
-function RefundTag({ type }: { type: PricingRow["refund"] }) {
-  const styles: Record<PricingRow["refund"], string> = {
-    "7-day window": "bg-yellow-100 text-yellow-700",
-    "If unused": "bg-yellow-100 text-yellow-700",
-    No: "bg-red-100 text-red-600",
-  };
-  return (
-    <span
-      className={`inline-block text-[11px] font-semibold px-2 py-0.5 rounded-full uppercase tracking-[0.05em] ${styles[type]}`}
-    >
-      {type}
-    </span>
-  );
-}
-
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function RefundPolicy() {
@@ -288,7 +261,7 @@ export default function RefundPolicy() {
       `}</style>
 
       {/* ── Topbar ── */}
-      <nav className="bg-[#0d2b1a] px-12 h-16 flex items-center justify-between sticky top-0 z-50 border-b border-[#1f3d28]">
+      <nav className="bg-[#0d2b1a] px-6 sm:px-8 lg:px-12 h-16 flex items-center justify-between sticky top-0 z-50 border-b border-[#1f3d28]">
         <Link href="/" className="flex items-center gap-2.5 no-underline">
           <Image
             src="/images/instroomLogo.png"
@@ -306,7 +279,7 @@ export default function RefundPolicy() {
       </nav>
 
       {/* ── Hero ── */}
-      <header className="bg-[#0d2b1a] px-12 pt-[72px] pb-16 relative overflow-hidden">
+      <header className="bg-[#0d2b1a] px-6 sm:px-8 lg:px-12 pt-12 sm:pt-16 lg:pt-[72px] pb-12 lg:pb-16 relative overflow-hidden">
         <div className="absolute -top-16 -right-16 w-80 h-80 rounded-full border border-[rgba(61,189,114,0.08)]" />
         <div className="absolute top-5 right-10 w-44 h-44 rounded-full border border-[rgba(61,189,114,0.12)]" />
         <div className="max-w-[760px] relative z-10">
@@ -321,7 +294,7 @@ export default function RefundPolicy() {
           </h1>
           <div className="flex gap-6 flex-wrap">
             {[
-              ["Effective", "April 21, 2026"],
+              ["Effective", "July 24, 2026"],
               ["Jurisdiction", "Republic of the Philippines"],
               ["Entity", "Armful OPC, trading as Armful Media"],
             ].map(([label, value]) => (
@@ -334,7 +307,7 @@ export default function RefundPolicy() {
       </header>
 
       {/* ── Layout ── */}
-      <div className="max-w-[1100px] mx-auto px-12 py-[60px] grid grid-cols-[220px_1fr] gap-16 items-start">
+      <div className="max-w-[1100px] mx-auto px-6 sm:px-8 lg:px-12 py-10 lg:py-[60px] grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-8 lg:gap-16 items-start">
 
         {/* ── TOC ── */}
         <aside className="sticky top-[88px] hidden lg:block">
@@ -362,9 +335,9 @@ export default function RefundPolicy() {
         {/* ── Content ── */}
         <main className="min-w-0">
           <Callout>
-            Instroom offers SaaS (Software-as-a-Service) subscriptions. Because our service is
-            digital and access is granted immediately upon payment, our refund policy is specific
-            and limited. Please read this Policy before subscribing.
+            Instroom is a Software-as-a-Service (SaaS) product. Because access is digital and
+            granted immediately upon payment, our refund policy is specific and limited. Please
+            read it before subscribing to a paid plan.
           </Callout>
 
           {/* S1 — Overview */}
@@ -372,51 +345,110 @@ export default function RefundPolicy() {
             <SectionLabel num="Section 01" />
             <SectionHeading>Overview</SectionHeading>
             <p className="text-[15px] text-[#2e3d34] font-light mb-3">
-              This Refund Policy explains when and how Armful OPC, a One Person Corporation
-              registered in the Republic of the Philippines, trading as Armful Media, and the owner
-              and operator of the Instroom platform ("we," "us," or "our"), will issue refunds for
-              payments made in connection with the Instroom platform, Chrome Extension, Post
-              Tracker, and related add-ons.
+              This Refund Policy explains when and how Armful OPC — a One Person Corporation
+              registered in the Republic of the Philippines, trading as Armful Media and the owner
+              and operator of Instroom ("we," "us," or "our") — issues refunds for payments made
+              for the Instroom platform and its paid features.
             </p>
             <p className="text-[15px] text-[#2e3d34] font-light mb-3">
-              We are committed to delivering a reliable, high-quality product. If you experience a
-              genuine issue with the Service, we encourage you to contact our support team first —
-              many issues can be resolved without cancellation.
+              We want you to be confident before you pay, which is why Instroom offers a{" "}
+              <strong>free-forever plan</strong> with no time limit and no credit card required. If
+              you run into a genuine problem on a paid plan, please contact our support team first
+              — most issues can be resolved without a refund.
             </p>
           </section>
 
-          {/* S2 — Subscription Billing */}
+          {/* S2 — Plans & Billing Model */}
           <section id="s2" className="section-animate mb-[52px] pb-[52px] border-b border-[#d4e8db]">
             <SectionLabel num="Section 02" />
-            <SectionHeading>Subscription Billing Model</SectionHeading>
+            <SectionHeading>Plans &amp; Billing Model</SectionHeading>
             <p className="text-[15px] text-[#2e3d34] font-light mb-3">
-              Instroom uses workspace-based billing. You are charged per workspace you own, not per
-              user or seat. Key billing facts:
+              Instroom uses <strong>workspace-based billing</strong> — you are charged per
+              workspace you own, not per user or seat. Every plan includes unlimited team members.
             </p>
+
+            <div className="overflow-x-auto my-5">
+              <table className="w-full min-w-[520px] border-collapse text-sm">
+                <thead>
+                  <tr>
+                    {["Plan", "Price", "Billing"].map((h) => (
+                      <th
+                        key={h}
+                        className="bg-[#1a4a2e] text-white px-3.5 py-2.5 text-left text-[12px] font-medium tracking-[0.05em]"
+                      >
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {plansBilling.map((row, i) => (
+                    <tr key={row.plan} className={i % 2 === 1 ? "bg-[rgba(45,122,79,0.03)]" : ""}>
+                      <td className="px-3.5 py-2.5 border-b border-[#d4e8db] font-semibold text-[#1a1a1a]">
+                        {row.plan}
+                      </td>
+                      <td className="px-3.5 py-2.5 border-b border-[#d4e8db] text-[#2e3d34] font-light">
+                        {row.price}
+                      </td>
+                      <td className="px-3.5 py-2.5 border-b border-[#d4e8db] text-[#2e3d34] font-light">
+                        {row.billing}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
             <ul className="pl-5 mb-3 list-disc">
               {[
-                "Subscriptions are billed monthly or annually, in advance.",
-                "Access to the Service begins immediately upon payment.",
-                "No annual contracts are required. You may cancel at any time.",
-                "Cancellation takes effect at the end of the current billing period. You retain access until that date.",
-                "Add-ons are billed per workspace per month.",
-              ].map((item) => (
-                <li key={item} className="text-[15px] text-[#2e3d34] font-light mb-1.5">
+                <>
+                  The <strong>Basic plan is free forever</strong>, subject to its usage limits. It
+                  is not a trial, nothing expires, and no payment is ever required to keep using
+                  it.
+                </>,
+                <>
+                  Paid subscriptions (Solo, Team, Agency) are billed{" "}
+                  <strong>monthly or annually, in advance</strong>.
+                </>,
+                <>
+                  Access to paid features begins <strong>immediately upon payment</strong>.
+                </>,
+                <>
+                  <strong>No trial period applies.</strong> You can evaluate Instroom on the free
+                  plan for as long as you like before deciding to pay.
+                </>,
+                <>
+                  You may <strong>cancel at any time.</strong> Cancellation takes effect at the end
+                  of the current billing period, and you keep access until that date.
+                </>,
+              ].map((item, i) => (
+                <li key={i} className="text-[15px] text-[#2e3d34] font-light mb-1.5">
                   {item}
                 </li>
               ))}
             </ul>
+
             <Warning>
-              <strong>Important:</strong> Because access to the Service is granted immediately upon
-              payment and our subscriptions are digital services, charges are generally
-              non-refundable once a billing period has commenced — except in the specific cases
-              outlined below.
+              <strong>Important:</strong> Because paid access is granted immediately and our
+              subscriptions are digital services, charges are generally non-refundable once a
+              billing period has begun — except in the specific cases below.
             </Warning>
           </section>
 
-          {/* S3 — Eligible Refunds */}
+          {/* S3 — Free Plan */}
           <section id="s3" className="section-animate mb-[52px] pb-[52px] border-b border-[#d4e8db]">
             <SectionLabel num="Section 03" />
+            <SectionHeading>Free Plan</SectionHeading>
+            <p className="text-[15px] text-[#2e3d34] font-light mb-3">
+              The Basic plan is offered at no cost and is not subject to billing or refunds. There
+              are no charges associated with it, and you can use it indefinitely within its
+              limits.
+            </p>
+          </section>
+
+          {/* S4 — Eligible Refunds */}
+          <section id="s4" className="section-animate mb-[52px] pb-[52px] border-b border-[#d4e8db]">
+            <SectionLabel num="Section 04" />
             <SectionHeading>Eligible Refund Scenarios</SectionHeading>
             <p className="text-[15px] text-[#2e3d34] font-light mb-3">
               We will issue a refund in the following circumstances:
@@ -428,9 +460,9 @@ export default function RefundPolicy() {
             </div>
           </section>
 
-          {/* S4 — Non-Refundable */}
-          <section id="s4" className="section-animate mb-[52px] pb-[52px] border-b border-[#d4e8db]">
-            <SectionLabel num="Section 04" />
+          {/* S5 — Non-Refundable */}
+          <section id="s5" className="section-animate mb-[52px] pb-[52px] border-b border-[#d4e8db]">
+            <SectionLabel num="Section 05" />
             <SectionHeading>Non-Refundable Cases</SectionHeading>
             <p className="text-[15px] text-[#2e3d34] font-light mb-3">
               We do not issue refunds in the following circumstances:
@@ -440,57 +472,6 @@ export default function RefundPolicy() {
                 <ScenarioCardComponent key={card.title} card={card} />
               ))}
             </div>
-          </section>
-
-          {/* S5 — Add-ons */}
-          <section id="s5" className="section-animate mb-[52px] pb-[52px] border-b border-[#d4e8db]">
-            <SectionLabel num="Section 05" />
-            <SectionHeading>Add-ons & Extra Workspaces</SectionHeading>
-            <p className="text-[15px] text-[#2e3d34] font-light mb-3">
-              Add-ons (Chrome Extension, Post Tracker Pro, Discovery, Shopify Connect, Affiliate
-              Tracking) and additional workspaces are billed per workspace per month.
-            </p>
-            <ul className="pl-5 mb-3 list-disc">
-              {[
-                "Add-ons can be disabled at any time from your workspace settings. Disabling takes effect at the next billing cycle.",
-                "Partial-period refunds for add-ons are not issued once the add-on has been activated for a billing period.",
-                "If an add-on was accidentally activated and not used, contact us within 48 hours for a case-by-case review.",
-              ].map((item) => (
-                <li key={item} className="text-[15px] text-[#2e3d34] font-light mb-1.5">
-                  {item}
-                </li>
-              ))}
-            </ul>
-
-            <table className="w-full border-collapse my-5 text-sm">
-              <thead>
-                <tr>
-                  {["Plan / Add-on", "Monthly", "Refund Eligible?"].map((h) => (
-                    <th
-                      key={h}
-                      className="bg-[#1a4a2e] text-white px-3.5 py-2.5 text-left text-[12px] font-medium tracking-[0.05em]"
-                    >
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {pricingRows.map((row, i) => (
-                  <tr key={row.plan} className={i % 2 === 1 ? "bg-[rgba(45,122,79,0.03)]" : ""}>
-                    <td className="px-3.5 py-2.5 border-b border-[#d4e8db] text-[#2e3d34] font-light">
-                      {row.plan}
-                    </td>
-                    <td className="px-3.5 py-2.5 border-b border-[#d4e8db] text-[#2e3d34] font-light">
-                      {row.price}
-                    </td>
-                    <td className="px-3.5 py-2.5 border-b border-[#d4e8db]">
-                      <RefundTag type={row.refund} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
           </section>
 
           {/* S6 — Annual Plans */}
@@ -504,17 +485,16 @@ export default function RefundPolicy() {
             <ul className="pl-5 mb-3 list-disc">
               <li className="text-[15px] text-[#2e3d34] font-light mb-1.5">
                 <strong>Within the first 7 days:</strong> New annual subscribers are eligible for a
-                full refund, consistent with the new subscriber window.
+                full refund, consistent with the new-subscriber window.
               </li>
               <li className="text-[15px] text-[#2e3d34] font-light mb-1.5">
-                <strong>After 7 days:</strong> Annual plan payments are non-refundable. You may
-                cancel your renewal at any time, and your access will continue through the end of
-                the paid annual period.
+                <strong>After 7 days:</strong> Annual payments are non-refundable. You may cancel
+                renewal at any time and keep access through the end of the paid period.
               </li>
               <li className="text-[15px] text-[#2e3d34] font-light mb-1.5">
                 <strong>Prorated refunds</strong> for the unused portion of an annual plan are not
-                offered except in the case of a verifiable platform failure or billing error by
-                Instroom.
+                offered, except in the case of a verifiable platform failure or billing error on
+                our side.
               </li>
             </ul>
             <HighlightBox>
@@ -526,41 +506,35 @@ export default function RefundPolicy() {
             </HighlightBox>
           </section>
 
-          {/* S7 — Chrome Extension */}
+          {/* S7 — Companion Tools & Upcoming Features */}
           <section id="s7" className="section-animate mb-[52px] pb-[52px] border-b border-[#d4e8db]">
             <SectionLabel num="Section 07" />
-            <SectionHeading>Chrome Extension (Standalone)</SectionHeading>
+            <SectionHeading>Companion Tools &amp; Upcoming Features</SectionHeading>
             <p className="text-[15px] text-[#2e3d34] font-light mb-3">
-              The standalone Chrome Extension is available in three tiers: Free, Pro ($9/mo), and
-              Team ($19/mo).
+              Instroom offers companion tools alongside the core platform:
             </p>
             <ul className="pl-5 mb-3 list-disc">
-              {[
-                "The Free tier is free and not subject to billing.",
-                "Pro and Team tiers follow the same refund policy as other paid Instroom subscriptions — 7-day new subscriber window, otherwise non-refundable.",
-                "If you are an existing Instroom platform subscriber and also subscribe to the standalone Chrome Extension, these are billed separately and each is subject to its own refund eligibility.",
-              ].map((item) => (
-                <li key={item} className="text-[15px] text-[#2e3d34] font-light mb-1.5">
-                  {item}
-                </li>
-              ))}
+              <li className="text-[15px] text-[#2e3d34] font-light mb-1.5">
+                <strong>Chrome Extension</strong> — Currently available as a free tool (with a
+                daily usage limit). The free version is not subject to billing or refunds. Any
+                future paid tier will be governed by this policy.
+              </li>
+              <li className="text-[15px] text-[#2e3d34] font-light mb-1.5">
+                <strong>Post Tracker</strong> and <strong>Discovery</strong> — Not yet available.
+                When these launch — whether as plan add-ons or standalone products — their pricing
+                and refund terms will be published and governed by this policy (or a successor
+                version).
+              </li>
             </ul>
-          </section>
-
-          {/* S8 — Free Tier */}
-          <section id="s8" className="section-animate mb-[52px] pb-[52px] border-b border-[#d4e8db]">
-            <SectionLabel num="Section 08" />
-            <SectionHeading>Free Tier</SectionHeading>
             <p className="text-[15px] text-[#2e3d34] font-light mb-3">
-              The Chrome Extension Free tier (20 profiles/day, basic metrics) is offered at no cost
-              and is not subject to billing or refunds. There are no charges associated with the
-              free tier.
+              We will update this policy before any new paid tool or add-on becomes available for
+              purchase.
             </p>
           </section>
 
-          {/* S9 — How to Request */}
-          <section id="s9" className="section-animate mb-[52px] pb-[52px] border-b border-[#d4e8db]">
-            <SectionLabel num="Section 09" />
+          {/* S8 — How to Request */}
+          <section id="s8" className="section-animate mb-[52px] pb-[52px] border-b border-[#d4e8db]">
+            <SectionLabel num="Section 08" />
             <SectionHeading>How to Request a Refund</SectionHeading>
             <p className="text-[15px] text-[#2e3d34] font-light mb-3">
               To request a refund, please follow these steps:
@@ -584,24 +558,21 @@ export default function RefundPolicy() {
 
             <Callout>
               Refund requests must be submitted within <strong>30 days</strong> of the charge in
-              question. Requests submitted beyond this window will not be considered except in cases
-              of fraud or billing error.
+              question. Requests beyond this window will not be considered, except in cases of
+              fraud or billing error.
             </Callout>
           </section>
 
-          {/* S10 — Processing */}
-          <section id="s10" className="section-animate mb-[52px] pb-[52px] border-b border-[#d4e8db]">
-            <SectionLabel num="Section 10" />
-            <SectionHeading>Processing & Timeline</SectionHeading>
-            <p className="text-[15px] text-[#2e3d34] font-light mb-3">
-              Once a refund is approved:
-            </p>
+          {/* S9 — Processing */}
+          <section id="s9" className="section-animate mb-[52px] pb-[52px] border-b border-[#d4e8db]">
+            <SectionLabel num="Section 09" />
+            <SectionHeading>Processing &amp; Timeline</SectionHeading>
             <ul className="pl-5 mb-3 list-disc">
               {[
                 "Refunds are issued to the original payment method used for the charge.",
-                <>Processing time is typically <strong>7–14 business days</strong> from approval, depending on your bank or card issuer.</>,
-                "We do not issue refunds via alternative payment methods, credits to other accounts, or in cash.",
-                "We will send you an email confirmation once the refund has been initiated on our end.",
+                <>Processing typically takes <strong>7–14 business days</strong> from approval, depending on your bank or card issuer.</>,
+                "We do not issue refunds via alternative payment methods, credits to other accounts, or cash.",
+                "We email you a confirmation once the refund has been initiated on our end.",
               ].map((item, i) => (
                 <li key={i} className="text-[15px] text-[#2e3d34] font-light mb-1.5">
                   {item}
@@ -610,26 +581,26 @@ export default function RefundPolicy() {
             </ul>
           </section>
 
-          {/* S11 — Chargebacks */}
-          <section id="s11" className="section-animate mb-[52px] pb-[52px] border-b border-[#d4e8db]">
-            <SectionLabel num="Section 11" />
-            <SectionHeading>Chargebacks & Disputes</SectionHeading>
+          {/* S10 — Chargebacks */}
+          <section id="s10" className="section-animate mb-[52px] pb-[52px] border-b border-[#d4e8db]">
+            <SectionLabel num="Section 10" />
+            <SectionHeading>Chargebacks &amp; Disputes</SectionHeading>
             <p className="text-[15px] text-[#2e3d34] font-light mb-3">
-              We encourage you to contact us directly before initiating a chargeback with your bank
-              or card provider. Most issues can be resolved quickly through our support team, and a
-              chargeback dispute can take significantly longer to resolve.
+              Please contact us before initiating a chargeback with your bank or card provider —
+              most issues are resolved quickly through support, while a chargeback can take much
+              longer.
             </p>
             <p className="text-[15px] text-[#2e3d34] font-light mb-3">
-              Filing a chargeback without first contacting us may result in the immediate suspension
-              of your account pending investigation. If a chargeback is found to be fraudulent or
-              made in bad faith, we reserve the right to pursue recovery of the disputed amount and
-              to permanently terminate the associated account.
+              Filing a chargeback without contacting us first may result in immediate suspension of
+              your account pending investigation. If a chargeback is found to be fraudulent or made
+              in bad faith, we reserve the right to recover the disputed amount and to permanently
+              terminate the associated account.
             </p>
           </section>
 
-          {/* S12 — Consumer Rights */}
-          <section id="s12" className="section-animate mb-[52px] pb-[52px] border-b border-[#d4e8db]">
-            <SectionLabel num="Section 12" />
+          {/* S11 — Consumer Rights */}
+          <section id="s11" className="section-animate mb-[52px] pb-[52px] border-b border-[#d4e8db]">
+            <SectionLabel num="Section 11" />
             <SectionHeading>Consumer Rights Under Philippine Law</SectionHeading>
             <p className="text-[15px] text-[#2e3d34] font-light mb-3">
               Nothing in this Refund Policy limits or excludes your statutory rights as a consumer
@@ -639,7 +610,15 @@ export default function RefundPolicy() {
             </p>
             <ul className="pl-5 mb-3 list-disc">
               <li className="text-[15px] text-[#2e3d34] font-light mb-1.5">
-                <strong>Department of Trade and Industry (DTI)</strong> — www.dti.gov.ph
+                <strong>Department of Trade and Industry (DTI)</strong> —{" "}
+                <a
+                  href="https://www.dti.gov.ph"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[#2d7a4f] underline"
+                >
+                  www.dti.gov.ph
+                </a>
               </li>
               <li className="text-[15px] text-[#2e3d34] font-light mb-1.5">
                 <strong>National Telecommunications Commission (NTC)</strong> — for electronic
@@ -647,15 +626,15 @@ export default function RefundPolicy() {
               </li>
             </ul>
             <p className="text-[15px] text-[#2e3d34] font-light mb-3">
-              We are committed to handling all refund requests in good faith and in compliance with
-              applicable Philippine consumer protection laws.
+              We handle all refund requests in good faith and in compliance with applicable
+              Philippine consumer-protection laws.
             </p>
           </section>
 
-          {/* S13 — Contact */}
-          <section id="s13" className="section-animate mb-0">
-            <SectionLabel num="Section 13" />
-            <SectionHeading>Contact Us</SectionHeading>
+          {/* S12 — Contact */}
+          <section id="s12" className="section-animate mb-0">
+            <SectionLabel num="Section 12" />
+            <SectionHeading>Contact</SectionHeading>
             <p className="text-[15px] text-[#2e3d34] font-light mb-3">
               For all billing and refund-related inquiries, please reach us at:
             </p>
@@ -665,14 +644,12 @@ export default function RefundPolicy() {
             <ul className="pl-5 list-disc">
               {[
                 ["SEC Registration No.", "2024090169123-01"],
+                ["Email", "billing@instroom.io"],
                 [
                   "Registered Address",
                   "2/F Armful Media Bldg., Santiago, Naujan, Oriental Mindoro, Philippines 5204",
                 ],
-                ["Email", "billing@instroom.io"],
-                ["Website", "instroom.io"],
-                ["Response time", "Within 2 business days"],
-                ["Jurisdiction", "Republic of the Philippines"],
+                ["Response Time", "Within 2 business days"],
               ].map(([label, value]) => (
                 <li key={label} className="text-[15px] text-[#2e3d34] font-light mb-1.5">
                   {label}: <strong>{value}</strong>
@@ -684,7 +661,7 @@ export default function RefundPolicy() {
       </div>
 
       {/* ── Footer ── */}
-      <footer className="bg-[#0d2b1a] px-12 py-9 flex items-center justify-between flex-wrap gap-4">
+      <footer className="bg-[#0d2b1a] px-6 sm:px-8 lg:px-12 py-9 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <p className="text-[13px] text-white/40 font-light m-0">
           © 2026 Armful OPC, trading as Armful Media (SEC Reg. No. 2024090169123-01). Instroom is a product of Armful OPC. 2/F Armful Media Bldg., Santiago, Naujan, Oriental Mindoro, Philippines 5204. All rights reserved.
         </p>

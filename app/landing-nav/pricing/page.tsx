@@ -1,7 +1,8 @@
-import Image from "next/image";
 import Link from "next/link";
 import { getActivePlans } from "@/prisma/plans";
 import { MainHeader } from "@/components/shared/main-header";
+import { MainFooter } from "@/components/shared/main-footer";
+import { PricingFinalCTA } from "@/components/pricing-page/final-cta";
 
 function getPlanSummary(plan: any) {
   if (plan.name === "basic") return "1 workspace (free)";
@@ -359,91 +360,11 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
           color: #1FAE5B;
         }
 
-        /* ── Footer ── */
-        .footer {
-          background: #111;
-          color: rgba(255,255,255,0.65);
-          padding: 56px 0 32px;
-          font-size: 0.875rem;
-        }
-
-        .footer-inner {
-          display: grid;
-          grid-template-columns: 2fr 1fr 1fr 1fr;
-          gap: 40px;
-          margin-bottom: 40px;
-          max-width: 1140px;
-          margin-left: auto;
-          margin-right: auto;
-          padding: 0 24px;
-        }
-
-        .footer h4 {
-          color: white;
-          font-size: 0.75rem;
-          text-transform: uppercase;
-          letter-spacing: 0.1em;
-          margin-bottom: 16px;
-          font-family: 'Manrope', sans-serif;
-          font-weight: 700;
-        }
-
-        .footer ul {
-          list-style: none;
-          margin: 0;
-          padding: 0;
-        }
-
-        .footer li { margin-bottom: 10px; }
-
-        .footer a {
-          color: rgba(255,255,255,0.6);
-          text-decoration: none;
-          transition: color 0.15s;
-        }
-
-        .footer a:hover { color: white; }
-
-        .footer-brand-desc {
-          color: rgba(255,255,255,0.55);
-          max-width: 260px;
-          font-size: 0.875rem;
-          line-height: 1.65;
-          margin-top: 12px;
-        }
-
-        .footer-bottom {
-          border-top: 1px solid rgba(255,255,255,0.08);
-          display: flex;
-          justify-content: space-between;
-          font-size: 0.8125rem;
-          color: rgba(255,255,255,0.4);
-          flex-wrap: wrap;
-          gap: 12px;
-          max-width: 1140px;
-          margin: 0 auto;
-          padding: 24px 24px 0;
-        }
-
-        .footer-legal {
-          display: flex;
-          gap: 24px;
-        }
-
-        .footer-legal a {
-          color: rgba(255,255,255,0.5);
-          text-decoration: none;
-        }
-
-        .footer-legal a:hover { color: white; }
-
         @media (max-width: 900px) {
           .plans-grid { grid-template-columns: 1fr; justify-items: center; }
-          .footer-inner { grid-template-columns: 1fr 1fr; }
         }
 
         @media (max-width: 640px) {
-          .footer-inner { grid-template-columns: 1fr; }
           .page-hero { padding: 64px 0 48px; }
           .plan-card { max-width: 360px; }
         }
@@ -544,56 +465,11 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
         </div>
       </section>
 
+      {/* FINAL CTA */}
+      <PricingFinalCTA />
+
       {/* FOOTER */}
-      <footer className="footer">
-        <div className="footer-inner">
-          <div>
-            <Image
-              src="/images/instroomLogoWhite.png"
-              alt="Instroom logo"
-              width={120}
-              height={120}
-              style={{ marginBottom: "4px" }}
-            />
-            <p className="footer-brand-desc">
-              The influencer marketing workspace for eCommerce brands and agencies.
-            </p>
-          </div>
-          <div>
-            <h4>Products</h4>
-            <ul>
-              <li><a href="/features">Instroom Platform</a></li>
-              <li><a href="#">Chrome Extension</a></li>
-              <li><a href="#">Post Tracker</a></li>
-              <li><a href="/features">Features</a></li>
-              <li><a href="/pricing">Pricing</a></li>
-            </ul>
-          </div>
-          <div>
-            <h4>Resources</h4>
-            <ul>
-              <li><a href="#">Blog</a></li>
-              <li><a href="#">FAQ&apos;s</a></li>
-              <li><a href="#">Demo</a></li>
-            </ul>
-          </div>
-          <div>
-            <h4>Company</h4>
-            <ul>
-              <li><a href="/about">About</a></li>
-              <li><a href="#">Contact</a></li>
-            </ul>
-          </div>
-        </div>
-        <div className="footer-bottom">
-          <p>&copy; 2026 Instroom. All rights reserved.</p>
-          <div className="footer-legal">
-            <Link href="/terms-of-service">Terms of Service</Link>
-            <Link href="/privacy">Privacy Policy</Link>
-            <Link href="/refund">Refund Policy</Link>
-          </div>
-        </div>
-      </footer>
+      <MainFooter />
     </div>
   );
 }

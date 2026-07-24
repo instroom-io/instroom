@@ -40,7 +40,7 @@ function FooterInner() {
     <footer className="bg-zinc-950 text-zinc-400 pt-10 pb-16 px-8 border-t border-zinc-800">
       <div className="max-w-6xl mx-auto">
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:flex lg:justify-between gap-8 sm:gap-10 mb-12">
-          <div className="lg:max-w-[220px]">
+          <div className="lg:max-w-[280px]">
             <Link href="/" style={{ display: "inline-block" }}>
               <Image
                 src="/images/instroomLogoWhiteFooter.png"
