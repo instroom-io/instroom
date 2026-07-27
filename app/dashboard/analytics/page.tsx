@@ -2,9 +2,10 @@
 "use client"
 
 import { useState, useEffect, useRef, useCallback, Suspense } from "react"
-import { Filter, Download, Loader2 } from "lucide-react"
+import { Filter, Download } from "lucide-react"
 import { useSession } from "next-auth/react"
 import { useRouter, useSearchParams } from "next/navigation"
+import { DashboardSkeleton } from "@/components/shared/skeletons"
 
 // ============================================================
 // Types
@@ -613,14 +614,7 @@ function AnalyticsPageContent() {
   const softPassReasonsList = ['Fully booked', "Temporarily unavailable / can't shoot", "Can't ship to their location", 'Ghosted / no longer active', 'Rate / deadline too tight']
 
   if (status === "loading" || isLoading) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <Loader2 className="w-8 h-8 animate-spin text-green-600 mx-auto mb-4" />
-          <p className="text-gray-600">Loading analytics data...</p>
-        </div>
-      </div>
-    )
+    return <DashboardSkeleton label="Fetching data..." />
   }
 
   if (error) {
@@ -1021,16 +1015,7 @@ function AnalyticsPageContent() {
 
 export default function AnalyticsPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-          <div className="text-center">
-            <Loader2 className="w-8 h-8 animate-spin text-green-600 mx-auto mb-4" />
-            <p className="text-gray-600">Loading analytics data...</p>
-          </div>
-        </div>
-      }
-    >
+    <Suspense fallback={<DashboardSkeleton label="Fetching data..." />}>
       <AnalyticsPageContent />
     </Suspense>
   )
