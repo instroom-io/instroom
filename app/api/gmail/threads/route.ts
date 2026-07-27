@@ -181,7 +181,12 @@ export async function GET(req: NextRequest) {
       const firstMsg = messages[0] || {}
       const labelIds: string[] = thread.messages?.[0]?.labelIds || []
 
-      const fromHeader: string = firstMsg.from || ""
+      // messages[0] is the oldest message in the thread, which is often the outbound
+      // message the user sent (cold outreach) rather than something from the contact.
+      // Prefer the first message that isn't one the user sent.
+      const contactMsg = messages.find((m: any) => !(m.labelIds || []).includes("SENT"))
+
+      const fromHeader: string = contactMsg ? contactMsg.from || "" : firstMsg.to || firstMsg.from || ""
       const emailMatch = fromHeader.match(/<([^>]+)>/)
       const senderEmail = (emailMatch ? emailMatch[1] : fromHeader).toLowerCase().trim()
 

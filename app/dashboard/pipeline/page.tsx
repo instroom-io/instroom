@@ -5,23 +5,7 @@ import { useSearchParams } from "next/navigation"
 import KanbanBoard from "./kanban/kanban-board"
 import { useSession } from "next-auth/react"
 import { SubscriptionGate } from "@/components/ui/subscription-gate"
-
-function PipelineSkeleton() {
-  return (
-    <div className="flex flex-col gap-4 p-4">
-      <div className="flex gap-4 overflow-hidden">
-        {[1, 2, 3, 4].map((col) => (
-          <div key={col} className="w-[240px] flex-shrink-0 flex flex-col gap-3">
-            <div className="h-9 rounded-xl bg-gray-200 animate-pulse" />
-            {[1, 2, 3].map((card) => (
-              <div key={card} className="h-24 rounded-xl bg-gray-100 animate-pulse border border-gray-200" />
-            ))}
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
+import { BoardSkeleton } from "@/components/shared/skeletons"
 
 function PipelineContent() {
   const searchParams = useSearchParams()
@@ -83,7 +67,7 @@ function PipelineContent() {
           <KanbanBoard brandId={brandId} />
         </div>
       ) : (
-        <PipelineSkeleton />
+        <BoardSkeleton label="Fetching data..." />
       )}
     </SubscriptionGate>
   )
@@ -91,7 +75,7 @@ function PipelineContent() {
 
 export default function PipelinePage() {
   return (
-    <Suspense fallback={<div>Loading...</div>}>
+    <Suspense fallback={<BoardSkeleton label="Fetching data..." />}>
       <PipelineContent />
     </Suspense>
   )

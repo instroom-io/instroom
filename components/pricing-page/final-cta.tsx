@@ -5,7 +5,7 @@ import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { BookDemoModal } from "@/components/shared/book-demo-modal"
 
-export function AboutCTA() {
+export function PricingFinalCTA() {
   const [showBookDemo, setShowBookDemo] = useState(false)
   return (
     <section style={{ background: "#1E1E1E", position: "relative", overflow: "hidden", padding: "100px 32px" }}>
@@ -22,11 +22,10 @@ export function AboutCTA() {
           style={{ fontFamily: "'Manrope', sans-serif", fontSize: "44px", fontWeight: 900, letterSpacing: "-0.03em" }}
           className="text-white mb-6 leading-tight"
         >
-          Start building your influencer workflow today.
+          Start free. Upgrade only when you outgrow it.
         </h2>
         <p className="text-base leading-relaxed text-white/60 mb-8">
-          Join brands and agencies who've moved from messy spreadsheets to structured, scalable influencer
-          marketing — with Instroom.
+          Basic is free forever — no credit card, no time limit. Upgrade to Solo or Team whenever you need more workspaces and campaigns.
         </p>
         <div className="flex gap-3 justify-center mb-4 flex-wrap">
           <Link href="/signup">
@@ -42,7 +41,7 @@ export function AboutCTA() {
             Book a Demo
           </Button>
         </div>
-        <p className="text-xs text-white/30">Free Forever. No Credit Card.</p>
+        <p className="text-xs text-white/30">Free forever on Basic · No credit card required</p>
       </div>
       <BookDemoModal open={showBookDemo} onClose={() => setShowBookDemo(false)} />
     </section>

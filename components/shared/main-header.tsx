@@ -5,6 +5,7 @@ import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { usePathname } from "next/navigation"
 import { useState, useRef, useEffect, type ReactNode } from "react"
+import { BookDemoModal } from "@/components/shared/book-demo-modal"
 
 function DropdownHero({
   href,
@@ -565,6 +566,7 @@ function ResourcesDropdown() {
 
 export function MainHeader() {
   const pathname = usePathname()
+  const [showBookDemo, setShowBookDemo] = useState(false)
 
   const navLinkStyle = (href: string) => ({
     textDecoration: "none",
@@ -642,9 +644,12 @@ export function MainHeader() {
         </ul>
 
         <div className="nav-cta" style={{ display: "flex", gap: 18, alignItems: "center", marginLeft: "auto" }}>
-          <a href="#" style={{ fontSize: "0.9375rem", textDecoration: "none", color: "var(--charcoal)" }}>
+          <button
+            onClick={() => setShowBookDemo(true)}
+            style={{ fontSize: "0.9375rem", background: "none", border: "none", cursor: "pointer", padding: 0, color: "var(--charcoal)", fontFamily: "inherit" }}
+          >
             Book a demo
-          </a>
+          </button>
           <Link href="/login" style={{ fontSize: "0.9375rem", fontWeight: "500", textDecoration: "none", color: "var(--charcoal)" }}>
             Log in
           </Link>
@@ -655,6 +660,7 @@ export function MainHeader() {
           </Link>
         </div>
       </div>
+      <BookDemoModal open={showBookDemo} onClose={() => setShowBookDemo(false)} />
     </nav>
   )
 }

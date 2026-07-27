@@ -19,13 +19,15 @@ import { useDroppable } from "@dnd-kit/core"
 import { useDraggable } from "@dnd-kit/core"
 import {
   IconSearch, IconX, IconChevronDown, IconChevronUp,
-  IconLoader2, IconLayoutKanban, IconList, IconFilter, IconLocation,
+  IconLayoutKanban, IconList, IconFilter, IconLocation,
   IconLayoutList, IconLink, IconArrowRight,
 } from "@tabler/icons-react"
 import { useClosedData, type ClosedInfluencer, type ClosedColumn } from "@/hooks/useClosedData"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { SubscriptionGate } from "@/components/ui/subscription-gate"
 import { HistoryTab } from "@/components/InfluencerProfileSidebar"
+import { PaidCollabTab } from "@/components/table-sheet/profile-sidebar"
+import { BoardSkeleton } from "@/components/shared/skeletons"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const NICHES    = ["Beauty","Fitness","Lifestyle","Food","Tech","Fashion","Travel"]
@@ -252,7 +254,7 @@ function DraggableCard({ id, children, onClick, disabled }: { id: string; childr
 // ─── Profile Drawer — structure mirrors Pipeline's InfluencerProfileSidebar ──
 // Tabs: Basic, Order, Post, Stats, History (same names/order/behavior as Pipeline).
 const STAGE_OPTIONS: ClosedColumn[] = ["For Order Creation", "In-Transit", "Delivered", "Posted", "No post"]
-const PROFILE_TABS = ["Basic", "Order", "Post", "Stats", "History"]
+const PROFILE_TABS = ["Basic", "Order", "Post", "Stats", "Paid collab details", "History"]
 
 function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCampaignTypeChange, canApproveInfluencers }: {
   inf: ClosedInfluencer; brandId?: string; onClose: () => void
@@ -499,8 +501,13 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCampaignTypeCh
             </div>
           )}
 
-          {/* ════ HISTORY TAB ════ */}
+          {/* ════ PAID COLLAB DETAILS TAB ════ */}
           {profileTab === 4 && (
+            <PaidCollabTab influencerName={inf.influencer} rateHint={inf.agreedRate ?? undefined} />
+          )}
+
+          {/* ════ HISTORY TAB ════ */}
+          {profileTab === 5 && (
             <HistoryTab brandId={brandId} biId={inf.id} />
           )}
 
@@ -568,7 +575,7 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCampaignTypeCh
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function ClosedPage() {
   return (
-    <Suspense fallback={<div className="flex items-center justify-center h-64"><IconLoader2 size={32} className="animate-spin text-[#1FAE5B]"/></div>}>
+    <Suspense fallback={<BoardSkeleton label="Fetching data..." />}>
       <PostTrackerContent />
     </Suspense>
   )
@@ -713,7 +720,7 @@ function PostTrackerContent() {
     )
   }
 
-  if (isLoading) return <div className="flex items-center justify-center h-64"><IconLoader2 size={32} className="animate-spin text-[#1FAE5B]"/></div>
+  if (isLoading) return <BoardSkeleton label="Fetching data..." />
   if (error) return <div className="flex flex-col items-center justify-center h-64 gap-3"><p className="text-red-500 text-sm">{error}</p><button onClick={refetch} className="text-[13px] px-4 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 transition">Retry</button></div>
 
   return (

@@ -63,8 +63,7 @@ export default function SecurityPage() {
       })
       .catch(() => {})
       .finally(() => setSecurityLoaded(true))
-  }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
-
+  }, [status]) 
   async function handleChangePassword() {
     if (!currentPassword || !newPassword || !confirmPassword) {
       show("All password fields are required", "error")
@@ -227,10 +226,11 @@ export default function SecurityPage() {
 
           <ToggleRow
             title="SMS verification"
-            desc="Receive a code via text message when logging in"
+            desc="Temporarily unavailable"
             enabled={smsEnabled}
             loading={togglingSms}
             onToggle={() => toggleSms(smsEnabled)}
+            disabled
             last
           />
         </CardContent>
@@ -245,6 +245,7 @@ function ToggleRow({
   enabled,
   loading,
   onToggle,
+  disabled,
   last,
 }: {
   title: string
@@ -252,6 +253,7 @@ function ToggleRow({
   enabled: boolean
   loading: boolean
   onToggle: () => void
+  disabled?: boolean
   last?: boolean
 }) {
   return (
@@ -259,7 +261,7 @@ function ToggleRow({
       className={cn(
         "flex items-center justify-between py-3 transition-opacity",
         !last && "border-b",
-        loading && "opacity-60"
+        (loading || disabled) && "opacity-60"
       )}
     >
       <div>
@@ -268,7 +270,7 @@ function ToggleRow({
       </div>
       <Switch
         checked={enabled}
-        disabled={loading}
+        disabled={loading || disabled}
         onCheckedChange={onToggle}
         className="data-[state=checked]:bg-emerald-600"
       />
