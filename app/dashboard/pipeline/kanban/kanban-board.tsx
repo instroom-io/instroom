@@ -50,6 +50,7 @@ import InfluencerProfileSidebar, {
 } from "@/components/InfluencerProfileSidebar"
 
 import { usePipelineData, type PipelineInfluencer } from "@/hooks/usePipelineData"
+import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { BoardSkeleton } from "@/components/shared/skeletons"
 
 // ─── Platform Icons ──────────────────────────────────────────────────────────
