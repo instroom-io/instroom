@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
+import { checkBrandAccess } from "@/lib/brand-access"
+import { hasBrandCapability } from "@/lib/permissions"
 
 export async function GET(
   req: NextRequest,
@@ -14,6 +16,10 @@ export async function GET(
     }
 
     const { brandId } = await context.params
+
+    if (!(await checkBrandAccess(brandId, session.user.id))) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
 
     const campaigns = await prisma.campaign.findMany({
       where: { brand_id: brandId },
@@ -81,6 +87,11 @@ export async function POST(
     }
 
     const { brandId } = await context.params
+
+    if (!(await hasBrandCapability(brandId, session.user.id, "manageCampaigns"))) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
+
     const body = await req.json()
 
     if (!body.name) {

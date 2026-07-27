@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
+import { checkBrandAccess } from "@/lib/brand-access"
+import { hasBrandCapability } from "@/lib/permissions"
 
 // Re-flattens the Attribution relation back onto the response object so
 // consumers keep reading these as top-level fields, exactly as when they
@@ -36,6 +38,10 @@ export async function GET(
 
     const { brandId, partnerId } = await context.params
 
+    if (!(await checkBrandAccess(brandId, session.user.id))) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
+
     const bi = await prisma.brandInfluencer.findFirst({
       where: { id: partnerId, brand_id: brandId },
       include: {
@@ -67,7 +73,12 @@ export async function PATCH(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const { partnerId } = await context.params
+    const { brandId, partnerId } = await context.params
+
+    if (!(await hasBrandCapability(brandId, session.user.id, "manageCampaigns"))) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
+
     const body = await req.json()
 
     const {
@@ -80,7 +91,7 @@ export async function PATCH(
     } = body
 
     const updated = await prisma.brandInfluencer.update({
-      where: { id: partnerId },
+      where: { id: partnerId, brand_id: brandId },
       data: {
         ...(campaign_id      !== undefined ? { campaign_id }      : {}),
         ...(contact_status   !== undefined ? { contact_status }   : {}),
@@ -131,11 +142,15 @@ export async function DELETE(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const { partnerId } = await context.params
+    const { brandId, partnerId } = await context.params
+
+    if (!(await hasBrandCapability(brandId, session.user.id, "manageCampaigns"))) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
 
     // BrandPartner row (if any) is cascade-deleted automatically via the
     // brand_influencer_id FK (onDelete: Cascade) — no manual cleanup needed.
-    await prisma.brandInfluencer.delete({ where: { id: partnerId } })
+    await prisma.brandInfluencer.delete({ where: { id: partnerId, brand_id: brandId } })
     return NextResponse.json({ success: true })
   } catch (error) {
     console.error("[DELETE /partners/:id]", error)

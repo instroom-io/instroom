@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
+import { checkBrandAccess } from "@/lib/brand-access"
+import { hasBrandCapability } from "@/lib/permissions"
 
 export async function GET(
   req: NextRequest,
@@ -14,7 +16,19 @@ export async function GET(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const { partnerId } = await context.params
+    const { brandId, partnerId } = await context.params
+
+    if (!(await checkBrandAccess(brandId, session.user.id))) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
+
+    const partner = await prisma.brandInfluencer.findFirst({
+      where: { id: partnerId, brand_id: brandId },
+      select: { id: true },
+    })
+    if (!partner) {
+      return NextResponse.json({ error: "Influencer not found in this workspace" }, { status: 404 })
+    }
 
     const logs = await prisma.outreachLog.findMany({
       where: { brand_influencer_id: partnerId },
@@ -37,7 +51,20 @@ export async function POST(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const { partnerId } = await context.params
+    const { brandId, partnerId } = await context.params
+
+    if (!(await hasBrandCapability(brandId, session.user.id, "manageCampaigns"))) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
+
+    const partner = await prisma.brandInfluencer.findFirst({
+      where: { id: partnerId, brand_id: brandId },
+      select: { id: true },
+    })
+    if (!partner) {
+      return NextResponse.json({ error: "Influencer not found in this workspace" }, { status: 404 })
+    }
+
     const body = await req.json()
 
     if (!body.outreach_type) {

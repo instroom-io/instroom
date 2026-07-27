@@ -90,7 +90,6 @@ function PaymentPageInner() {
 
     setError(null);
 
-    // Free plan — create a trial subscription via API, then go to dashboard
     if (isFree) {
       try {
         setLoading(true);
@@ -208,9 +207,6 @@ function PaymentPageInner() {
             >
               &larr; Choose a different plan
             </button>
-          </div>
-          <div className="hidden md:flex items-center">
-            <div className="h-96 w-1 bg-gradient-to-b from-[#1FAE5B]/40 via-[#1E1E1E]/10 to-[#0F6B3E]/40 rounded-full mx-6" />
           </div>
           <div className="md:w-1/2 p-8 flex flex-col justify-center">
             <h2 className="text-2xl font-bold mb-2 text-center md:text-left text-[#1E1E1E]">

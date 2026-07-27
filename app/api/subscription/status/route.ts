@@ -3,7 +3,7 @@ import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import { NextResponse } from "next/server"
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const session = await getServerSession(authOptions)
 
@@ -11,8 +11,39 @@ export async function GET() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
+    const { searchParams } = new URL(request.url)
+    const brandId = searchParams.get("brandId")
+
+    // Entitlements belong to the brand (its owner's plan), not necessarily
+    // the calling user — a team member has no subscription of their own.
+    let targetUserId = session.user.id
+
+    if (brandId) {
+      const brand = await prisma.brand.findUnique({ where: { id: brandId } })
+
+      if (!brand) {
+        return NextResponse.json({ error: "Brand not found" }, { status: 404 })
+      }
+
+      const isOwner = brand.owner_id === session.user.id
+      const isMember = isOwner
+        ? true
+        : !!(await prisma.brandMember.findFirst({
+            where: { brand_id: brandId, user_id: session.user.id },
+          }))
+
+      if (!isMember) {
+        return NextResponse.json(
+          { error: "You don't have access to this workspace" },
+          { status: 403 }
+        )
+      }
+
+      targetUserId = brand.owner_id
+    }
+
     const subscription = await prisma.userSubscription.findUnique({
-      where: { user_id: session.user.id },
+      where: { user_id: targetUserId },
       include: { plan: true },
     })
 

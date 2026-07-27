@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import Image from "next/image";
+import Link from "next/link";
 
 const tocItems = [
   { id: "s1", label: "1. Introduction" },
@@ -85,7 +86,7 @@ export default function InstroomPrivacyPolicy() {
 
       {/* Nav */}
       <nav className="bg-[#0d2b1a] px-12 h-16 flex items-center justify-between sticky top-0 z-50 border-b border-[#1f3d28]">
-        <div className="flex items-center gap-2.5 cursor-pointer">
+        <Link href="/" className="flex items-center gap-2.5 cursor-pointer">
           <Image
             src="/images/instroomLogo.png"
             alt="Instroom Logo"
@@ -94,9 +95,9 @@ export default function InstroomPrivacyPolicy() {
             className="w-9 h-9 rounded-full object-cover"
           />
           <span className="font-semibold text-[18px] text-white tracking-[-0.3px]">
-            instroom
+            Instroom
           </span>
-        </div>
+        </Link>
         <span className="text-[12px] font-medium text-[#a8e6c1] tracking-[0.08em] uppercase bg-[rgba(61,189,114,0.12)] px-3 py-1 rounded-full border border-[rgba(61,189,114,0.25)]">
           Privacy Policy
         </span>

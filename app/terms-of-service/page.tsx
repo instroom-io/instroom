@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import Image from "next/image";
+import Link from "next/link";
 
 const styles = `
   @import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap');
@@ -230,10 +231,10 @@ export default function InstroomTermsOfService() {
 
       {/* Top Bar */}
       <nav className="tos-topbar">
-        <div className="tos-logo">
+        <Link href="/" className="tos-logo">
           <Image src="/images/instroomLogo.png" alt="Instroom Logo" width={36} height={36} className="pp-logo-icon" />
-          <span className="tos-logo-text">instroom</span>
-        </div>
+          <span className="tos-logo-text">Instroom</span>
+        </Link>
         <span className="tos-doc-label">Terms of Service</span>
       </nav>
 

@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma"
 import { canCreateCampaign } from "@/lib/subscription-limits"
+import { hasBrandCapability } from "@/lib/permissions"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { NextRequest, NextResponse } from "next/server"
@@ -89,6 +90,10 @@ export async function POST(
 
     if (!isMember) {
       return NextResponse.json({ error: "Brand not found or access denied" }, { status: 404 })
+    }
+
+    if (!(await hasBrandCapability(brandId, session.user.id, "manageCampaigns"))) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
     // If setting to active, check campaign limit

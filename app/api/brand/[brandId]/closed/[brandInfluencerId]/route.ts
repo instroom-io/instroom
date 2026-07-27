@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
+import { hasBrandCapability } from "@/lib/permissions"
 
 type ClosedColumn =
   | "For Order Creation"
@@ -136,6 +137,10 @@ export async function PATCH(
     })
 
     if (!brand) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
+
+    if (!(await hasBrandCapability(brandId, session.user.id, "approveInfluencers"))) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 

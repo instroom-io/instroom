@@ -626,17 +626,25 @@ function CollabTypeModal({ influencer, onConfirm, onCancel }: CollabTypeModalPro
 }
 
 // ─── Deal Agreed → Move to Post Tracker (no modal, direct action) ────────────
-function DealAgreedMoveButton({ onMarkOrderPlaced }: {
+function DealAgreedMoveButton({ onMarkOrderPlaced, disabled }: {
   onMarkOrderPlaced: () => void
+  disabled?: boolean
 }) {
   return (
     <div className="mt-3 pt-3 border-t border-gray-100">
       <button
         onClick={(e) => {
           e.stopPropagation()
+          if (disabled) return
           onMarkOrderPlaced()
         }}
-        className="w-full text-xs font-medium py-2 rounded-lg transition-all flex items-center justify-center gap-1.5 bg-[#1FAE5B] text-white hover:bg-[#0f6b3e]"
+        disabled={disabled}
+        title={disabled ? "Only Owners and Managers can approve influencers" : undefined}
+        className={`w-full text-xs font-medium py-2 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+          disabled
+            ? "bg-gray-200 text-gray-400 cursor-not-allowed"
+            : "bg-[#1FAE5B] text-white hover:bg-[#0f6b3e]"
+        }`}
       >
         <IconPackage size={12} />
         Move to Post Tracker
@@ -646,11 +654,12 @@ function DealAgreedMoveButton({ onMarkOrderPlaced }: {
 }
 
 // ─── Pipeline Card ────────────────────────────────────────────────────────────
-function PipelineCard({ influencer, onOpenSidebar, onStatusChange, onMarkOrderPlaced }: {
+function PipelineCard({ influencer, onOpenSidebar, onStatusChange, onMarkOrderPlaced, canApproveInfluencers }: {
   influencer: PipelineInfluencer
   onOpenSidebar: (inf: PipelineInfluencer) => void
   onStatusChange: (id: string, newStatus: string) => void
   onMarkOrderPlaced?: (id: string) => void
+  canApproveInfluencers: boolean
 }) {
   // nextStages is now always ["Deal Agreed", "Not Interested"] for pre-deal cards,
   // ["Not Interested"] for Deal Agreed cards, and [] for terminal cards
@@ -714,6 +723,7 @@ function PipelineCard({ influencer, onOpenSidebar, onStatusChange, onMarkOrderPl
       {influencer.pipelineStatus === "Deal Agreed" && onMarkOrderPlaced && (
         <DealAgreedMoveButton
           onMarkOrderPlaced={() => onMarkOrderPlaced(influencer.id)}
+          disabled={!canApproveInfluencers}
         />
       )}
 
@@ -722,8 +732,10 @@ function PipelineCard({ influencer, onOpenSidebar, onStatusChange, onMarkOrderPl
         <div className="flex gap-2 mt-3 pt-2 border-t border-gray-100 flex-wrap">
           {nextStages.map((stage) => (
             <button key={stage}
-              onClick={(e) => { e.stopPropagation(); onStatusChange(influencer.id, stage) }}
-              className={`text-xs px-2 py-1 rounded transition-all ${
+              onClick={(e) => { e.stopPropagation(); if (!canApproveInfluencers) return; onStatusChange(influencer.id, stage) }}
+              disabled={!canApproveInfluencers}
+              title={!canApproveInfluencers ? "Only Owners and Managers can approve influencers" : undefined}
+              className={`text-xs px-2 py-1 rounded transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
                 stage === "Not Interested"
                   ? "bg-red-50 text-red-600 hover:bg-red-100"
                   : "bg-green-50 text-green-700 hover:bg-green-100 border border-green-200"
@@ -738,7 +750,7 @@ function PipelineCard({ influencer, onOpenSidebar, onStatusChange, onMarkOrderPl
 }
 
 // ─── Portal StatusDropdown ────────────────────────────────────────────────────
-function StatusDropdown({ currentStatus, onStatusChange }: { currentStatus: string; onStatusChange: (s: string) => void }) {
+function StatusDropdown({ currentStatus, onStatusChange, canApproveInfluencers }: { currentStatus: string; onStatusChange: (s: string) => void; canApproveInfluencers: boolean }) {
   const [isOpen, setIsOpen] = useState(false)
   const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({})
   const [mounted, setMounted] = useState(false)
@@ -788,8 +800,10 @@ function StatusDropdown({ currentStatus, onStatusChange }: { currentStatus: stri
   return (
     <>
       <button ref={buttonRef}
-        onClick={(e) => { e.stopPropagation(); setIsOpen((p) => !p) }}
-        className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium whitespace-nowrap border ${getStatusColor(currentStatus)}`}>
+        onClick={(e) => { e.stopPropagation(); if (!canApproveInfluencers) return; setIsOpen((p) => !p) }}
+        disabled={!canApproveInfluencers}
+        title={!canApproveInfluencers ? "Only Owners and Managers can approve influencers" : undefined}
+        className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium whitespace-nowrap border ${getStatusColor(currentStatus)} ${!canApproveInfluencers ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}>
         {currentStatus}
         <IconChevronDown size={12} className={`transition-transform flex-shrink-0 ${isOpen ? "rotate-180" : ""}`} />
       </button>
@@ -814,12 +828,13 @@ function DroppableColumn({ id, children }: { id: string; children: React.ReactNo
   )
 }
 
-function DraggableCard({ id, children }: { id: string; children: React.ReactNode }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id })
+function DraggableCard({ id, disabled, children }: { id: string; disabled?: boolean; children: React.ReactNode }) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id, disabled })
   const style = transform ? { transform: `translate(${transform.x}px, ${transform.y}px)` } : undefined
   return (
     <div ref={setNodeRef} style={style} {...listeners} {...attributes}
-      className={`cursor-grab active:cursor-grabbing ${isDragging ? "opacity-50" : ""}`}>
+      title={disabled ? "Only Owners and Managers can approve influencers" : undefined}
+      className={`${disabled ? "cursor-not-allowed opacity-60" : "cursor-grab active:cursor-grabbing"} ${isDragging ? "opacity-50" : ""}`}>
       {children}
     </div>
   )
@@ -864,6 +879,9 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   const { data, isLoading, error, updateStatus, refetch } = usePipelineData(brandId)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
+  const { canApproveInfluencers, loading: capabilitiesLoading } = useBrandCapabilities(brandId)
+  const canApprove = !capabilitiesLoading && canApproveInfluencers
+
   const toast = (msg: string, duration = 3000) => {
     setShowSuccessMessage(msg)
     setTimeout(() => setShowSuccessMessage(null), duration)
@@ -873,6 +891,10 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   const handleMarkOrderPlaced = async (id: string) => {
     const influencer = data.find((i) => i.id === id)
     if (!influencer) return
+    if (!canApprove) {
+      toast("Only Owners and Managers can approve influencers", 2500)
+      return
+    }
     const success = await updateStatus(id, "For Order Creation")
     toast(
       success
@@ -911,6 +933,11 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     const destKey   = over.id as string
     const dragged   = data.find((item) => item.id === draggedId)
     if (!dragged) return
+
+    if (!canApprove) {
+      toast("Only Owners and Managers can approve influencers", 2500)
+      return
+    }
 
     const newStatus = getStatusFromColumnKey(destKey)
     if (dragged.pipelineStatus === newStatus) return
@@ -958,6 +985,10 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
 
   // ── Status update from card buttons / list dropdown ───────────────────────
   const handleStatusUpdate = async (id: string, newStatus: string) => {
+    if (!canApprove) {
+      toast("Only Owners and Managers can approve influencers", 2500)
+      return
+    }
     if (newStatus === "Not Interested") {
       const influencer = data.find((i) => i.id === id)
       if (influencer) { setPendingNiId(id); setNiModalInfluencer(influencer) }
@@ -1034,6 +1065,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
       onOpenSidebar={openSidebar}
       onStatusChange={handleStatusUpdate}
       onMarkOrderPlaced={handleMarkOrderPlaced}
+      canApproveInfluencers={canApprove}
     />
   )
 
@@ -1235,7 +1267,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
 
                     <div className="flex flex-col gap-2 min-h-[400px]">
                       {items.map((inf) => (
-                        <DraggableCard key={inf.id} id={inf.id}>
+                        <DraggableCard key={inf.id} id={inf.id} disabled={!canApprove}>
                           {renderCard(inf)}
                         </DraggableCard>
                       ))}
@@ -1275,7 +1307,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
 
                     <div className="flex flex-col gap-2 min-h-[400px]">
                       {items.map((inf) => (
-                        <DraggableCard key={inf.id} id={inf.id}>
+                        <DraggableCard key={inf.id} id={inf.id} disabled={!canApprove}>
                           {renderCard(inf)}
                         </DraggableCard>
                       ))}
@@ -1403,7 +1435,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                       </td>
                       <td className="px-4 py-3">
                         <div onClick={(e) => e.stopPropagation()}>
-                          <StatusDropdown currentStatus={inf.pipelineStatus} onStatusChange={(s) => handleStatusUpdate(inf.id, s)} />
+                          <StatusDropdown currentStatus={inf.pipelineStatus} onStatusChange={(s) => handleStatusUpdate(inf.id, s)} canApproveInfluencers={canApprove} />
                         </div>
                       </td>
                     </tr>

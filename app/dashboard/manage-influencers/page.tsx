@@ -11,6 +11,7 @@ import TableSheet, {
   type CustomColumn,
 } from "@/components/table-sheet"
 import { useInfluencerData } from "@/hooks/useInfluencerData"
+import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { LimitExceededDialog } from "@/components/limit-exceeded-dialog"
 import { WorkspaceUnavailableModal } from "@/components/workspace-unavailable-modal"
 import { TableSkeleton } from "@/components/shared/skeletons"
@@ -132,6 +133,7 @@ function InfluencersContent() {
 
   const { rows, customColumns, isLoading, error, setCustomColumns } =
     useInfluencerData(brandId)
+  const { canManageInfluencers, canApproveInfluencers } = useBrandCapabilities(brandId)
 
   // ── Auto-select owned brand if no brandId provided ──────────────────────────
   useEffect(() => {
@@ -656,6 +658,8 @@ function InfluencersContent() {
           brandId={brandId}
           subscriptionStatus={subscriptionStatus}
           onShowTrialModal={() => setShowTrialLimitModal(true)}
+          readOnly={!canManageInfluencers}
+          canApproveInfluencers={canApproveInfluencers}
         />
       )}
 
