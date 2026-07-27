@@ -8,6 +8,7 @@ import InfluencerProfileSidebar from "./InfluencerProfileSidebar"
 import { IconSearch, IconFilter } from "@tabler/icons-react"
 import { ReactNode } from "react"
 import { useBrandTaxonomy } from "@/hooks/useBrandTaxonomy"
+import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { TableSkeleton } from "@/components/shared/skeletons"
 
 import {
