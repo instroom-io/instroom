@@ -1,7 +1,12 @@
+"use client"
+
 import Link from "next/link"
+import { useState } from "react"
 import { CtaBand, HelpBullet, HelpVisual, SectionLabel } from "./shared"
+import { BookDemoModal } from "@/components/shared/book-demo-modal"
 
 export function Agency({ onBack }: { onBack: () => void }) {
+  const [showBookDemo, setShowBookDemo] = useState(false)
   return (
     <>
       <button onClick={onBack} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 500, color: "var(--ink3)", cursor: "pointer", padding: "20px 40px 0", background: "none", border: "none", fontFamily: "'Inter',sans-serif", transition: "color 0.15s" }}
@@ -32,7 +37,9 @@ export function Agency({ onBack }: { onBack: () => void }) {
                   onMouseLeave={e => (e.currentTarget.style.background = "var(--green)")}
                 >Start free trial</button>
               </Link>
-              <button style={{ fontSize: 14, fontWeight: 500, padding: "11px 22px", borderRadius: 10, border: "0.5px solid var(--border)", background: "transparent", color: "var(--ink2)", cursor: "pointer", fontFamily: "'Inter',sans-serif", transition: "all 0.15s" }}
+              <button
+                onClick={() => setShowBookDemo(true)}
+                style={{ fontSize: 14, fontWeight: 500, padding: "11px 22px", borderRadius: 10, border: "0.5px solid var(--border)", background: "transparent", color: "var(--ink2)", cursor: "pointer", fontFamily: "'Inter',sans-serif", transition: "all 0.15s" }}
                 onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--ink2)"; e.currentTarget.style.color = "var(--ink)"; }}
                 onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.color = "var(--ink2)"; }}
               >Book a demo</button>
@@ -188,6 +195,7 @@ export function Agency({ onBack }: { onBack: () => void }) {
         headline="Your clients deserve better than a spreadsheet export."
         sub="Try Instroom free for 30 days. Bring your whole team. No seat fees, no onboarding call — just sign up and run a campaign the right way."
       />
+      <BookDemoModal open={showBookDemo} onClose={() => setShowBookDemo(false)} />
     </>
   )
 }
