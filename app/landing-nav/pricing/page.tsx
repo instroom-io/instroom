@@ -367,6 +367,11 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
         @media (max-width: 640px) {
           .page-hero { padding: 64px 0 48px; }
           .plan-card { max-width: 360px; }
+          .plan-inner { padding: 24px; }
+          .container { padding: 0 16px; }
+          .billing-toggle { flex-wrap: wrap; }
+          .billing-toggle a { padding: 8px 16px; font-size: 0.875rem; }
+          .plans-section { padding: 48px 0 56px; }
         }
       `}</style>
 

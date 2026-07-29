@@ -37,8 +37,8 @@ function FooterInner() {
   }
 
   return (
-    <footer className="bg-zinc-950 text-zinc-400 pt-10 pb-16 px-8 border-t border-zinc-800">
-      <div className="max-w-6xl mx-auto">
+    <footer className="bg-zinc-950 text-zinc-400 pt-10 pb-16 border-t border-zinc-800">
+      <div className="max-w-[1280px] mx-auto px-8">
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:flex lg:justify-between gap-8 sm:gap-10 mb-12">
           <div className="lg:max-w-[280px]">
             <Link href="/" style={{ display: "inline-block" }}>
@@ -141,7 +141,7 @@ function FooterInner() {
 
 export function MainFooter() {
   return (
-    <Suspense fallback={<footer className="bg-zinc-950 text-zinc-400 pt-10 pb-16 px-8 border-t border-zinc-800" />}>
+    <Suspense fallback={<footer className="bg-zinc-950 text-zinc-400 pt-10 pb-16 border-t border-zinc-800" />}>
       <FooterInner />
     </Suspense>
   )

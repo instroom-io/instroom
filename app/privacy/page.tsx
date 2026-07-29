@@ -51,7 +51,7 @@ export default function InstroomPrivacyPolicy() {
         lede="Your privacy is important to us. This Policy explains what personal information Instroom collects, how we use it, and the rights you have under Philippine law. We are committed to full compliance with the Data Privacy Act of 2012 (RA 10173)."
       />
 
-      <div className="max-w-[860px] mx-auto px-6 pb-20">
+      <div className="max-w-[860px] mx-auto px-4 sm:px-6 pb-20">
         <LegalSection number="Section 01" heading="Introduction">
           <LegalP>
             Armful OPC, a One Person Corporation registered in the Republic of the Philippines, trading as Armful

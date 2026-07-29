@@ -203,7 +203,7 @@ export function OnboardingForm({
         {/* Content */}
         <div className="flex-1 mb-4 sm:mb-6">
           {step === 1 && (
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {[
                 { label: '🛍️ My own brand', subtext: 'I manage my brand\'s influencer campaigns' },
                 { label: '🏢 My brand + a team', subtext: 'We have an in-house marketing team' },
@@ -227,7 +227,7 @@ export function OnboardingForm({
           )}
 
           {step === 2 && (
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {[
                 { emoji: '🛒', label: 'eCommerce / DTC', subtext: 'I sell physical products online' },
                 { emoji: '📱', label: 'Mobile app', subtext: 'Installs, sign-ups, in-app actions' },
@@ -256,7 +256,7 @@ export function OnboardingForm({
           )}
 
           {step === 3 && (
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {[
                 { emoji: '🎯', label: 'Drive conversions', subtext: 'Sales, installs, sign-ups, leads' },
                 { emoji: '📣', label: 'Build brand awareness', subtext: 'Reach new audiences at scale' },
@@ -282,7 +282,7 @@ export function OnboardingForm({
           )}
 
           {step === 4 && (
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {[
                 { emoji: '🌱', label: 'None yet', subtext: 'Just getting started' },
                 { emoji: '👤', label: '1 – 10', subtext: 'Small roster, early stage' },

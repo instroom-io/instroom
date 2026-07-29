@@ -17,6 +17,7 @@ declare module "next-auth" {
       email?: string | null
       name?: string | null
       image?: string | null
+      platform_role?: string
     }
     accessToken?: string
     error?: string
@@ -117,6 +118,7 @@ const nextAuthConfig = {
             email: user.email,
             name: user.name,
             image: user.image,
+            platform_role: user.platform_role,
           }
         } catch (error) {
           // Re-throw custom auth method / 2FA errors so the client can branch on them
@@ -187,6 +189,7 @@ const nextAuthConfig = {
             user.name = dbUser.name
             user.image = dbUser.image
             user.isNewUser = isNewUser
+            user.platform_role = dbUser.platform_role
             
             if (isNewUser) {
               const onboarding = await prisma.onboarding.findUnique({
@@ -251,6 +254,9 @@ const nextAuthConfig = {
         if (user.isNewUser !== undefined) {
           token.isNewUser = user.isNewUser
         }
+        if (user.platform_role !== undefined) {
+          token.platform_role = user.platform_role
+        }
         token.lastActivity = Math.floor(Date.now() / 1000)
         token.exp = Math.floor(Date.now() / 1000) + INACTIVITY_TIMEOUT
       }
@@ -296,6 +302,9 @@ const nextAuthConfig = {
         if (token.name) session.user.name = token.name as string
         if (token.isNewUser !== undefined) {
           session.user.isNewUser = token.isNewUser
+        }
+        if (token.platform_role !== undefined) {
+          session.user.platform_role = token.platform_role as string
         }
         await syncBrandActivityWithSubscription(session.user.id)
       }

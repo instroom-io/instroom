@@ -349,6 +349,7 @@ function influencerToPartner(inf: PipelineInfluencer, brandId?: string): Partner
     email:              inf.email || null,
     brandId:            brandId,
     brandInfluencerId:  inf.id,
+    collabType:         inf.collabType,
   }
 }
 
@@ -528,7 +529,7 @@ function CollabTypeModal({ influencer, onConfirm, onCancel }: CollabTypeModalPro
         <div className="flex items-start justify-between px-7 pt-6 pb-4 border-b border-gray-100">
           <div>
             <h2 className="text-base font-semibold text-gray-900">Select Collaboration Type</h2>
-            <p className="text-xs text-gray-500 mt-0.5">Choose the collaboration type before marking this deal as agreed.</p>
+            <p className="text-xs text-gray-500 mt-0.5">Choose the collaboration type to mark this deal agreed and move it to Post Tracker.</p>
           </div>
           <button onClick={onCancel} className="text-gray-400 hover:text-gray-600 transition ml-4 mt-0.5">
             <IconX size={18} />
@@ -549,7 +550,7 @@ function CollabTypeModal({ influencer, onConfirm, onCancel }: CollabTypeModalPro
             </div>
             <div className="ml-auto flex items-center gap-1.5 text-xs text-gray-400">
               <IconArrowRight size={14} />
-              <span>Moving to Deal Agreed</span>
+              <span>Moving to Post Tracker</span>
             </div>
           </div>
         </div>
@@ -602,7 +603,7 @@ function CollabTypeModal({ influencer, onConfirm, onCancel }: CollabTypeModalPro
         {/* Footer */}
         <div className="flex items-center justify-between px-7 py-4 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl">
           <p className="text-[11px] text-gray-400">
-            This will move the influencer to Deal Agreed
+            This marks the deal agreed and moves the influencer to Post Tracker
           </p>
           <div className="flex items-center gap-2">
             <button
@@ -617,7 +618,7 @@ function CollabTypeModal({ influencer, onConfirm, onCancel }: CollabTypeModalPro
               className="px-6 py-2 text-sm font-medium text-white bg-green-500 rounded-lg hover:bg-green-600 transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
             >
               <IconArrowRight size={14} />
-              Confirm Deal Agreed
+              Confirm &amp; Move to Post Tracker
             </button>
           </div>
         </div>
@@ -626,40 +627,11 @@ function CollabTypeModal({ influencer, onConfirm, onCancel }: CollabTypeModalPro
   )
 }
 
-// ─── Deal Agreed → Move to Post Tracker (no modal, direct action) ────────────
-function DealAgreedMoveButton({ onMarkOrderPlaced, disabled }: {
-  onMarkOrderPlaced: () => void
-  disabled?: boolean
-}) {
-  return (
-    <div className="mt-3 pt-3 border-t border-gray-100">
-      <button
-        onClick={(e) => {
-          e.stopPropagation()
-          if (disabled) return
-          onMarkOrderPlaced()
-        }}
-        disabled={disabled}
-        title={disabled ? "Only Owners and Managers can approve influencers" : undefined}
-        className={`w-full text-xs font-medium py-2 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
-          disabled
-            ? "bg-gray-200 text-gray-400 cursor-not-allowed"
-            : "bg-[#1FAE5B] text-white hover:bg-[#0f6b3e]"
-        }`}
-      >
-        <IconPackage size={12} />
-        Move to Post Tracker
-      </button>
-    </div>
-  )
-}
-
 // ─── Pipeline Card ────────────────────────────────────────────────────────────
-function PipelineCard({ influencer, onOpenSidebar, onStatusChange, onMarkOrderPlaced, canApproveInfluencers }: {
+function PipelineCard({ influencer, onOpenSidebar, onStatusChange, canApproveInfluencers }: {
   influencer: PipelineInfluencer
   onOpenSidebar: (inf: PipelineInfluencer) => void
   onStatusChange: (id: string, newStatus: string) => void
-  onMarkOrderPlaced?: (id: string) => void
   canApproveInfluencers: boolean
 }) {
   // nextStages is now always ["Deal Agreed", "Not Interested"] for pre-deal cards,
@@ -703,7 +675,8 @@ function PipelineCard({ influencer, onOpenSidebar, onStatusChange, onMarkOrderPl
           </div>
         )}
 
-        {/* Collab type badge — shown on both Deal Agreed and For Order Creation */}
+        {/* Collab type badge — Deal Agreed now cascades straight to For Order
+            Creation on confirm, but legacy rows can still rest at Deal Agreed */}
         {(influencer.pipelineStatus === "For Order Creation" || influencer.pipelineStatus === "Deal Agreed") && influencer.collabType && (
           <div className="mt-1.5">
             {(() => {
@@ -719,14 +692,6 @@ function PipelineCard({ influencer, onOpenSidebar, onStatusChange, onMarkOrderPl
           </div>
         )}
       </div>
-
-      {/* Move to Post Tracker button — only on Deal Agreed cards */}
-      {influencer.pipelineStatus === "Deal Agreed" && onMarkOrderPlaced && (
-        <DealAgreedMoveButton
-          onMarkOrderPlaced={() => onMarkOrderPlaced(influencer.id)}
-          disabled={!canApproveInfluencers}
-        />
-      )}
 
       {/* Quick-move buttons — only for non-terminal cards */}
       {nextStages.length > 0 && !terminal && (
@@ -888,34 +853,34 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     setTimeout(() => setShowSuccessMessage(null), duration)
   }
 
-  // ── Move to Post Tracker: NO modal, direct status update ──────────────────
-  const handleMarkOrderPlaced = async (id: string) => {
-    const influencer = data.find((i) => i.id === id)
-    if (!influencer) return
-    if (!canApprove) {
-      toast("Only Owners and Managers can approve influencers", 2500)
-      return
-    }
-    const success = await updateStatus(id, "For Order Creation")
-    toast(
-      success
-        ? `${influencer.influencer} moved to Post Tracker ✓`
-        : `Failed to move ${influencer.influencer}`
-    )
-  }
-
-  // ── Collab type confirmed → move to Deal Agreed ───────────────────────────
+  // ── Collab type confirmed → deal agreed AND straight into Post Tracker ────
+  // Confirming a Collaboration Type is the single action that both marks the
+  // deal agreed and moves the influencer into Post Tracker with its default
+  // initial status — no separate "Move to Post Tracker" click needed anymore.
   const handleCollabTypeConfirm = async (collabType: CollabType) => {
     if (!pendingCollabId || !collabModalInfluencer) return
-    const success = await updateStatus(pendingCollabId, "Deal Agreed", {  })
+    const success = await updateStatus(pendingCollabId, "Deal Agreed", { collaborationType: collabType })
     const collabName = COLLAB_TYPES.find((c) => c.id === collabType)?.title ?? collabType
     toast(
       success
-        ? `${collabModalInfluencer.influencer} moved to Deal Agreed · ${collabName} ✓`
+        ? `${collabModalInfluencer.influencer} moved to Post Tracker · ${collabName} ✓`
         : `Failed to move ${collabModalInfluencer.influencer}`
     )
     setCollabModalInfluencer(null)
     setPendingCollabId(null)
+  }
+
+  // ── Collab type edited from the Influencer Profile sidebar ────────────────
+  // Keeps Pipeline + Profile + Post Tracker in sync no matter which surface
+  // the edit was made from — same PATCH, same persisted DB field.
+  const handleCollabTypeChangeFromSidebar = async (biId: string, newType: string) => {
+    const influencer = data.find((i) => i.id === biId)
+    if (!influencer) return
+    const success = await updateStatus(biId, influencer.pipelineStatus, { collaborationType: newType })
+    if (success) {
+      setSelectedPartner((prev) => (prev ? { ...prev, collabType: newType } : prev))
+    }
+    toast(success ? "Collaboration type updated ✓" : "Failed to update collaboration type")
   }
 
   const handleCollabTypeCancel = () => {
@@ -948,16 +913,12 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
       return
     }
 
-    // Drag to Deal Agreed → open collab type modal first
-    if (newStatus === "Deal Agreed") {
+    // Drag to Deal Agreed (or directly to the hidden For Order Creation column)
+    // → open the collab type modal first. Confirming it both agrees the deal
+    // and cascades straight into Post Tracker — there's no manual move step.
+    if (newStatus === "Deal Agreed" || newStatus === "For Order Creation") {
       setPendingCollabId(draggedId)
       setCollabModalInfluencer(dragged)
-      return
-    }
-
-    // Drag to For Order Creation directly is blocked — must use button on Deal Agreed card
-    if (newStatus === "For Order Creation") {
-      toast("Please use the 'Move to Post Tracker' button on the Deal Agreed card.", 4000)
       return
     }
 
@@ -1065,7 +1026,6 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
       influencer={inf}
       onOpenSidebar={openSidebar}
       onStatusChange={handleStatusUpdate}
-      onMarkOrderPlaced={handleMarkOrderPlaced}
       canApproveInfluencers={canApprove}
     />
   )
@@ -1104,7 +1064,13 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
       )}
 
       {sidebarOpen && selectedPartner && (
-        <InfluencerProfileSidebar partner={selectedPartner} campaigns={[] as Campaign[]} allPartners={[]} onClose={() => setSidebarOpen(false)} />
+        <InfluencerProfileSidebar
+          partner={selectedPartner}
+          campaigns={[] as Campaign[]}
+          allPartners={[]}
+          onClose={() => setSidebarOpen(false)}
+          onCollabTypeChange={handleCollabTypeChangeFromSidebar}
+        />
       )}
 
       {/* ── Single inline toolbar row ── */}
@@ -1136,7 +1102,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
           </button>
 
           {showFilterPanel && (
-            <div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-30 w-[420px] p-5">
+            <div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-30 w-[420px] max-w-[90vw] p-5">
               <div className="flex items-center justify-between mb-4">
                 <span className="text-xs font-bold text-gray-800 uppercase tracking-wide">Filter by</span>
                 {hasActiveFilters && (
