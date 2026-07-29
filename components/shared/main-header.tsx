@@ -653,9 +653,9 @@ export function MainHeader() {
           <Link href="/login" style={{ fontSize: "0.9375rem", fontWeight: "500", textDecoration: "none", color: "var(--charcoal)" }}>
             Log in
           </Link>
-          <Link href="/signup">
+          <Link href="/early-access">
             <Button className="bg-gradient-to-r from-[#0F6B3E] to-[#1FAE5B] text-white font-semibold hover:from-[#0a5a2f] hover:to-[#158a48] shadow-lg shadow-emerald-500/25">
-              Start free
+              Get Early Access
             </Button>
           </Link>
         </div>

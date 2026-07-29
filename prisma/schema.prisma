@@ -566,3 +566,14 @@ model BrandTierSettings {
   brand Brand @relation(fields: [brand_id], references: [id], onDelete: Cascade)
 }
 
+model EarlyAccessSignup {
+  id         String   @id @default(cuid()) @db.VarChar(30)
+  email      String   @unique
+  name       String?  @db.VarChar(100)
+  role       String?  @db.VarChar(50)
+  invited_at DateTime?
+  created_at DateTime @default(now())
+
+  @@index([email])
+}
+
