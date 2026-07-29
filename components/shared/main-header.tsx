@@ -7,6 +7,20 @@ import { usePathname } from "next/navigation"
 import { useState, useRef, useEffect, type ReactNode } from "react"
 import { BookDemoModal } from "@/components/shared/book-demo-modal"
 
+function useDropdownAlign(open: boolean, ref: React.RefObject<HTMLElement | null>, menuWidth: number) {
+  const [align, setAlign] = useState<"left" | "right">("left")
+
+  useEffect(() => {
+    if (!open || !ref.current) return
+    const rect = ref.current.getBoundingClientRect()
+    const overflowsRight = rect.left + menuWidth > window.innerWidth - 20
+    const overflowsLeft = rect.right - menuWidth < 20
+    setAlign(overflowsRight && !overflowsLeft ? "right" : "left")
+  }, [open, menuWidth, ref])
+
+  return align
+}
+
 function DropdownHero({
   href,
   icon,
@@ -84,6 +98,7 @@ function ProductDropdown() {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLLIElement>(null)
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const align = useDropdownAlign(open, ref, 760)
 
   const handleMouseEnter = () => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current)
@@ -105,7 +120,7 @@ function ProductDropdown() {
           background: "none",
           border: "none",
           cursor: "pointer",
-          fontSize: "1rem",
+          fontSize: "0.9375rem",
           fontWeight: 500,
           color: "var(--charcoal)",
           display: "flex",
@@ -127,9 +142,10 @@ function ProductDropdown() {
         <div style={{
           position: "absolute",
           top: "calc(100% + 12px)",
-          left: "50%",
-          transform: "translateX(-50%)",
+          left: align === "left" ? 0 : "auto",
+          right: align === "right" ? 0 : "auto",
           width: 760,
+          maxWidth: "min(760px, calc(100vw - 40px))",
           background: "#ffffff",
           borderRadius: 16,
           boxShadow: "0 4px 6px rgba(0,0,0,0.04), 0 12px 40px rgba(0,0,0,0.12), 0 0 0 1px rgba(0,0,0,0.06)",
@@ -319,6 +335,7 @@ function NavDropdownShell({
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLLIElement>(null)
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const align = useDropdownAlign(open, ref, width)
 
   const handleMouseEnter = () => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current)
@@ -340,7 +357,7 @@ function NavDropdownShell({
           background: "none",
           border: "none",
           cursor: "pointer",
-          fontSize: "1rem",
+          fontSize: "0.9375rem",
           fontWeight: 500,
           color: "var(--charcoal)",
           display: "flex",
@@ -362,9 +379,10 @@ function NavDropdownShell({
         <div style={{
           position: "absolute",
           top: "calc(100% + 12px)",
-          left: "50%",
-          transform: "translateX(-50%)",
+          left: align === "left" ? 0 : "auto",
+          right: align === "right" ? 0 : "auto",
           width,
+          maxWidth: `min(${width}px, calc(100vw - 40px))`,
           background: "#ffffff",
           borderRadius: 16,
           boxShadow: "0 4px 6px rgba(0,0,0,0.04), 0 12px 40px rgba(0,0,0,0.12), 0 0 0 1px rgba(0,0,0,0.06)",
@@ -460,7 +478,7 @@ function ResourcesDropdown() {
       <DropdownHero
         href="/blog"
         title="Resources"
-        desc="Guides, tools, and answers to help you grow smarter"
+        desc="Guides and answers to help you grow smarter"
         icon={
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
             <path d="M4 5.5C4 4.67 4.67 4 5.5 4H12v16H5.5A1.5 1.5 0 014 18.5v-13z" stroke="white" strokeWidth="1.6" strokeLinejoin="round"/>
@@ -470,11 +488,11 @@ function ResourcesDropdown() {
         pills={[
           { label: "Blog" },
           { label: "FAQs" },
-          { label: "Free Tools" },
+          { label: "Demo" },
         ]}
       />
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
         <DropdownCard
           href="/blog"
           iconBg="#e8f3fa"
@@ -513,53 +531,6 @@ function ResourcesDropdown() {
           }
         />
       </div>
-
-      <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#9ca3af", marginBottom: 8, padding: "0 4px" }}>
-        Free Tools
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-        <DropdownCard
-          href="/tools/tiktok-downloader"
-          iconBg="#e8f8ef"
-          title="TikTok Downloader"
-          desc="Save TikTok videos in HD, no watermark"
-          badge="Free"
-          icon={
-            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-              <path d="M9 3v8M9 11l-3-3M9 11l3-3" stroke="#1FAE5B" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-              <path d="M3 13v1a2 2 0 002 2h8a2 2 0 002-2v-1" stroke="#1FAE5B" strokeWidth="1.6" strokeLinecap="round" />
-            </svg>
-          }
-        />
-        <DropdownCard
-          href="#"
-          iconBg="#e8f3fa"
-          title="Transcribe to Text"
-          desc="Turn videos into text captions instantly"
-          soon
-          icon={
-            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-              <rect x="7" y="2" width="4" height="8" rx="2" stroke="#2C8EC4" strokeWidth="1.6" />
-              <path d="M4.5 8.5a4.5 4.5 0 009 0" stroke="#2C8EC4" strokeWidth="1.6" strokeLinecap="round" />
-              <path d="M9 13v2.5M6.5 15.5h5" stroke="#2C8EC4" strokeWidth="1.5" strokeLinecap="round" />
-            </svg>
-          }
-        />
-        <DropdownCard
-          href="#"
-          iconBg="#f3f0fd"
-          title="Rate Calculator"
-          desc="Estimate fair rates for sponsored content"
-          soon
-          icon={
-            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-              <rect x="4" y="2" width="10" height="14" rx="1.5" stroke="#8b5cf6" strokeWidth="1.6" />
-              <path d="M6.5 5.5h5M6.5 8.5h1.5M10 8.5h1.5M6.5 11.5h1.5M10 11.5h1.5" stroke="#8b5cf6" strokeWidth="1.4" strokeLinecap="round" />
-            </svg>
-          }
-        />
-      </div>
     </NavDropdownShell>
   )
 }
@@ -567,11 +538,13 @@ function ResourcesDropdown() {
 export function MainHeader() {
   const pathname = usePathname()
   const [showBookDemo, setShowBookDemo] = useState(false)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
   const navLinkStyle = (href: string) => ({
     textDecoration: "none",
     color: pathname === href ? "var(--green)" : "var(--charcoal)",
     fontWeight: pathname === href ? 600 : 500,
+    fontSize: "0.9375rem",
   })
 
   return (
@@ -586,41 +559,32 @@ export function MainHeader() {
       }}
     >
         <div
-          className="nav-inner"
+          className="nav-inner px-8"
           style={{
             display: "flex",
             alignItems: "center",
             paddingTop: "14px",
             paddingBottom: "14px",
-            paddingLeft: "60px",
-            paddingRight: "16px",
             width: "100%",
+            maxWidth: 1280,
+            margin: "0 auto",
             gap: 24,
           }}
         >
-        <Link href="/" style={{ display: "flex", alignItems: "center", gap: 8, textDecoration: "none", marginRight: 80 }}>
+        <Link href="/" style={{ display: "flex", alignItems: "center", gap: 8, textDecoration: "none", flexShrink: 0, marginRight: 16 }}>
           <Image src="/images/instroomLogo.png" alt="Instroom logo" width={36} height={36} />
-          <span style={{ fontSize: "1.125rem", fontWeight: "bold", color: "var(--charcoal)" }}>Instroom</span>
+          <span style={{ fontSize: "1.375rem", fontWeight: 800, letterSpacing: "-0.02em", color: "var(--charcoal)" }}>Instroom</span>
         </Link>
 
         <ul
-          className="nav-links"
+          className="nav-links hidden lg:flex"
           style={{
-            display: "flex",
             gap: 32,
             alignItems: "center",
             listStyle: "none",
-            marginTop: 0,
-            marginBottom: 0,
-            marginLeft: 0,
-            marginRight: 0,
-            paddingTop: 0,
-            paddingBottom: 0,
-            paddingLeft: 0,
-            paddingRight: 0,
-            position: "absolute",
-            left: "50%",
-            transform: "translateX(-50%)",
+            margin: 0,
+            marginLeft: 24,
+            padding: 0,
           }}
         >
           <ProductDropdown />
@@ -643,7 +607,7 @@ export function MainHeader() {
           <ResourcesDropdown />
         </ul>
 
-        <div className="nav-cta" style={{ display: "flex", gap: 18, alignItems: "center", marginLeft: "auto" }}>
+        <div className="nav-cta hidden lg:flex" style={{ gap: 18, alignItems: "center", marginLeft: "auto" }}>
           <button
             onClick={() => setShowBookDemo(true)}
             style={{ fontSize: "0.9375rem", background: "none", border: "none", cursor: "pointer", padding: 0, color: "var(--charcoal)", fontFamily: "inherit" }}
@@ -653,13 +617,61 @@ export function MainHeader() {
           <Link href="/login" style={{ fontSize: "0.9375rem", fontWeight: "500", textDecoration: "none", color: "var(--charcoal)" }}>
             Log in
           </Link>
-          <Link href="/signup">
+          <Link href="/early-access">
             <Button className="bg-gradient-to-r from-[#0F6B3E] to-[#1FAE5B] text-white font-semibold hover:from-[#0a5a2f] hover:to-[#158a48] shadow-lg shadow-emerald-500/25">
-              Start free
+              Get Early Access
             </Button>
           </Link>
         </div>
+
+        <button
+          aria-label={mobileMenuOpen ? "Close menu" : "Open menu"}
+          onClick={() => setMobileMenuOpen(v => !v)}
+          className="flex lg:hidden"
+          style={{ marginLeft: "auto", background: "none", border: "none", cursor: "pointer", padding: 4 }}
+        >
+          {mobileMenuOpen ? (
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+              <path d="M6 6l12 12M18 6L6 18" stroke="var(--charcoal)" strokeWidth="1.8" strokeLinecap="round" />
+            </svg>
+          ) : (
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+              <path d="M4 7h16M4 12h16M4 17h16" stroke="var(--charcoal)" strokeWidth="1.8" strokeLinecap="round" />
+            </svg>
+          )}
+        </button>
       </div>
+
+      {mobileMenuOpen && (
+        <div className="lg:hidden" style={{ background: "#F4F7F5", borderTop: "1px solid rgba(0,0,0,0.06)", padding: "16px 20px 24px" }}>
+          <ul style={{ display: "flex", flexDirection: "column", gap: 16, listStyle: "none", margin: 0, padding: 0 }}>
+            <li><Link href="/features" onClick={() => setMobileMenuOpen(false)} style={navLinkStyle("/features")}>Products</Link></li>
+            <li><Link href="/solutions" onClick={() => setMobileMenuOpen(false)} style={navLinkStyle("/solutions")}>Solutions</Link></li>
+            <li><Link href="/landing-nav/features" onClick={() => setMobileMenuOpen(false)} style={navLinkStyle("/landing-nav/features")}>What's Inside</Link></li>
+            <li><Link href="/about" onClick={() => setMobileMenuOpen(false)} style={navLinkStyle("/about")}>About Us</Link></li>
+            <li><Link href="/landing-nav/pricing" onClick={() => setMobileMenuOpen(false)} style={navLinkStyle("/landing-nav/pricing")}>Pricing</Link></li>
+            <li><Link href="/blog" onClick={() => setMobileMenuOpen(false)} style={navLinkStyle("/blog")}>Resources</Link></li>
+          </ul>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 20, paddingTop: 20, borderTop: "1px solid rgba(0,0,0,0.06)" }}>
+            <button
+              onClick={() => { setShowBookDemo(true); setMobileMenuOpen(false) }}
+              style={{ fontSize: "0.9375rem", background: "none", border: "none", cursor: "pointer", padding: 0, color: "var(--charcoal)", fontFamily: "inherit", textAlign: "left" }}
+            >
+              Book a demo
+            </button>
+            <Link href="/login" onClick={() => setMobileMenuOpen(false)} style={{ fontSize: "0.9375rem", fontWeight: "500", textDecoration: "none", color: "var(--charcoal)" }}>
+              Log in
+            </Link>
+            <Link href="/signup" onClick={() => setMobileMenuOpen(false)}>
+              <Button className="w-full bg-gradient-to-r from-[#0F6B3E] to-[#1FAE5B] text-white font-semibold hover:from-[#0a5a2f] hover:to-[#158a48] shadow-lg shadow-emerald-500/25">
+                Start free
+              </Button>
+            </Link>
+          </div>
+        </div>
+      )}
+
       <BookDemoModal open={showBookDemo} onClose={() => setShowBookDemo(false)} />
     </nav>
   )

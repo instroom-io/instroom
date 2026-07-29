@@ -884,7 +884,10 @@ function InboxContent() {
       <div className="flex flex-1 overflow-hidden">
 
         {/* ── CONTACT LIST PANEL ── */}
-        <div className="w-80 border-r border-gray-200 flex flex-col bg-white flex-shrink-0 shadow-sm">
+        {/* On narrow viewports this collapses to a single pane: list panel hides
+            once a conversation is selected, and the back button (lg:hidden below)
+            returns to it by clearing selectedEmail. */}
+        <div className={`${selectedEmail ? "hidden lg:flex" : "flex"} w-full lg:w-80 border-r border-gray-200 flex-col bg-white flex-shrink-0 shadow-sm`}>
           {isLoading ? (
             <div className="flex-1 flex flex-col items-center justify-center gap-3 text-gray-400 p-6">
               <div className="relative w-10 h-10">
@@ -1065,7 +1068,7 @@ function InboxContent() {
         </div>
 
         {/* ── CHAT / MESSAGE AREA ── */}
-        <div className="flex-1 flex flex-col bg-white">
+        <div className={`${selectedEmail ? "flex" : "hidden lg:flex"} flex-1 flex-col bg-white`}>
           {isLoading ? (
             <ListSkeleton rows={6} label="Fetching data..." />
           ) : needsConnect || (emails.length === 0 && (gmailSyncState === "error" || outlookSyncState === "error")) ? (

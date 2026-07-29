@@ -83,6 +83,45 @@ export const STAGE_STYLE: Record<number, string> = {
   7: "bg-cyan-100 text-cyan-700",
   8: "bg-[#0F6B3E]/15 text-[#0F6B3E]",
 }
+// ─── Unified journey status ────────────────────────────────────────────────────
+// The Influencer Profile is the single place that moves an influencer through
+// its journey. This collapses approval_status + stage into the progression
+// shown there, and is what keeps the Influencer List and Pipeline in sync —
+// they read the exact same approval_status/contact_status/stage columns.
+export const JOURNEY_STATUSES = [
+  "Pending", "Approved", "Contacted", "In Conversation", "Deal Agreed", "Post Tracker",
+] as const
+export type JourneyStatus = typeof JOURNEY_STATUSES[number]
+
+export function getJourneyStatus(
+  approvalStatus: string | undefined,
+  stage: string | number | undefined
+): JourneyStatus | "Declined" {
+  if (approvalStatus === "Declined") return "Declined"
+  if (approvalStatus !== "Approved") return "Pending"
+  const s = Number(stage) || 1
+  if (s <= 1) return "Approved"
+  if (s === 2) return "Contacted"
+  if (s === 3) return "In Conversation"
+  if (s === 4) return "Deal Agreed"
+  return "Post Tracker"
+}
+
+export function journeyStatusToFields(status: JourneyStatus): {
+  approval_status: "Approved" | "Declined" | "Pending"
+  contact_status: string
+  stage: string
+} {
+  switch (status) {
+    case "Pending":         return { approval_status: "Pending",  contact_status: "not_contacted",      stage: "1" }
+    case "Approved":        return { approval_status: "Approved", contact_status: "not_contacted",        stage: "1" }
+    case "Contacted":       return { approval_status: "Approved", contact_status: "contacted",           stage: "2" }
+    case "In Conversation": return { approval_status: "Approved", contact_status: "negotiating",         stage: "3" }
+    case "Deal Agreed":     return { approval_status: "Approved", contact_status: "agreed",              stage: "4" }
+    case "Post Tracker":    return { approval_status: "Approved", contact_status: "for_order_creation",  stage: "5" }
+  }
+}
+
 export const APPROVAL_STYLE: Record<string, string> = {
   Approved: "bg-green-100 text-green-700",
   Declined: "bg-red-100 text-red-600",

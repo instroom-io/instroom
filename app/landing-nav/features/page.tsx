@@ -178,7 +178,7 @@ export default function FeaturesPage() {
       </div>
 
       {/* FEATURE 1: PIPELINE — white bg, visual on right */}
-      <section className="py-24 scroll-mt-[140px] bg-white border-b border-black/[0.07]" id="pipeline">
+      <section className="py-12 sm:py-16 lg:py-24 scroll-mt-[140px] bg-white border-b border-black/[0.07]" id="pipeline">
         <div className="max-w-[1140px] mx-auto px-6">
           <div className="grid grid-cols-1 min-[901px]:grid-cols-2 gap-10 min-[901px]:gap-[72px] items-center">
             <div>
@@ -231,7 +231,7 @@ export default function FeaturesPage() {
       </section>
 
       {/* FEATURE 2: EMAIL — tinted bg, visual on left */}
-      <section className="py-24 scroll-mt-[140px] bg-[#F4F7F5] border-b border-black/[0.07]" id="email">
+      <section className="py-12 sm:py-16 lg:py-24 scroll-mt-[140px] bg-[#F4F7F5] border-b border-black/[0.07]" id="email">
         <div className="max-w-[1140px] mx-auto px-6">
           <div className="grid grid-cols-1 min-[901px]:grid-cols-2 gap-10 min-[901px]:gap-[72px] items-center">
             <div className="min-[901px]:order-2">
@@ -285,7 +285,7 @@ export default function FeaturesPage() {
       </section>
 
       {/* FEATURE 3: CREATOR CRM — white bg, visual on right */}
-      <section className="py-24 scroll-mt-[140px] bg-white border-b border-black/[0.07]" id="crm">
+      <section className="py-12 sm:py-16 lg:py-24 scroll-mt-[140px] bg-white border-b border-black/[0.07]" id="crm">
         <div className="max-w-[1140px] mx-auto px-6">
           <div className="grid grid-cols-1 min-[901px]:grid-cols-2 gap-10 min-[901px]:gap-[72px] items-center">
             <div>
@@ -339,7 +339,7 @@ export default function FeaturesPage() {
       </section>
 
       {/* FEATURE 4: REPORTING — tinted bg, visual on left */}
-      <section className="py-24 scroll-mt-[140px] bg-[#F4F7F5] border-b border-black/[0.07]" id="reporting">
+      <section className="py-12 sm:py-16 lg:py-24 scroll-mt-[140px] bg-[#F4F7F5] border-b border-black/[0.07]" id="reporting">
         <div className="max-w-[1140px] mx-auto px-6">
           <div className="grid grid-cols-1 min-[901px]:grid-cols-2 gap-10 min-[901px]:gap-[72px] items-center">
             <div className="min-[901px]:order-2">
@@ -392,7 +392,7 @@ export default function FeaturesPage() {
       </section>
 
       {/* FEATURE 5: BRAND PARTNERS — white bg, visual on right */}
-      <section className="py-24 scroll-mt-[140px] bg-white border-b border-black/[0.07]" id="brand-partners">
+      <section className="py-12 sm:py-16 lg:py-24 scroll-mt-[140px] bg-white border-b border-black/[0.07]" id="brand-partners">
         <div className="max-w-[1140px] mx-auto px-6">
           <div className="grid grid-cols-1 min-[901px]:grid-cols-2 gap-10 min-[901px]:gap-[72px] items-center">
             <div>
@@ -443,7 +443,7 @@ export default function FeaturesPage() {
       </section>
 
       {/* FINAL CTA */}
-      <section className="relative overflow-hidden bg-[#1E1E1E] text-white text-center py-24">
+      <section className="relative overflow-hidden bg-[#1E1E1E] text-white text-center py-12 sm:py-16 lg:py-24">
         <div
           className="absolute inset-0 pointer-events-none"
           style={{
@@ -460,9 +460,9 @@ export default function FeaturesPage() {
             30 days free. Full platform access. No credit card.
           </p>
           <div className="flex gap-3 justify-center flex-wrap">
-            <Link href="/signup">
+            <Link href="/early-access">
               <Button className="bg-[#1FAE5B] text-white font-bold h-13 px-9 rounded-xl hover:bg-[#158a48] shadow-lg shadow-emerald-500/40 text-base transition-all duration-150" style={{ height: "52px", fontSize: "1rem" }}>
-                Try it for Free
+                Get Early Access
               </Button>
             </Link>
             <Button

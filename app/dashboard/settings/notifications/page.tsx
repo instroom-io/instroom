@@ -221,7 +221,7 @@ export default function NotificationsPage() {
   if (status === "loading" || !notifsLoaded) return <LoadingScreen />
 
   return (
-    <div className="max-w-3xl px-9 py-7">
+    <div className="max-w-3xl px-4 py-5 sm:px-6 sm:py-6 md:px-9 md:py-7">
       {/* Toast */}
       {toast && (
         <div
@@ -273,13 +273,13 @@ export default function NotificationsPage() {
                   <div
                     key={item.title}
                     className={cn(
-                      "flex items-center justify-between py-3 transition-opacity",
+                      "flex items-center justify-between gap-3 py-3 transition-opacity",
                       !isLast && "border-b",
                       !item.apiKey && "opacity-50",
                       isToggling && "opacity-60",
                     )}
                   >
-                    <div>
+                    <div className="min-w-0">
                       <p className="text-xs font-medium text-foreground">
                         {item.title}
                         {!item.apiKey && (
@@ -296,7 +296,7 @@ export default function NotificationsPage() {
                       checked={item.on}
                       onCheckedChange={() => handleToggle(gi, ii)}
                       disabled={!item.apiKey || isToggling}
-                      className="data-[state=checked]:bg-emerald-600"
+                      className="flex-shrink-0 data-[state=checked]:bg-emerald-600"
                     />
                   </div>
                 )

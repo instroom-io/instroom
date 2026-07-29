@@ -116,7 +116,7 @@ export default function RefundPolicy() {
         lede="Instroom is a Software-as-a-Service (SaaS) product. Because access is digital and granted immediately upon payment, our refund policy is specific and limited. Please read it before subscribing to a paid plan."
       />
 
-      <div className="max-w-[860px] mx-auto px-6 pb-20">
+      <div className="max-w-[860px] mx-auto px-4 sm:px-6 pb-20">
         <LegalSection number="Section 01" heading="Overview">
           <LegalP>
             This Refund Policy explains when and how Armful OPC — a One Person Corporation registered in the

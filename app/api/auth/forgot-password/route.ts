@@ -29,6 +29,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(successResponse, { status: 200 })
     }
 
+    if (!user.password_hash) {
+      // Account was created via Google — there's no password to reset
+      return NextResponse.json(
+        { error: "This account uses Google sign-in. Please log in using the \"Sign in with Google\" button instead." },
+        { status: 400 }
+      )
+    }
+
     // Generate reset token
     const resetToken = crypto.randomBytes(32).toString("hex")
     const hashedToken = crypto

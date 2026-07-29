@@ -277,10 +277,12 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
 
         @media (max-width: 640px) {
           .plan-card { max-width: 360px; }
+          .plan-inner { padding: 24px; }
+          .container { padding: 0 16px; }
         }
       `}</style>
 
-      <div className="fixed top-6 left-12 z-50">
+      <div className="fixed top-4 left-4 z-50 sm:top-6 sm:left-12">
         <Image
           src="/images/INSTROOM LOGO 1.png"
           alt="Instroom Logo"
@@ -288,22 +290,22 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
           height={180}
           priority
           quality={95}
-          className="drop-shadow-sm"
+          className="drop-shadow-sm w-24 h-24 sm:w-32 sm:h-32 lg:w-[180px] lg:h-[180px]"
         />
       </div>
 
-      <section className="mx-auto max-w-4xl px-6 pt-20 pb-6 text-center lg:px-0">
-        <h1 className="text-3xl font-extrabold md:text-4xl bg-gradient-to-r from-[#1FAE5B] to-[#0F6B3E] bg-clip-text text-transparent">
+      <section className="mx-auto max-w-4xl px-4 pt-24 pb-6 text-center sm:px-6 sm:pt-20 lg:px-0">
+        <h1 className="text-2xl font-extrabold sm:text-3xl md:text-4xl bg-gradient-to-r from-[#1FAE5B] to-[#0F6B3E] bg-clip-text text-transparent">
           Simple, Transparent Pricing
         </h1>
-        <p className="mt-6 text-[#666666] text-lg md:text-xl max-w-2xl mx-auto">
+        <p className="mt-6 text-[#666666] text-base sm:text-lg md:text-xl max-w-2xl mx-auto">
           Choose the perfect plan for your influencer marketing needs. No hidden fees. Cancel anytime.
         </p>
 
-        <div className="flex justify-center mt-10 gap-1 bg-white border border-[#0F6B3E]/20 rounded-full p-1 w-fit mx-auto">
+        <div className="flex flex-wrap justify-center mt-10 gap-1 bg-white border border-[#0F6B3E]/20 rounded-full p-1 w-fit mx-auto">
           <a
             href="?cycle=monthly"
-            className={`px-6 py-2 rounded-full text-base font-semibold transition-all duration-150 ${
+            className={`px-4 py-2 rounded-full text-sm sm:px-6 sm:text-base font-semibold transition-all duration-150 ${
               cycle === "monthly"
                 ? "bg-[#1FAE5B] text-white shadow-md"
                 : "text-[#1E1E1E] hover:text-[#1FAE5B]"
@@ -313,7 +315,7 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
           </a>
           <a
             href="?cycle=yearly"
-            className={`px-6 py-2 rounded-full text-base font-semibold transition-all duration-150 flex items-center gap-2 ${
+            className={`px-4 py-2 rounded-full text-sm sm:px-6 sm:text-base font-semibold transition-all duration-150 flex items-center gap-2 ${
               cycle === "yearly"
                 ? "bg-[#1FAE5B] text-white shadow-md"
                 : "text-[#1E1E1E] hover:text-[#1FAE5B]"

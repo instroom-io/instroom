@@ -80,13 +80,23 @@ const NEXT_STAGE: Record<ClosedColumn, ClosedColumn | null> = {
   "No post":            null,
 }
 
+// Canonical Collaboration Type list — same ids/labels as the Pipeline board's
+// collab type modal (kanban-board.tsx COLLAB_TYPES), since this value is set
+// there and only ever displayed (read-only) here.
 const CAMPAIGN_TYPES = [
-  { value: "gifting",        label: "Gifting",          color: "bg-purple-100 text-purple-700",   implied: "Product sent, no payment, no commission" },
-  { value: "paid",           label: "Paid",             color: "bg-emerald-100 text-emerald-700", implied: "Product sent + flat fee" },
-  { value: "affiliate",      label: "Affiliate",        color: "bg-blue-100 text-blue-700",       implied: "Product sent + commission link" },
-  { value: "paid_gifting",   label: "Paid + Gifting",   color: "bg-teal-100 text-teal-700",       implied: "Product sent + flat fee, brand owns content" },
-  { value: "paid_affiliate", label: "Paid + Affiliate", color: "bg-indigo-100 text-indigo-700",   implied: "Product sent + flat fee + commission" },
+  { value: "gifting",           label: "Gifting",             color: "bg-purple-100 text-purple-700",  implied: "Product sent, no payment, no commission" },
+  { value: "paid",              label: "Paid",                color: "bg-blue-100 text-blue-700",      implied: "Product sent + flat fee" },
+  { value: "affiliate",         label: "Affiliate",           color: "bg-green-100 text-green-700",    implied: "Product sent + commission link" },
+  { value: "ugc",               label: "UGC",                 color: "bg-orange-100 text-orange-700",  implied: "Product sent, brand owns content, no post required" },
+  { value: "tiktok-shop",       label: "TikTok Shop",         color: "bg-pink-100 text-pink-700",      implied: "Product sent + in-app shop tagging + commission" },
+  { value: "paid-affiliate",    label: "Paid + Affiliate",    color: "bg-indigo-100 text-indigo-700",  implied: "Product sent + flat fee + commission" },
+  { value: "ugc-paid",          label: "UGC + Paid",          color: "bg-amber-100 text-amber-700",    implied: "Product sent + flat fee + brand owns content" },
+  { value: "tiktok-shop-paid",  label: "TikTok Shop + Paid",  color: "bg-rose-100 text-rose-700",      implied: "TikTok Shop + flat fee on top" },
 ]
+
+// Collaboration types with a paid component — only these show the
+// "Paid collab details" tab. Gifting / Affiliate / UGC / TikTok Shop don't.
+const PAID_COLLAB_TYPES = new Set(["paid", "paid-affiliate", "ugc-paid", "tiktok-shop-paid"])
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function getAvatarColor(name: string) {
@@ -256,10 +266,10 @@ function DraggableCard({ id, children, onClick, disabled }: { id: string; childr
 const STAGE_OPTIONS: ClosedColumn[] = ["For Order Creation", "In-Transit", "Delivered", "Posted", "No post"]
 const PROFILE_TABS = ["Basic", "Order", "Post", "Stats", "Paid collab details", "History"]
 
-function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCampaignTypeChange, canApproveInfluencers }: {
+function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChange, canApproveInfluencers }: {
   inf: ClosedInfluencer; brandId?: string; onClose: () => void
   onColumnChange: (id: string, col: ClosedColumn) => Promise<boolean>
-  onCampaignTypeChange: (id: string, type: string) => Promise<boolean>
+  onCollabTypeChange: (id: string, type: string) => Promise<boolean>
   canApproveInfluencers: boolean
 }) {
   const [profileTab, setProfileTab] = useState(0)
@@ -268,6 +278,13 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCampaignTypeCh
 
   const campaignType = inf.campaignType ?? "gifting"
   const selectedCampaignMeta = CAMPAIGN_TYPES.find(c => c.value === campaignType)
+  const showPaidCollabTab = PAID_COLLAB_TYPES.has(campaignType)
+
+  // If the collab type changes (from Pipeline) while this tab is open and it's
+  // no longer a paid type, fall back to Basic instead of showing an empty tab.
+  useEffect(() => {
+    if (profileTab === 4 && !showPaidCollabTab) setProfileTab(0)
+  }, [showPaidCollabTab, profileTab])
 
   const [orderData, setOrderData] = useState({
     orderStatus: inf.orderStatus || "", productDetails: inf.productDetails || "",
@@ -287,9 +304,9 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCampaignTypeCh
     const ok = await onColumnChange(inf.id, newStage)
     if (ok) showToast(`Moved to ${newStage}`)
   }
-  const handleCampaignTypeChange = async (newType: string) => {
-    const ok = await onCampaignTypeChange(inf.id, newType)
-    if (ok) showToast("Campaign type updated")
+  const handleCollabTypeChange = async (newType: string) => {
+    const ok = await onCollabTypeChange(inf.id, newType)
+    if (ok) showToast("Collaboration type updated")
   }
 
   return (
@@ -336,13 +353,13 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCampaignTypeCh
               </div>
 
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                <span style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em" }}>Campaign Type</span>
+                <span style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em" }}>Collaboration Type</span>
                 <select
                   className="csel"
                   value={campaignType}
-                  onChange={(e) => handleCampaignTypeChange(e.target.value)}
+                  onChange={(e) => handleCollabTypeChange(e.target.value)}
                   disabled={!canApproveInfluencers}
-                  title={!canApproveInfluencers ? "Only Owners and Managers can update campaign type" : undefined}
+                  title={!canApproveInfluencers ? "Only Owners and Managers can update collaboration type" : "Inherited from Pipeline — change here if the collaboration changes"}
                   style={{ opacity: canApproveInfluencers ? undefined : 0.5, cursor: canApproveInfluencers ? undefined : "not-allowed" }}
                 >
                   {CAMPAIGN_TYPES.map((ct) => (
@@ -380,6 +397,7 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCampaignTypeCh
         {/* ── Tabs ── */}
         <div className="pit-bar">
           {PROFILE_TABS.map((tab, idx) => (
+            idx === 4 && !showPaidCollabTab ? null :
             <div key={idx} className={`pit ${profileTab === idx ? "active" : ""}`} onClick={() => setProfileTab(idx)}>
               {tab}
             </div>
@@ -672,14 +690,14 @@ function PostTrackerContent() {
     await handleMove(id, newCol)
   }
 
-  const handleCampaignTypeChange = useCallback(async (id: string, type: string): Promise<boolean> => {
+  const handleCollabTypeChange = useCallback(async (id: string, type: string): Promise<boolean> => {
     if (!canApprove) {
-      showToast("Only Owners and Managers can update campaign type")
+      showToast("Only Owners and Managers can update collaboration type")
       return false
     }
     const ok = await updateCampaignType(id, type)
-    if (ok) { setSelectedInf(p=>p?.id===id?{...p,campaignType:type}:p); showToast("Campaign type updated") }
-    else showToast("Failed to update campaign type")
+    if (ok) { setSelectedInf(p=>p?.id===id?{...p,campaignType:type}:p); showToast("Collaboration type updated") }
+    else showToast("Failed to update collaboration type")
     return ok
   }, [updateCampaignType, canApprove])
 
@@ -730,7 +748,7 @@ function PostTrackerContent() {
 
       {selectedInf&&(
         <ProfileDrawer inf={selectedInf} brandId={brandId} onClose={()=>setSelectedInf(null)}
-          onColumnChange={handleMove} onCampaignTypeChange={handleCampaignTypeChange} canApproveInfluencers={canApprove}/>
+          onColumnChange={handleMove} onCollabTypeChange={handleCollabTypeChange} canApproveInfluencers={canApprove}/>
       )}
 
       {/* ── Single inline toolbar row — matches Manage Influencers layout ── */}
@@ -749,7 +767,7 @@ function PostTrackerContent() {
             <IconFilter size={15}/> Filters
           </button>
           {showFilterPanel&&(
-            <div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-30 w-[340px] p-5">
+            <div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-30 w-[340px] max-w-[90vw] p-5">
               <div className="flex items-center justify-between mb-4">
                 <span className="text-xs font-bold text-gray-800 uppercase tracking-wide">Filter by</span>
                 {hasActiveFilters&&<button className="text-xs text-gray-400 hover:text-red-500 transition flex items-center gap-1" onClick={()=>setFilters({influencer:"",handle:"",location:"all",niche:"all"})}><IconX size={12}/> Clear all</button>}

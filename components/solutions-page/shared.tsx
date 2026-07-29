@@ -36,7 +36,7 @@ export function SectionLabel({ children }: { children: React.ReactNode }) {
 export function CtaBand({ headline, sub }: { headline: string; sub: string }) {
   const [showBookDemo, setShowBookDemo] = useState(false)
   return (
-    <section style={{ background: "#1E1E1E", position: "relative", overflow: "hidden", padding: "100px 32px" }}>
+    <section className="px-4 sm:px-6 lg:px-8 py-16 sm:py-20 lg:py-[100px]" style={{ background: "#1E1E1E", position: "relative", overflow: "hidden" }}>
       <div
         style={{
           position: "absolute",
@@ -51,9 +51,9 @@ export function CtaBand({ headline, sub }: { headline: string; sub: string }) {
         <h2 style={{ fontFamily: "'Manrope',sans-serif", fontSize: "clamp(28px,4vw,44px)", fontWeight: 900, letterSpacing: "-0.03em", color: "#fff", lineHeight: 1.15, marginBottom: 16 }}>{headline}</h2>
         <p style={{ fontSize: 16, color: "rgba(255,255,255,0.6)", lineHeight: 1.6, marginBottom: 32 }}>{sub}</p>
         <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap", marginBottom: 16 }}>
-          <Link href="/signup">
+          <Link href="/early-access">
             <Button className="bg-[#1FAE5B] text-white font-bold h-13 px-9 rounded-xl hover:bg-[#158a48] shadow-lg shadow-emerald-500/40 text-base transition-all duration-150" style={{ height: "52px", fontSize: "1rem" }}>
-              Try it for Free
+              Get Early Access
             </Button>
           </Link>
           <Button

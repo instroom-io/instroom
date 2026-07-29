@@ -58,7 +58,7 @@ interface UsePipelineDataReturn {
   data: PipelineInfluencer[]
   isLoading: boolean
   error: string | null
-  updateStatus: (id: string, newStatus: string, extra?: { niReason?: string }) => Promise<boolean>
+  updateStatus: (id: string, newStatus: string, extra?: { niReason?: string; collaborationType?: string }) => Promise<boolean>
   refetch: () => void
 }
 
@@ -66,6 +66,7 @@ function mapItem(item: any): PipelineInfluencer {
   return {
     id:              item.id,
     influencerId:    item.influencerId,
+    collabType:      item.collabType || undefined,
     campaignId:      item.campaignId,
     campaignName:    item.campaignName,
     influencer:      item.influencer,
@@ -116,24 +117,31 @@ function mapItem(item: any): PipelineInfluencer {
 function applyStatusChange(
   item: PipelineInfluencer,
   newStatus: string,
-  niReason?: string
+  niReason?: string,
+  collaborationType?: string
 ): PipelineInfluencer {
-  const base: Partial<PipelineInfluencer> = { pipelineStatus: newStatus }
+  const collab = collaborationType !== undefined ? { collabType: collaborationType } : {}
 
   switch (newStatus) {
     case "For Outreach":
-      return { ...item, ...base, contactStatus: "pending",           stage: 1, approvalStatus: "Approved" }
+      return { ...item, pipelineStatus: newStatus, ...collab, contactStatus: "pending",           stage: 1, approvalStatus: "Approved" }
     case "Contacted":
-      return { ...item, ...base, contactStatus: "contacted",         stage: 2, approvalStatus: "Approved" }
+      return { ...item, pipelineStatus: newStatus, ...collab, contactStatus: "contacted",         stage: 2, approvalStatus: "Approved" }
     case "In Conversation":
-      return { ...item, ...base, contactStatus: "negotiating",       stage: 3, approvalStatus: "Approved" }
+      return { ...item, pipelineStatus: newStatus, ...collab, contactStatus: "negotiating",       stage: 3, approvalStatus: "Approved" }
     case "Deal Agreed":
-      return { ...item, ...base, contactStatus: "agreed",            stage: 4, approvalStatus: "Approved" }
+      // A Collaboration Type is only ever sent alongside "Deal Agreed" once
+      // the user confirms it in the modal — at that point the deal cascades
+      // straight through to Post Tracker's default status (stage 5), matching
+      // what the server now does, instead of resting at "Deal Agreed" first.
+      return collaborationType !== undefined
+        ? { ...item, pipelineStatus: "For Order Creation", ...collab, contactStatus: "for_order_creation", stage: 5, approvalStatus: "Approved" }
+        : { ...item, pipelineStatus: newStatus, contactStatus: "agreed", stage: 4, approvalStatus: "Approved" }
     case "For Order Creation":
-      return { ...item, ...base, contactStatus: "for_order_creation",stage: 5, approvalStatus: "Approved" }
+      return { ...item, pipelineStatus: newStatus, ...collab, contactStatus: "for_order_creation",stage: 5, approvalStatus: "Approved" }
     case "Not Interested":
       return {
-        ...item, ...base,
+        ...item, pipelineStatus: newStatus,
         contactStatus:  "not_interested",
         stage:          0,
         approvalStatus: "Declined",
@@ -141,7 +149,7 @@ function applyStatusChange(
         niReason:       niReason || "Not interested",
       }
     default:
-      return { ...item, ...base }
+      return { ...item, pipelineStatus: newStatus }
   }
 }
 
@@ -182,7 +190,7 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
 
   // ── Status update — optimistic, no loading flicker ────────────────────────
   const updateStatus = useCallback(
-    async (id: string, newStatus: string, extra?: { niReason?: string }): Promise<boolean> => {
+    async (id: string, newStatus: string, extra?: { niReason?: string; collaborationType?: string }): Promise<boolean> => {
       if (!brandId) return false
 
       // 1. Save snapshot for rollback
@@ -192,7 +200,7 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
       setData((prev) => {
         snapshot = prev
         return prev.map((item) =>
-          item.id === id ? applyStatusChange(item, newStatus, extra?.niReason) : item
+          item.id === id ? applyStatusChange(item, newStatus, extra?.niReason, extra?.collaborationType) : item
         )
       })
 
@@ -205,6 +213,7 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
           body: JSON.stringify({
             pipelineStatus: newStatus,
             ...(extra?.niReason ? { niReason: extra.niReason } : {}),
+            ...(extra?.collaborationType !== undefined ? { collaborationType: extra.collaborationType } : {}),
           }),
         })
 

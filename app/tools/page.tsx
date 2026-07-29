@@ -34,10 +34,11 @@ export default function FreeToolsPage() {
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800;900&display=swap');`}</style>
       <MainHeader />
 
-      <section style={{ background: "#F7F9F8", padding: "64px 24px" }}>
+      <section className="px-4 sm:px-6 lg:px-6 py-10 sm:py-12 lg:py-16" style={{ background: "#F7F9F8" }}>
         <div className="max-w-4xl mx-auto text-center">
           <h1
-            style={{ fontFamily: "'Manrope', sans-serif", fontSize: "40px", fontWeight: 900, letterSpacing: "-0.02em", color: "#1E1E1E" }}
+            className="text-3xl sm:text-4xl lg:text-[40px]"
+            style={{ fontFamily: "'Manrope', sans-serif", fontWeight: 900, letterSpacing: "-0.02em", color: "#1E1E1E" }}
           >
             Free <span style={{ color: "#1FAE5B" }}>Tools</span>
           </h1>
@@ -47,8 +48,8 @@ export default function FreeToolsPage() {
         </div>
       </section>
 
-      <section style={{ padding: "56px 24px 96px" }}>
-        <div className="max-w-4xl mx-auto grid grid-cols-1 sm:grid-cols-3 gap-5">
+      <section className="px-4 sm:px-6 lg:px-6 pt-10 sm:pt-12 lg:pt-14 pb-16 sm:pb-20 lg:pb-24">
+        <div className="max-w-4xl mx-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {TOOLS.map((tool) => {
             const card = (
               <div

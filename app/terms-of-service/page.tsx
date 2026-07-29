@@ -23,7 +23,7 @@ export default function InstroomTermsOfService() {
         lede="Please read these Terms of Service carefully before using Instroom. By creating an account or using any part of our platform, you agree to be bound by these terms. If you do not agree, do not use the Service."
       />
 
-      <div className="max-w-[860px] mx-auto px-6 pb-20">
+      <div className="max-w-[860px] mx-auto px-4 sm:px-6 pb-20">
         <LegalSection number="Section 01" heading="Agreement to Terms">
           <LegalP>
             These Terms of Service ("Terms") constitute a legally binding agreement between you ("User," "you," or

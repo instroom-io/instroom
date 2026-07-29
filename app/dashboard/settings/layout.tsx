@@ -6,7 +6,7 @@ export default function SettingsLayout({
 }) {
   return (
     <div
-      className="flex flex-row"
+      className="flex flex-col md:flex-row"
       style={{
         position: "absolute",
         inset: 0,

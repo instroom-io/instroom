@@ -4,7 +4,7 @@ import { CtaBand, HelpBullet, HelpVisual, SectionLabel } from "./shared"
 export function Freelancer({ onBack }: { onBack: () => void }) {
   return (
     <>
-      <button onClick={onBack} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 500, color: "var(--ink3)", cursor: "pointer", padding: "20px 40px 0", textDecoration: "none", background: "none", border: "none", fontFamily: "'Inter',sans-serif", transition: "color 0.15s" }}
+      <button onClick={onBack} className="px-4 sm:px-6 lg:px-10 pt-5" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 500, color: "var(--ink3)", cursor: "pointer", textDecoration: "none", background: "none", border: "none", fontFamily: "'Inter',sans-serif", transition: "color 0.15s" }}
         onMouseEnter={e => (e.currentTarget.style.color = "var(--green)")}
         onMouseLeave={e => (e.currentTarget.style.color = "var(--ink3)")}
       >
@@ -13,7 +13,7 @@ export function Freelancer({ onBack }: { onBack: () => void }) {
 
       {/* Hero */}
       <div style={{ background: "#F4F7F5", backgroundImage: "radial-gradient(circle, rgba(31,174,91,0.12) 1px, transparent 1px)", backgroundSize: "28px 28px", borderBottom: "0.5px solid var(--border)" }}>
-        <div className="sol-hero-grid" style={{ maxWidth: 1100, margin: "0 auto", padding: "80px 40px 72px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 64, alignItems: "center" }}>
+        <div className="sol-hero-grid px-4 sm:px-6 lg:px-10 pt-12 sm:pt-16 lg:pt-20 pb-10 sm:pb-14 lg:pb-[72px]" style={{ maxWidth: 1100, margin: "0 auto", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 64, alignItems: "center" }}>
           <div>
             <div className="sol-eyebrow">
               <span className="sol-eyebrow-dot" />
@@ -51,7 +51,7 @@ export function Freelancer({ onBack }: { onBack: () => void }) {
 
       {/* Pains */}
       <div style={{ background: "#fff", borderTop: "0.5px solid var(--border)", borderBottom: "0.5px solid var(--border)" }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "72px 40px" }}>
+        <div className="px-4 sm:px-6 lg:px-10 py-10 sm:py-14 lg:py-[72px]" style={{ maxWidth: 1100, margin: "0 auto" }}>
           <SectionLabel>The freelancer problem</SectionLabel>
           <h2 style={{ fontFamily: "'Manrope',sans-serif", fontSize: "clamp(28px,3.5vw,42px)", lineHeight: 1.15, color: "var(--ink)", marginBottom: 16 }}>
             You're not disorganized.<br />Your tools <em style={{ color: "var(--green)", fontStyle: "normal", fontWeight: 800 }}>just weren't built for this.</em>
@@ -80,7 +80,7 @@ export function Freelancer({ onBack }: { onBack: () => void }) {
 
       {/* How it helps */}
       <div style={{ background: "var(--bg)", borderTop: "0.5px solid var(--border)", borderBottom: "0.5px solid var(--border)" }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "72px 40px" }}>
+        <div className="px-4 sm:px-6 lg:px-10 py-10 sm:py-14 lg:py-[72px]" style={{ maxWidth: 1100, margin: "0 auto" }}>
           <SectionLabel>How Instroom helps</SectionLabel>
           <h2 style={{ fontFamily: "'Manrope',sans-serif", fontSize: "clamp(28px,3.5vw,42px)", lineHeight: 1.15, color: "var(--ink)", marginBottom: 52 }}>
             Everything you need to<br /><em style={{ color: "var(--green)", fontStyle: "normal", fontWeight: 800 }}>deliver and impress.</em>
@@ -166,7 +166,7 @@ export function Freelancer({ onBack }: { onBack: () => void }) {
 
       {/* Features */}
       <div style={{ background: "var(--bg)" }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "72px 40px" }}>
+        <div className="px-4 sm:px-6 lg:px-10 py-10 sm:py-14 lg:py-[72px]" style={{ maxWidth: 1100, margin: "0 auto" }}>
           <SectionLabel>Built for solo operators</SectionLabel>
           <h2 style={{ fontFamily: "'Manrope',sans-serif", fontSize: "clamp(28px,3.5vw,42px)", lineHeight: 1.15, color: "var(--ink)" }}>
             The features that matter<br />when it's just <em style={{ color: "var(--green)", fontStyle: "normal", fontWeight: 800 }}>you.</em>

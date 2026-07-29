@@ -141,6 +141,7 @@ export async function GET(
         stage:           true,
         order_status:    true,
         content_posted:  true,
+        product_details: true,
         approval_status: true,
         approval_notes:  true,
         agreed_rate:     true,
@@ -244,11 +245,17 @@ export async function GET(
           bi.approval_status
         )
 
+        let collabType: string | undefined
+        if (bi.product_details) {
+          try { collabType = JSON.parse(bi.product_details)?.campaignType || undefined } catch { /* malformed — ignore */ }
+        }
+
         return {
           id:            bi.id,
           influencerId:  inf.id,
           campaignId:    bi.campaign_id,
           campaignName:  bi.campaign?.name ?? null,
+          collabType,
 
           influencer:      inf.full_name || inf.handle,
           instagramHandle: inf.platform === "instagram" ? `@${inf.handle}` : inf.handle,
