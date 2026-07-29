@@ -9,11 +9,17 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     const email = typeof body.email === "string" ? body.email.trim() : ""
-    const name = typeof body.name === "string" ? body.name.trim() : null
-    const role = typeof body.role === "string" ? body.role.trim() : null
+    const name = typeof body.name === "string" ? body.name.trim() : ""
+    const role = typeof body.role === "string" ? body.role.trim() : ""
 
     if (!email || !validEmail(email)) {
       return NextResponse.json({ error: "Enter a valid email address." }, { status: 400 })
+    }
+    if (!name) {
+      return NextResponse.json({ error: "Enter your name." }, { status: 400 })
+    }
+    if (!role) {
+      return NextResponse.json({ error: "Let us know what you're running." }, { status: 400 })
     }
 
     const existing = await prisma.earlyAccessSignup.findUnique({ where: { email } })
@@ -22,7 +28,7 @@ export async function POST(req: NextRequest) {
     }
 
     await prisma.earlyAccessSignup.create({
-      data: { email, name: name || null, role: role || null },
+      data: { email, name, role },
     })
 
     return NextResponse.json({ success: true })

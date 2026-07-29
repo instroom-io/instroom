@@ -3,6 +3,18 @@
 import { useState, useEffect, useRef, Suspense } from "react"
 import { useSearchParams } from "next/navigation"
 import { useSession } from "next-auth/react"
+import {
+  DndContext,
+  DragOverlay,
+  closestCorners,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  useDroppable,
+  useDraggable,
+  type DragStartEvent,
+  type DragEndEvent,
+} from "@dnd-kit/core"
 import { SubscriptionGate } from "@/components/ui/subscription-gate"
 import { ListSkeleton } from "@/components/shared/skeletons"
 import {
@@ -297,6 +309,34 @@ function parseQuotedBlock(quoted: string): { attribution: string | null; text: s
   return { attribution, text }
 }
 
+// ─── Drag-and-drop: stage tab drop target / message row drag source ──────────
+
+function DroppableStageTab({ id, isExit, children }: { id: string; isExit?: boolean; children: React.ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({ id })
+  return (
+    <div
+      ref={setNodeRef}
+      className={`w-full h-full transition-colors ${isOver ? (isExit ? "ring-2 ring-inset ring-red-400" : "ring-2 ring-inset ring-[#1FAE5B]") : ""}`}
+    >
+      {children}
+    </div>
+  )
+}
+
+function DraggableEmailRow({ id, children }: { id: string; children: React.ReactNode }) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id })
+  return (
+    <div
+      ref={setNodeRef}
+      {...listeners}
+      {...attributes}
+      className={`cursor-grab active:cursor-grabbing ${isDragging ? "opacity-40" : ""}`}
+    >
+      {children}
+    </div>
+  )
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 function InboxContent() {
@@ -333,6 +373,7 @@ function InboxContent() {
   const [updateStageModal, setUpdateStageModal] = useState<{ open: boolean; email: Email | null }>({ open: false, email: null })
   const [stageNotification, setStageNotification] = useState<{ show: boolean; message: string; type: "error" | "success" }>({ show: false, message: "", type: "error" })
   const [showPipelineBar, setShowPipelineBar] = useState(false)
+  const [activeDragId, setActiveDragId] = useState<string | null>(null)
   const [showActions, setShowActions] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
 
@@ -633,6 +674,24 @@ function InboxContent() {
     }
   }
 
+  // ── Drag-to-reassign: dragging a message row onto a pipeline stage tab ──────
+  const dragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
+
+  const handleDragStart = (event: DragStartEvent) => {
+    setActiveDragId(event.active.id as string)
+  }
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    setActiveDragId(null)
+    const { active, over } = event
+    if (!over) return
+    const emailId = active.id as string
+    const targetStage = over.id as PipelineStage
+    const email = emails.find((e) => String(e.id) === emailId)
+    if (!email || email.status === targetStage) return
+    updateEmailStage(email.id, targetStage)
+  }
+
   const sendReply = async () => {
     if (!reply.trim() || !selectedEmail || isSending) return
 
@@ -741,6 +800,7 @@ function InboxContent() {
       plans={["Solo", "Team"]}
     >
     <div className="flex flex-col h-screen bg-gray-50">
+    <DndContext sensors={dragSensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
 
       {/* ── PIPELINE BAR ── */}
       <div className="flex-shrink-0 bg-white border-b border-gray-200 shadow-sm relative">
@@ -773,20 +833,22 @@ function InboxContent() {
                   const isLast = index === stageConfigs.length - 1
                   return (
                     <div key={stage.id} className="relative flex-1 min-w-[80px] md:min-w-[100px]">
-                      <button
-                        onClick={() => setSelectedStage(stage.id)}
-                        className={`w-full h-full px-3 md:px-4 py-2 md:py-3 text-center transition-all duration-200 ${
-                          isActive
-                            ? `${stage.activeBgColor} text-white shadow-md`
-                            : `${stage.bgColor} ${stage.color} hover:${stage.hoverBgColor} hover:text-white`
-                        }`}
-                      >
-                        <div className="text-lg md:text-2xl font-bold">{getStageCount(stage.id)}</div>
-                        <div className="text-[10px] md:text-xs font-medium flex items-center justify-center gap-1 mt-0.5 md:mt-1">
-                          {stage.icon}
-                          <span className="hidden sm:inline">{stage.label}</span>
-                        </div>
-                      </button>
+                      <DroppableStageTab id={stage.id} isExit={stage.id === "REJECTED"}>
+                        <button
+                          onClick={() => setSelectedStage(stage.id)}
+                          className={`w-full h-full px-3 md:px-4 py-2 md:py-3 text-center transition-all duration-200 ${
+                            isActive
+                              ? `${stage.activeBgColor} text-white shadow-md`
+                              : `${stage.bgColor} ${stage.color} hover:${stage.hoverBgColor} hover:text-white`
+                          }`}
+                        >
+                          <div className="text-lg md:text-2xl font-bold">{getStageCount(stage.id)}</div>
+                          <div className="text-[10px] md:text-xs font-medium flex items-center justify-center gap-1 mt-0.5 md:mt-1">
+                            {stage.icon}
+                            <span className="hidden sm:inline">{stage.label}</span>
+                          </div>
+                        </button>
+                      </DroppableStageTab>
                       {!isLast && !isMobile && (
                         <div
                           className="absolute top-0 right-0 w-0 h-0 border-t-[40px] md:border-t-[44px] border-b-[40px] md:border-b-[44px] border-l-[12px] md:border-l-[16px] border-t-transparent border-b-transparent"
@@ -1024,42 +1086,43 @@ function InboxContent() {
                   </div>
                 ) : (
                   filteredEmails.map((email) => (
-                    <div
-                      key={email.id}
-                      onClick={() => { setSelectedEmail(email); markAsRead(email.id) }}
-                      className={`flex items-start gap-3 px-4 py-3 cursor-pointer transition-all duration-150 ${
-                        selectedEmail?.id === email.id ? "bg-gray-100 border-l-4 border-l-[#1FAE5B]" : "hover:bg-gray-50"
-                      } ${!email.read ? "bg-blue-50/40" : ""}`}
-                    >
-                      <div className="relative flex-shrink-0">
-                        <img src={email.avatar} alt={email.name} className="w-10 h-10 rounded-full object-cover" />
-                        {!email.read && (
-                          <div className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-[#1FAE5B] rounded-full ring-2 ring-white" />
-                        )}
-                      </div>
-
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className={`text-sm truncate ${!email.read ? "font-semibold text-gray-900" : "text-gray-700"}`}>
-                            {email.name}
-                          </span>
-                          <span className="text-xs text-gray-400 flex-shrink-0">{formatDate(email.timestamp)}</span>
+                    <DraggableEmailRow key={email.id} id={String(email.id)}>
+                      <div
+                        onClick={() => { setSelectedEmail(email); markAsRead(email.id) }}
+                        className={`flex items-start gap-3 px-4 py-3 cursor-pointer transition-all duration-150 ${
+                          selectedEmail?.id === email.id ? "bg-gray-100 border-l-4 border-l-[#1FAE5B]" : "hover:bg-gray-50"
+                        } ${!email.read ? "bg-blue-50/40" : ""}`}
+                      >
+                        <div className="relative flex-shrink-0">
+                          <img src={email.avatar} alt={email.name} className="w-10 h-10 rounded-full object-cover" />
+                          {!email.read && (
+                            <div className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-[#1FAE5B] rounded-full ring-2 ring-white" />
+                          )}
                         </div>
-                        <p className={`text-xs truncate mt-0.5 ${!email.read ? "text-gray-800 font-medium" : "text-gray-500"}`}>
-                          {email.subject}
-                        </p>
-                        <p className="text-xs text-gray-400 truncate mt-0.5">{email.preview}</p>
-                        {getStatusBadge(email.status) && <div className="mt-1.5">{getStatusBadge(email.status)}</div>}
-                      </div>
 
-                      <button onClick={(e) => toggleStar(email.id, e)} className="flex-shrink-0 mt-0.5 transition-opacity hover:opacity-80">
-                        {email.starred ? (
-                          <IconStarFilled size={14} className="text-yellow-500" />
-                        ) : (
-                          <IconStar size={14} className="text-gray-300" />
-                        )}
-                      </button>
-                    </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className={`text-sm truncate ${!email.read ? "font-semibold text-gray-900" : "text-gray-700"}`}>
+                              {email.name}
+                            </span>
+                            <span className="text-xs text-gray-400 flex-shrink-0">{formatDate(email.timestamp)}</span>
+                          </div>
+                          <p className={`text-xs truncate mt-0.5 ${!email.read ? "text-gray-800 font-medium" : "text-gray-500"}`}>
+                            {email.subject}
+                          </p>
+                          <p className="text-xs text-gray-400 truncate mt-0.5">{email.preview}</p>
+                          {getStatusBadge(email.status) && <div className="mt-1.5">{getStatusBadge(email.status)}</div>}
+                        </div>
+
+                        <button onClick={(e) => toggleStar(email.id, e)} className="flex-shrink-0 mt-0.5 transition-opacity hover:opacity-80">
+                          {email.starred ? (
+                            <IconStarFilled size={14} className="text-yellow-500" />
+                          ) : (
+                            <IconStar size={14} className="text-gray-300" />
+                          )}
+                        </button>
+                      </div>
+                    </DraggableEmailRow>
                   ))
                 )}
               </div>
@@ -1450,6 +1513,22 @@ function InboxContent() {
         </div>
       )}
 
+      <DragOverlay>
+        {activeDragId ? (() => {
+          const draggedEmail = emails.find((e) => String(e.id) === activeDragId)
+          if (!draggedEmail) return null
+          return (
+            <div className="flex items-center gap-2.5 bg-white border border-gray-200 rounded-lg px-3 py-2.5 shadow-lg w-[220px] rotate-2">
+              <img src={draggedEmail.avatar} alt={draggedEmail.name} className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-gray-900 truncate">{draggedEmail.name}</div>
+                <div className="text-xs text-gray-500 truncate">{draggedEmail.subject}</div>
+              </div>
+            </div>
+          )
+        })() : null}
+      </DragOverlay>
+
       <style jsx>{`
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
         @keyframes scaleIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
@@ -1459,6 +1538,7 @@ function InboxContent() {
         .animate-scaleIn { animation: scaleIn 0.2s ease-out; }
         .animate-slideUp { animation: slideUp 0.3s ease-out; }
       `}</style>
+    </DndContext>
     </div>
     </SubscriptionGate>
   )

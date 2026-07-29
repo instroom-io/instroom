@@ -36,6 +36,14 @@ export function EarlyAccessForm({ className }: { className?: string }) {
       setError("Enter a valid email so we can reach you.")
       return
     }
+    if (!name.trim()) {
+      setError("Enter your name.")
+      return
+    }
+    if (!role) {
+      setError("Let us know what you're running.")
+      return
+    }
     setError(null)
     setIsLoading(true)
     try {
@@ -156,21 +164,22 @@ export function EarlyAccessForm({ className }: { className?: string }) {
             </Field>
             <Field>
               <FieldLabel htmlFor="name" className="font-medium text-gray-700 text-xs sm:text-sm">
-                Name <span className="text-gray-400 font-normal">(optional)</span>
+                Name
               </FieldLabel>
               <Input
                 id="name"
                 type="text"
-                placeholder="First name"
+                placeholder="Full name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 disabled={isLoading}
+                required
                 className="rounded-lg border border-gray-200 bg-gray-50/50 text-gray-900 placeholder:text-gray-400 focus:bg-white focus:border-[#0F6B3E] focus:ring-[#0F6B3E]/20 transition-colors"
               />
             </Field>
             <Field>
               <FieldLabel htmlFor="role" className="font-medium text-gray-700 text-xs sm:text-sm">
-                What are you running? <span className="text-gray-400 font-normal">(optional)</span>
+                What are you running?
               </FieldLabel>
               <Select value={role} onValueChange={setRole}>
                 <SelectTrigger id="role" className="w-full rounded-lg border border-gray-200 bg-gray-50/50">

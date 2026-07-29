@@ -5,6 +5,7 @@ import { useEffect } from "react"
 const BOOKING_URL = "https://api.leadconnectorhq.com/widget/booking/fYhRA8Yxw2jlk8pwd79B"
 const EMBED_SCRIPT_SRC = "https://link.msgsndr.com/js/form_embed.js"
 const TOP_CROP = 72
+const BOTTOM_CROP = 48
 
 export function BookDemoModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   useEffect(() => {
@@ -87,10 +88,11 @@ export function BookDemoModal({ open, onClose }: { open: boolean; onClose: () =>
             src={BOOKING_URL}
             style={{
               width: "100%",
-              minHeight: 650 + TOP_CROP,
+              minHeight: 650 + TOP_CROP + BOTTOM_CROP,
               border: "none",
               display: "block",
               marginTop: -TOP_CROP,
+              marginBottom: -BOTTOM_CROP,
             }}
             scrolling="no"
             id="book-demo-widget"
