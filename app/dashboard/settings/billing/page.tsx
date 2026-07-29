@@ -195,7 +195,7 @@ export default function BillingPage() {
   }
 
   return (
-    <div className="max-w-3xl px-9 py-7">
+    <div className="max-w-3xl px-4 py-5 sm:px-6 sm:py-6 md:px-9 md:py-7">
       {toast && (
         <div
           className={cn(
@@ -243,7 +243,7 @@ export default function BillingPage() {
 
             <CardContent className="space-y-5 pt-5">
               {/* Plan banner */}
-              <div className="flex items-center justify-between rounded-xl border border-emerald-100 bg-emerald-50/60 px-5 py-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-emerald-100 bg-emerald-50/60 px-5 py-4">
                 <div className="flex items-center gap-3">
                   <span className={`rounded-md px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${planColor}`}>
                     {planLabel}
@@ -256,7 +256,7 @@ export default function BillingPage() {
                   </div>
                 </div>
                 {subscription.plan?.price != null && (
-                  <div className="text-right">
+                  <div className="text-left sm:text-right">
                     <span className="text-xl font-bold text-foreground">${subscription.plan.price}</span>
                     <span className="text-xs text-muted-foreground">
                       /{subscription.billing_cycle === "yearly" ? "year" : "month"}
@@ -349,9 +349,9 @@ export default function BillingPage() {
 
             <CardContent className="pt-4">
               {paymentMethod?.cardLastFour ? (
-                <div className="flex items-center justify-between rounded-lg border px-4 py-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-lg border px-4 py-3">
                   <div className="flex items-center gap-3">
-                    <div className="flex h-6 w-9 items-center justify-center rounded bg-muted text-[10px] font-bold uppercase text-muted-foreground">
+                    <div className="flex h-6 w-9 flex-shrink-0 items-center justify-center rounded bg-muted text-[10px] font-bold uppercase text-muted-foreground">
                       {paymentMethod.cardBrand?.slice(0, 4) || "Card"}
                     </div>
                     <p className="text-sm font-medium text-foreground">
@@ -362,6 +362,7 @@ export default function BillingPage() {
                   <Button
                     variant="outline"
                     size="sm"
+                    className="self-start sm:self-auto"
                     onClick={() => {
                       if (paymentMethod.customerPortalUrl) window.location.href = paymentMethod.customerPortalUrl
                       else openBillingPortal()
@@ -371,9 +372,9 @@ export default function BillingPage() {
                   </Button>
                 </div>
               ) : (
-                <div className="flex items-center justify-between rounded-lg border border-dashed px-4 py-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-lg border border-dashed px-4 py-4">
                   <p className="text-sm text-muted-foreground">No payment method on file yet.</p>
-                  <Button variant="outline" size="sm" onClick={openBillingPortal}>
+                  <Button variant="outline" size="sm" className="self-start sm:self-auto" onClick={openBillingPortal}>
                     Add payment method
                   </Button>
                 </div>
@@ -400,41 +401,43 @@ export default function BillingPage() {
                   <p className="text-sm text-muted-foreground">No invoices yet.</p>
                 </div>
               ) : (
-                payments.map((p) => (
-                  <div
-                    key={p.id}
-                    className="flex items-center justify-between border-b border-dashed py-3 text-sm last:border-0"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <p className="font-medium text-foreground">{formatDate(p.created_at)}</p>
-                      <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                        {p.description || "Subscription payment"}
-                      </p>
-                    </div>
-                    <div className="flex flex-shrink-0 items-center gap-4">
-                      <span className="font-medium text-foreground">{formatMoney(p.amount, p.currency)}</span>
-                      <span
-                        className={`rounded-md px-2 py-1 text-xs font-medium capitalize ${
-                          statusColors[p.status?.toLowerCase()] || "bg-gray-100 text-gray-600"
-                        }`}
-                      >
-                        {p.status}
-                      </span>
-                      {p.invoice_url ? (
-                        <a
-                          href={p.invoice_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-xs font-medium text-emerald-700 hover:underline"
+                <div className="overflow-x-auto">
+                  {payments.map((p) => (
+                    <div
+                      key={p.id}
+                      className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-dashed py-3 text-sm last:border-0"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium text-foreground">{formatDate(p.created_at)}</p>
+                        <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                          {p.description || "Subscription payment"}
+                        </p>
+                      </div>
+                      <div className="flex flex-shrink-0 items-center gap-4">
+                        <span className="font-medium text-foreground">{formatMoney(p.amount, p.currency)}</span>
+                        <span
+                          className={`rounded-md px-2 py-1 text-xs font-medium capitalize ${
+                            statusColors[p.status?.toLowerCase()] || "bg-gray-100 text-gray-600"
+                          }`}
                         >
-                          View
-                        </a>
-                      ) : (
-                        <span className="w-8" />
-                      )}
+                          {p.status}
+                        </span>
+                        {p.invoice_url ? (
+                          <a
+                            href={p.invoice_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs font-medium text-emerald-700 hover:underline"
+                          >
+                            View
+                          </a>
+                        ) : (
+                          <span className="w-8" />
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))
+                  ))}
+                </div>
               )}
             </CardContent>
           </Card>

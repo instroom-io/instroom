@@ -359,7 +359,7 @@ function ArticleView({
 
       <div style={{ minHeight: "100vh" }}>
         {/* Hero */}
-        <div style={{ position: "relative", height: 420, overflow: "hidden" }}>
+        <div className="h-64 sm:h-80 lg:h-[420px]" style={{ position: "relative", overflow: "hidden" }}>
           <img
             src={art.heroImg}
             alt={art.heroAlt}
@@ -370,7 +370,7 @@ function ArticleView({
             background: "linear-gradient(to bottom, rgba(10,26,15,0.3) 0%, rgba(10,26,15,0.8) 100%)",
             display: "flex", alignItems: "flex-end",
           }}>
-            <div style={{ maxWidth: 760, margin: "0 auto", padding: "0 40px 48px", width: "100%" }}>
+            <div className="px-4 pb-8 sm:px-8 sm:pb-10 lg:px-10 lg:pb-12" style={{ maxWidth: 760, margin: "0 auto", width: "100%" }}>
               <button
                 onClick={onBack}
                 style={{
@@ -415,7 +415,7 @@ function ArticleView({
         </div>
 
         {/* Body */}
-        <div style={{ maxWidth: 760, margin: "0 auto", padding: "52px 40px 80px" }}>
+        <div className="px-4 py-10 sm:px-8 sm:py-12 lg:px-10 lg:pt-[52px] lg:pb-20" style={{ maxWidth: 760, margin: "0 auto" }}>
           <div className="article-body" dangerouslySetInnerHTML={{ __html: art.body + ctaHtml }} />
         </div>
       </div>
@@ -546,7 +546,7 @@ function IndexView({ onSelectArticle }: { onSelectArticle: (slug: ArticleSlug) =
       <MainHeader />
 
       {/* Hero */}
-      <section style={{ background: "#0a1a0f", padding: "72px 40px 56px", position: "relative", overflow: "hidden" }}>
+      <section className="px-4 py-10 sm:px-8 sm:py-12 lg:px-10 lg:pt-[72px] lg:pb-14" style={{ background: "#0a1a0f", position: "relative", overflow: "hidden" }}>
         <div style={{ position: "absolute", top: -100, right: -80, width: 440, height: 440, background: "radial-gradient(circle, rgba(31,174,91,0.16) 0%, transparent 65%)", pointerEvents: "none" }} />
         <div style={{ maxWidth: 1120, margin: "0 auto", position: "relative", zIndex: 1 }}>
           <div style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 11, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: "#1FAE5B", marginBottom: 20 }}>
@@ -582,7 +582,10 @@ function IndexView({ onSelectArticle }: { onSelectArticle: (slug: ArticleSlug) =
       </section>
 
       {/* Blog Wrap */}
-      <div style={{ maxWidth: 1120, margin: "0 auto", padding: "52px 40px 80px", display: "grid", gridTemplateColumns: "1fr 296px", gap: 52, alignItems: "start" }}>
+      <div
+        className="grid grid-cols-1 gap-8 px-4 py-10 sm:px-8 sm:py-12 lg:grid-cols-[1fr_296px] lg:gap-[52px] lg:px-10 lg:pt-[52px] lg:pb-20"
+        style={{ maxWidth: 1120, margin: "0 auto", alignItems: "start" }}
+      >
         <main>
           {/* Featured label */}
           <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#888", marginBottom: 18, paddingBottom: 10, borderBottom: "0.5px solid rgba(0,0,0,0.08)" }}>
@@ -592,10 +595,10 @@ function IndexView({ onSelectArticle }: { onSelectArticle: (slug: ArticleSlug) =
           {/* Featured Card */}
           <article
             onClick={() => onSelectArticle("roi-metrics")}
+            className="grid grid-cols-1 lg:grid-cols-2 lg:min-h-[340px]"
             style={{
               border: "0.5px solid rgba(0,0,0,0.08)", borderRadius: 14, overflow: "hidden",
-              marginBottom: 48, display: "grid", gridTemplateColumns: "1fr 1fr",
-              minHeight: 340, cursor: "pointer", transition: "box-shadow 0.2s",
+              marginBottom: 48, cursor: "pointer", transition: "box-shadow 0.2s",
             }}
             onMouseEnter={(e) => {
               (e.currentTarget as HTMLElement).style.boxShadow = "0 8px 32px rgba(0,0,0,0.12)";
@@ -608,7 +611,7 @@ function IndexView({ onSelectArticle }: { onSelectArticle: (slug: ArticleSlug) =
               if (img) img.style.transform = "scale(1)";
             }}
           >
-            <div style={{ position: "relative", overflow: "hidden" }}>
+            <div className="h-56 sm:h-72 lg:h-auto" style={{ position: "relative", overflow: "hidden" }}>
               <img
                 className="feat-img"
                 src="https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=800&q=80&fit=crop"
@@ -651,7 +654,7 @@ function IndexView({ onSelectArticle }: { onSelectArticle: (slug: ArticleSlug) =
           </p>
 
           {/* Grid Cards */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18, marginBottom: 48 }}>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-[18px]" style={{ marginBottom: 48 }}>
             {GRID_CARDS.map((card) => (
               <article
                 key={card.slug}
@@ -718,7 +721,7 @@ function IndexView({ onSelectArticle }: { onSelectArticle: (slug: ArticleSlug) =
                   el.style.background = "#fff";
                 }}
               >
-                <div style={{ width: 80, height: 80, borderRadius: 10, flexShrink: 0, overflow: "hidden" }}>
+                <div className="w-14 h-14 sm:w-20 sm:h-20" style={{ borderRadius: 10, flexShrink: 0, overflow: "hidden" }}>
                   <img src={item.img} alt={item.alt} loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", filter: "brightness(0.9)" }} />
                 </div>
                 <div style={{ flex: 1 }}>

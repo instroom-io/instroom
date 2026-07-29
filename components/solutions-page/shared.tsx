@@ -36,7 +36,7 @@ export function SectionLabel({ children }: { children: React.ReactNode }) {
 export function CtaBand({ headline, sub }: { headline: string; sub: string }) {
   const [showBookDemo, setShowBookDemo] = useState(false)
   return (
-    <section style={{ background: "#1E1E1E", position: "relative", overflow: "hidden", padding: "100px 32px" }}>
+    <section className="px-4 sm:px-6 lg:px-8 py-16 sm:py-20 lg:py-[100px]" style={{ background: "#1E1E1E", position: "relative", overflow: "hidden" }}>
       <div
         style={{
           position: "absolute",

@@ -48,6 +48,9 @@ export interface Partner {
   brandInfluencerId?: string
   brandId?: string
   email?: string | null
+  /** Collaboration Type — same value persisted in product_details.campaignType,
+   *  shared with the Pipeline board and Post Tracker so all three stay in sync. */
+  collabType?: string
 }
 
 interface Deliverable { name: string; posted: boolean }
@@ -255,6 +258,19 @@ const COLLAB_TYPES = [
   { value: "TikTok Shop + Paid", implied: "TikTok Shop + flat fee on top" },
 ]
 
+// The Pipeline board (and the persisted DB value) use short kebab-case ids
+// ("gifting", "tiktok-shop", ...) while this sidebar shows the nicer Title
+// Case label. Map between them at the read/write boundary so both surfaces
+// stay in sync against the same underlying value.
+const KANBAN_ID_TO_LABEL: Record<string, string> = {
+  "gifting": "Gifting", "paid": "Paid", "affiliate": "Affiliate", "ugc": "UGC",
+  "tiktok-shop": "TikTok Shop", "paid-affiliate": "Paid + Affiliate",
+  "ugc-paid": "UGC + Paid", "tiktok-shop-paid": "TikTok Shop + Paid",
+}
+const LABEL_TO_KANBAN_ID: Record<string, string> = Object.fromEntries(
+  Object.entries(KANBAN_ID_TO_LABEL).map(([id, label]) => [label, id])
+)
+
 // Colour coding per collab type so the pill is visually distinct
 const COLLAB_COLORS: Record<string, { bg: string; color: string; border: string }> = {
   "Gifting":            { bg: "#f0fdf4", color: "#15803d", border: "#bbf7d0" },
@@ -438,8 +454,12 @@ export default function InfluencerProfileSidebar({
 }) {
   const [profileTab,     setProfileTab]     = useState(0)
   const [pipelineStatus, setPipelineStatus] = useState(partner.commSt || "For Outreach")
-  // ── NEW: collaboration type state ──────────────────────────────────────────
-  const [collabType,     setCollabType]     = useState("Gifting")
+  // Collaboration type — initialized from the real persisted value (shared
+  // with Pipeline + Post Tracker via product_details.campaignType) instead of
+  // always resetting to "Gifting" regardless of what's actually saved.
+  const [collabType,     setCollabType]     = useState(
+    KANBAN_ID_TO_LABEL[partner.collabType ?? ""] ?? partner.collabType ?? "Gifting"
+  )
   const [showNIModal,    setShowNIModal]    = useState(false)
   const [prevStatus,     setPrevStatus]     = useState(partner.commSt || "For Outreach")
   const [showEmailModal, setShowEmailModal] = useState(false)
@@ -515,15 +535,13 @@ export default function InfluencerProfileSidebar({
 
   const TABS = ["Basic", "Order", "Attribution", "Post", "Stats", "History"]
 
-  // Collab type implied text (shown under the pill)
-  const selectedCollabMeta = COLLAB_TYPES.find(c => c.value === collabType)
   const collabColors = COLLAB_COLORS[collabType] ?? { bg: "#f9fafb", color: "#374151", border: "#e5e7eb" }
 
   // ── Collab type change handler ────────────────────────────────────────────
   const handleCollabTypeChange = (newType: string) => {
     setCollabType(newType)
     if (onCollabTypeChange && partner.brandInfluencerId) {
-      onCollabTypeChange(partner.brandInfluencerId, newType)
+      onCollabTypeChange(partner.brandInfluencerId, LABEL_TO_KANBAN_ID[newType] ?? newType)
     }
   }
 
@@ -597,9 +615,9 @@ export default function InfluencerProfileSidebar({
               <div className="phd">{partner.handle}</div>
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "flex-start" }}>
-              {/* PIPELINE dropdown */}
+              {/* STAGE dropdown */}
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                <span style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em" }}>Pipeline</span>
+                <span style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em" }}>Stage</span>
                 <select
                   className="ssel"
                   value={pipelineStatus}
@@ -619,9 +637,9 @@ export default function InfluencerProfileSidebar({
                 </select>
               </div>
 
-              {/* ── NEW: COLLAB TYPE dropdown ── */}
+              {/* COLLABORATION TYPE dropdown */}
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                <span style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em" }}>Collab Type</span>
+                <span style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em" }}>Collaboration Type</span>
                 <select
                   className="csel"
                   value={collabType}
@@ -639,19 +657,6 @@ export default function InfluencerProfileSidebar({
               </div>
             </div>
           </div>
-
-          {/* ── NEW: Collab type implied pill ── */}
-          {selectedCollabMeta && (
-            <div
-              className="collab-implied"
-              style={{ background: collabColors.bg, border: `1px solid ${collabColors.border}`, color: collabColors.color }}
-            >
-              <span className="collab-implied-dot" style={{ background: collabColors.color }} />
-              <span className="collab-implied-type">{collabType}</span>
-              <span className="collab-implied-sep">·</span>
-              <span className="collab-implied-text">{selectedCollabMeta.implied}</span>
-            </div>
-          )}
 
           {/* NI status pill */}
           {pipelineStatus === "Not Interested" && (
@@ -857,13 +862,6 @@ export default function InfluencerProfileSidebar({
 
           /* Collab type select — adapts colour via inline style */
           .csel { font-size:11px; padding:5px 10px; border-radius:8px; border-width:1px; border-style:solid; cursor:pointer; font-family:inherit; font-weight:600; transition:all .15s; min-width:130px; }
-
-          /* Collab implied pill */
-          .collab-implied { display:inline-flex; align-items:center; gap:6px; padding:5px 12px; border-radius:20px; border-width:1px; border-style:solid; font-size:11px; margin-bottom:6px; flex-wrap:wrap; }
-          .collab-implied-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
-          .collab-implied-type { font-weight:700; font-size:11px; }
-          .collab-implied-sep { opacity:.4; font-size:11px; }
-          .collab-implied-text { font-size:11px; opacity:.75; }
 
           .close-btn { position:absolute; top:16px; right:20px; width:30px; height:30px; border-radius:50%; border:1.5px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; flex-shrink:0; line-height:1; transition:background .15s,border-color .15s,color .15s; }
           .close-btn:hover { background:#fee2e2; color:#dc2626; border-color:#fca5a5; }

@@ -233,7 +233,7 @@ function IntegrationsContent() {
   const ptEnabled = integrations.posttracker.connected
 
   return (
-    <div className="max-w-3xl px-9 py-7">
+    <div className="max-w-3xl px-4 py-5 sm:px-6 sm:py-6 md:px-9 md:py-7">
       {/* Toast */}
       {toast && (
         <div
@@ -529,7 +529,7 @@ function IntegrationRow({
   return (
     <div
       className={cn(
-        "flex items-center gap-3.5 rounded-[10px] border-[0.5px] px-4 py-3.5",
+        "flex flex-col sm:flex-row sm:items-center gap-3.5 rounded-[10px] border-[0.5px] px-4 py-3.5",
         connected
           ? "border-[#9ed4b8] bg-[#f0faf5]"
           : comingSoon
@@ -537,6 +537,7 @@ function IntegrationRow({
           : "border-black/[0.09] bg-white"
       )}
     >
+      <div className="flex items-center gap-3.5 sm:contents">
       <div
         className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-[10px]"
         style={{ background: comingSoon && !connected ? "#f0f0ee" : logoBg, opacity: comingSoon && !connected ? 0.6 : 1 }}
@@ -558,8 +559,9 @@ function IntegrationRow({
         </div>
         <div className="mt-0.5 text-[11px] text-[#888]">{desc}</div>
       </div>
+      </div>
 
-      <div className="flex flex-shrink-0 items-center gap-1.5">
+      <div className="flex flex-shrink-0 flex-wrap items-center gap-1.5">
         {connected ? (
           <>
             <Badge

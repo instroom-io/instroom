@@ -152,11 +152,11 @@ function PaymentPageInner() {
 
   return (
     <div className="relative min-h-screen bg-[#F7F9F8] text-[#1E1E1E] overflow-hidden">
-      <div className="pointer-events-none fixed top-0 left-0 w-96 h-96 rounded-full bg-[#1FAE5B]/8 blur-3xl -translate-x-1/2 -translate-y-1/2" />
-      <div className="pointer-events-none fixed bottom-0 right-0 w-80 h-80 rounded-full bg-[#0F6B3E]/6 blur-3xl translate-x-1/3 translate-y-1/3" />
-      <div className="pointer-events-none fixed top-1/3 right-1/4 w-64 h-64 rounded-full bg-[#2C8EC4]/5 blur-3xl" />
+      <div className="pointer-events-none fixed top-0 left-0 w-64 sm:w-96 h-64 sm:h-96 rounded-full bg-[#1FAE5B]/8 blur-3xl -translate-x-1/2 -translate-y-1/2" />
+      <div className="pointer-events-none fixed bottom-0 right-0 w-56 sm:w-80 h-56 sm:h-80 rounded-full bg-[#0F6B3E]/6 blur-3xl translate-x-1/3 translate-y-1/3" />
+      <div className="pointer-events-none hidden sm:block fixed top-1/3 right-1/4 w-64 h-64 rounded-full bg-[#2C8EC4]/5 blur-3xl" />
 
-      <div className="fixed top-6 left-12 z-50">
+      <div className="fixed top-4 sm:top-6 left-4 sm:left-12 z-50">
         <Image
           src="/images/INSTROOM LOGO 1.png"
           alt="Instroom Logo"
@@ -164,14 +164,14 @@ function PaymentPageInner() {
           height={180}
           priority
           quality={95}
-          className="drop-shadow-sm"
+          className="drop-shadow-sm w-32 sm:w-44 h-auto"
         />
       </div>
 
-      <div className="relative min-h-screen flex items-center justify-center px-4 py-12">
-        <div className="w-full max-w-4xl bg-white border border-[#0F6B3E]/15 rounded-2xl shadow-2xl flex flex-col md:flex-row overflow-hidden">
-          <div className="md:w-1/2 p-8 flex flex-col justify-center bg-gradient-to-br from-[#1FAE5B]/5 to-[#0F6B3E]/5 border-b md:border-b-0 md:border-r-0">
-            <h2 className="text-2xl font-bold mb-1 text-center md:text-left text-[#1E1E1E]">Your Plan</h2>
+      <div className="relative min-h-screen flex items-center justify-center px-4 py-8 sm:py-12">
+        <div className="w-full max-w-sm sm:max-w-xl md:max-w-4xl bg-white border border-[#0F6B3E]/15 rounded-2xl shadow-2xl flex flex-col md:flex-row overflow-hidden">
+          <div className="md:w-1/2 p-6 sm:p-8 flex flex-col justify-center bg-gradient-to-br from-[#1FAE5B]/5 to-[#0F6B3E]/5 border-b md:border-b-0 md:border-r-0">
+            <h2 className="text-xl sm:text-2xl font-bold mb-1 text-center md:text-left text-[#1E1E1E]">Your Plan</h2>
             <h3 className="text-lg font-semibold mb-1 text-[#1E1E1E]">
               {plan.display_name}
               {isFree && <span className="ml-2 text-xs font-normal text-[#0F6B3E]">(30-day free trial)</span>}
@@ -208,11 +208,11 @@ function PaymentPageInner() {
               &larr; Choose a different plan
             </button>
           </div>
-          <div className="md:w-1/2 p-8 flex flex-col justify-center">
-            <h2 className="text-2xl font-bold mb-2 text-center md:text-left text-[#1E1E1E]">
+          <div className="md:w-1/2 p-6 sm:p-8 flex flex-col justify-center">
+            <h2 className="text-xl sm:text-2xl font-bold mb-2 text-center md:text-left text-[#1E1E1E]">
               {isFree ? "Get Started for Free" : "Payment Information"}
             </h2>
-            <p className="text-[#666666] text-center md:text-left mb-8">
+            <p className="text-sm sm:text-base text-[#666666] text-center md:text-left mb-6 sm:mb-8">
               {isFree
                 ? "No credit card required. Click below to start your 30-day free trial."
                 : "Click the button below to securely complete your subscription."}

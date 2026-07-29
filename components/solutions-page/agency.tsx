@@ -9,7 +9,7 @@ export function Agency({ onBack }: { onBack: () => void }) {
   const [showBookDemo, setShowBookDemo] = useState(false)
   return (
     <>
-      <button onClick={onBack} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 500, color: "var(--ink3)", cursor: "pointer", padding: "20px 40px 0", background: "none", border: "none", fontFamily: "'Inter',sans-serif", transition: "color 0.15s" }}
+      <button onClick={onBack} className="px-4 sm:px-6 lg:px-10 pt-5" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 500, color: "var(--ink3)", cursor: "pointer", background: "none", border: "none", fontFamily: "'Inter',sans-serif", transition: "color 0.15s" }}
         onMouseEnter={e => (e.currentTarget.style.color = "var(--green)")}
         onMouseLeave={e => (e.currentTarget.style.color = "var(--ink3)")}
       >
@@ -18,7 +18,7 @@ export function Agency({ onBack }: { onBack: () => void }) {
 
       {/* Hero */}
       <div style={{ background: "#F4F7F5", backgroundImage: "radial-gradient(circle, rgba(31,174,91,0.12) 1px, transparent 1px)", backgroundSize: "28px 28px", borderBottom: "0.5px solid var(--border)" }}>
-        <div className="sol-hero-grid" style={{ maxWidth: 1100, margin: "0 auto", padding: "80px 40px 72px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 64, alignItems: "center" }}>
+        <div className="sol-hero-grid px-4 sm:px-6 lg:px-10 pt-12 sm:pt-16 lg:pt-20 pb-10 sm:pb-14 lg:pb-[72px]" style={{ maxWidth: 1100, margin: "0 auto", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 64, alignItems: "center" }}>
           <div>
             <div className="sol-eyebrow">
               <span className="sol-eyebrow-dot" />
@@ -58,7 +58,7 @@ export function Agency({ onBack }: { onBack: () => void }) {
 
       {/* Pains */}
       <div style={{ background: "#fff", borderTop: "0.5px solid var(--border)", borderBottom: "0.5px solid var(--border)" }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "72px 40px" }}>
+        <div className="px-4 sm:px-6 lg:px-10 py-10 sm:py-14 lg:py-[72px]" style={{ maxWidth: 1100, margin: "0 auto" }}>
           <SectionLabel>The agency problem</SectionLabel>
           <h2 style={{ fontFamily: "'Manrope',sans-serif", fontSize: "clamp(28px,3.5vw,42px)", lineHeight: 1.15, color: "var(--ink)", marginBottom: 16 }}>
             You're good at campaigns.<br />The tools are <em style={{ color: "var(--green)", fontStyle: "normal", fontWeight: 800 }}>working against you.</em>
@@ -87,7 +87,7 @@ export function Agency({ onBack }: { onBack: () => void }) {
 
       {/* How it helps */}
       <div style={{ background: "var(--bg)", borderTop: "0.5px solid var(--border)", borderBottom: "0.5px solid var(--border)" }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "72px 40px" }}>
+        <div className="px-4 sm:px-6 lg:px-10 py-10 sm:py-14 lg:py-[72px]" style={{ maxWidth: 1100, margin: "0 auto" }}>
           <SectionLabel>How Instroom helps</SectionLabel>
           <h2 style={{ fontFamily: "'Manrope',sans-serif", fontSize: "clamp(28px,3.5vw,42px)", lineHeight: 1.15, color: "var(--ink)", marginBottom: 52 }}>
             One platform.<br /><em style={{ color: "var(--green)", fontStyle: "normal", fontWeight: 800 }}>Every client. Every campaign.</em>
@@ -167,7 +167,7 @@ export function Agency({ onBack }: { onBack: () => void }) {
 
       {/* Features */}
       <div style={{ background: "var(--bg)" }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "72px 40px" }}>
+        <div className="px-4 sm:px-6 lg:px-10 py-10 sm:py-14 lg:py-[72px]" style={{ maxWidth: 1100, margin: "0 auto" }}>
           <SectionLabel>Built for teams at scale</SectionLabel>
           <h2 style={{ fontFamily: "'Manrope',sans-serif", fontSize: "clamp(28px,3.5vw,42px)", lineHeight: 1.15, color: "var(--ink)" }}>
             Every feature your team<br />needs to <em style={{ color: "var(--green)", fontStyle: "normal", fontWeight: 800 }}>deliver at scale.</em>

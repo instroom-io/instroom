@@ -4,7 +4,7 @@
 import React, { useState, useEffect } from "react"
 import type { InfluencerRow, CustomColumn } from "./types"
 import { platforms } from "./constants"
-import { STATUS_LABEL } from "./constants"
+import { STATUS_LABEL, JOURNEY_STATUSES, getJourneyStatus, journeyStatusToFields, type JourneyStatus } from "./constants"
 import { getProfileUrl, handleApprovalChange, formatFollowers } from "./utils"
 import { ProfilePicture } from "./ui-atoms"
 import { DeclineConfirmationModal } from "./modals"
@@ -703,6 +703,32 @@ export default function ProfileSidebar({
     affiliateRevenue
   )
 
+  const PIPELINE_STAGE_BY_CONTACT_STATUS: Record<string, string> = {
+    not_contacted: "1", contacted: "2", negotiating: "3", agreed: "4", for_order_creation: "5",
+  }
+
+  const handlePipelineChange = (value: string) => {
+    if (!editedRow) return
+    setEditedRow({
+      ...editedRow,
+      contact_status: value,
+      stage: PIPELINE_STAGE_BY_CONTACT_STATUS[value] ?? editedRow.stage,
+      approval_status: "Approved",
+    })
+  }
+
+  const handleJourneyStatusChange = (value: string) => {
+    if (!editedRow) return
+    if (value === "Declined") { setShowDeclineModal(true); return }
+    if (value === "Pending") {
+      const fields = journeyStatusToFields("Pending")
+      setEditedRow({ ...editedRow, ...fields })
+      return
+    }
+    const fields = journeyStatusToFields(value as JourneyStatus)
+    setEditedRow({ ...editedRow, ...fields })
+  }
+
   const handleFieldChange = (field: string, value: string) => {
     if (!editedRow) return
     if (field === "approval_status") {
@@ -862,23 +888,36 @@ export default function ProfileSidebar({
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", flexShrink: 0 }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                <span style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em" }}>Pipeline</span>
-                <select style={S.pipeSel} value={editedRow.contact_status} onChange={e => handleFieldChange("contact_status", e.target.value)}>
+                <span style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em" }}>Stage</span>
+                <select style={S.pipeSel} value={editedRow.contact_status} onChange={e => handlePipelineChange(e.target.value)}>
                   <option value="not_contacted">For Outreach</option>
-                  <option value="contacted">In Conversation</option>
-                  <option value="interested">Interested</option>
-                  <option value="agreed">Agreed</option>
+                  <option value="contacted">Contacted</option>
+                  <option value="negotiating">In Conversation</option>
+                  <option value="agreed">Deal Agreed</option>
+                  <option value="for_order_creation">Post Tracker</option>
                 </select>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                <span style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em" }}>Approval</span>
-                <select
-                  style={{ ...S.pipeSel, borderColor: editedRow.approval_status === "Approved" ? "#16a34a" : editedRow.approval_status === "Declined" ? "#dc2626" : "#f4b740", background: editedRow.approval_status === "Approved" ? "#f0fdf4" : editedRow.approval_status === "Declined" ? "#fef2f2" : "#fffbeb", color: editedRow.approval_status === "Approved" ? "#166534" : editedRow.approval_status === "Declined" ? "#991b1b" : "#854f0b" }}
-                  value={editedRow.approval_status || "Pending"} onChange={e => handleFieldChange("approval_status", e.target.value)}>
-                  <option value="Pending">Pending</option>
-                  <option value="Approved">Approved</option>
-                  <option value="Declined">Declined</option>
-                </select>
+                <span style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em" }}>Status</span>
+                {editedRow.approval_status === "Declined" ? (
+                  <select style={{ ...S.pipeSel, borderColor: "#dc2626", background: "#fef2f2", color: "#991b1b" }}
+                    value="Declined" onChange={e => handleJourneyStatusChange(e.target.value)}>
+                    <option value="Declined">Declined</option>
+                    {JOURNEY_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                ) : (
+                  <select
+                    style={
+                      getJourneyStatus(editedRow.approval_status, editedRow.stage) === "Pending"
+                        ? { ...S.pipeSel, borderColor: "#f4b740", background: "#fffbeb", color: "#854f0b" }
+                        : { ...S.pipeSel, borderColor: "#16a34a", background: "#f0fdf4", color: "#166534" }
+                    }
+                    value={getJourneyStatus(editedRow.approval_status, editedRow.stage)}
+                    onChange={e => handleJourneyStatusChange(e.target.value)}>
+                    {JOURNEY_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                    <option value="Declined">Declined</option>
+                  </select>
+                )}
               </div>
               <button
                 onClick={onClose} title="Close"
@@ -1082,7 +1121,7 @@ export default function ProfileSidebar({
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 16 }}>
                 <div style={S.metricBox}><div style={{ fontSize: 14, fontWeight: 700, color: "#111827" }}>{editedRow.tier || "Bronze"}</div><div style={S.metricLabel}>Tier</div></div>
                 <div style={S.metricBox}><div style={{ fontSize: 14, fontWeight: 700, color: editedRow.approval_status === "Approved" ? "#1fae5b" : editedRow.approval_status === "Declined" ? "#e24b4a" : "#854f0b" }}>{editedRow.approval_status || "Pending"}</div><div style={S.metricLabel}>Approval</div></div>
-                <div style={S.metricBox}><div style={{ fontSize: 13, fontWeight: 700, color: "#111827" }}>{STATUS_LABEL[editedRow.contact_status] || editedRow.contact_status}</div><div style={S.metricLabel}>Pipeline</div></div>
+                <div style={S.metricBox}><div style={{ fontSize: 13, fontWeight: 700, color: "#111827" }}>{STATUS_LABEL[editedRow.contact_status] || editedRow.contact_status}</div><div style={S.metricLabel}>Stage</div></div>
               </div>
               {editedRow.transferred_date && (
                 <div style={{ background: "#f0fdf4", borderRadius: 10, padding: "10px 14px", fontSize: 12, color: "#166534", border: "1px solid #dcfce7", display: "flex", alignItems: "center", gap: 8 }}>

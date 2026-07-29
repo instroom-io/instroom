@@ -121,7 +121,7 @@ export default function SecurityPage() {
   }
 
   return (
-    <div className="max-w-3xl px-9 py-7">
+    <div className="max-w-3xl px-4 py-5 sm:px-6 sm:py-6 md:px-9 md:py-7">
       {toast && (
         <div
           className={cn(
@@ -153,8 +153,8 @@ export default function SecurityPage() {
         </div>
 
         <CardContent className="pt-4">
-          <div className="grid grid-cols-2 gap-3.5">
-            <div className="col-span-2 space-y-1">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+            <div className="sm:col-span-2 space-y-1">
               <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">
                 Current password
               </Label>
@@ -259,12 +259,12 @@ function ToggleRow({
   return (
     <div
       className={cn(
-        "flex items-center justify-between py-3 transition-opacity",
+        "flex items-center justify-between gap-3 py-3 transition-opacity",
         !last && "border-b",
         (loading || disabled) && "opacity-60"
       )}
     >
-      <div>
+      <div className="min-w-0">
         <p className="text-xs font-medium text-foreground">{title}</p>
         <p className="mt-0.5 text-[11px] text-muted-foreground">{desc}</p>
       </div>
@@ -272,7 +272,7 @@ function ToggleRow({
         checked={enabled}
         disabled={loading || disabled}
         onCheckedChange={onToggle}
-        className="data-[state=checked]:bg-emerald-600"
+        className="flex-shrink-0 data-[state=checked]:bg-emerald-600"
       />
     </div>
   )

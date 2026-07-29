@@ -60,6 +60,10 @@ export function LoginForm({
   }
 
   const afterSignIn = async () => {
+    if (formData.email.trim().toLowerCase() === "admin@instroom.io") {
+      router.push("/admin")
+      return
+    }
     try {
       const onboardingResponse = await fetch("/api/check-onboarding", {
         method: "POST",

@@ -149,8 +149,8 @@ export function PasswordResetForm({ token, className = "" }: { token?: string; c
 
 
   return (
-    <div className="flex flex-col gap-6 w-full max-w-lg">
-      <Card className={`rounded-2xl shadow-lg p-8 border border-[#0F6B3E]/15 bg-gradient-to-b from-white via-white to-[#0F6B3E]/5 relative overflow-hidden ${className}`}>
+    <div className="flex flex-col gap-6 w-full max-w-sm sm:max-w-lg">
+      <Card className={`rounded-2xl shadow-lg p-6 sm:p-8 border border-[#0F6B3E]/15 bg-gradient-to-b from-white via-white to-[#0F6B3E]/5 relative overflow-hidden ${className}`}>
         <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-transparent via-[#1FAE5B] to-transparent" />
         <CardHeader className="gap-2 pb-2 pt-4">
           <CardTitle className="text-2xl font-bold text-gray-900">Reset Your Password</CardTitle>
