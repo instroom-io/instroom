@@ -1176,7 +1176,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
             {/* ── Performance summary ── */}
             <div className="cd-section">
               <div className="cd-section-title">Performance summary</div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8, marginBottom: 8 }}>
+              <div className="kpi-grid" style={{ marginBottom: 8 }}>
                 <div className="kpi-card">
                   <div className="kpi-l">Total revenue</div>
                   <div className="kpi-v g">{campRev ? formatMoney(campRev) : "—"}</div>
@@ -1202,7 +1202,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
                   <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>net profit ÷ spend</div>
                 </div>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8 }}>
+              <div className="kpi-grid">
                 <div className="kpi-card">
                   <div className="kpi-l">Posts done</div>
                   <div className="kpi-v" style={{ color: campPosted === campPartners.length && campPartners.length > 0 ? "#1FAE5B" : "#1E1E1E" }}>
@@ -1437,7 +1437,8 @@ export default function BrandPartnersPage({ brandId }: Props) {
         .btn-primary { background: #1FAE5B; color: #fff; border: none; padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 11px; font-weight: 500; font-family: 'Inter', sans-serif; }
         .btn-primary:hover { background: #0F6B3E; }
         .btn-outline { background: transparent; border: 0.5px solid rgba(0,0,0,0.2); padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 11px; font-weight: 500; color: #555; font-family: 'Inter', sans-serif; }
-        .tab-search-row { background: #fff; border-bottom: 0.5px solid rgba(0,0,0,0.08); padding: 0 20px; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+        .tab-search-row { background: #fff; border-bottom: 0.5px solid rgba(0,0,0,0.08); padding: 8px 20px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+        .sb { max-width: 100%; }
         .tab-bar { display: flex; }
         .tab { padding: 10px 16px; cursor: pointer; font-size: 12px; font-weight: 500; color: #888; border-bottom: 2px solid transparent; }
         .tab.active { color: #1FAE5B; border-bottom-color: #1FAE5B; }
@@ -1445,7 +1446,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
         .sw { position: relative; }
         .sb { font-size: 12px; padding: 6px 10px 6px 28px; border-radius: 8px; border: 0.5px solid rgba(0,0,0,0.15); background: #f7f9f8; width: 200px; font-family: 'Inter', sans-serif; }
         .fw { position: relative; }
-        .fp { position: absolute; top: calc(100% + 6px); right: 0; z-index: 200; background: #fff; border: 0.5px solid rgba(0,0,0,0.12); border-radius: 10px; padding: 14px; box-shadow: 0 4px 16px rgba(0,0,0,0.1); width: 360px; }
+        .fp { position: absolute; top: calc(100% + 6px); right: 0; z-index: 200; background: #fff; border: 0.5px solid rgba(0,0,0,0.12); border-radius: 10px; padding: 14px; box-shadow: 0 4px 16px rgba(0,0,0,0.1); width: 360px; max-width: 90vw; }
         .fp-title { font-size: 11px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; }
         .fg { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         .fg label { font-size: 11px; color: #888; display: block; margin-bottom: 4px; }
@@ -1498,6 +1499,8 @@ export default function BrandPartnersPage({ brandId }: Props) {
         .c-archived { background: #f0f0ee; color: #999; }
         .cd-section { background: #fff; border: 0.5px solid rgba(0,0,0,0.08); border-radius: 10px; padding: 14px 16px; }
         .cd-section-title { font-size: 11px; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; }
+        .kpi-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; }
+        @media (max-width: 640px) { .kpi-grid { grid-template-columns: repeat(2,1fr); } }
         .kpi-card { background: #fff; border: 0.5px solid rgba(0,0,0,0.08); border-radius: 10px; padding: 12px 14px; }
         .kpi-l { font-size: 10px; color: #888; }
         .kpi-v { font-size: 17px; font-weight: 600; color: #1E1E1E; margin-top: 2px; }

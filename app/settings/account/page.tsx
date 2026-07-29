@@ -250,19 +250,19 @@ export default function AccountSettingsPage() {
 
   return (
     <SidebarProvider className="flex w-full">
-      <div className="flex w-full min-h-screen font-sans" style={{ background: "#f7f5f2" }}>
+      <div className="flex flex-col md:flex-row w-full min-h-screen font-sans" style={{ background: "#f7f5f2" }}>
         {/* Sidebar */}
-        <div className="w-[350px] flex-shrink-0">
+        <div className="w-full md:w-[350px] flex-shrink-0">
           <AppSidebar />
         </div>
 
         {/* Main */}
-        <main className="flex-1 min-h-screen px-10 py-12">
+        <main className="flex-1 min-h-screen px-4 py-8 sm:px-6 md:px-10 md:py-12">
 
           {/* Header */}
           <div className="mb-12 animate-[fadeUp_0.4s_ease_both]">
             <SectionLabel>Your Account</SectionLabel>
-            <h1 className="font-serif text-4xl font-semibold text-gray-900 leading-tight tracking-tight">
+            <h1 className="font-serif text-2xl sm:text-3xl md:text-4xl font-semibold text-gray-900 leading-tight tracking-tight">
               Account Settings
             </h1>
             <p className="mt-2 text-sm text-stone-400 font-light">
@@ -274,7 +274,7 @@ export default function AccountSettingsPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
 
             {/* Profile Card */}
-            <section className="bg-white border border-stone-200 rounded-[20px] p-8 flex flex-col hover:shadow-[0_8px_32px_-8px_rgba(0,0,0,0.08)] transition-shadow">
+            <section className="bg-white border border-stone-200 rounded-[20px] p-5 sm:p-6 md:p-8 flex flex-col hover:shadow-[0_8px_32px_-8px_rgba(0,0,0,0.08)] transition-shadow">
               <SectionLabel>Profile</SectionLabel>
 
               {/* Avatar row */}
@@ -333,7 +333,7 @@ export default function AccountSettingsPage() {
             </section>
 
             {/* Subscription Card */}
-            <section className="bg-white border border-stone-200 rounded-[20px] p-8 flex flex-col hover:shadow-[0_8px_32px_-8px_rgba(0,0,0,0.08)] transition-shadow">
+            <section className="bg-white border border-stone-200 rounded-[20px] p-5 sm:p-6 md:p-8 flex flex-col hover:shadow-[0_8px_32px_-8px_rgba(0,0,0,0.08)] transition-shadow">
               <div className="flex items-start justify-between mb-6">
                 <SectionLabel>Subscription</SectionLabel>
                 <PlanBadge label={planLabel} colorClass={planColor} />
@@ -359,7 +359,7 @@ export default function AccountSettingsPage() {
           </div>
 
           {/* Plan Usage Card */}
-          <section className="bg-white border border-stone-200 rounded-[20px] p-8 mt-6 hover:shadow-[0_8px_32px_-8px_rgba(0,0,0,0.08)] transition-shadow">
+          <section className="bg-white border border-stone-200 rounded-[20px] p-5 sm:p-6 md:p-8 mt-6 hover:shadow-[0_8px_32px_-8px_rgba(0,0,0,0.08)] transition-shadow">
             <div className="flex items-center justify-between mb-2">
               <SectionLabel>Plan Usage & Limits</SectionLabel>
               <PlanBadge label={`${planLabel} Plan`} colorClass={planColor} />

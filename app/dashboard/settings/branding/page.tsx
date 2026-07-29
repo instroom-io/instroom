@@ -189,7 +189,7 @@ function BrandingContent() {
   }
 
   return (
-    <div className="max-w-3xl px-9 py-7">
+    <div className="max-w-3xl px-4 py-5 sm:px-6 sm:py-6 md:px-9 md:py-7">
       <div className="mb-6">
         <h1 className="text-lg font-semibold text-foreground">Branding</h1>
         <p className="text-xs text-muted-foreground">Customize your workspace appearance</p>
@@ -240,7 +240,7 @@ function BrandingContent() {
           </div>
 
           <CardContent className="pt-5">
-            <div className="flex max-w-2xl gap-6">
+            <div className="flex flex-col sm:flex-row max-w-2xl gap-6">
               {/* Logo */}
               <div className="w-[120px] flex-shrink-0">
                 <Label className="mb-2 block text-[11px] uppercase tracking-wide text-muted-foreground">

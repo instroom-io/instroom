@@ -1,6 +1,14 @@
-import { NextResponse } from "next/server";
-import { getToken } from "next-auth/jwt";
-import { prisma } from "@/lib/prisma";
+// NOTE: this file must live at the project root (or src/ root) for Next.js
+// to actually run it as middleware. It previously lived at app/middleware.ts,
+// a location Next.js does not recognize — meaning the /dashboard and
+// /onboarding protection below was never executing. Moved here as part of
+// wiring up /admin protection, since both rely on the same mechanism.
+
+import { NextResponse } from "next/server"
+import { getToken } from "next-auth/jwt"
+import { prisma } from "@/lib/prisma"
+
+const ADMIN_EMAIL = "admin@instroom.io"
 
 // ─── In-Memory Cache for Subscription Status ───────────────────────────────
 // Prevents database query on every page load. TTL: 5 minutes.
@@ -10,12 +18,12 @@ const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 function getCachedSubscription(userId: string): boolean | null {
   const cached = subscriptionCache.get(userId);
   if (!cached) return null;
-  
+
   if (Date.now() - cached.timestamp > CACHE_TTL) {
     subscriptionCache.delete(userId);
     return null;
   }
-  
+
   return cached.valid;
 }
 
@@ -76,10 +84,23 @@ async function checkSubscriptionAccess(userId: string, brandId: string | null): 
 export async function middleware(req: any) {
   const { pathname, searchParams } = req.nextUrl;
 
+  // ─── Admin Dashboard — gated to the mock admin account only ──────────────
+  // Checked first and independently of the subscription logic below: the
+  // admin account has no brand/subscription of its own and must never be
+  // routed through that check.
+  if (pathname.startsWith("/admin")) {
+    const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
+    const isAdmin = !!token && (token.platform_role === "admin" || token.email === ADMIN_EMAIL);
+    if (!isAdmin) {
+      return NextResponse.redirect(new URL(token ? "/dashboard" : "/login", req.url));
+    }
+    return NextResponse.next();
+  }
+
   if (pathname.startsWith("/onboarding") || pathname.startsWith("/dashboard")) {
     const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
     if (!token || !token.sub) {
-      return NextResponse.redirect(new URL("/signin", req.url));
+      return NextResponse.redirect(new URL("/login", req.url));
     }
 
     const brandId = searchParams.get("brandId");
@@ -107,5 +128,6 @@ export async function middleware(req: any) {
 }
 
 export const config = {
-  matcher: ["/onboarding/:path*", "/dashboard/:path*"],
+  matcher: ["/onboarding/:path*", "/dashboard/:path*", "/admin/:path*"],
+  runtime: "nodejs",
 };

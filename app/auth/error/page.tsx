@@ -38,14 +38,14 @@ function AuthErrorContent() {
   const message = errorMessages[error as string] || 'An authentication error occurred.'
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-offwhite">
-      <div className="w-full max-w-md p-8 bg-white rounded-lg shadow-lg">
-        <h1 className="text-2xl font-bold text-red-600 mb-4">Authentication Error</h1>
-        <p className="text-gray-700 mb-6">{message}</p>
-        <p className="text-sm text-gray-500 mb-6">
+    <div className="flex items-center justify-center min-h-screen bg-offwhite px-4">
+      <div className="w-full max-w-sm sm:max-w-md p-6 sm:p-8 bg-white rounded-lg shadow-lg">
+        <h1 className="text-xl sm:text-2xl font-bold text-red-600 mb-4">Authentication Error</h1>
+        <p className="text-sm sm:text-base text-gray-700 mb-6">{message}</p>
+        <p className="text-sm text-gray-500 mb-6 break-words">
           Error code: <code className="bg-gray-100 px-2 py-1 rounded">{error}</code>
         </p>
-        <div className="flex gap-4">
+        <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
           <Link href="/login" className="flex-1 text-center bg-primary-green text-white py-2 rounded hover:bg-deep-green transition">
             Back to Login
           </Link>

@@ -120,16 +120,14 @@ export function SettingsSidebar() {
 
   return (
     <div
-      className="flex flex-col flex-shrink-0 overflow-y-auto"
+      className="flex flex-row md:flex-col flex-shrink-0 w-full md:w-[220px] overflow-x-auto md:overflow-y-auto overflow-y-hidden md:overflow-x-hidden border-b md:border-b-0 md:border-r border-black/[0.08]"
       style={{
-        width: 220,
         background: "#ffffff",
-        borderRight: "0.5px solid rgba(0,0,0,0.08)",
         alignSelf: "stretch",
       }}
     >
       {/* Header */}
-      <div style={{ padding: "16px 20px 12px" }}>
+      <div className="hidden md:block" style={{ padding: "16px 20px 12px" }}>
         <p style={{ fontSize: 15, fontWeight: 700, color: "#1e1e1e", margin: 0 }}>
           Settings
         </p>
@@ -137,11 +135,15 @@ export function SettingsSidebar() {
 
       {/* Nav */}
       {settingsSections.map((section, si) => (
-        <div key={section.group} style={{ marginBottom: 6 }}>
+        <div key={section.group} className="flex flex-row md:flex-col flex-shrink-0" style={{ marginBottom: 0 }}>
           {si > 0 && (
-            <div style={{ height: "0.5px", background: "rgba(0,0,0,0.07)", margin: "8px 20px" }} />
+            <div
+              className="hidden md:block"
+              style={{ height: "0.5px", background: "rgba(0,0,0,0.07)", margin: "8px 20px" }}
+            />
           )}
           <p
+            className="hidden md:block"
             style={{
               fontSize: 9,
               fontWeight: 700,
@@ -168,11 +170,8 @@ export function SettingsSidebar() {
                 role="button"
                 tabIndex={0}
                 onKeyDown={(e) => e.key === "Enter" && router.push(item.href)}
+                className="flex items-center gap-2.5 whitespace-nowrap flex-shrink-0 px-3 py-2 md:px-5 md:py-[9px]"
                 style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  padding: "9px 20px",
                   cursor: "pointer",
                   fontSize: 12,
                   fontWeight: isActive ? 600 : 500,

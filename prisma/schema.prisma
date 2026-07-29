@@ -247,6 +247,10 @@ model Influencer {
   avg_views         Int      @default(0)
   niche             String?  @db.VarChar(100)
   location          String?  @db.VarChar(255)
+  // Platform-level moderation state, managed only from the Admin Dashboard —
+  // distinct from the per-brand BrandInfluencer.approval_status workflow.
+  verification_status String @default("pending") @db.VarChar(20)
+  is_suspended        Boolean @default(false)
   created_at        DateTime @default(now())
   updated_at        DateTime @updatedAt
 
@@ -256,6 +260,7 @@ model Influencer {
   @@unique([handle, platform])
   @@index([handle])
   @@index([platform])
+  @@index([verification_status])
   @@index([email])
   @@index([niche])
 }
@@ -401,6 +406,24 @@ model ContentPost {
   updated_at          DateTime @updatedAt
 
   @@index([brand_influencer_id])
+}
+
+// Platform-wide admin action log — distinct from ActivityLog (which is
+// brand-scoped and cascades with Brand deletion). No FK to User/Brand on
+// purpose: an admin action or its target may reference an entity that no
+// longer exists (e.g. a deleted campaign), and this log must survive that.
+model AdminAuditLog {
+  id           String   @id @default(cuid()) @db.VarChar(30)
+  admin_email  String   @db.VarChar(255)
+  action       String   @db.VarChar(100)
+  target_type  String   @db.VarChar(50)
+  target_id    String?  @db.VarChar(30)
+  target_label String?  @db.VarChar(255)
+  details      String?  @db.Text
+  created_at   DateTime @default(now())
+
+  @@index([created_at])
+  @@index([target_type, target_id])
 }
 
 model ActivityLog {

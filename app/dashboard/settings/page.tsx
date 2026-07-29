@@ -216,7 +216,7 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="max-w-3xl px-9 py-7">
+    <div className="max-w-3xl px-4 py-5 sm:px-6 sm:py-6 md:px-9 md:py-7">
       <div className="mb-6">
         <h1 className="text-lg font-semibold text-foreground">Profile</h1>
         <p className="text-xs text-muted-foreground">Manage your personal account information</p>
@@ -234,7 +234,7 @@ export default function ProfilePage() {
           </div>
         </div>
         <CardContent className="pt-4">
-          <div className="mb-4 flex items-center gap-4">
+          <div className="mb-4 flex flex-col sm:flex-row items-center sm:items-center gap-4 text-center sm:text-left">
             <Avatar className="h-20 w-20">
               <AvatarImage src={avatarUrl ?? undefined} alt="Avatar" />
               <AvatarFallback className="bg-primary text-lg font-bold text-primary-foreground">
@@ -263,7 +263,7 @@ export default function ProfilePage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
             <div className="space-y-1">
               <Label htmlFor="firstName" className="text-[11px] uppercase tracking-wide text-muted-foreground">
                 First name
@@ -286,7 +286,7 @@ export default function ProfilePage() {
                 placeholder="Last name"
               />
             </div>
-            <div className="col-span-2 space-y-1">
+            <div className="sm:col-span-2 space-y-1">
               <Label htmlFor="email" className="text-[11px] uppercase tracking-wide text-muted-foreground">
                 Email address
               </Label>
@@ -298,7 +298,7 @@ export default function ProfilePage() {
                 placeholder="you@example.com"
               />
             </div>
-            <div className="col-span-2 space-y-1">
+            <div className="sm:col-span-2 space-y-1">
               <Label htmlFor="jobTitle" className="text-[11px] uppercase tracking-wide text-muted-foreground">
                 Job title <span className="font-normal text-muted-foreground/70">(optional)</span>
               </Label>
@@ -335,7 +335,7 @@ export default function ProfilePage() {
           </div>
         </div>
         <CardContent className="pt-4">
-          <div className="grid grid-cols-3 gap-3.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3.5">
             <div className="space-y-1">
               <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">Timezone</Label>
               <Select value={timezone} onValueChange={setTimezone}>

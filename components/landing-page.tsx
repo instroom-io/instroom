@@ -793,7 +793,7 @@ export function LandingPage() {
             <Button
               variant="outline"
               onClick={() => setShowBookDemo(true)}
-              className="h-13 px-9 rounded-xl border-2 border-white/40 text-white bg-transparent hover:bg-white/10 hover:border-white/60 font-semibold text-base transition-all duration-150" style={{ height: "52px", fontSize: "1rem" }}
+              className="h-11 px-6 sm:h-12 sm:px-8 lg:h-13 lg:px-9 rounded-xl border-2 border-white/40 text-white bg-transparent hover:bg-white/10 hover:border-white/60 font-semibold text-sm sm:text-base transition-all duration-150"
             >
               Book a Demo
             </Button>

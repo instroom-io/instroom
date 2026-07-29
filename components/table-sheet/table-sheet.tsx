@@ -9,7 +9,7 @@ import {
   IconTrash, IconPlus, IconX, IconExternalLink, IconCheck, IconCalendar,
   IconGripVertical, IconSearch, IconFilter, IconTags, IconMapPin,
   IconChecklist, IconCopy, IconAlertTriangle, IconDownload, IconUpload,
-  IconSettings, IconChevronDown, IconLoader2, IconArrowsSort,
+  IconSettings, IconChevronDown, IconLoader2, IconArrowsSort, IconDots, IconEye,
 } from "@tabler/icons-react"
 
 import type { InfluencerRow, CustomColumn, AnyColDef, CustomColDef, CellAddress, FilterState, ToastNotification, SortOrder } from "./types"
@@ -217,7 +217,8 @@ export default function TableSheet({
   const [showAddRowsModal, setShowAddRowsModal]   = useState(false)
   const [showDeclineModal, setShowDeclineModal]   = useState(false)
   const [pendingDeclineRowIdx, setPendingDeclineRowIdx] = useState<number | null>(null)
-  const [showImportExportMenu, setShowImportExportMenu] = useState(false)
+  const [showImportExportMenu, setShowImportExportMenu]           = useState(false)
+  const [showSettingsMenu, setShowSettingsMenu]       = useState(false)
   const [showManageNiches, setShowManageNiches]       = useState(false)
   const [showManageLocations, setShowManageLocations] = useState(false)
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -260,6 +261,7 @@ export default function TableSheet({
   const [duplicateRowIds, setDuplicateRowIds]     = useState<Set<string>>(new Set())
   const [pendingDuplicateInfo, setPendingDuplicateInfo] = useState<{ rowId: string; handle: string; existingName: string } | null>(null)
 
+  const [openRowMenuId, setOpenRowMenuId]                 = useState<string | null>(null)
   const [showBulkStatusMenu, setShowBulkStatusMenu]       = useState(false)
   const [showBulkTransferConfirm, setShowBulkTransferConfirm] = useState(false)
   const bulkStatusRef = useRef<HTMLDivElement>(null)
@@ -269,8 +271,10 @@ export default function TableSheet({
   const containerRef       = useRef<HTMLDivElement>(null)
   const tabPendingRef      = useRef(false)
   const filterBtnRef       = useRef<HTMLButtonElement>(null)
-  const importExportBtnRef = useRef<HTMLButtonElement>(null)
-  const importExportRef    = useRef<HTMLDivElement>(null)
+  const importExportBtnRef       = useRef<HTMLButtonElement>(null)
+  const importExportRef      = useRef<HTMLDivElement>(null)
+  const settingsBtnRef     = useRef<HTMLButtonElement>(null)
+  const settingsMenuRef    = useRef<HTMLDivElement>(null)
   const fileInputRef       = useRef<HTMLInputElement>(null)
 
   const { toasts, addToast, dismissToast } = useToast()
@@ -318,7 +322,7 @@ export default function TableSheet({
         avg_views: parseFormattedNumber(d.avg_video_views || d.avg_views),
       }
     } catch (err) {
-      console.error(`API fetch error for ${handle}:`, err)
+      console.warn(`API fetch error for ${handle}:`, err)
       setApiErrorModal({ open: true, platform, handle: clean })
       return null
     }
@@ -352,6 +356,22 @@ export default function TableSheet({
     }
     document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h)
   }, [showImportExportMenu])
+
+  useEffect(() => {
+    if (!showSettingsMenu) return
+    const h = (e: MouseEvent) => {
+      if (settingsMenuRef.current && !settingsMenuRef.current.contains(e.target as Node) &&
+          settingsBtnRef.current && !settingsBtnRef.current.contains(e.target as Node))
+        setShowSettingsMenu(false)
+    }
+    document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h)
+  }, [showSettingsMenu])
+
+  useEffect(() => {
+    if (!openRowMenuId) return
+    const h = () => setOpenRowMenuId(null)
+    document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h)
+  }, [openRowMenuId])
 
   const filteredRows = (() => {
     const filtered = rows.filter(row => {
@@ -393,6 +413,28 @@ export default function TableSheet({
   }, [filteredRows.length, rowsPerPage, currentPage])
 
   const sidebarRow = rows.find(r => r.id === sidebarRowId) || null
+
+  // Row click is delayed briefly so a double-click can cancel it — otherwise
+  // the first click of a double-click would collapse an existing multi-select
+  // before onDoubleClick even fires, destroying the selection just to view a
+  // profile. Modifier-key clicks (ctrl/shift multi-select) run immediately —
+  // those are deliberate gestures, never the start of a double-click.
+  const rowClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (rowClickTimerRef.current) clearTimeout(rowClickTimerRef.current) }, [])
+
+  const handleRowClick = (id: string, e: React.MouseEvent) => {
+    if (e.ctrlKey || e.metaKey || e.shiftKey) {
+      handleRowSelect(id, e)
+      return
+    }
+    if (rowClickTimerRef.current) clearTimeout(rowClickTimerRef.current)
+    rowClickTimerRef.current = setTimeout(() => { handleRowSelect(id, e); rowClickTimerRef.current = null }, 200)
+  }
+
+  const handleRowDoubleClick = (id: string) => {
+    if (rowClickTimerRef.current) { clearTimeout(rowClickTimerRef.current); rowClickTimerRef.current = null }
+    setSidebarRowId(id)
+  }
 
   const handleRowSelect = (id: string, e?: React.MouseEvent) => {
     if (e?.ctrlKey || e?.metaKey) {
@@ -930,7 +972,7 @@ export default function TableSheet({
       )
       const socialLink = row.social_link || getProfileUrl(row.platform, row.handle)
       return (
-        <td key={col.key} className={`group border border-gray-200 px-1.5 py-1 text-xs cursor-cell select-none relative hover:bg-blue-50/20 ${ringCls}`} style={{ minWidth: col.minWidth }} onClick={() => startEdit(rowIdx, colIdx)} onFocus={() => setActiveCell({ rowIdx, colIdx })} title="Double-click to view profile">
+        <td key={col.key} className={`group border border-gray-200 px-1.5 py-1 text-xs cursor-cell select-none relative hover:bg-blue-50/20 ${ringCls}`} style={{ minWidth: col.minWidth }} onClick={() => startEdit(rowIdx, colIdx)} onFocus={() => setActiveCell({ rowIdx, colIdx })} title="Click avatar to view profile · click name to edit">
           <div className="flex items-center gap-2">
             <div
               className="rounded-full ring-2 ring-transparent group-hover:ring-blue-400 hover:!ring-blue-500 transition cursor-pointer flex-shrink-0"
@@ -1023,7 +1065,16 @@ export default function TableSheet({
       {/* API Error Modal */}
       {apiErrorModal.open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={e => { if (e.target === e.currentTarget) setApiErrorModal({ open: false }) }}>
-          <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-lg">
+          <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-lg relative">
+            <button type="button" aria-label="Cancel and delete row" title="Cancel and delete row"
+              className="absolute top-3 right-3 p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition"
+              onClick={() => {
+                const { rowId } = apiErrorModal
+                setApiErrorModal({ open: false })
+                if (rowId) deleteRow(rowId)
+              }}>
+              <IconX size={16} />
+            </button>
             <div className="flex items-start gap-3">
               <div className="flex-shrink-0 p-1.5 bg-red-100 rounded-full">
                 <IconAlertTriangle size={20} className="text-red-600" />
@@ -1050,7 +1101,7 @@ export default function TableSheet({
 
       {pendingDuplicateInfo && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={e => { if (e.target === e.currentTarget) setPendingDuplicateInfo(null) }}>
-          <div className="bg-white rounded-xl shadow-xl w-[420px] p-5">
+          <div className="bg-white rounded-xl shadow-xl w-[420px] max-w-[90vw] p-5">
             <div className="flex items-start gap-2.5 mb-3">
               <div className="p-1.5 bg-amber-100 rounded-full flex-shrink-0"><IconAlertTriangle size={18} className="text-amber-600" /></div>
               <div>
@@ -1124,10 +1175,8 @@ export default function TableSheet({
           {/* Right-side controls */}
           <div className="flex items-center gap-1.5 ml-auto">
             {!readOnly && (
-              <button onClick={addRow} className="flex items-center gap-1.5 px-2.5 py-2 text-xs font-medium border border-gray-200 rounded-lg text-gray-700 hover:bg-green-50 hover:text-green-700 hover:border-green-200 transition" title="Add a new row"><IconPlus size={14} /> Add Row</button>
+              <button onClick={addRow} className="flex items-center gap-1.5 px-2.5 py-2 text-xs font-medium border border-gray-200 rounded-lg text-gray-700 hover:bg-green-50 hover:text-green-700 hover:border-green-200 transition" title="Add a new influencer"><IconPlus size={18} /> Add Influencer</button>
             )}
-            <button onClick={() => setShowManageNiches(true)} className="flex items-center gap-1.5 px-2.5 py-2 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 transition" title="Manage niches"><IconTags size={13} /> Niches</button>
-            <button onClick={() => setShowManageLocations(true)} className="flex items-center gap-1.5 px-2.5 py-2 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 transition" title="Manage locations"><IconMapPin size={13} /> Locations</button>
 
             <div className="relative">
               <button
@@ -1151,6 +1200,16 @@ export default function TableSheet({
                   <button onClick={() => { fileInputRef.current?.click(); setShowImportExportMenu(false) }} className="flex items-center gap-2 w-full text-left px-3 py-2 text-xs hover:bg-gray-50 transition text-gray-700"><IconUpload size={13} className="text-blue-500" /> Import from CSV</button>
                   <button onClick={() => { exportToCSV(rows, customCols); setShowImportExportMenu(false) }} className="flex items-center gap-2 w-full text-left px-3 py-2 text-xs hover:bg-gray-50 transition text-gray-700"><IconDownload size={13} className="text-green-500" /> Export to CSV</button>
                   <button onClick={() => { downloadTemplate(customCols); setShowImportExportMenu(false) }} className="flex items-center gap-2 w-full text-left px-3 py-2 text-xs hover:bg-gray-50 transition text-gray-700"><IconDownload size={13} className="text-gray-400" /> Download template</button>
+                </div>
+              )}
+            </div>
+
+            <div className="relative">
+              <button ref={settingsBtnRef} onClick={() => setShowSettingsMenu(v => !v)} className="flex items-center gap-1.5 px-2.5 py-2 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 transition" title="Settings"><IconSettings size={13} /> Settings</button>
+              {showSettingsMenu && (
+                <div ref={settingsMenuRef} className="absolute right-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-lg shadow-xl w-52 py-1">
+                  <button onClick={() => { setShowManageNiches(true); setShowSettingsMenu(false) }} className="flex items-center gap-2 w-full text-left px-3 py-2 text-xs hover:bg-gray-50 transition text-gray-700"><IconTags size={13} className="text-gray-400" /> Add Niche</button>
+                  <button onClick={() => { setShowManageLocations(true); setShowSettingsMenu(false) }} className="flex items-center gap-2 w-full text-left px-3 py-2 text-xs hover:bg-gray-50 transition text-gray-700"><IconMapPin size={13} className="text-gray-400" /> Add Location</button>
                 </div>
               )}
             </div>
@@ -1199,7 +1258,7 @@ export default function TableSheet({
       {/* Bulk transfer confirm */}
       {showBulkTransferConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={e => { if (e.target === e.currentTarget) setShowBulkTransferConfirm(false) }}>
-          <div className="bg-white rounded-xl shadow-xl w-[400px] p-5">
+          <div className="bg-white rounded-xl shadow-xl w-[400px] max-w-[90vw] p-5">
             <div className="flex items-start gap-2.5 mb-3">
               <div className="p-1.5 bg-green-100 rounded-full flex-shrink-0"><IconChecklist size={18} className="text-green-600" /></div>
               <div className="flex-1">
@@ -1275,7 +1334,7 @@ export default function TableSheet({
                 const isDup = duplicateRowIds.has(row.id)
                 return (
                   <tr key={row.id} className={`group cursor-pointer transition-colors ${isSel ? "bg-blue-100" : "hover:bg-gray-50/60"} ${isDeclined ? "bg-red-50/30" : ""} ${isDup ? "bg-amber-50/50 opacity-60" : ""}`}
-                    onClick={e => handleRowSelect(row.id, e)} onDoubleClick={() => setSidebarRowId(row.id)}>
+                    onClick={e => handleRowClick(row.id, e)} onDoubleClick={() => handleRowDoubleClick(row.id)}>
                     <td className="border border-gray-100 text-center bg-gray-50/40 select-none py-0.5">
                       <div className="flex flex-col items-center justify-center gap-0.5">
                         {isFetching ? <IconLoader2 size={12} className="text-green-600 animate-spin" />
@@ -1287,7 +1346,12 @@ export default function TableSheet({
                     {allCols.map((col, ci) => renderCell(row, ri, col, ci))}
                     {!readOnly && <td className="border border-gray-200 bg-gray-50/40" />}
                     <td className="border border-gray-200 text-center bg-gray-50/40">
-                      {!readOnly && <button onClick={e => { e.stopPropagation(); deleteRow(row.id) }} className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-500 transition"><IconTrash size={12} /></button>}
+                      <div className="flex items-center justify-center gap-0.5">
+                        <button onClick={e => { e.stopPropagation(); setSidebarRowId(row.id) }} title="View profile"
+                          className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-blue-600 transition"><IconEye size={13} /></button>
+                        {!readOnly && <button onClick={e => { e.stopPropagation(); deleteRow(row.id) }} title="Delete row"
+                          className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-500 transition"><IconTrash size={12} /></button>}
+                      </div>
                     </td>
                   </tr>
                 )

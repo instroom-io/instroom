@@ -283,7 +283,7 @@ function CollaboratorsContent() {
   }
 
   return (
-    <div className="max-w-[1040px] px-9 py-7">
+    <div className="max-w-[1040px] px-4 py-5 sm:px-6 sm:py-6 md:px-9 md:py-7">
       <div className="mb-6">
         <h1 className="text-lg font-semibold text-foreground">Team & Collaborators</h1>
         <p className="text-xs text-muted-foreground">Manage who has access to your brand</p>
@@ -296,7 +296,7 @@ function CollaboratorsContent() {
         </div>
       )}
 
-      <div className="grid grid-cols-[420px_1fr] items-start gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-[420px_1fr] items-start gap-5">
         {/* Left column */}
         <div className="flex flex-col gap-4">
           {/* Owner */}
@@ -305,7 +305,7 @@ function CollaboratorsContent() {
               <div className="border-b px-5 py-3">
                 <p className="text-sm font-semibold text-foreground">Brand owner</p>
               </div>
-              <CardContent className="flex items-center justify-between px-5 py-4">
+              <CardContent className="flex flex-wrap items-center justify-between gap-2 px-5 py-4">
                 <div className="flex items-center gap-3">
                   <Avatar className="h-10 w-10">
                     <AvatarImage src={owner.image || ""} alt={owner.name || ""} />
@@ -313,9 +313,9 @@ function CollaboratorsContent() {
                       {(owner.name || owner.email).charAt(0).toUpperCase()}
                     </AvatarFallback>
                   </Avatar>
-                  <div>
-                    <p className="text-sm font-semibold text-foreground">{owner.name || owner.email}</p>
-                    <p className="text-xs text-muted-foreground">{owner.email}</p>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-foreground">{owner.name || owner.email}</p>
+                    <p className="truncate text-xs text-muted-foreground">{owner.email}</p>
                   </div>
                 </div>
                 <span className="whitespace-nowrap rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold text-emerald-800">

@@ -8,7 +8,7 @@ import { BookDemoModal } from "@/components/shared/book-demo-modal"
 export function PricingFinalCTA() {
   const [showBookDemo, setShowBookDemo] = useState(false)
   return (
-    <section style={{ background: "#1E1E1E", position: "relative", overflow: "hidden", padding: "100px 32px" }}>
+    <section className="px-5 py-16 sm:px-8 sm:py-20 lg:px-8 lg:py-[100px]" style={{ background: "#1E1E1E", position: "relative", overflow: "hidden" }}>
       <div
         style={{
           position: "absolute",
@@ -19,8 +19,8 @@ export function PricingFinalCTA() {
       <div className="max-w-2xl mx-auto text-center relative z-10">
         <p className="text-xs font-bold uppercase tracking-widest text-emerald-500 mb-4">Ready to Simplify?</p>
         <h2
-          style={{ fontFamily: "'Manrope', sans-serif", fontSize: "44px", fontWeight: 900, letterSpacing: "-0.03em" }}
-          className="text-white mb-6 leading-tight"
+          style={{ fontFamily: "'Manrope', sans-serif", fontWeight: 900, letterSpacing: "-0.03em" }}
+          className="text-white mb-6 leading-tight text-3xl sm:text-4xl lg:text-[44px]"
         >
           Start free. Upgrade only when you outgrow it.
         </h2>

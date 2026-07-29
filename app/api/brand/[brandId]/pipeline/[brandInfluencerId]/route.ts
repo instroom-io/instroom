@@ -25,7 +25,7 @@ import { provisionGoAffProAffiliate } from "@/lib/goaffpro-provision"
 import { hasBrandCapability } from "@/lib/permissions"
 
 // ─── Status → DB field mapping ────────────────────────────────────────────────
-function pipelineStatusToFields(pipelineStatus: string): {
+function pipelineStatusToFields(pipelineStatus: string, collaborationType?: string): {
   contact_status:  string
   stage:           number
   approval_status: string
@@ -38,7 +38,12 @@ function pipelineStatusToFields(pipelineStatus: string): {
     case "In Conversation":
       return { contact_status: "negotiating",         stage: 3, approval_status: "Approved" }
     case "Deal Agreed":
-      return { contact_status: "agreed",              stage: 4, approval_status: "Approved" }
+      // Confirming a Collaboration Type is what marks the deal as fully agreed —
+      // once it's set, skip the separate "Move to Post Tracker" step entirely and
+      // land directly on Post Tracker's default initial status (stage 5).
+      return collaborationType
+        ? { contact_status: "for_order_creation", stage: 5, approval_status: "Approved" }
+        : { contact_status: "agreed",              stage: 4, approval_status: "Approved" }
     case "For Order Creation":
       return { contact_status: "for_order_creation",  stage: 5, approval_status: "Approved" }
     case "Not Interested":
@@ -63,9 +68,10 @@ export async function PATCH(
     const { brandId, brandInfluencerId } = await params
 
     const body = await req.json()
-    const { pipelineStatus, niReason } = body as {
+    const { pipelineStatus, niReason, collaborationType } = body as {
       pipelineStatus?: string
       niReason?: string
+      collaborationType?: string
     }
 
     if (!pipelineStatus) {
@@ -91,13 +97,24 @@ export async function PATCH(
     }
 
     // ── Compute DB fields from pipeline status ───────────────────────────────
-    const fields = pipelineStatusToFields(pipelineStatus)
+    const fields = pipelineStatusToFields(pipelineStatus, collaborationType)
 
     // ── Snapshot BEFORE state so the change can be logged ────────────────────
     const before = await prisma.brandInfluencer.findUnique({
       where: { id: brandInfluencerId, brand_id: brandId },
-      select: { contact_status: true, stage: true },
+      select: { contact_status: true, stage: true, product_details: true },
     })
+
+    // ── Merge Collaboration Type into the same product_details JSON blob
+    //    that Post Tracker's own Collaboration Type dropdown writes to
+    //    (product_details.campaignType) — one shared value everywhere.
+    let productDetailsJson: string | undefined
+    if (collaborationType !== undefined) {
+      let details: Record<string, unknown> = {}
+      try { details = before?.product_details ? JSON.parse(before.product_details) : {} } catch { details = {} }
+      details.campaignType = collaborationType
+      productDetailsJson = JSON.stringify(details)
+    }
 
     // ── Update — select only what we send back ────────────────────────────────
     const updated = await prisma.brandInfluencer.update({
@@ -109,12 +126,13 @@ export async function PATCH(
         contact_status:  fields.contact_status,
         stage:           fields.stage,
         approval_status: fields.approval_status,
+        ...(productDetailsJson !== undefined ? { product_details: productDetailsJson } : {}),
         // Only write approval_notes for NI moves — don't overwrite on others
         ...(pipelineStatus === "Not Interested"
           ? { approval_notes: niReason || "Not interested" }
           : {}),
       },
-      // Return only the 4 fields the client needs to confirm the update.
+      // Return only the fields the client needs to confirm the update.
       // Avoids loading the full row (Text fields, relations, etc.)
       select: {
         id:              true,
@@ -124,8 +142,10 @@ export async function PATCH(
       },
     })
 
-    // ── Provision GoAffPro affiliate on first transition into Deal Agreed ────
-    if (before && before.stage !== 4 && fields.stage === 4) {
+    // ── Provision GoAffPro affiliate on first transition into Deal Agreed or
+    //    beyond — guarded so it only fires once, whether the row lands on
+    //    stage 4 (legacy path) or jumps straight to stage 5 (new cascade).
+    if (before && before.stage < 4 && fields.stage >= 4) {
       provisionGoAffProAffiliate({ brandId, brandInfluencerId }).then((result) => {
         if (!result.success && !result.skipped) {
           console.error("GoAffPro provisioning failed:", result.reason)
@@ -211,7 +231,10 @@ export async function PATCH(
       console.error("❌ Notification setup failed:", err)
     }
 
-    return NextResponse.json({ success: true, data: updated })
+    return NextResponse.json({
+      success: true,
+      data: { ...updated, collabType: collaborationType },
+    })
 
   } catch (error: unknown) {
     const e = error as { code?: string; message?: string }

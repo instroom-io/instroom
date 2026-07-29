@@ -26,7 +26,7 @@ export function Hub({ onNavigate }: { onNavigate: (page: PageId) => void }) {
   return (
     <>
       <div style={{ background: "#F4F7F5", backgroundImage: "radial-gradient(circle, rgba(31,174,91,0.12) 1px, transparent 1px)", backgroundSize: "28px 28px" }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "56px 40px 0", textAlign: "center" }}>
+        <div className="px-4 sm:px-6 lg:px-10 pt-8 sm:pt-10 lg:pt-14" style={{ maxWidth: 1100, margin: "0 auto", textAlign: "center" }}>
           <div className="sol-eyebrow fade-up" style={{ margin: "0 auto 16px" }}>
             <span className="sol-eyebrow-dot" />
             Solutions
@@ -42,7 +42,7 @@ export function Hub({ onNavigate }: { onNavigate: (page: PageId) => void }) {
       </div>
 
       <div style={{ background: "#fff", borderBottom: "0.5px solid var(--border)" }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "40px 40px 64px" }}>
+        <div className="px-4 sm:px-6 lg:px-10 pt-6 sm:pt-8 lg:pt-10 pb-10 sm:pb-12 lg:pb-16" style={{ maxWidth: 1100, margin: "0 auto" }}>
           <div className="hub-cards-grid fade-up delay-3" style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 16 }}>
             {cards.map(card => (
               <button key={card.id} onClick={() => onNavigate(card.id)} className="hub-card" style={{ textAlign: "left", width: "100%", fontFamily: "inherit" }}>
