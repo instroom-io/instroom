@@ -255,9 +255,9 @@ export function LandingPage() {
               Instroom is the system. Every creator, every campaign, every result — in one workspace. Built by people who've done the work.
             </p>
             <div className={styles.heroCtas}>
-              <Link href="/signup">
+              <Link href="/early-access">
                 <Button className="bg-gradient-to-r from-[#0F6B3E] to-[#1FAE5B] text-white font-semibold h-12 px-8 hover:from-[#0a5a2f] hover:to-[#158a48] shadow-lg shadow-emerald-500/25 rounded-xl">
-                  Try it for Free
+                  Get Early Access
                 </Button>
               </Link>
               <a href="#features">
@@ -743,9 +743,9 @@ export function LandingPage() {
           <p className={`${styles.fontHand} text-3xl font-semibold text-[#0F6B3E] mb-8 leading-snug`}>
             Hopefully yours will live here soon.<br />Fingers crossed.
           </p>
-          <Link href="/signup">
+          <Link href="/early-access">
             <Button className="bg-gradient-to-r from-[#0F6B3E] to-[#1FAE5B] text-white font-semibold h-12 px-8 hover:from-[#0a5a2f] hover:to-[#158a48] rounded-xl shadow-lg shadow-emerald-600/20">
-              Try it for Free
+              Get Early Access
             </Button>
           </Link>
         </div>
@@ -785,9 +785,9 @@ export function LandingPage() {
           <h2>The system is ready. Your next campaign is waiting.</h2>
           <p className={styles.finalCtaLead}>Stop building the process. Start running the campaign.</p>
           <div className={styles.heroCtas} style={{ justifyContent: "center" }}>
-            <Link href="/signup">
-              <Button className="bg-[#1FAE5B] text-white font-bold h-11 px-6 sm:h-12 sm:px-8 lg:h-13 lg:px-9 rounded-xl hover:bg-[#158a48] shadow-lg shadow-emerald-500/40 text-sm sm:text-base transition-all duration-150">
-                Try it for Free
+            <Link href="/early-access">
+              <Button className="bg-[#1FAE5B] text-white font-bold h-13 px-9 rounded-xl hover:bg-[#158a48] shadow-lg shadow-emerald-500/40 text-base transition-all duration-150" style={{ height: "52px", fontSize: "1rem" }}>
+                Get Early Access
               </Button>
             </Link>
             <Button

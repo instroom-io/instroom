@@ -28,9 +28,9 @@ export function PricingFinalCTA() {
           Basic is free forever — no credit card, no time limit. Upgrade to Solo or Team whenever you need more workspaces and campaigns.
         </p>
         <div className="flex gap-3 justify-center mb-4 flex-wrap">
-          <Link href="/signup">
+          <Link href="/early-access">
             <Button className="bg-[#1FAE5B] text-white font-bold h-13 px-9 rounded-xl hover:bg-[#158a48] shadow-lg shadow-emerald-500/40 text-base transition-all duration-150" style={{ height: "52px", fontSize: "1rem" }}>
-              Try it for Free
+              Get Early Access
             </Button>
           </Link>
           <Button
