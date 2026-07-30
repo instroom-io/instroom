@@ -42,7 +42,7 @@ export function TikTokDownloaderFeatures() {
       <div className="max-w-6xl mx-auto">
         <h2
           className="text-center mb-12"
-          style={{ fontFamily: "'Manrope', sans-serif", fontSize: "30px", fontWeight: 800, letterSpacing: "-0.02em", color: "#1E1E1E" }}
+          style={{ fontFamily: "'Manrope', sans-serif", fontSize: "clamp(1.375rem, 5vw, 1.875rem)", fontWeight: 800, letterSpacing: "-0.02em", color: "#1E1E1E" }}
         >
           Why Use Our <span style={{ color: "#1FAE5B" }}>TikTok Video Downloader</span>?
         </h2>

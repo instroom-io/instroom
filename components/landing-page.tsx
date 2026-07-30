@@ -228,7 +228,7 @@ export function LandingPage() {
               <div className={styles.heroEyebrowDot} />
               Influencer marketing, organized
             </div>
-            <h1 className={styles.heroH1} style={{ fontFamily: "'Manrope', sans-serif", fontSize: "52px", fontWeight: 800, lineHeight: 1.08, letterSpacing: "-0.03em", marginBottom: "24px" }}>Influencer marketing isn't{" "}
+            <h1 className={styles.heroH1} style={{ fontFamily: "'Manrope', sans-serif", fontWeight: 800, lineHeight: 1.08, letterSpacing: "-0.03em", marginBottom: "24px" }}>Influencer marketing isn't{" "}
             <span style={{ position: "relative", display: "inline-block" }}>
               <span style={{ position: "relative", zIndex: 1 }}>complicated</span>
               <svg
@@ -277,7 +277,7 @@ export function LandingPage() {
           <div className={styles.heroMockup}>
             <div className="h-full w-full flex font-[Inter,system-ui,-apple-system,sans-serif] overflow-hidden">
               {/* Sidebar */}
-              <div className="w-[128px] shrink-0 bg-[#0F6B3E] flex flex-col pt-3 pb-2 px-2 gap-3">
+              <div className={`${styles.heroMockupSidebar} shrink-0 bg-[#0F6B3E] flex flex-col pt-3 pb-2 px-2 gap-3`}>
                 <Image src="/INSTROOM WHITE.png" alt="Instroom" width={72} height={15} className="object-contain self-center" />
                 <div className="w-full h-px bg-white/20" />
                 <div className="flex flex-col gap-1">
@@ -395,16 +395,6 @@ export function LandingPage() {
           <div className={styles.heroBadge}>
             <div className={styles.heroBadgeDot} />
             200+ campaigns managed
-          </div>
-
-          <div className={`${styles.heroFloatBadge} ${styles.heroFloatTop}`}>
-            <IconStarFilled size={12} className="text-[#F4C24A]" />
-            4.9/5 average rating
-          </div>
-
-          <div className={`${styles.heroFloatBadge} ${styles.heroFloatBottom}`}>
-            <IconArrowsMove size={12} className="text-[#1FAE5B]" />
-            Drag &amp; drop pipeline
           </div>
 
           <div className={`${styles.heroFloatBadge} ${styles.heroFloatTop}`}>

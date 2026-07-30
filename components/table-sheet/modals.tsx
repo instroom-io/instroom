@@ -29,7 +29,7 @@ export function ConfirmationDialog({ isOpen, onClose, onConfirm, title, message,
   if (!isOpen) return null
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="bg-white rounded-xl shadow-xl w-[420px] p-5">
+      <div className="bg-white rounded-xl shadow-xl w-[420px] max-w-[90vw] p-5">
         <div className="flex items-start gap-2.5 mb-3">
           <div className={`p-2 ${s.iconBg} rounded-full flex-shrink-0`}><IC size={24} className={s.iconColor} /></div>
           <div className="flex-1"><h3 className="text-base font-semibold text-gray-900">{title}</h3><div className="text-sm text-gray-500 mt-1">{message}</div></div>
@@ -72,7 +72,7 @@ export function AddRowsModal({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="bg-white rounded-xl shadow-xl w-[380px] p-5">
+      <div className="bg-white rounded-xl shadow-xl w-[380px] max-w-[90vw] p-5">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-base font-semibold text-gray-900">Add Multiple Rows</h3>
           <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600 transition rounded">
@@ -167,7 +167,7 @@ export function DeclineConfirmationModal({ isOpen, onClose, onConfirm, influence
   }
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="bg-white rounded-xl shadow-xl w-[420px] p-5">
+      <div className="bg-white rounded-xl shadow-xl w-[420px] max-w-[90vw] p-5">
         <div className="flex items-center gap-2.5 mb-3">
           <div className="p-2 bg-red-100 rounded-full"><IconAlertTriangle size={20} className="text-red-600" /></div>
           <div>
@@ -236,7 +236,7 @@ export function ManageOptionsModal({ isOpen, onClose, title, options, onAdd, onR
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[1px]" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="bg-white rounded-2xl shadow-2xl w-[400px] max-h-[80vh] flex flex-col overflow-hidden">
+      <div className="bg-white rounded-2xl shadow-2xl w-[400px] max-w-[90vw] max-h-[80vh] flex flex-col overflow-hidden">
         <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-gray-100">
           <div>
             <h3 className="text-base font-semibold text-gray-900">{title}</h3>
@@ -334,7 +334,7 @@ export function AddColumnModal({ isOpen, onClose, onConfirm, customCols }: {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="bg-white rounded-xl shadow-xl w-[620px] max-h-[90vh] overflow-y-auto">
+      <div className="bg-white rounded-xl shadow-xl w-[620px] max-w-[90vw] max-h-[90vh] overflow-y-auto">
         <div className="px-5 pt-5 pb-3 border-b border-gray-100">
           <div className="flex items-center justify-between">
             <div>
@@ -447,7 +447,7 @@ export function FilterPopover({ isOpen, onClose, filters, onApplyFilters, onClea
   const selCls = "w-full px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg outline-none bg-white focus:ring-2 focus:ring-blue-400"
   const inputCls = "w-full px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-400"
   return (
-    <div ref={ref} className="absolute top-full right-0 mt-2 z-50 bg-white border border-gray-200 rounded-xl shadow-xl w-[400px]" onClick={e => e.stopPropagation()}>
+    <div ref={ref} className="absolute top-full right-0 mt-2 z-50 bg-white border border-gray-200 rounded-xl shadow-xl w-[400px] max-w-[90vw]" onClick={e => e.stopPropagation()}>
       <div className="px-4 pt-4 pb-2 flex items-center justify-between">
         <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider">Filters</h4>
         <button onClick={() => { setLf({ platform:"all",niche:"all",location:"all",gender:"all",approval:"all",dateFrom:"",dateTo:"" }); onClearFilters() }} className="text-[10px] text-gray-400 hover:text-gray-600 transition">Clear all</button>

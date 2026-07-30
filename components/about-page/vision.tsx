@@ -1,6 +1,6 @@
 export function AboutVision() {
   return (
-    <section style={{ background: "#1E1E1E", position: "relative", overflow: "hidden", padding: "60px 32px" }}>
+    <section style={{ background: "#1E1E1E", position: "relative", overflow: "hidden", padding: "clamp(40px,8vw,60px) clamp(16px,5vw,32px)" }}>
       <div
         style={{
           position: "absolute",
@@ -8,7 +8,7 @@ export function AboutVision() {
           background: "radial-gradient(ellipse at 30% 50%, rgba(31,174,91,0.18) 0%, transparent 70%)",
         }}
       />
-      <div className="max-w-6xl mx-auto flex items-center gap-12 relative z-10">
+      <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-start sm:items-center gap-6 sm:gap-12 relative z-10">
         <div
           style={{ background: "rgba(31,174,91,0.15)", border: "1px solid rgba(31,174,91,0.3)" }}
           className="w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0 text-3xl"
@@ -20,7 +20,7 @@ export function AboutVision() {
           <p
             style={{
               fontFamily: "'Manrope', sans-serif",
-              fontSize: "22px",
+              fontSize: "clamp(1.1rem, 3vw, 1.375rem)",
               fontWeight: 700,
               color: "white",
               lineHeight: 1.4,

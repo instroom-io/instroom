@@ -1,8 +1,45 @@
 import { prisma } from "@/lib/prisma"
+import { upsertGhlContact } from "@/lib/ghl"
 import { NextRequest, NextResponse } from "next/server"
 
 function validEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())
+}
+
+// Sends the signup to GHL and persists the sync result. Never throws — a
+// GHL failure (or any unexpected error in this whole function) is caught
+// and recorded on the row, never surfaced to the caller, so the Early
+// Access registration itself always succeeds regardless of GHL. This is
+// deliberately double-guarded: upsertGhlContact() already catches its own
+// errors, but this outer try/catch means even a mistake in THIS function
+// can't turn an already-successful DB save into a failed HTTP response.
+async function syncToGhl(signup: { id: string; email: string; name: string | null; role: string | null; phone: string | null }) {
+  try {
+    const result = await upsertGhlContact({
+      email: signup.email,
+      name: signup.name,
+      phone: signup.phone,
+      role: signup.role,
+      source: "Instroom Website",
+    })
+
+    await prisma.earlyAccessSignup.update({
+      where: { id: signup.id },
+      data: result.success
+        ? {
+            ghl_contact_id: result.contactId,
+            ghl_sync_status: "synced",
+            ghl_synced_at: new Date(),
+            ghl_sync_error: null,
+          }
+        : {
+            ghl_sync_status: "failed",
+            ghl_sync_error: result.error,
+          },
+    })
+  } catch (err) {
+    console.error("GHL sync failed unexpectedly:", err instanceof Error ? err.message : String(err))
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -22,14 +59,55 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Let us know what you're running." }, { status: 400 })
     }
 
+    // If an Instroom account already exists with this email, connect this
+    // signup to it and prefer the account's own name — avoids sending GHL
+    // an incomplete/duplicate-looking contact when we already know who they
+    // are, instead of only trusting the raw form input.
+    const existingUser = await prisma.user.findUnique({
+      where: { email },
+      select: { id: true, name: true },
+    })
+
     const existing = await prisma.earlyAccessSignup.findUnique({ where: { email } })
+
+    let signup: { id: string; email: string; name: string | null; role: string | null; phone: string | null }
+
     if (existing) {
+      // Already on the list — link the account if it wasn't linked before
+      // (e.g. they signed up for early access first, made an account
+      // later), and retry the GHL sync if it previously failed or is
+      // still pending. Re-submitting the form is the retry mechanism.
+      signup = await prisma.earlyAccessSignup.update({
+        where: { id: existing.id },
+        data: {
+          user_id: existing.user_id ?? existingUser?.id ?? null,
+          name: existing.name || existingUser?.name || name,
+        },
+        select: { id: true, email: true, name: true, role: true, phone: true },
+      })
+
+      if (existing.ghl_sync_status !== "synced") {
+        await syncToGhl(signup)
+      }
+
       return NextResponse.json({ success: true, alreadyOnList: true })
     }
 
-    await prisma.earlyAccessSignup.create({
-      data: { email, name, role },
+    signup = await prisma.earlyAccessSignup.create({
+      data: {
+        email,
+        name: existingUser?.name || name,
+        role,
+        user_id: existingUser?.id ?? null,
+      },
+      select: { id: true, email: true, name: true, role: true, phone: true },
     })
+
+    // Fire the GHL sync only after the DB save above has already succeeded.
+    // Awaited (not queued) to match this app's existing style of direct
+    // synchronous calls, but its own errors are fully contained in
+    // syncToGhl and can never fail this response.
+    await syncToGhl(signup)
 
     return NextResponse.json({ success: true })
   } catch (error) {

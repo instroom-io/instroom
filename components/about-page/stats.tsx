@@ -7,12 +7,12 @@ const stats = [
 
 export function AboutStats() {
   return (
-    <section style={{ background: "#F7F9F8", padding: "100px 32px" }}>
+    <section style={{ background: "#F7F9F8", padding: "clamp(48px,10vw,100px) clamp(16px,5vw,32px)" }}>
       <div className="max-w-6xl mx-auto">
-        <div className="text-center mb-20">
+        <div className="text-center mb-12 sm:mb-16 lg:mb-20">
           <p className="text-xs font-bold uppercase tracking-widest text-emerald-600 mb-4">By The Numbers</p>
           <h2
-            style={{ fontFamily: "'Manrope', sans-serif", fontSize: "36px", fontWeight: 800, letterSpacing: "-0.02em" }}
+            style={{ fontFamily: "'Manrope', sans-serif", fontSize: "clamp(1.5rem, 4vw, 2.25rem)", fontWeight: 800, letterSpacing: "-0.02em" }}
             className="text-zinc-900 mb-3"
           >
             Proven experience, not just promises.
@@ -21,11 +21,11 @@ export function AboutStats() {
             The numbers behind Instroom aren't projections — they're the track record that inspired it.
           </p>
         </div>
-        <div className="grid grid-cols-4 gap-px bg-zinc-300 rounded-2xl overflow-hidden border border-zinc-300">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-zinc-300 rounded-2xl overflow-hidden border border-zinc-300">
           {stats.map((stat, idx) => (
-            <div key={idx} className="bg-white p-12 text-center">
+            <div key={idx} className="bg-white p-6 sm:p-8 lg:p-12 text-center">
               <div
-                style={{ fontFamily: "'Manrope', sans-serif", fontSize: "44px", fontWeight: 900, letterSpacing: "-0.03em" }}
+                style={{ fontFamily: "'Manrope', sans-serif", fontSize: "clamp(1.75rem, 5vw, 2.75rem)", fontWeight: 900, letterSpacing: "-0.03em" }}
                 className="text-zinc-900 mb-2"
               >
                 {stat.number}

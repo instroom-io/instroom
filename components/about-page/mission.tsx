@@ -27,13 +27,13 @@ export function AboutMission() {
           pointerEvents: "none",
         }}
       />
-      <div className="max-w-6xl mx-auto px-8 py-20 grid grid-cols-2 gap-20 relative z-10">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16 lg:py-20 grid grid-cols-1 lg:grid-cols-2 gap-10 lg:gap-20 relative z-10">
         <div>
           <p className="text-xs font-bold uppercase tracking-widest text-emerald-600 mb-4">Our Mission</p>
           <h2
             style={{
               fontFamily: "'Manrope', sans-serif",
-              fontSize: "40px",
+              fontSize: "clamp(1.75rem, 4.5vw, 2.5rem)",
               fontWeight: 800,
               lineHeight: 1.15,
               letterSpacing: "-0.02em",

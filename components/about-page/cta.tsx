@@ -8,7 +8,7 @@ import { BookDemoModal } from "@/components/shared/book-demo-modal"
 export function AboutCTA() {
   const [showBookDemo, setShowBookDemo] = useState(false)
   return (
-    <section style={{ background: "#1E1E1E", position: "relative", overflow: "hidden", padding: "100px 32px" }}>
+    <section style={{ background: "#1E1E1E", position: "relative", overflow: "hidden", padding: "clamp(48px,10vw,100px) clamp(16px,5vw,32px)" }}>
       <div
         style={{
           position: "absolute",
@@ -19,7 +19,7 @@ export function AboutCTA() {
       <div className="max-w-2xl mx-auto text-center relative z-10">
         <p className="text-xs font-bold uppercase tracking-widest text-emerald-500 mb-4">Ready to Simplify?</p>
         <h2
-          style={{ fontFamily: "'Manrope', sans-serif", fontSize: "44px", fontWeight: 900, letterSpacing: "-0.03em" }}
+          style={{ fontFamily: "'Manrope', sans-serif", fontSize: "clamp(1.75rem, 5vw, 2.75rem)", fontWeight: 900, letterSpacing: "-0.03em" }}
           className="text-white mb-6 leading-tight"
         >
           Start building your influencer workflow today.
