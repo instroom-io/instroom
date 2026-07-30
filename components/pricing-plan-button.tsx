@@ -2,6 +2,9 @@
 
 import Link from "next/link"
 
+// Flip to `false` once real subscriptions open back up after the beta.
+const BETA_CHECKOUT_DISABLED = true
+
 interface PricingPlanButtonProps {
   planName: string
   cycle: string
@@ -34,6 +37,18 @@ export function PricingPlanButton({
   if (isCurrentPlan) {
     return (
       <span className="w-full block rounded-lg py-3 text-center text-base font-semibold cursor-default bg-[#1FAE5B]/10 text-[#1FAE5B] border-2 border-[#1FAE5B]/30">
+        {buttonText}
+      </span>
+    )
+  }
+
+  if (BETA_CHECKOUT_DISABLED) {
+    return (
+      <span
+        aria-disabled="true"
+        title="Not available during the private beta"
+        className="w-full block rounded-lg py-3 text-center text-base font-semibold cursor-not-allowed bg-gray-100 text-gray-400 border-2 border-gray-200"
+      >
         {buttonText}
       </span>
     )
