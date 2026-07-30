@@ -5,6 +5,7 @@ import WelcomeEmail from "@/emails/welcome"
 import PasswordResetEmail from "@/emails/password-reset"
 import OTPEmail from "@/emails/otp"
 import BrandInvitationEmail from "@/emails/brand-invitation"
+import EarlyAccessApprovedEmail from "@/emails/early-access-approved"
 import NotificationEmail, { type NotifType } from "@/emails/notification"
 
 // ── Nodemailer transporter ────────────────────────────────────────────────────
@@ -84,6 +85,19 @@ export async function sendBrandInvitationEmail(
   return sendEmail({
     to:      email,
     subject: `You're invited to join ${brandName} on Instroom`,
+    html,
+  })
+}
+
+export async function sendEarlyAccessApprovedEmail(
+  email:     string,
+  name:      string,
+  signupUrl: string,
+): Promise<boolean> {
+  const html = await render(EarlyAccessApprovedEmail({ name, signupUrl }))
+  return sendEmail({
+    to:      email,
+    subject: "You're approved for Instroom early access!",
     html,
   })
 }

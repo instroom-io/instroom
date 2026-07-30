@@ -1,9 +1,11 @@
 import Image from "next/image";
+import Link from "next/link";
 import { getActivePlans } from "@/prisma/plans";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from  "@/lib/prisma";
 import { PricingPlanButton } from "@/components/pricing-plan-button";
+import { GetEarlyAccessButton } from "@/components/get-early-access-button";
 
 function getPlanSummary(plan: any) {
   if (plan.name === "basic") {
@@ -284,10 +286,10 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
           src="/images/INSTROOM LOGO 1.png"
           alt="Instroom Logo"
           width={180}
-          height={180}
+          height={98}
           priority
           quality={95}
-          className="drop-shadow-sm w-24 h-24 sm:w-32 sm:h-32 lg:w-[180px] lg:h-[180px]"
+          className="drop-shadow-sm w-24 h-[52px] sm:w-32 sm:h-[70px] lg:w-[180px] lg:h-[98px]"
         />
       </div>
 
@@ -323,6 +325,25 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
               Save 20%
             </span>
           </a>
+        </div>
+
+        <div className="mt-8 inline-flex flex-wrap items-center justify-center gap-3 rounded-xl border border-[#F4B740]/40 bg-[#F4B740]/8 px-5 py-3 text-sm text-[#8a5a00]">
+          {session?.user?.id ? (
+            <>
+              <span>We&apos;re in private beta, so new subscriptions aren&apos;t open yet — but you&apos;re approved.</span>
+              <GetEarlyAccessButton cycle={cycle} />
+            </>
+          ) : (
+            <>
+              <span>We&apos;re in private beta, so new subscriptions aren&apos;t open yet.</span>
+              <Link
+                href="/early-access"
+                className="font-semibold text-[#0F6B3E] underline underline-offset-2 hover:text-[#1FAE5B] whitespace-nowrap"
+              >
+                Request Early Access →
+              </Link>
+            </>
+          )}
         </div>
       </section>
 
