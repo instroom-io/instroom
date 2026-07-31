@@ -102,7 +102,7 @@ export function TikTokDownloaderHero() {
         <h1
           style={{
             fontFamily: "'Manrope', sans-serif",
-            fontSize: "44px",
+            fontSize: "clamp(1.75rem, 7vw, 2.75rem)",
             fontWeight: 900,
             lineHeight: 1.1,
             letterSpacing: "-0.02em",

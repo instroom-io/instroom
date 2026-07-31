@@ -244,7 +244,7 @@ const InlineFilterPanel = ({
   if (!isOpen) return null
 
   return (
-    <div className="flex items-center gap-3 animate-slideIn">
+    <div className="flex items-center gap-3 flex-wrap animate-slideIn">
       <select
         value={filters.platform}
         onChange={(e) => onFilterChange('platform', e.target.value)}
@@ -638,11 +638,11 @@ function AnalyticsPageContent() {
     <div className="min-h-screen bg-gray-50 flex flex-col">
       {/* Top Bar */}
       <div className="bg-white border-b border-gray-200 px-6 py-4 sticky top-0 z-10">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <p className="text-xs text-gray-400 mt-0.5">Showing {metrics.totalOutreach} influencer{metrics.totalOutreach !== 1 ? 's' : ''}</p>
           </div>
-          <div className="flex items-center gap-3" ref={filterContainerRef}>
+          <div className="flex items-center gap-3 flex-wrap" ref={filterContainerRef}>
             <button
               onClick={() => setShowFilters(!showFilters)}
               className={`flex items-center gap-2 px-3 py-2 text-sm border rounded-lg transition-colors ${

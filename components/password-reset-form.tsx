@@ -153,8 +153,8 @@ export function PasswordResetForm({ token, className = "" }: { token?: string; c
       <Card className={`rounded-2xl shadow-lg p-6 sm:p-8 border border-[#0F6B3E]/15 bg-gradient-to-b from-white via-white to-[#0F6B3E]/5 relative overflow-hidden ${className}`}>
         <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-transparent via-[#1FAE5B] to-transparent" />
         <CardHeader className="gap-2 pb-2 pt-4">
-          <CardTitle className="text-2xl font-bold text-gray-900">Reset Your Password</CardTitle>
-          <CardDescription className="text-sm text-gray-600">
+          <CardTitle className="text-xl sm:text-2xl font-bold text-gray-900">Reset Your Password</CardTitle>
+          <CardDescription className="text-xs sm:text-sm text-gray-600">
             Enter a new password to regain access to your account
           </CardDescription>
         </CardHeader>
@@ -231,7 +231,7 @@ export function PasswordResetForm({ token, className = "" }: { token?: string; c
 
                       {/* Strength Label */}
                       <div className="flex items-center gap-2">
-                        <span className="text-xs font-medium text-gray-600">Strength:</span>
+                        <span className="text-xs font-medium text-gray-600 whitespace-nowrap">Strength:</span>
                         <span className={cn(
                           "text-xs font-semibold",
                           passwordStrengthLevel === 'weak' && 'text-red-500',
@@ -247,31 +247,31 @@ export function PasswordResetForm({ token, className = "" }: { token?: string; c
                       {/* Requirements Checklist */}
                       <div className="text-xs space-y-1 mt-2">
                         <div className={`flex items-center gap-2 ${passwordStrength.hasMinLength ? 'text-green-600' : 'text-gray-500'}`}>
-                          <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full ${passwordStrength.hasMinLength ? 'bg-green-500' : 'bg-gray-300'}`}>
+                          <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full flex-shrink-0 ${passwordStrength.hasMinLength ? 'bg-green-500' : 'bg-gray-300'}`}>
                             {passwordStrength.hasMinLength && <span className="text-white text-xs">✓</span>}
                           </span>
                           At least 8 characters
                         </div>
                         <div className={`flex items-center gap-2 ${passwordStrength.hasUppercase ? 'text-green-600' : 'text-gray-500'}`}>
-                          <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full ${passwordStrength.hasUppercase ? 'bg-green-500' : 'bg-gray-300'}`}>
+                          <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full flex-shrink-0 ${passwordStrength.hasUppercase ? 'bg-green-500' : 'bg-gray-300'}`}>
                             {passwordStrength.hasUppercase && <span className="text-white text-xs">✓</span>}
                           </span>
                           One uppercase letter (A-Z)
                         </div>
                         <div className={`flex items-center gap-2 ${passwordStrength.hasLowercase ? 'text-green-600' : 'text-gray-500'}`}>
-                          <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full ${passwordStrength.hasLowercase ? 'bg-green-500' : 'bg-gray-300'}`}>
+                          <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full flex-shrink-0 ${passwordStrength.hasLowercase ? 'bg-green-500' : 'bg-gray-300'}`}>
                             {passwordStrength.hasLowercase && <span className="text-white text-xs">✓</span>}
                           </span>
                           One lowercase letter (a-z)
                         </div>
                         <div className={`flex items-center gap-2 ${passwordStrength.hasNumber ? 'text-green-600' : 'text-gray-500'}`}>
-                          <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full ${passwordStrength.hasNumber ? 'bg-green-500' : 'bg-gray-300'}`}>
+                          <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full flex-shrink-0 ${passwordStrength.hasNumber ? 'bg-green-500' : 'bg-gray-300'}`}>
                             {passwordStrength.hasNumber && <span className="text-white text-xs">✓</span>}
                           </span>
                           One number (0-9)
                         </div>
                         <div className={`flex items-center gap-2 ${passwordStrength.hasSpecialChar ? 'text-green-600' : 'text-gray-500'}`}>
-                          <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full ${passwordStrength.hasSpecialChar ? 'bg-green-500' : 'bg-gray-300'}`}>
+                          <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full flex-shrink-0 ${passwordStrength.hasSpecialChar ? 'bg-green-500' : 'bg-gray-300'}`}>
                             {passwordStrength.hasSpecialChar && <span className="text-white text-xs">✓</span>}
                           </span>
                           One special character (!@#$%^&*)

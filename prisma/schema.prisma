@@ -590,13 +590,31 @@ model BrandTierSettings {
 }
 
 model EarlyAccessSignup {
-  id         String   @id @default(cuid()) @db.VarChar(30)
-  email      String   @unique
-  name       String?  @db.VarChar(100)
-  role       String?  @db.VarChar(50)
+  id         String    @id @default(cuid()) @db.VarChar(30)
+  email      String    @unique
+  name       String?   @db.VarChar(100)
+  role       String?   @db.VarChar(50)
+  phone      String?   @db.VarChar(30)
   invited_at DateTime?
-  created_at DateTime @default(now())
+  created_at DateTime  @default(now())
+
+  // Links this signup to an existing Instroom account with the same email,
+  // if one already exists — so we can enrich the GHL contact with real
+  // account info instead of creating an unnecessary duplicate/incomplete one.
+  // Plain column, no DB-level FK/relation (User is a MyISAM table, which
+  // doesn't support foreign keys — same reason Brand.owner_id is plain too).
+  user_id String? @db.VarChar(30)
+
+  // GoHighLevel sync bookkeeping — populated by the backend after the DB
+  // save succeeds. A GHL failure never blocks/fails the signup itself; it
+  // just leaves ghl_sync_status "failed" with the error, for later retry.
+  ghl_contact_id  String?   @db.VarChar(60)
+  ghl_sync_status String    @default("pending") @db.VarChar(20) // pending | synced | failed
+  ghl_synced_at   DateTime?
+  ghl_sync_error  String?   @db.Text
 
   @@index([email])
+  @@index([user_id])
+  @@index([ghl_sync_status])
 }
 

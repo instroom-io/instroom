@@ -82,10 +82,10 @@ function AcceptInvitationContent() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-white via-white to-[#0F6B3E]/5 p-4">
-      <Card className="w-full max-w-md rounded-2xl shadow-lg border border-[#0F6B3E]/15">
-        <CardHeader className="text-center pb-6">
-          <CardTitle className="text-2xl">Accept Invitation</CardTitle>
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-white via-white to-[#0F6B3E]/5 p-4 sm:p-6">
+      <Card className="w-full max-w-sm sm:max-w-md rounded-2xl shadow-lg border border-[#0F6B3E]/15">
+        <CardHeader className="text-center pb-4 sm:pb-6">
+          <CardTitle className="text-xl sm:text-2xl">Accept Invitation</CardTitle>
         </CardHeader>
 
         <CardContent className="space-y-6">
@@ -203,10 +203,10 @@ export default function AcceptInvitationPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-white via-white to-[#0F6B3E]/5 p-4">
-          <Card className="w-full max-w-md rounded-2xl shadow-lg border border-[#0F6B3E]/15">
-            <CardHeader className="text-center pb-6">
-              <CardTitle className="text-2xl">Accept Invitation</CardTitle>
+        <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-white via-white to-[#0F6B3E]/5 p-4 sm:p-6">
+          <Card className="w-full max-w-sm sm:max-w-md rounded-2xl shadow-lg border border-[#0F6B3E]/15">
+            <CardHeader className="text-center pb-4 sm:pb-6">
+              <CardTitle className="text-xl sm:text-2xl">Accept Invitation</CardTitle>
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="flex flex-col items-center justify-center space-y-4">

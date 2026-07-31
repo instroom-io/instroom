@@ -31,9 +31,9 @@ export function Hub({ onNavigate }: { onNavigate: (page: PageId) => void }) {
             <span className="sol-eyebrow-dot" />
             Solutions
           </div>
-          <h1 className="fade-up delay-1" style={{ fontFamily: "'Manrope',sans-serif", fontWeight: 800, fontSize: "clamp(2.25rem, 5vw, 3.5rem)", lineHeight: 1.12, color: "var(--ink)", margin: "0 auto 20px", letterSpacing: "-0.02em" }}>
-            <span style={{ whiteSpace: "nowrap" }}>Instroom works differently</span><br />
-            <span style={{ whiteSpace: "nowrap" }}>for <span style={{ color: "var(--green)" }}>different kinds</span> of operators.</span>
+          <h1 className="fade-up delay-1" style={{ fontFamily: "'Manrope',sans-serif", fontWeight: 800, fontSize: "clamp(1.75rem, 5vw, 3.5rem)", lineHeight: 1.12, color: "var(--ink)", margin: "0 auto 20px", letterSpacing: "-0.02em" }}>
+            <span className="sm:whitespace-nowrap">Instroom works differently</span><br />
+            <span className="sm:whitespace-nowrap">for <span style={{ color: "var(--green)" }}>different kinds</span> of operators.</span>
           </h1>
           <p className="fade-up delay-2" style={{ fontSize: 18, color: "var(--ink2)", lineHeight: 1.625, maxWidth: 620, margin: "0 auto 48px" }}>
             Whether you're running campaigns solo, managing clients, or growing your own brand — Instroom fits the way you actually work. Pick your situation.

@@ -417,31 +417,31 @@ export function SignupForm({ ...props }: React.ComponentProps<typeof Card>) {
                     {/* Requirements Checklist */}
                     <div className="text-xs space-y-0.5 mt-1">
                       <div className={`flex items-center gap-2 ${passwordStrength.hasMinLength ? 'text-green-600' : 'text-gray-500'}`}>
-                        <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full ${passwordStrength.hasMinLength ? 'bg-green-500' : 'bg-gray-300'}`}>
+                        <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full flex-shrink-0 ${passwordStrength.hasMinLength ? 'bg-green-500' : 'bg-gray-300'}`}>
                           {passwordStrength.hasMinLength && <span className="text-white text-xs">✓</span>}
                         </span>
                         At least 8 characters
                       </div>
                       <div className={`flex items-center gap-2 ${passwordStrength.hasUppercase ? 'text-green-600' : 'text-gray-500'}`}>
-                        <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full ${passwordStrength.hasUppercase ? 'bg-green-500' : 'bg-gray-300'}`}>
+                        <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full flex-shrink-0 ${passwordStrength.hasUppercase ? 'bg-green-500' : 'bg-gray-300'}`}>
                           {passwordStrength.hasUppercase && <span className="text-white text-xs">✓</span>}
                         </span>
                         One uppercase letter (A-Z)
                       </div>
                       <div className={`flex items-center gap-2 ${passwordStrength.hasLowercase ? 'text-green-600' : 'text-gray-500'}`}>
-                        <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full ${passwordStrength.hasLowercase ? 'bg-green-500' : 'bg-gray-300'}`}>
+                        <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full flex-shrink-0 ${passwordStrength.hasLowercase ? 'bg-green-500' : 'bg-gray-300'}`}>
                           {passwordStrength.hasLowercase && <span className="text-white text-xs">✓</span>}
                         </span>
                         One lowercase letter (a-z)
                       </div>
                       <div className={`flex items-center gap-2 ${passwordStrength.hasNumber ? 'text-green-600' : 'text-gray-500'}`}>
-                        <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full ${passwordStrength.hasNumber ? 'bg-green-500' : 'bg-gray-300'}`}>
+                        <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full flex-shrink-0 ${passwordStrength.hasNumber ? 'bg-green-500' : 'bg-gray-300'}`}>
                           {passwordStrength.hasNumber && <span className="text-white text-xs">✓</span>}
                         </span>
                         One number (0-9)
                       </div>
                       <div className={`flex items-center gap-2 ${passwordStrength.hasSpecialChar ? 'text-green-600' : 'text-gray-500'}`}>
-                        <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full ${passwordStrength.hasSpecialChar ? 'bg-green-500' : 'bg-gray-300'}`}>
+                        <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full flex-shrink-0 ${passwordStrength.hasSpecialChar ? 'bg-green-500' : 'bg-gray-300'}`}>
                           {passwordStrength.hasSpecialChar && <span className="text-white text-xs">✓</span>}
                         </span>
                         One special character (!@#$%^&*)
