@@ -96,7 +96,7 @@ export default function InstroomChatbot() {
       )}
 
       {open && (
-        <div className="fixed bottom-6 right-6 w-[360px] h-[480px] bg-white rounded-xl shadow-2xl flex flex-col border">
+        <div className="fixed bottom-6 right-3 left-3 sm:left-auto sm:right-6 w-auto sm:w-[360px] max-w-[calc(100vw-1.5rem)] h-[480px] max-h-[calc(100vh-3rem)] bg-white rounded-xl shadow-2xl flex flex-col border">
           <div className="bg-[#0F6B3E] text-white p-4 flex justify-between items-center rounded-t-xl">
             <span className="font-semibold">Instroom Assistant</span>
             <button 

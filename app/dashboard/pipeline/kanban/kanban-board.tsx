@@ -8,7 +8,7 @@
 
 "use client"
 
-import { useState, useEffect, useRef, type ReactNode } from "react"
+import { useState, useEffect, useMemo, useRef, type ReactNode } from "react"
 import ReactDOM from "react-dom"
 import {
   DndContext,
@@ -695,18 +695,19 @@ function PipelineCard({ influencer, onOpenSidebar, onStatusChange, canApproveInf
 
       {/* Quick-move buttons — only for non-terminal cards */}
       {nextStages.length > 0 && !terminal && (
-        <div className="flex gap-2 mt-3 pt-2 border-t border-gray-100 flex-wrap">
+        <div className="flex gap-1.5 mt-3 pt-2 border-t border-gray-100 flex-nowrap">
           {nextStages.map((stage) => (
             <button key={stage}
               onClick={(e) => { e.stopPropagation(); if (!canApproveInfluencers) return; onStatusChange(influencer.id, stage) }}
               disabled={!canApproveInfluencers}
               title={!canApproveInfluencers ? "Only Owners and Managers can approve influencers" : undefined}
-              className={`text-xs px-2 py-1 rounded transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+              className={`text-[11px] font-medium px-2 py-1 rounded-full border transition flex items-center gap-1 min-w-0 flex-1 justify-center disabled:opacity-40 disabled:cursor-not-allowed ${
                 stage === "Not Interested"
-                  ? "bg-red-50 text-red-600 hover:bg-red-100"
-                  : "bg-green-50 text-green-700 hover:bg-green-100 border border-green-200"
+                  ? "bg-red-50 text-red-600 border-red-200 hover:bg-red-100"
+                  : "bg-[#EAF7EF] text-[#0F6B3E] border-[#bfe5cf] hover:bg-[#d7f0e0]"
               }`}>
-              {stage === "Not Interested" ? "✕ Not Interested" : `→ ${stage}`}
+              {stage === "Not Interested" ? <IconX size={11} className="flex-shrink-0" /> : <IconArrowRight size={11} className="flex-shrink-0" />}
+              <span className="truncate">{stage}</span>
             </button>
           ))}
         </div>
@@ -786,7 +787,8 @@ function DroppableColumn({ id, children }: { id: string; children: React.ReactNo
   const isExit = id === "not-interested" || id === "for-order-creation"
   return (
     <div ref={setNodeRef}
-      className={`flex flex-col gap-3 w-[240px] flex-shrink-0 transition-colors rounded-lg ${
+      style={{ scrollSnapAlign: "start" }}
+      className={`flex flex-col gap-3 w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0 transition-colors rounded-lg ${
         isOver ? (isExit ? "bg-red-50" : "bg-gray-50") : ""
       }`}>
       {children}
@@ -989,22 +991,28 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   }
 
   // ── Filtering ──────────────────────────────────────────────────────────────
-  let filteredData = data
-    .filter((d) =>
-      d.influencer.toLowerCase().includes(search.toLowerCase()) ||
-      d.instagramHandle.toLowerCase().includes(search.toLowerCase())
-    )
-    .filter((d) => selectedColumnStatus ? d.pipelineStatus === selectedColumnStatus : true)
+  // Memoized so this filter/sort pipeline only recomputes when the inputs it
+  // actually depends on change — not on every render (e.g. showFilterPanel
+  // toggling, drag hover, tooltip hover).
+  const filteredData = useMemo(() => {
+    let result = data
+      .filter((d) =>
+        d.influencer.toLowerCase().includes(search.toLowerCase()) ||
+        d.instagramHandle.toLowerCase().includes(search.toLowerCase())
+      )
+      .filter((d) => selectedColumnStatus ? d.pipelineStatus === selectedColumnStatus : true)
 
-  if (filters.influencer)           filteredData = filteredData.filter((p) => p.influencer.toLowerCase().includes(filters.influencer.toLowerCase()))
-  if (filters.handle)               filteredData = filteredData.filter((p) => p.instagramHandle.toLowerCase().includes(filters.handle.toLowerCase()))
-  if (filters.locations.length > 0) filteredData = filteredData.filter((p) => filters.locations.includes(p.location ?? ""))
-  if (filters.niches.length > 0)    filteredData = filteredData.filter((p) => filters.niches.includes(p.niche ?? ""))
-  filteredData = [...filteredData].sort((a, b) => {
-    const da = new Date(a.createdAt ?? 0).getTime()
-    const db = new Date(b.createdAt ?? 0).getTime()
-    return sortOrder === "newest" ? db - da : da - db
-  })
+    if (filters.influencer)           result = result.filter((p) => p.influencer.toLowerCase().includes(filters.influencer.toLowerCase()))
+    if (filters.handle)               result = result.filter((p) => p.instagramHandle.toLowerCase().includes(filters.handle.toLowerCase()))
+    if (filters.locations.length > 0) result = result.filter((p) => filters.locations.includes(p.location ?? ""))
+    if (filters.niches.length > 0)    result = result.filter((p) => filters.niches.includes(p.niche ?? ""))
+    result = [...result].sort((a, b) => {
+      const da = new Date(a.createdAt ?? 0).getTime()
+      const db = new Date(b.createdAt ?? 0).getTime()
+      return sortOrder === "newest" ? db - da : da - db
+    })
+    return result
+  }, [data, search, filters, selectedColumnStatus, sortOrder])
 
   const activeFilterCount =
     (filters.influencer ? 1 : 0) +
@@ -1212,7 +1220,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
       {/* ── KANBAN VIEW ── */}
       {view === "Board" && (
         <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-          <div className="rounded-xl border border-[#0F6B3E]/10 bg-white p-5 overflow-x-auto">
+          <div className="rounded-xl border border-[#0F6B3E]/10 bg-white p-5 overflow-x-auto" style={{ scrollSnapType: "x proximity" }}>
             <div className="flex gap-4 min-w-max">
 
               {visibleColumns.filter((c) => c.key !== "not-interested").map((col) => {
@@ -1290,7 +1298,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
 
           <DragOverlay>
             {activeInfluencer ? (
-              <div className="bg-white border border-gray-200 rounded-lg p-3 shadow-lg rotate-2 w-[240px]">
+              <div className="bg-white border border-gray-200 rounded-lg p-3 shadow-lg rotate-2 w-[min(78vw,240px)] sm:w-[240px]">
                 {renderCard(activeInfluencer)}
               </div>
             ) : null}

@@ -166,6 +166,15 @@ export async function PATCH(
     // ✅ Get current record
     const record = await prisma.brandInfluencer.findUnique({
       where: { id: brandInfluencerId },
+      // Only pull what mapClosedToPipelineFields / safeParse actually read —
+      // this route fires on every drag-and-drop stage move, so avoid loading
+      // the record's large @db.Text fields (notes, deliverables, etc.) here.
+      select: {
+        shipped_at: true,
+        delivered_at: true,
+        posted_at: true,
+        product_details: true,
+      },
     })
 
     if (!record) {

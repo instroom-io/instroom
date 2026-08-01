@@ -130,6 +130,10 @@ function formatActivityDetails(action: string, details: Record<string, unknown>)
       return `via ${details.method ?? "manual"}${details.platform ? ` on ${details.platform}` : ""}`
     case "posttracker.stage_changed":
       return `${details.from} → ${details.to}`
+    case "influencer.updated": {
+      const fields = details.fields as string[] | undefined
+      return fields?.length ? `Updated ${fields.length} field${fields.length > 1 ? "s" : ""}` : ""
+    }
     default:
       return ""
   }
@@ -143,10 +147,15 @@ function HistoryTab({ brandId, biId }: { brandId?: string; biId?: string }) {
   useEffect(() => {
     if (!brandId || !biId) { setLoading(false); return }
     setLoading(true); setError(null)
-    fetch(`/api/brand/${brandId}/influencers/${biId}/activity`)
+    const controller = new AbortController()
+    fetch(`/api/brand/${brandId}/influencers/${biId}/activity`, { signal: controller.signal })
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
       .then(d => { setLogs(d.logs ?? []); setLoading(false) })
-      .catch(err => { console.error("[HistoryTab]", err); setError("Failed to load history"); setLoading(false) })
+      .catch(err => {
+        if (err?.name === "AbortError") return
+        console.error("[HistoryTab]", err); setError("Failed to load history"); setLoading(false)
+      })
+    return () => controller.abort()
   }, [brandId, biId])
 
   if (!brandId || !biId) return (
@@ -623,6 +632,19 @@ export default function InfluencerProfileSidebar({ partner, campaigns, onClose }
           .ms-txt { font-size:10px; color:#888; }
           .btn-primary { background:#1fae5b; color:#fff; border:none; padding:8px 18px; border-radius:8px; cursor:pointer; font-size:12px; font-weight:600; font-family:inherit; transition:background .15s; }
           .btn-primary:hover { background:#0f6b3e; }
+
+          @media (max-width:480px) {
+            .pph { padding:14px 14px; }
+            .ppb { padding:14px 14px; }
+            .pit-bar { padding:0 14px; }
+            .close-btn { top:14px; right:14px; }
+            .sr4 { grid-template-columns:repeat(2,1fr); }
+            .fgrd { grid-template-columns:1fr; }
+            .pfr { grid-template-columns:1fr; }
+            .skg { grid-template-columns:repeat(2,1fr); }
+            .avg-row { grid-template-columns:repeat(3,1fr); gap:6px; }
+            .mg { grid-template-columns:repeat(3,1fr); }
+          }
         `}</style>
       </div>
     </>

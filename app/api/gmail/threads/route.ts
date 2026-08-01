@@ -31,6 +31,12 @@ function extractText(payload: any): string {
   return ""
 }
 
+// Short-TTL in-memory cache so rapid refresh/mount cycles (e.g. React effects
+// firing twice, quick manual "Refresh" clicks) don't repeat the full N-thread
+// Gmail fan-out fetch. Keyed by user + the brandId the request was made with.
+const THREADS_CACHE_TTL_MS = 15_000
+const threadsCache = new Map<string, { expiresAt: number; body: any }>()
+
 async function refreshToken(refresh_token: string, userId: string): Promise<string | null> {
   try {
     const res = await fetch("https://oauth2.googleapis.com/token", {
@@ -120,6 +126,15 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  const cacheUserId = session.user?.id
+  const cacheKey = cacheUserId ? `${cacheUserId}:${brandId ?? "auto"}` : null
+  if (cacheKey) {
+    const cached = threadsCache.get(cacheKey)
+    if (cached && cached.expiresAt > Date.now()) {
+      return NextResponse.json(cached.body)
+    }
+  }
+
   try {
     // 1. List inbox threads
     const listRes = await fetch(
@@ -149,7 +164,9 @@ export async function GET(req: NextRequest) {
     const threadIds: string[] = (listData.threads || []).map((t: any) => t.id)
 
     if (threadIds.length === 0) {
-      return NextResponse.json({ threads: [] })
+      const body = { threads: [] }
+      if (cacheKey) threadsCache.set(cacheKey, { expiresAt: Date.now() + THREADS_CACHE_TTL_MS, body })
+      return NextResponse.json(body)
     }
 
     // 2. Fetch full thread details in parallel
@@ -220,7 +237,9 @@ export async function GET(req: NextRequest) {
         ...thread,
         brandInfluencer: null,
       }))
-      return NextResponse.json({ threads })
+      const body = { threads }
+      if (cacheKey) threadsCache.set(cacheKey, { expiresAt: Date.now() + THREADS_CACHE_TTL_MS, body })
+      return NextResponse.json(body)
     }
 
     const senderEmails = [...new Set(shapedThreads.map((t) => t.senderEmail).filter(Boolean))]
@@ -320,7 +339,9 @@ export async function GET(req: NextRequest) {
       )
     }
 
-    return NextResponse.json({ threads })
+    const body = { threads }
+    if (cacheKey) threadsCache.set(cacheKey, { expiresAt: Date.now() + THREADS_CACHE_TTL_MS, body })
+    return NextResponse.json(body)
   } catch (err: any) {
     return NextResponse.json({ error: err.message || "Failed to fetch threads" }, { status: 500 })
   }

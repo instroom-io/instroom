@@ -70,21 +70,13 @@ export async function PATCH(req: NextRequest) {
 
   const normalizedEmail = senderEmail.toLowerCase().trim()
 
-  // Try exact email match first, fall back to case-insensitive scan
-  let influencer = await prisma.influencer.findFirst({
+  // MySQL's default collation (utf8mb4_general_ci/unicode_ci) is case-insensitive
+  // for String columns, so a single findFirst covers case-insensitive matching
+  // without ever pulling the entire influencer table into memory.
+  const influencer = await prisma.influencer.findFirst({
     where:  { email: normalizedEmail },
     select: { id: true, full_name: true, handle: true },
   })
-
-  if (!influencer) {
-    const allInfluencers = await prisma.influencer.findMany({
-      select: { id: true, email: true, full_name: true, handle: true },
-    })
-    influencer =
-      allInfluencers.find(
-        (inf) => inf.email?.toLowerCase() === normalizedEmail,
-      ) || null
-  }
 
   if (!influencer) {
     return NextResponse.json({ error: "Influencer not registered" }, { status: 404 })

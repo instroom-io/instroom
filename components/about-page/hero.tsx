@@ -8,10 +8,11 @@ export function AboutHero() {
         background: "#F7F9F8",
         backgroundImage: "radial-gradient(circle, rgba(31,174,91,0.12) 1px, transparent 1px)",
         backgroundSize: "28px 28px",
+        overflow: "hidden",
       }}
     >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-16 grid grid-cols-1 lg:grid-cols-[1fr_1.3fr] gap-10 lg:gap-12 items-center">
-        <div>
+        <div className="min-w-0">
           <div className="inline-flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-full px-4 py-2 mb-6">
             <span className="w-1.5 h-1.5 bg-emerald-600 rounded-full" />
             <span className="text-xs font-bold uppercase tracking-widest text-emerald-700">
@@ -95,7 +96,7 @@ export function AboutHero() {
 
         {/* Visual column — sized and positioned exactly like .heroRight/.heroMockup on the homepage hero */}
         <div
-          className="relative w-full"
+          className="relative w-full min-w-0"
           style={{ display: "flex", alignItems: "center", justifyContent: "center", alignSelf: "start" }}
         >
           {/* floating accent circles, sit behind the card */}

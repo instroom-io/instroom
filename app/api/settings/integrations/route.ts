@@ -9,7 +9,6 @@ function defaultIntegrations() {
   return {
     goaffpro: { connected: false } as { connected: boolean; connectedAs?: string },
     uppromote: { connected: false },
-    posttracker: { connected: false },
     shopify: { connected: false },
     woocommerce: { connected: false },
     gdrive: { connected: false },
@@ -58,8 +57,6 @@ export async function GET(req: Request) {
         ...defaultIntegrations(),
         goaffpro,
       },
-      hashtags: "",
-      mentions: "",
     })
   } catch (error) {
     console.error("[GET /settings/integrations]", error)

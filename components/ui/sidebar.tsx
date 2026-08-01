@@ -31,6 +31,9 @@ const SIDEBAR_WIDTH = "16rem"
 const SIDEBAR_WIDTH_MOBILE = "18rem"
 const SIDEBAR_WIDTH_ICON = "3rem"
 const SIDEBAR_KEYBOARD_SHORTCUT = "b"
+const SIDEBAR_WIDTH_STORAGE_KEY = "sidebar_width_px"
+const SIDEBAR_WIDTH_MIN_PX = 200
+const SIDEBAR_WIDTH_MAX_PX = 420
 
 type SidebarContextProps = {
   state: "expanded" | "collapsed"
@@ -40,6 +43,8 @@ type SidebarContextProps = {
   setOpenMobile: (open: boolean) => void
   isMobile: boolean
   toggleSidebar: () => void
+  sidebarWidth: string | null
+  setSidebarWidth: (px: number) => void
 }
 
 const SidebarContext = React.createContext<SidebarContextProps | null>(null)
@@ -68,6 +73,25 @@ function SidebarProvider({
 }) {
   const isMobile = useIsMobile()
   const [openMobile, setOpenMobile] = React.useState(false)
+
+  // Draggable width, restored from localStorage. Null means "use whatever
+  // --sidebar-width the consumer passed in" — we only override once the
+  // user has actually resized it.
+  const [sidebarWidth, _setSidebarWidth] = React.useState<string | null>(null)
+
+  React.useEffect(() => {
+    const saved = window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)
+    if (saved) _setSidebarWidth(`${saved}px`)
+  }, [])
+
+  const setSidebarWidth = React.useCallback((px: number) => {
+    const clamped = Math.min(
+      SIDEBAR_WIDTH_MAX_PX,
+      Math.max(SIDEBAR_WIDTH_MIN_PX, px)
+    )
+    window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(clamped))
+    _setSidebarWidth(`${clamped}px`)
+  }, [])
 
   // This is the internal state of the sidebar.
   // We use openProp and setOpenProp for control from outside the component.
@@ -122,8 +146,20 @@ function SidebarProvider({
       openMobile,
       setOpenMobile,
       toggleSidebar,
+      sidebarWidth,
+      setSidebarWidth,
     }),
-    [state, open, setOpen, isMobile, openMobile, setOpenMobile, toggleSidebar]
+    [
+      state,
+      open,
+      setOpen,
+      isMobile,
+      openMobile,
+      setOpenMobile,
+      toggleSidebar,
+      sidebarWidth,
+      setSidebarWidth,
+    ]
   )
 
   return (
@@ -136,6 +172,7 @@ function SidebarProvider({
               "--sidebar-width": SIDEBAR_WIDTH,
               "--sidebar-width-icon": SIDEBAR_WIDTH_ICON,
               ...style,
+              ...(sidebarWidth ? { "--sidebar-width": sidebarWidth } : {}),
             } as React.CSSProperties
           }
           className={cn(
@@ -163,7 +200,39 @@ function Sidebar({
   variant?: "sidebar" | "floating" | "inset"
   collapsible?: "offcanvas" | "icon" | "none"
 }) {
-  const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
+  const { isMobile, state, openMobile, setOpenMobile, setSidebarWidth } =
+    useSidebar()
+
+  const handleResizeStart = React.useCallback(
+    (event: React.MouseEvent) => {
+      event.preventDefault()
+      const startX = event.clientX
+      const container = (event.currentTarget as HTMLElement).closest(
+        '[data-slot="sidebar-container"]'
+      ) as HTMLElement | null
+      const startWidth = container?.getBoundingClientRect().width ?? 288
+
+      const onMouseMove = (moveEvent: MouseEvent) => {
+        const delta =
+          side === "left"
+            ? moveEvent.clientX - startX
+            : startX - moveEvent.clientX
+        setSidebarWidth(startWidth + delta)
+      }
+      const onMouseUp = () => {
+        document.removeEventListener("mousemove", onMouseMove)
+        document.removeEventListener("mouseup", onMouseUp)
+        document.body.style.cursor = ""
+        document.body.style.userSelect = ""
+      }
+
+      document.body.style.cursor = "col-resize"
+      document.body.style.userSelect = "none"
+      document.addEventListener("mousemove", onMouseMove)
+      document.addEventListener("mouseup", onMouseUp)
+    },
+    [side, setSidebarWidth]
+  )
 
   if (collapsible === "none") {
     return (
@@ -248,6 +317,18 @@ function Sidebar({
         >
           {children}
         </div>
+        {state === "expanded" && (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize sidebar"
+            onMouseDown={handleResizeStart}
+            className={cn(
+              "absolute inset-y-0 z-30 w-1 cursor-col-resize touch-none select-none hover:bg-sidebar-ring/40",
+              side === "left" ? "right-0" : "left-0"
+            )}
+          />
+        )}
       </div>
     </div>
   )

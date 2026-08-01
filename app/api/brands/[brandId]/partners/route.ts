@@ -7,6 +7,82 @@ import { authOptions } from "@/lib/auth"
 // Re-flattens the Attribution relation back onto the response object so
 // consumers (BrandPartnersPage.tsx etc.) keep reading these as top-level
 // fields, exactly as when they lived directly on BrandInfluencer.
+// Tight select shared by GET and POST: pulls only the columns that
+// dbToPartner() in BrandPartnersPage.tsx (and its child components) actually
+// consume, instead of `include: true`-ing entire influencer/partner/
+// attribution rows (which also drags along unused @db.Text columns like
+// product_details, post_caption, and approval_notes on every row).
+const PARTNER_SELECT = {
+  id: true,
+  brand_id: true,
+  influencer_id: true,
+  campaign_id: true,
+  contact_status: true,
+  stage: true,
+  content_posted: true,
+  post_url: true,
+  notes: true,
+  agreed_rate: true,
+  internal_rating: true,
+  likes_count: true,
+  comments_count: true,
+  engagement_count: true,
+  deliverables: true,
+  created_at: true,
+  updated_at: true,
+  influencer: {
+    select: {
+      handle: true,
+      platform: true,
+      full_name: true,
+      email: true,
+      gender: true,
+      niche: true,
+      location: true,
+      bio: true,
+      profile_image_url: true,
+      social_link: true,
+      follower_count: true,
+      engagement_rate: true,
+      avg_likes: true,
+      avg_comments: true,
+      avg_views: true,
+    },
+  },
+  campaign: {
+    select: { id: true, name: true, status: true },
+  },
+  partner: {
+    select: {
+      id: true,
+      brand_id: true,
+      influencer_id: true,
+      brand_influencer_id: true,
+      on_retainer: true,
+      retainer_fee: true,
+      default_commission: true,
+      tier_override: true,
+      product_cost: true,
+      fees_paid: true,
+      commission_paid: true,
+      created_at: true,
+      updated_at: true,
+    },
+  },
+  attribution: {
+    select: {
+      affiliate_id: true,
+      ref_code: true,
+      coupon: true,
+      spark_ads: true,
+      affiliate_link: true,
+      clicks: true,
+      sales_count: true,
+      gmv: true,
+    },
+  },
+} as const
+
 function flattenAttribution<T extends { attribution?: { affiliate_id: string | null; ref_code: string | null; coupon: string | null; spark_ads: string | null; affiliate_link: string | null; clicks: number; sales_count: number; gmv: unknown } | null }>(
   bi: T
 ) {
@@ -67,14 +143,7 @@ export async function GET(
             } : {}),
         },
       },
-      include: {
-        influencer: true,
-        campaign: {
-          select: { id: true, name: true, status: true },
-        },
-        partner: true,
-        attribution: true,
-      },
+      select: PARTNER_SELECT,
       orderBy: { created_at: "desc" },
     })
 
@@ -163,12 +232,7 @@ export async function POST(
 
     const brandInfluencer = await prisma.brandInfluencer.findUniqueOrThrow({
       where: { id: bi.id },
-      include: {
-        influencer: true,
-        campaign: { select: { id: true, name: true, status: true } },
-        partner: true,
-        attribution: true,
-      },
+      select: PARTNER_SELECT,
     })
 
     return NextResponse.json({ data: flattenAttribution(brandInfluencer) }, { status: 201 })

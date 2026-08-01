@@ -29,7 +29,7 @@
 .containerMd {
   max-width: 1140px;
   margin: 0 auto;
-  padding: 0 24px;
+  padding: 0 clamp(16px, 5vw, 24px);
 }
 
 .section { padding: 96px 0; }
@@ -69,7 +69,7 @@
 .heroInner {
   max-width: 1280px;
   margin: 0 auto;
-  padding: 0 32px;
+  padding: 0 clamp(16px, 4vw, 32px);
   display: grid;
   grid-template-columns: 1fr 1.3fr;
   align-items: center;
@@ -296,6 +296,7 @@
 .trustCarousel {
   display: flex;
   gap: 24px;
+  overflow: hidden;
   animation: scrollLeft 60s linear infinite;
   will-change: transform;
 }
@@ -725,6 +726,7 @@
 .founderSignature {
   width: auto;
   height: 64px;
+  max-width: 100%;
   object-fit: contain;
   margin-bottom: -30px;
   position: relative;
@@ -841,8 +843,8 @@
   border: 1.5px solid #1FAE5B;
   border-radius: 12px;
   background: rgba(31, 174, 91, 0.05);
-  margin: 0 -20px;
-  padding: 24px 20px;
+  margin: 0 clamp(-20px, -5vw, -16px);
+  padding: 24px clamp(12px, 5vw, 20px);
 }
 
 .faqQ {
@@ -1258,7 +1260,8 @@
   .heroCtas { justify-content: center; }
 
   .heroRight {
-    padding: 0 0 56px;
+    padding: 28px 0 48px;
+    display: block;
   }
 
   .heroBadge { display: none; }
@@ -1266,6 +1269,10 @@
   .heroMockup {
     height: auto;
     aspect-ratio: 16 / 9;
+    width: min(100%, 360px);
+    max-width: 360px;
+    margin: 0 auto;
+    transform: none;
   }
 
   .insideFeatGrid {
@@ -1323,6 +1330,10 @@
     grid-template-columns: 1fr;
     gap: 0;
     padding: 0;
+  }
+
+  .founderImage {
+    min-height: 280px;
   }
 }
 

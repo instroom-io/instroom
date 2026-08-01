@@ -38,7 +38,7 @@ const FEATURES = [
 
 export function TikTokDownloaderFeatures() {
   return (
-    <section style={{ background: "#F7F9F8", padding: "72px 24px" }}>
+    <section style={{ background: "#F7F9F8", padding: "clamp(48px, 10vw, 72px) 20px" }}>
       <div className="max-w-6xl mx-auto">
         <h2
           className="text-center mb-12"
