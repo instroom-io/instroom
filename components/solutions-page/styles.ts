@@ -102,12 +102,24 @@ export const GLOBAL_STYLES = `
   /* Responsive */
   @media (max-width: 900px) {
     .hub-cards-grid, .pains-grid, .features-grid { grid-template-columns: 1fr 1fr !important; }
-    .help-row { grid-template-columns: 1fr !important; }
+    .help-row { grid-template-columns: 1fr !important; gap: 32px !important; }
     .help-row.reverse .help-text, .help-row.reverse .help-visual { order: unset !important; }
-    .sol-hero-grid { grid-template-columns: 1fr !important; }
+    .sol-hero-grid { grid-template-columns: 1fr !important; gap: 32px !important; }
     .mock-kpi-row { grid-template-columns: 1fr 1fr !important; }
+    .sol-hero-media { min-height: 320px !important; }
   }
   @media (max-width: 600px) {
     .hub-cards-grid, .pains-grid, .features-grid { grid-template-columns: 1fr !important; }
+    .mock-kpi-row { grid-template-columns: repeat(3, 1fr) !important; gap: 6px !important; }
+    .pain-photo-banner { height: 180px !important; }
+    .sol-hero-media { min-height: 240px !important; }
+    .help-visual { padding: 18px !important; }
+    .sol-hero-badge { bottom: 10px !important; left: 10px !important; right: 10px !important; max-width: calc(100% - 20px) !important; padding: 8px 10px !important; border-radius: 10px !important; }
+    .sol-hero-badge > div:first-child { font-size: 17px !important; }
+    .sol-hero-badge > div:last-child { font-size: 10px !important; margin-top: 1px !important; }
+  }
+  @media (max-width: 360px) {
+    .mock-kpi { padding: 8px !important; }
+    .mock-kpi-val { font-size: 16px !important; }
   }
 `

@@ -185,7 +185,6 @@ export async function GET(
             niche:             true,
             location:          true,
             profile_image_url: true,
-            bio:               true,
             follower_count:    true,
             engagement_rate:   true,
             avg_likes:         true,
@@ -275,7 +274,6 @@ export async function GET(
           location:        inf.location          || "",
           email:           inf.email             || "",
           profileImageUrl: inf.profile_image_url || null,
-          bio:             inf.bio               || "",
 
           pipelineStatus,
           contactStatus:   bi.contact_status,

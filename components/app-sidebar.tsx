@@ -12,6 +12,7 @@ import {
   IconCircleCheck,
   IconMail,
   IconBuildingStore,
+  IconMessageCircle2,
 } from "@tabler/icons-react"
 
 import { NavMain } from "@/components/nav-main"
@@ -33,6 +34,7 @@ const navData = {
     { title: "Pipeline", url: "/dashboard/pipeline", icon: IconGitBranch },
     { title: "Post Tracker", url: "/dashboard/post-tracker", icon: IconCircleCheck },
     { title: "Brand Partners", url: "/dashboard/brand-partners", icon: IconBuildingStore },
+    { title: "Community", url: "/dashboard/community", icon: IconMessageCircle2 },
     { title: "Analytics", url: "/dashboard/analytics", icon: IconChartBar },
   ],
 }

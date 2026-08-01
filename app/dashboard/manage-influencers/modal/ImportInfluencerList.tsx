@@ -32,7 +32,7 @@ export default function ImportInfluencerList({ close }: any) {
         </p>
 
         {/* SAMPLE BUTTONS */}
-        <div className="grid grid-cols-2 gap-4 mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
 
           <button className="h-11 border border-gray-200 rounded-lg bg-gray-50 text-sm hover:border-[#1FAE5B] hover:text-[#0F6B3E] transition">
             Make a copy of sample csv

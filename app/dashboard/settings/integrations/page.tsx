@@ -16,7 +16,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Link2, BoxSelect, ShoppingCart, FolderOpen, Radio, Loader2 } from "lucide-react"
+import { Link2, ShoppingCart, FolderOpen, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 function LoadingScreen() {
@@ -42,7 +42,6 @@ function useToast() {
 type IntegrationId =
   | "uppromote"
   | "goaffpro"
-  | "posttracker"
   | "shopify"
   | "woocommerce"
   | "gdrive"
@@ -57,7 +56,6 @@ type IntegrationsMap = Record<IntegrationId, IntegrationState>
 const DEFAULT_STATE: IntegrationsMap = {
   uppromote: { connected: false },
   goaffpro: { connected: false },
-  posttracker: { connected: false },
   shopify: { connected: false },
   woocommerce: { connected: false },
   gdrive: { connected: false },
@@ -85,9 +83,6 @@ function IntegrationsContent() {
       ? `${window.location.origin}/api/webhooks/goaffpro/orders/${brandId}`
       : ""
 
-  const [hashtags, setHashtags] = useState("")
-  const [mentions, setMentions] = useState("")
-
   useEffect(() => {
     if (!brandId) {
       setLoading(false)
@@ -104,8 +99,6 @@ function IntegrationsContent() {
       .then((r) => r.json())
       .then((data) => {
         if (data.integrations) setIntegrations(data.integrations)
-        if (data.hashtags) setHashtags(data.hashtags)
-        if (data.mentions) setMentions(data.mentions)
       })
       .catch(() => {})
       .finally(() => setLoading(false))
@@ -230,8 +223,6 @@ function IntegrationsContent() {
     }
   }
 
-  const ptEnabled = integrations.posttracker.connected
-
   return (
     <div className="max-w-3xl px-4 py-5 sm:px-6 sm:py-6 md:px-9 md:py-7">
       {/* Toast */}
@@ -281,63 +272,6 @@ function IntegrationsContent() {
             onDisconnect={() => handleDisconnect("uppromote", "UpPromote")}
             onManage={() => handleManage("UpPromote")}
           />
-        </div>
-      </SettingsCard>
-
-      {/* Post Tracker Pro */}
-      <SettingsCard
-        icon={<BoxSelect className="h-4 w-4 text-[#1FAE5B]" strokeWidth={1.5} />}
-        title="Post Tracker Pro"
-        desc="Auto-detect influencer posts via hashtag and mention monitoring"
-      >
-        <div className="mb-3.5">
-          <IntegrationRow
-            logo={<Radio className="h-[18px] w-[18px] text-[#1E1E1E]" />}
-            logoBg="#f7f9f8"
-            name="Post Tracker Pro"
-            tag="Add-on"
-            desc="Monitors Instagram, TikTok, and YouTube for your brand hashtags and mentions"
-            connected={ptEnabled}
-            connectedLabel="Enabled"
-            disconnectedLabel="Not enabled"
-            loading={pendingId === "posttracker" || loading}
-            comingSoon
-            onConnect={() => {}}
-            onDisconnect={() => handleDisconnect("posttracker", "Post Tracker Pro")}
-            onManage={() => handleManage("Post Tracker Pro")}
-          />
-        </div>
-
-        <div className="rounded-[9px] bg-[#f7f9f8] px-4 py-3.5">
-          <div className="mb-2 flex flex-col gap-1.5">
-            <Label className="text-[11px] font-semibold tracking-wide text-[#555]">
-              Hashtags to monitor
-            </Label>
-            <Input
-              className="text-xs"
-              placeholder="e.g. #nonoise, #nonoiseofficial"
-              value={hashtags}
-              onChange={(e) => setHashtags(e.target.value)}
-              disabled={!ptEnabled}
-            />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label className="text-[11px] font-semibold tracking-wide text-[#555]">
-              Mentions to monitor
-            </Label>
-            <Input
-              className="text-xs"
-              placeholder="e.g. @nonoise, @nonoisestore"
-              value={mentions}
-              onChange={(e) => setMentions(e.target.value)}
-              disabled={!ptEnabled}
-            />
-          </div>
-          {!ptEnabled && (
-            <div className="mt-2 text-[10px] text-[#aaa]">
-              Enable Post Tracker Pro to configure hashtag and mention tracking
-            </div>
-          )}
         </div>
       </SettingsCard>
 

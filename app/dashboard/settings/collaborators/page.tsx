@@ -457,7 +457,7 @@ function CollaboratorsContent() {
             </div>
 
             <CardContent className="space-y-5 pt-5">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="rounded-[9px] border px-3.5 py-3">
                   <p className="mb-1 text-[10px] text-muted-foreground">Seats purchased</p>
                   <p className="text-xl font-bold text-foreground">{buySeatsModal.currentExtraSeats}</p>

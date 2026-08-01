@@ -42,15 +42,17 @@ function DropdownHero({
         justifyContent: "space-between",
         background: "linear-gradient(135deg, #0F6B3E 0%, #1FAE5B 100%)",
         borderRadius: 12,
-        padding: "18px 22px",
+        padding: "clamp(14px, 3vw, 18px) clamp(14px, 4vw, 22px)",
         marginBottom: 16,
         cursor: "pointer",
         position: "relative",
         overflow: "hidden",
+        flexWrap: "wrap",
+        gap: 12,
       }}>
         {/* decorative circles */}
-        <div style={{ position: "absolute", top: -30, right: -30, width: 120, height: 120, background: "rgba(255,255,255,0.07)", borderRadius: "50%" }} />
-        <div style={{ position: "absolute", bottom: -20, right: 60, width: 80, height: 80, background: "rgba(255,255,255,0.05)", borderRadius: "50%" }} />
+        <div style={{ position: "absolute", top: -30, right: -30, width: 120, height: 120, background: "rgba(255,255,255,0.07)", borderRadius: "50%", maxWidth: "40%", maxHeight: "40%" }} />
+        <div style={{ position: "absolute", bottom: -20, right: 60, width: 80, height: 80, background: "rgba(255,255,255,0.05)", borderRadius: "50%", maxWidth: "30%", maxHeight: "30%" }} />
 
         <div style={{ display: "flex", alignItems: "center", gap: 14, position: "relative" }}>
           <div style={{ width: 44, height: 44, background: "rgba(255,255,255,0.18)", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -62,7 +64,7 @@ function DropdownHero({
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end", maxWidth: 420, position: "relative" }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end", maxWidth: "100%", position: "relative" }}>
           {pills.map(({ label, soon }) => (
             <span key={label} style={{
               display: "inline-flex", alignItems: "center", gap: 5,
@@ -72,7 +74,6 @@ function DropdownHero({
               borderRadius: 99,
               fontSize: 11.5, fontWeight: 500,
               color: "rgba(255,255,255,0.95)",
-              whiteSpace: "nowrap",
             }}>
               {!soon && (
                 <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
@@ -120,7 +121,7 @@ function ProductDropdown() {
           background: "none",
           border: "none",
           cursor: "pointer",
-          fontSize: "0.9375rem",
+          fontSize: "0.8125rem",
           fontWeight: 500,
           color: "var(--charcoal)",
           display: "flex",
@@ -357,7 +358,7 @@ function NavDropdownShell({
           background: "none",
           border: "none",
           cursor: "pointer",
-          fontSize: "0.9375rem",
+          fontSize: "0.8125rem",
           fontWeight: 500,
           color: "var(--charcoal)",
           display: "flex",
@@ -579,7 +580,7 @@ export function MainHeader() {
     textDecoration: "none",
     color: pathname === href ? "var(--green)" : "var(--charcoal)",
     fontWeight: pathname === href ? 600 : 500,
-    fontSize: "0.9375rem",
+    fontSize: "0.8125rem",
   })
 
   return (
@@ -614,7 +615,7 @@ export function MainHeader() {
         <ul
           className="nav-links hidden lg:flex"
           style={{
-            gap: 32,
+            gap: 22,
             alignItems: "center",
             listStyle: "none",
             margin: 0,
@@ -642,18 +643,18 @@ export function MainHeader() {
           <ResourcesDropdown />
         </ul>
 
-        <div className="nav-cta hidden lg:flex" style={{ gap: 18, alignItems: "center", marginLeft: "auto" }}>
+        <div className="nav-cta hidden lg:flex" style={{ gap: 16, alignItems: "center", marginLeft: "auto" }}>
           <button
             onClick={() => setShowBookDemo(true)}
-            style={{ fontSize: "0.9375rem", background: "none", border: "none", cursor: "pointer", padding: 0, color: "var(--charcoal)", fontFamily: "inherit" }}
+            style={{ fontSize: "0.8125rem", background: "none", border: "none", cursor: "pointer", padding: 0, color: "var(--charcoal)", fontFamily: "inherit" }}
           >
             Book a demo
           </button>
-          <Link href="/login" style={{ fontSize: "0.9375rem", fontWeight: "500", textDecoration: "none", color: "var(--charcoal)" }}>
+          <Link href="/login" style={{ fontSize: "0.8125rem", fontWeight: "500", textDecoration: "none", color: "var(--charcoal)" }}>
             Log in
           </Link>
           <Link href="/early-access">
-            <Button className="bg-gradient-to-r from-[#0F6B3E] to-[#1FAE5B] text-white font-semibold hover:from-[#0a5a2f] hover:to-[#158a48] shadow-lg shadow-emerald-500/25">
+            <Button className="bg-gradient-to-r from-[#0F6B3E] to-[#1FAE5B] text-white font-semibold hover:from-[#0a5a2f] hover:to-[#158a48] shadow-lg shadow-emerald-500/25 text-[0.8125rem]">
               Get Early Access
             </Button>
           </Link>

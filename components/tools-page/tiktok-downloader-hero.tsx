@@ -97,7 +97,7 @@ export function TikTokDownloaderHero() {
   }
 
   return (
-    <section style={{ background: "linear-gradient(180deg, #0B2A1D 0%, #0F3D28 100%)", padding: "72px 24px 64px" }}>
+    <section style={{ background: "linear-gradient(180deg, #0B2A1D 0%, #0F3D28 100%)", padding: "clamp(48px, 10vw, 72px) 20px clamp(40px, 8vw, 64px)" }}>
       <div className="max-w-2xl mx-auto text-center">
         <h1
           style={{
@@ -125,6 +125,7 @@ export function TikTokDownloaderHero() {
             placeholder="Paste TikTok video link here..."
             style={{
               flex: 1,
+              minWidth: 0,
               height: 56,
               borderRadius: 999,
               border: "1px solid rgba(255,255,255,0.15)",
@@ -134,6 +135,7 @@ export function TikTokDownloaderHero() {
               background: "#fff",
               color: "#1E1E1E",
               boxShadow: "0 4px 16px rgba(0,0,0,0.15)",
+              width: "100%",
             }}
           />
           <button
@@ -179,7 +181,7 @@ export function TikTokDownloaderHero() {
               <img
                 src={proxied(result.cover)}
                 alt={result.title || "TikTok video"}
-                style={{ width: "100%", height: 220, objectFit: "cover", objectPosition: "top", display: "block" }}
+                style={{ width: "100%", height: "clamp(160px, 40vw, 220px)", objectFit: "cover", objectPosition: "top", display: "block" }}
               />
               {result.duration && (
                 <span

@@ -39,9 +39,9 @@ export function Freelancer({ onBack }: { onBack: () => void }) {
             </div>
             <p style={{ fontSize: 12, color: "var(--ink3)" }}>No credit card required · 30-day free trial</p>
           </div>
-          <div style={{ position: "relative", borderRadius: 20, overflow: "hidden", minHeight: 420, boxShadow: "0 12px 40px rgba(0,0,0,0.1)" }}>
+          <div className="sol-hero-media" style={{ position: "relative", borderRadius: 20, overflow: "hidden", minHeight: 420, boxShadow: "0 12px 40px rgba(0,0,0,0.1)" }}>
             <img src="https://images.unsplash.com/photo-1522202176988-66273c2fd55f?w=900&q=85&fit=crop&crop=faces,center" alt="" loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", position: "absolute", inset: 0 }} />
-            <div style={{ position: "absolute", bottom: 24, left: 24, background: "rgba(255,255,255,0.95)", backdropFilter: "blur(8px)", borderRadius: 12, padding: "12px 16px", boxShadow: "0 4px 16px rgba(0,0,0,0.12)" }}>
+            <div className="sol-hero-badge" style={{ position: "absolute", bottom: 24, left: 24, background: "rgba(255,255,255,0.95)", backdropFilter: "blur(8px)", borderRadius: 12, padding: "12px 16px", boxShadow: "0 4px 16px rgba(0,0,0,0.12)" }}>
               <div style={{ fontSize: 22, fontWeight: 800, color: "var(--green)", fontFamily: "'Manrope',sans-serif" }}>200+</div>
               <div style={{ fontSize: 11, color: "var(--ink3)", marginTop: 2 }}>Campaigns managed</div>
             </div>

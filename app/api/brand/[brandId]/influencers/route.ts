@@ -64,6 +64,23 @@ export async function GET(
     const brandInfluencers = await prisma.brandInfluencer.findMany({
       where: {
         brand_id: brandId,
+        // Push the search filter down to the DB via the influencer relation
+        // when a caller supplies one, instead of always loading every row
+        // for the brand and filtering the full set in JS. No current caller
+        // passes `search`, so this is purely additive and changes nothing
+        // for existing behavior — it only narrows the query when used.
+        ...(search
+          ? {
+              influencer: {
+                OR: [
+                  { handle: { contains: search } },
+                  { full_name: { contains: search } },
+                  { niche: { contains: search } },
+                  { location: { contains: search } },
+                ],
+              },
+            }
+          : {}),
       },
       include: { attribution: true },
       orderBy: { created_at: "desc" },
@@ -71,19 +88,45 @@ export async function GET(
 
     const influencerIds = [...new Set(brandInfluencers.map((bi) => bi.influencer_id))]
 
-    const partnerIds = unpartneredOnly
-      ? new Set(
-          (
-            await prisma.brandPartner.findMany({
-              where: { brand_id: brandId },
-              select: { brand_influencer_id: true },
-            })
-          ).map((partner) => partner.brand_influencer_id)
-        )
-      : new Set<string>()
+    // Neither query depends on the other's result — both only depend on data
+    // already fetched above — so issue them concurrently instead of awaiting
+    // the partner lookup before starting the influencer lookup.
+    const [partnerRows, influencers] = await Promise.all([
+      unpartneredOnly
+        ? prisma.brandPartner.findMany({
+            where: { brand_id: brandId },
+            select: { brand_influencer_id: true },
+          })
+        : Promise.resolve([]),
+      // Fetch influencers so orphaned brand_influencer rows can be skipped safely.
+      // Tight select: only the fields the response below actually reads
+      // (skips e.g. verification_status/is_suspended, which aren't used here).
+      prisma.influencer.findMany({
+        where: { id: { in: influencerIds } },
+        select: {
+          id: true,
+          handle: true,
+          platform: true,
+          full_name: true,
+          email: true,
+          gender: true,
+          niche: true,
+          location: true,
+          bio: true,
+          profile_image_url: true,
+          social_link: true,
+          follower_count: true,
+          engagement_rate: true,
+          avg_likes: true,
+          avg_comments: true,
+          avg_views: true,
+          created_at: true,
+          updated_at: true,
+        },
+      }),
+    ])
 
-    // Fetch influencers first so orphaned brand_influencer rows can be skipped safely.
-    const influencers = await prisma.influencer.findMany({ where: { id: { in: influencerIds } } })
+    const partnerIds = new Set(partnerRows.map((partner) => partner.brand_influencer_id))
     const influencerMap = new Map(influencers.map((i) => [i.id, i]))
 
     const filteredBrandInfluencers = brandInfluencers.filter((bi) => {

@@ -10,9 +10,14 @@
 //   2. update uses `select` — only returns the 4 fields we actually send
 //      back to the client instead of the full BrandInfluencer row.
 //
-//   3. Auth + update are run with Promise.all where possible (see note
-//      inline — we can't fully parallelize because update depends on auth,
-//      but the pattern is ready for future use).
+//   3. Auth check (brand.count + hasBrandCapability) and the BEFORE snapshot
+//      findUnique are independent of each other, so they run concurrently
+//      via Promise.all instead of three sequential round-trips.
+//
+//   4. The post-update notification lookup/send block is fire-and-forget —
+//      it is NOT awaited in the main request path, so PATCH returns to the
+//      client as soon as the update completes. Its two independent lookups
+//      (influencer, brand) run in parallel via Promise.all.
 
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
@@ -86,24 +91,25 @@ export async function PATCH(
     // "Declined" (see pipelineStatusToFields below), so this whole action is
     // an approval decision — gated to owners and managers only. The brand
     // must also be active (owner's subscription in good standing).
-    const activeCount = await prisma.brand.count({ where: { id: brandId, is_active: true } })
+    const [activeCount, canApprove, before] = await Promise.all([
+      prisma.brand.count({ where: { id: brandId, is_active: true } }),
+      hasBrandCapability(brandId, session.user.id, "approveInfluencers"),
+      prisma.brandInfluencer.findUnique({
+        where: { id: brandInfluencerId, brand_id: brandId },
+        select: { contact_status: true, stage: true, product_details: true },
+      }),
+    ])
+
     if (activeCount === 0) {
       return NextResponse.json({ error: "Not found" }, { status: 403 })
     }
 
-    const canApprove = await hasBrandCapability(brandId, session.user.id, "approveInfluencers")
     if (!canApprove) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
     // ── Compute DB fields from pipeline status ───────────────────────────────
     const fields = pipelineStatusToFields(pipelineStatus, collaborationType)
-
-    // ── Snapshot BEFORE state so the change can be logged ────────────────────
-    const before = await prisma.brandInfluencer.findUnique({
-      where: { id: brandInfluencerId, brand_id: brandId },
-      select: { contact_status: true, stage: true, product_details: true },
-    })
 
     // ── Merge Collaboration Type into the same product_details JSON blob
     //    that Post Tracker's own Collaboration Type dropdown writes to
@@ -170,23 +176,26 @@ export async function PATCH(
     }
 
     // ── Send notification ───────────────────────────────────────────────────
-    // Non-blocking: notify all brand members in background
-    try {
+    // Non-blocking: notify all brand members in background (fire-and-forget,
+    // same pattern as logActivity/provisionGoAffProAffiliate above — do not
+    // await this, so PATCH returns to the client immediately).
+    ;(async () => {
       const brandInfluencerFull = await prisma.brandInfluencer.findUnique({
         where: { id: brandInfluencerId },
         select: { influencer_id: true },
       })
-      
+
       if (brandInfluencerFull) {
-        const influencer = await prisma.influencer.findUnique({
-          where: { id: brandInfluencerFull.influencer_id },
-          select: { full_name: true, handle: true },
-        })
-        
-        const brand = await prisma.brand.findUnique({
-          where: { id: brandId },
-          select: { slug: true },
-        })
+        const [influencer, brand] = await Promise.all([
+          prisma.influencer.findUnique({
+            where: { id: brandInfluencerFull.influencer_id },
+            select: { full_name: true, handle: true },
+          }),
+          prisma.brand.findUnique({
+            where: { id: brandId },
+            select: { slug: true },
+          }),
+        ])
 
         const influencerName = influencer?.full_name || influencer?.handle || "Influencer"
         const appUrl = process.env.NEXTAUTH_URL ?? ""
@@ -206,30 +215,27 @@ export async function PATCH(
           message = `${influencerName}'s status has been updated to "${pipelineStatus}".`
         }
 
-        // Send to all brand members (non-blocking)
-        prisma.brandMember
-          .findMany({
-            where: { brand_id: brandId },
-            select: { user_id: true },
-          })
-          .then(async (members) => {
-            await Promise.allSettled(
-              members.map(({ user_id }) =>
-                sendNotification({
-                  userId: user_id,
-                  type: notifType,
-                  title,
-                  message,
-                  actionUrl,
-                })
-              )
-            )
-          })
-          .catch((err) => console.error("Notification dispatch failed:", err))
+        // Send to all brand members
+        const members = await prisma.brandMember.findMany({
+          where: { brand_id: brandId },
+          select: { user_id: true },
+        })
+
+        await Promise.allSettled(
+          members.map(({ user_id }) =>
+            sendNotification({
+              userId: user_id,
+              type: notifType,
+              title,
+              message,
+              actionUrl,
+            })
+          )
+        )
       }
-    } catch (err) {
+    })().catch((err) => {
       console.error("❌ Notification setup failed:", err)
-    }
+    })
 
     return NextResponse.json({
       success: true,

@@ -64,6 +64,10 @@ function formatActivityDetails(action: string, details: Record<string, unknown>)
       return `via ${details.method ?? "manual"}${details.platform ? ` on ${details.platform}` : ""}`
     case "posttracker.stage_changed":
       return `${details.from} → ${details.to}`
+    case "influencer.updated": {
+      const fields = details.fields as string[] | undefined
+      return fields?.length ? `Updated ${fields.length} field${fields.length > 1 ? "s" : ""}` : ""
+    }
     default:
       return ""
   }
@@ -668,18 +672,26 @@ export default function ProfileSidebar({
     comments: "", amount: "", usageRights: "", views: "", clicks: "",
   })
 
+  const resetFormToRow = () => {
+    if (!row) return
+    setEditedRow({ ...row })
+    setOrderData(d => ({
+      ...d,
+      discountCode: row.coupon || row.ref_code || defaultDiscountCode,
+      affiliateLink: row.affiliate_link || defaultAffiliateLink,
+      sparkAds: row.spark_ads || "",
+    }))
+    setPostData({ postLink: "", likes: "", sales: "", driveLink: "", comments: "", amount: "", usageRights: "", views: "", clicks: "" })
+  }
+
   useEffect(() => {
     if (row) {
-      setEditedRow({ ...row }); setProfileTab(0)
-      setOrderData(d => ({
-        ...d,
-        discountCode: row.coupon || row.ref_code || defaultDiscountCode,
-        affiliateLink: row.affiliate_link || defaultAffiliateLink,
-        sparkAds: row.spark_ads || "",
-      }))
-      setPostData({ postLink: "", likes: "", sales: "", driveLink: "", comments: "", amount: "", usageRights: "", views: "", clicks: "" })
+      resetFormToRow()
+      setProfileTab(0)
     }
   }, [row])
+
+  const handleCancel = () => resetFormToRow()
 
   if (!row || !editedRow) return null
 
@@ -827,7 +839,9 @@ export default function ProfileSidebar({
     statLabel: { fontSize: 9, fontWeight: 600, color: "#6b7280", textTransform: "uppercase" as const, letterSpacing: "0.07em" },
     statVal: { fontSize: 16, fontWeight: 700, color: "#111827", marginTop: 3 },
     formInput: { width: "100%", fontSize: 12, padding: "8px 10px", borderRadius: 8, border: "1.5px solid #e5e7eb", background: "#f9fafb", color: "#111827", boxSizing: "border-box" as const, outline: "none", transition: "border-color 0.15s, background 0.15s" },
-    saveBtn: { background: "#1fae5b", color: "#fff", border: "none", padding: "8px 18px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 600, transition: "background 0.15s" },
+    saveBtn: { background: "#1fae5b", color: "#fff", border: "none", padding: "9px 20px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 600, transition: "background 0.15s" },
+    cancelBtn: { background: "transparent", color: "#6b7280", border: "1.5px solid #e5e7eb", padding: "9px 18px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 600, transition: "background 0.15s, border-color 0.15s" },
+    actionBar: { display: "flex", alignItems: "center" as const, justifyContent: "flex-end" as const, gap: 8, position: "sticky" as const, bottom: -20, margin: "8px -20px -20px", padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2 },
     sectionTitle: { fontSize: 10, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase" as const, letterSpacing: "0.08em", padding: "14px 0 8px", marginBottom: 10, borderBottom: "1px solid #f3f4f6" },
     metricBox: { background: "#f9fafb", borderRadius: 10, padding: "12px 10px", textAlign: "center" as const, border: "1px solid #f3f4f6" },
     metricVal: { fontSize: 16, fontWeight: 700, color: "#111827" },
@@ -1036,7 +1050,8 @@ export default function ProfileSidebar({
                 </div>
               )}
               {!readOnly && (
-                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <div style={S.actionBar}>
+                  <button style={S.cancelBtn} onClick={handleCancel} disabled={isSaving}>Cancel</button>
                   <button style={{ ...S.saveBtn, opacity: isSaving ? 0.6 : 1, cursor: isSaving ? "not-allowed" : "pointer" }} onClick={handleSave} disabled={isSaving} onMouseEnter={e => { if (!isSaving) e.currentTarget.style.background = "#0f6b3e" }} onMouseLeave={e => { e.currentTarget.style.background = "#1fae5b" }}>{isSaving ? "Saving…" : "Save Changes"}</button>
                 </div>
               )}
@@ -1056,7 +1071,8 @@ export default function ProfileSidebar({
               <div style={S.formGroup}><div style={S.formLabel}>Product Cost</div><input style={S.formInput} value={orderData.productCost} onChange={e => setOrderData(d => ({ ...d, productCost: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
               <div style={S.formGroup}><div style={S.formLabel}>Shipping Address</div><input style={S.formInput} value={orderData.shippingAddress} onChange={e => setOrderData(d => ({ ...d, shippingAddress: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
               <div style={S.formGroup}><div style={S.formLabel}>Tracking Link</div><input style={S.formInput} value={orderData.trackingLink} onChange={e => setOrderData(d => ({ ...d, trackingLink: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
-              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
+              <div style={S.actionBar}>
+                <button style={S.cancelBtn} onClick={handleCancel} disabled={isSaving}>Cancel</button>
                 <button style={{ ...S.saveBtn, opacity: isSaving ? 0.6 : 1, cursor: isSaving ? "not-allowed" : "pointer" }} onClick={handleSave} disabled={isSaving}>{isSaving ? "Saving…" : "Save Changes"}</button>
               </div>
             </div>
@@ -1070,9 +1086,12 @@ export default function ProfileSidebar({
                 <div style={S.formGroup}><div style={S.formLabel}>Ad Code/Spark Ads Code</div><input style={S.formInput} value={orderData.sparkAds} placeholder="Ad Code/Spark Ads Code" onChange={e => setOrderData(d => ({ ...d, sparkAds: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
               </div>
               <div style={S.formGroup}><div style={S.formLabel}>Affiliate Link</div><input style={S.formInput} value={orderData.affiliateLink} placeholder="—" onChange={e => setOrderData(d => ({ ...d, affiliateLink: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
-              <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, marginTop: 4 }}>
+              <div style={{ ...S.actionBar, justifyContent: attributionSaveMessage ? "space-between" : "flex-end" }}>
                 {attributionSaveMessage && <div style={{ fontSize: 12, color: "#667085" }}>{attributionSaveMessage}</div>}
-                <button style={{ ...S.saveBtn, opacity: isSaving ? 0.6 : 1, cursor: isSaving ? "not-allowed" : "pointer" }} onClick={handleSave} disabled={isSaving}>{isSaving ? "Saving…" : "Save Changes"}</button>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button style={S.cancelBtn} onClick={handleCancel} disabled={isSaving}>Cancel</button>
+                  <button style={{ ...S.saveBtn, opacity: isSaving ? 0.6 : 1, cursor: isSaving ? "not-allowed" : "pointer" }} onClick={handleSave} disabled={isSaving}>{isSaving ? "Saving…" : "Save Changes"}</button>
+                </div>
               </div>
             </div>
           )}
@@ -1085,7 +1104,8 @@ export default function ProfileSidebar({
               <div style={S.formRow}><div style={S.formGroup}><div style={S.formLabel}>Comments</div><input style={S.formInput} value={postData.comments} onChange={e => setPostData(d => ({ ...d, comments: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div><div style={S.formGroup}><div style={S.formLabel}>Amount ($)</div><input style={S.formInput} value={postData.amount} onChange={e => setPostData(d => ({ ...d, amount: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div></div>
               <div style={S.formRow}><div style={S.formGroup}><div style={S.formLabel}>Usage Rights</div><select style={S.formInput} value={postData.usageRights} onChange={e => setPostData(d => ({ ...d, usageRights: e.target.value }))}><option value="">Select…</option><option>Granted</option><option>Not Granted</option><option>Pending</option></select></div><div style={S.formGroup}><div style={S.formLabel}>Views</div><input style={S.formInput} value={postData.views} onChange={e => setPostData(d => ({ ...d, views: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div></div>
               <div style={S.formRow}><div style={S.formGroup}><div style={S.formLabel}>Clicks</div><input style={S.formInput} value={postData.clicks} onChange={e => setPostData(d => ({ ...d, clicks: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div><div style={S.formGroup}><div style={S.formLabel}>CVR (auto)</div><input style={{ ...S.formInput, background: "#f0fdf4", color: "#1fae5b", fontWeight: 600 }} readOnly value={postCVR || "—"} /></div></div>
-              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
+              <div style={S.actionBar}>
+                <button style={S.cancelBtn} onClick={handleCancel} disabled={isSaving}>Cancel</button>
                 <button style={{ ...S.saveBtn, opacity: isSaving ? 0.6 : 1, cursor: isSaving ? "not-allowed" : "pointer" }} onClick={handleSave} disabled={isSaving}>{isSaving ? "Saving…" : "Save Changes"}</button>
               </div>
             </div>
@@ -1136,7 +1156,7 @@ export default function ProfileSidebar({
           {profileTab === 5 && (
             <HistoryTab
               brandId={brandId}
-              biId={row.id}
+              biId={row.brand_influencer_id || row.id}
             />
           )}
 

@@ -109,19 +109,21 @@ export default function NewCampaignModal({ isOpen, onClose, brandId, partners, o
       const campaignId = json.data?.id
       if (!campaignId) { setErrMsg("Campaign created but ID not returned."); setSaving(false); return }
 
-      for (const [partnerId, data] of Array.from(fees.entries())) {
-        if (data.fee > 0 || data.deliverables.length > 0) {
-          await fetch(`/api/brands/${brandId}/partners/${partnerId}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              campaign_id:  campaignId,
-              agreed_rate:  data.fee > 0          ? data.fee                          : undefined,
-              deliverables: data.deliverables.length > 0 ? data.deliverables.join(", ") : undefined,
-            }),
-          }).catch(() => {/* non-fatal */})
-        }
-      }
+      await Promise.all(
+        Array.from(fees.entries())
+          .filter(([, data]) => data.fee > 0 || data.deliverables.length > 0)
+          .map(([partnerId, data]) =>
+            fetch(`/api/brands/${brandId}/partners/${partnerId}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                campaign_id:  campaignId,
+                agreed_rate:  data.fee > 0          ? data.fee                          : undefined,
+                deliverables: data.deliverables.length > 0 ? data.deliverables.join(", ") : undefined,
+              }),
+            }).catch(() => {/* non-fatal */})
+          )
+      )
 
       setSuccess(true)
       setTimeout(() => { onCreated(); onClose() }, 700)
@@ -261,6 +263,7 @@ export default function NewCampaignModal({ isOpen, onClose, brandId, partners, o
               </div>
               <div>
                 <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 10 }}>Per-creator fees</div>
+                <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                   <thead>
                     <tr style={{ borderBottom: "0.5px solid #eee" }}>
@@ -287,13 +290,14 @@ export default function NewCampaignModal({ isOpen, onClose, brandId, partners, o
                             </div>
                           </td>
                           <td style={{ padding: "8px" }}>
-                            <input type="number" style={{ ...fs, width: 110 }} placeholder="$0" value={d?.fee || ""} onChange={e => setFee(p.id, parseFloat(e.target.value) || 0)} />
+                            <input type="number" style={{ ...fs, width: "100%", maxWidth: 110, minWidth: 70 }} placeholder="$0" value={d?.fee || ""} onChange={e => setFee(p.id, parseFloat(e.target.value) || 0)} />
                           </td>
                         </tr>
                       )
                     })}
                   </tbody>
                 </table>
+                </div>
               </div>
             </div>
           )}

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useMemo } from "react"
 import TierSettingsModal from "./TierSettingsModal"
 import AddPartnerModal from "./AddPartnerModal"
 import NewCampaignModal from "./NewCampaignModal"
@@ -432,9 +432,12 @@ export default function BrandPartnersPage({ brandId }: Props) {
       })
       if (!res.ok) throw new Error(`Server error ${res.status}`)
 
-      // Refresh partners so campaign_id changes are reflected locally
-      const fresh = await partnersApi.list(brandId)
-      setPartners(fresh.map(dbToPartner))
+      // Patch campaign_id locally for the affected partners instead of
+      // refetching the entire (potentially large) partner list.
+      const idSet = new Set(influencerIds)
+      setPartners((prev) =>
+        prev.map((p) => (idSet.has(p.id) ? { ...p, campaign_id: campaignId } : p))
+      )
       setShowAddToCampaign(false)
       setPickerSelectedIds([])
     } catch (e: any) {
@@ -467,21 +470,31 @@ export default function BrandPartnersPage({ brandId }: Props) {
   const handleAddPartner = async (formData: any) => {
     try {
       if (formData.type === "search") {
-        for (const inf of formData.influencers) {
-          try {
-            const bi = await partnersApi.add(brandId, {
+        const results = await Promise.allSettled(
+          formData.influencers.map((inf: any) =>
+            partnersApi.add(brandId, {
               influencer_id: inf.id,
               notes: formData.notes || null,
             })
-            setPartners((prev) => [...prev, dbToPartner(bi)])
-          } catch (e: any) {
-            if (e.message?.includes("already added") || e.message?.includes("409")) {
-              // skip silently
-            } else {
-              throw e
-            }
+          )
+        )
+
+        const added: Partner[] = []
+        let firstFailure: any = null
+        for (const result of results) {
+          if (result.status === "fulfilled") {
+            added.push(dbToPartner(result.value))
+          } else {
+            const e = result.reason
+            const isDuplicate = e?.message?.includes("already added") || e?.message?.includes("409")
+            if (!isDuplicate && !firstFailure) firstFailure = e
           }
         }
+
+        if (added.length > 0) {
+          setPartners((prev) => [...prev, ...added])
+        }
+        if (firstFailure) throw firstFailure
         return
       }
 
@@ -585,7 +598,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
   }
 
   // ── Sorting & filtering ──────────────────────────────────────────────────
-  const getFilteredPartners = useCallback(() => {
+  const filteredPartners = useMemo(() => {
     let filtered = [...partners]
     if (searchQuery) {
       const q = searchQuery.toLowerCase()
@@ -624,7 +637,6 @@ export default function BrandPartnersPage({ brandId }: Props) {
     return filtered
   }, [partners, searchQuery, filters, sortCol, sortAsc, getDisplayTier])
 
-  const filteredPartners = getFilteredPartners()
   const totalPages = Math.max(1, Math.ceil(filteredPartners.length / rowsPerPage))
   const paginatedPartners = filteredPartners.slice(
     (currentPage - 1) * rowsPerPage,
@@ -1500,7 +1512,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
         .cd-section { background: #fff; border: 0.5px solid rgba(0,0,0,0.08); border-radius: 10px; padding: 14px 16px; }
         .cd-section-title { font-size: 11px; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; }
         .kpi-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; }
-        @media (max-width: 640px) { .kpi-grid { grid-template-columns: repeat(2,1fr); } }
+        @media (max-width: 640px) { .kpi-grid { grid-template-columns: repeat(2,1fr); } .sb { width: 100%; max-width: 100%; } }
         .kpi-card { background: #fff; border: 0.5px solid rgba(0,0,0,0.08); border-radius: 10px; padding: 12px 14px; }
         .kpi-l { font-size: 10px; color: #888; }
         .kpi-v { font-size: 17px; font-weight: 600; color: #1E1E1E; margin-top: 2px; }

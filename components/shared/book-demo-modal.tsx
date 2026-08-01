@@ -46,19 +46,20 @@ export function BookDemoModal({ open, onClose }: { open: boolean; onClose: () =>
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        padding: 24,
+        padding: "clamp(8px, 4vw, 24px)",
       }}
     >
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
           position: "relative",
-          width: "100%",
-          maxWidth: 1024,
+          width: "min(1024px, calc(100% - 24px))",
+          maxWidth: "95vw",
           maxHeight: "90vh",
           background: "#fff",
-          borderRadius: 16,
+          borderRadius: 20,
           overflow: "auto",
+          overflowY: "auto",
           boxShadow: "0 24px 64px rgba(0,0,0,0.35)",
         }}
       >
@@ -67,15 +68,15 @@ export function BookDemoModal({ open, onClose }: { open: boolean; onClose: () =>
           aria-label="Close"
           style={{
             position: "absolute",
-            top: 12,
-            right: 12,
-            width: 32,
-            height: 32,
+            top: 10,
+            right: 10,
+            width: 40,
+            height: 40,
             borderRadius: "50%",
             border: "none",
             background: "rgba(0,0,0,0.08)",
             color: "#1E1E1E",
-            fontSize: 18,
+            fontSize: 20,
             lineHeight: 1,
             cursor: "pointer",
             zIndex: 1,
@@ -83,7 +84,7 @@ export function BookDemoModal({ open, onClose }: { open: boolean; onClose: () =>
         >
           ×
         </button>
-        <div style={{ overflow: "hidden", borderRadius: 16 }}>
+        <div style={{ overflow: "hidden", borderRadius: 20 }}>
           <iframe
             src={BOOKING_URL}
             style={{

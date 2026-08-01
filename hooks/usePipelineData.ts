@@ -26,7 +26,6 @@ export interface PipelineInfluencer {
   location: string
   email: string
   profileImageUrl: string | null
-  bio: string
   pipelineStatus: string
   contactStatus: string
   stage: number | null
@@ -83,7 +82,6 @@ function mapItem(item: any): PipelineInfluencer {
     location:        item.location,
     email:           item.email,
     profileImageUrl: item.profileImageUrl,
-    bio:             item.bio,
     pipelineStatus:  item.pipelineStatus,
     contactStatus:   item.contactStatus  || item.contact_status  || "",
     stage:           item.stage          ?? null,
@@ -161,15 +159,26 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
   // Track in-flight PATCH requests so we don't refetch while one is pending
   const pendingRef = useRef(0)
 
+  // Tracks the AbortController for the most recent fetchData call — lets a
+  // newer request (e.g. after brandId changes) cancel a still-in-flight
+  // older one, so a slow stale response can't overwrite fresher state.
+  const abortRef = useRef<AbortController | null>(null)
+
   // ── Initial fetch (shows spinner) ─────────────────────────────────────────
   const fetchData = useCallback(async (showSpinner = true) => {
     if (!brandId) { setIsLoading(false); return }
+
+    // Cancel any previous in-flight request for this hook instance before
+    // starting a new one.
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
 
     try {
       if (showSpinner) setIsLoading(true)
       setError(null)
 
-      const res = await fetch(`/api/brand/${brandId}/pipeline`)
+      const res = await fetch(`/api/brand/${brandId}/pipeline`, { signal: controller.signal })
       if (!res.ok) {
         const err = await res.json()
         throw new Error(err.error || "Failed to fetch pipeline data")
@@ -179,14 +188,18 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
       const mapped = (json.data || []).map(mapItem)
       setData(mapped)
     } catch (err: unknown) {
-      const e = err as { message?: string }
+      const e = err as { name?: string; message?: string }
+      if (e?.name === "AbortError") return
       setError(e?.message || "Something went wrong")
     } finally {
-      if (showSpinner) setIsLoading(false)
+      if (showSpinner && !controller.signal.aborted) setIsLoading(false)
     }
   }, [brandId])
 
-  useEffect(() => { fetchData(true) }, [fetchData])
+  useEffect(() => {
+    fetchData(true)
+    return () => { abortRef.current?.abort() }
+  }, [fetchData])
 
   // ── Status update — optimistic, no loading flicker ────────────────────────
   const updateStatus = useCallback(
