@@ -14,6 +14,7 @@ export function SiteHeader() {
     "/dashboard/inbox": "Inbox",
     "/dashboard/pipeline": "Pipeline",
     "/dashboard/brand-partners": "Brand Partners",
+    "/dashboard/community": "Community",
     "/dashboard/post-tracker": "Post Tracker",
     "/dashboard/analytics": "Analytics",
     "/dashboard/influencer-discovery": "Influencer Discovery",

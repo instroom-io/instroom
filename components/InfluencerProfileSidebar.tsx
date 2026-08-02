@@ -112,7 +112,7 @@ function formatActivityDetails(action: string, details: Record<string, unknown>)
       return `${details.from} → ${details.to}`
     case "influencer.updated": {
       const fields = details.fields as string[] | undefined
-      return fields?.length ? `Fields: ${fields.join(", ")}` : ""
+      return fields?.length ? `Updated ${fields.length} field${fields.length > 1 ? "s" : ""}` : ""
     }
     default:
       return ""
@@ -736,7 +736,16 @@ export default function InfluencerProfileSidebar({
               <div className="pfg"><div className="pfl">Product Cost</div><input className="pfi" value={orderData.productCost} onChange={e => setOrderData(d => ({ ...d, productCost: e.target.value }))} /></div>
               <div className="pfg"><div className="pfl">Shipping Address</div><input className="pfi" value={orderData.shippingAddress} onChange={e => setOrderData(d => ({ ...d, shippingAddress: e.target.value }))} placeholder="Shipping Address" /></div>
               <div className="pfg"><div className="pfl">Tracking Link</div><input className="pfi" value={orderData.trackingLink} onChange={e => setOrderData(d => ({ ...d, trackingLink: e.target.value }))} placeholder="Tracking Link" /></div>
-              <div style={{ display: "flex", justifyContent: "flex-end" }}><button className="btn-primary">Save</button></div>
+              <div
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8,
+                  position: "sticky", bottom: -18, margin: "8px -20px -18px",
+                  padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
+                }}
+              >
+                <button className="btn-secondary">Cancel</button>
+                <button className="btn-primary">Save</button>
+              </div>
             </div>
           )}
 
@@ -793,7 +802,16 @@ export default function InfluencerProfileSidebar({
                 <div className="pfg"><div className="pfl">Clicks</div><input className="pfi" value={postData.clicks} onChange={e => setPostData(d => ({ ...d, clicks: e.target.value }))} /></div>
                 <div className="pfg"><div className="pfl">CVR (auto)</div><input className="pfi" readOnly style={{ background: "#f0fdf4", color: "#1fae5b", fontWeight: 600 }} value={postCVR || "—"} /></div>
               </div>
-              <div style={{ display: "flex", justifyContent: "flex-end" }}><button className="btn-primary">Save</button></div>
+              <div
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8,
+                  position: "sticky", bottom: -18, margin: "8px -20px -18px",
+                  padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
+                }}
+              >
+                <button className="btn-secondary">Cancel</button>
+                <button className="btn-primary">Save</button>
+              </div>
             </div>
           )}
 
@@ -908,8 +926,10 @@ export default function InfluencerProfileSidebar({
           .mv { font-size:12px; font-weight:600; color:#1e1e1e; margin-top:2px; }
           .mv-best { color:#1fae5b; }
           .ms-txt { font-size:10px; color:#888; }
-          .btn-primary { background:#1fae5b; color:#fff; border:none; padding:8px 18px; border-radius:8px; cursor:pointer; font-size:12px; font-weight:600; font-family:inherit; transition:background .15s; }
+          .btn-primary { background:#1fae5b; color:#fff; border:none; padding:9px 20px; border-radius:8px; cursor:pointer; font-size:13px; font-weight:600; font-family:inherit; transition:background .15s; }
           .btn-primary:hover { background:#0f6b3e; }
+          .btn-secondary { background:transparent; color:#6b7280; border:1.5px solid #e5e7eb; padding:9px 18px; border-radius:8px; cursor:pointer; font-size:13px; font-weight:600; font-family:inherit; transition:background .15s,border-color .15s; }
+          .btn-secondary:hover { background:#f9fafb; border-color:#d1d5db; }
         `}</style>
       </div>
     </>

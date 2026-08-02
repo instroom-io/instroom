@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef, Suspense } from "react"
+import { useState, useEffect, useMemo, useRef, Suspense } from "react"
 import { useSearchParams } from "next/navigation"
 import { useSession } from "next-auth/react"
 import {
@@ -370,6 +370,7 @@ function InboxContent() {
   const [isSending, setIsSending] = useState(false)
   const [sendError, setSendError] = useState<string | undefined>()
   const [searchQuery, setSearchQuery] = useState("")
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("")
   const [updateStageModal, setUpdateStageModal] = useState<{ open: boolean; email: Email | null }>({ open: false, email: null })
   const [stageNotification, setStageNotification] = useState<{ show: boolean; message: string; type: "error" | "success" }>({ show: false, message: "", type: "error" })
   const [showPipelineBar, setShowPipelineBar] = useState(false)
@@ -398,6 +399,12 @@ function InboxContent() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const replyTextareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Monotonically increasing request ids so a slow/stale gmail or outlook
+  // fetch (e.g. issued for a previous brandId) can't overwrite state with
+  // out-of-date results after a newer request has already resolved.
+  const gmailRequestIdRef = useRef(0)
+  const outlookRequestIdRef = useRef(0)
 
   useEffect(() => {
     const checkMobile = () => setIsMobile(window.innerWidth < 768)
@@ -455,14 +462,22 @@ function InboxContent() {
     setExpandedQuotes(new Set())
   }, [selectedEmail?.id])
 
+  // Debounce the search input so filtering doesn't run on every keystroke.
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearchQuery(searchQuery), 250)
+    return () => clearTimeout(timer)
+  }, [searchQuery])
+
   // ── Gmail connection check ─────────────────────────────────────────────────
 
   const checkGmailConnection = async () => {
+    const requestId = ++gmailRequestIdRef.current
     try {
       const url = new URL("/api/gmail/threads", window.location.origin)
       if (brandId) url.searchParams.append("brandId", brandId)
       const res = await fetch(url.toString())
       const data = await res.json()
+      if (requestId !== gmailRequestIdRef.current) return // superseded by a newer request
 
       if (res.ok) {
         const mappedEmails = (data.threads || []).map((t: any, i: number) => mapGmailThreadToEmail(t, i))
@@ -476,6 +491,7 @@ function InboxContent() {
         setGmailSyncState("error")
       }
     } catch {
+      if (requestId !== gmailRequestIdRef.current) return
       setGmailError("Network error. Please check your connection.")
       setGmailSyncState("error")
     }
@@ -489,12 +505,14 @@ function InboxContent() {
   }
 
   const loadGmailThreads = async () => {
+    const requestId = ++gmailRequestIdRef.current
     setGmailSyncState("syncing")
     try {
       const url = new URL("/api/gmail/threads", window.location.origin)
       if (brandId) url.searchParams.append("brandId", brandId)
       const res = await fetch(url.toString())
       const data = await res.json()
+      if (requestId !== gmailRequestIdRef.current) return // superseded by a newer request
 
       if (res.ok) {
         const mappedEmails = (data.threads || []).map((t: any, i: number) => mapGmailThreadToEmail(t, i))
@@ -508,6 +526,7 @@ function InboxContent() {
         setGmailSyncState("error")
       }
     } catch (err: any) {
+      if (requestId !== gmailRequestIdRef.current) return
       setGmailError(err?.message || "Failed to load Gmail threads.")
       setGmailSyncState("error")
     }
@@ -516,11 +535,13 @@ function InboxContent() {
   // ── Outlook connection check ───────────────────────────────────────────────
 
   const checkOutlookConnection = async () => {
+    const requestId = ++outlookRequestIdRef.current
     try {
       const url = new URL("/api/outlook/threads", window.location.origin)
       if (brandId) url.searchParams.append("brandId", brandId)
       const res = await fetch(url.toString())
       const data = await res.json()
+      if (requestId !== outlookRequestIdRef.current) return // superseded by a newer request
 
       if (res.ok) {
         const mappedEmails = (data.threads || []).map((t: any, i: number) => mapOutlookThreadToEmail(t, i))
@@ -534,6 +555,7 @@ function InboxContent() {
         setOutlookSyncState("error")
       }
     } catch {
+      if (requestId !== outlookRequestIdRef.current) return
       setOutlookError("Network error. Please check your connection.")
       setOutlookSyncState("error")
     }
@@ -547,12 +569,14 @@ function InboxContent() {
   }
 
   const loadOutlookThreads = async () => {
+    const requestId = ++outlookRequestIdRef.current
     setOutlookSyncState("syncing")
     try {
       const url = new URL("/api/outlook/threads", window.location.origin)
       if (brandId) url.searchParams.append("brandId", brandId)
       const res = await fetch(url.toString())
       const data = await res.json()
+      if (requestId !== outlookRequestIdRef.current) return // superseded by a newer request
 
       if (res.ok) {
         const mappedEmails = (data.threads || []).map((t: any, i: number) => mapOutlookThreadToEmail(t, i))
@@ -566,6 +590,7 @@ function InboxContent() {
         setOutlookSyncState("error")
       }
     } catch (err: any) {
+      if (requestId !== outlookRequestIdRef.current) return
       setOutlookError(err?.message || "Failed to load Outlook threads.")
       setOutlookSyncState("error")
     }
@@ -609,15 +634,18 @@ function InboxContent() {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  const filteredEmails = emails.filter((email) => {
-    const matchesStage = selectedStage === "ALL" || email.status === selectedStage
-    const matchesSearch =
-      searchQuery === "" ||
-      email.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      email.handle.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      email.subject.toLowerCase().includes(searchQuery.toLowerCase())
-    return matchesStage && matchesSearch
-  })
+  const filteredEmails = useMemo(() => {
+    const query = debouncedSearchQuery.toLowerCase()
+    return emails.filter((email) => {
+      const matchesStage = selectedStage === "ALL" || email.status === selectedStage
+      const matchesSearch =
+        query === "" ||
+        email.name.toLowerCase().includes(query) ||
+        email.handle.toLowerCase().includes(query) ||
+        email.subject.toLowerCase().includes(query)
+      return matchesStage && matchesSearch
+    })
+  }, [emails, selectedStage, debouncedSearchQuery])
 
   const getStageCount = (stage: PipelineStage | "ALL") => {
     if (stage === "ALL") return emails.length

@@ -329,6 +329,10 @@ model BrandInfluencer {
   @@index([brand_id, contact_status])
   @@index([campaign_id])
   @@index([brand_id, order_status])
+  @@index([brand_id, created_at])
+  @@index([brand_id, approval_status])
+  @@index([brand_id, content_posted])
+  @@index([brand_id, updated_at])
 }
 
 model Attribution {
@@ -494,6 +498,67 @@ model IntegrationConnection {
   @@index([integration_key])
 }
 
+model CommunityChannel {
+  id          String   @id @default(cuid()) @db.VarChar(30)
+  brand_id    String   @db.VarChar(30)
+  name        String   @db.VarChar(100)
+  description String?  @db.VarChar(255)
+  is_default  Boolean  @default(false)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  @@index([brand_id])
+}
+
+model CommunityMessage {
+  id         String   @id @default(cuid()) @db.VarChar(30)
+  channel_id String   @db.VarChar(30)
+  brand_id   String   @db.VarChar(30)
+  user_id    String   @db.VarChar(30)
+  body       String   @db.Text
+  created_at DateTime @default(now())
+
+  @@index([channel_id])
+  @@index([brand_id])
+  @@index([user_id])
+  @@index([channel_id, created_at])
+}
+
+// Per-influencer opt-in for automatic post detection, configured from the
+// Post Tracker Influencer Profile (not Settings). Hashtags/mentions are
+// stored per brand_influencer since different influencers can be tagged to
+// different campaign hashtags/handles.
+model PostDetectionSetting {
+  id                  String   @id @default(cuid()) @db.VarChar(30)
+  brand_influencer_id String   @unique @db.VarChar(30)
+  brand_id            String   @db.VarChar(30)
+  enabled             Boolean  @default(false)
+  hashtags            String?  @db.VarChar(255)
+  mentions            String?  @db.VarChar(255)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@index([brand_id])
+}
+
+// Posts the (future) detection job matches against an influencer's monitored
+// hashtags/mentions. Empty today since there is no live social API wired up
+// yet — the UI/data shape is ready for a background job to start inserting
+// rows here without any further schema changes.
+model DetectedPost {
+  id                  String    @id @default(cuid()) @db.VarChar(30)
+  brand_influencer_id String   @db.VarChar(30)
+  brand_id            String   @db.VarChar(30)
+  platform            String   @db.VarChar(50)
+  post_url            String   @db.VarChar(500)
+  matched_hashtag     String?  @db.VarChar(100)
+  matched_mention     String?  @db.VarChar(100)
+  detected_at         DateTime @default(now())
+
+  @@index([brand_influencer_id])
+  @@index([brand_id])
+}
+
 model BrandCustomField {
   id               String   @id @default(cuid()) @db.VarChar(30)
   brand_id         String   @db.VarChar(30)
@@ -590,13 +655,31 @@ model BrandTierSettings {
 }
 
 model EarlyAccessSignup {
-  id         String   @id @default(cuid()) @db.VarChar(30)
-  email      String   @unique
-  name       String?  @db.VarChar(100)
-  role       String?  @db.VarChar(50)
+  id         String    @id @default(cuid()) @db.VarChar(30)
+  email      String    @unique
+  name       String?   @db.VarChar(100)
+  role       String?   @db.VarChar(50)
+  phone      String?   @db.VarChar(30)
   invited_at DateTime?
-  created_at DateTime @default(now())
+  created_at DateTime  @default(now())
+
+  // Links this signup to an existing Instroom account with the same email,
+  // if one already exists — so we can enrich the GHL contact with real
+  // account info instead of creating an unnecessary duplicate/incomplete one.
+  // Plain column, no DB-level FK/relation (User is a MyISAM table, which
+  // doesn't support foreign keys — same reason Brand.owner_id is plain too).
+  user_id String? @db.VarChar(30)
+
+  // GoHighLevel sync bookkeeping — populated by the backend after the DB
+  // save succeeds. A GHL failure never blocks/fails the signup itself; it
+  // just leaves ghl_sync_status "failed" with the error, for later retry.
+  ghl_contact_id  String?   @db.VarChar(60)
+  ghl_sync_status String    @default("pending") @db.VarChar(20) // pending | synced | failed
+  ghl_synced_at   DateTime?
+  ghl_sync_error  String?   @db.Text
 
   @@index([email])
+  @@index([user_id])
+  @@index([ghl_sync_status])
 }
 

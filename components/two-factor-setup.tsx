@@ -141,13 +141,16 @@ export function TwoFactorSetup({ enabled, onEnabledChange, onToast }: TwoFactorS
 
           {qrCodeDataUrl && (
             <div className="flex justify-center py-4">
-              <Image
-                src={qrCodeDataUrl}
-                alt="2FA QR code"
-                width={200}
-                height={200}
-                unoptimized
-              />
+              <div style={{ maxWidth: 200, width: "100%" }}>
+                <Image
+                  src={qrCodeDataUrl}
+                  alt="2FA QR code"
+                  width={200}
+                  height={200}
+                  unoptimized
+                  style={{ width: "100%", height: "auto" }}
+                />
+              </div>
             </div>
           )}
 

@@ -2,7 +2,7 @@
 
 import ReactDOM from "react-dom"
 import React, {
-  useState, useRef, useEffect, useCallback,
+  useState, useRef, useEffect, useCallback, useMemo,
   type KeyboardEvent, type ReactNode, type DragEvent,
 } from "react"
 import {
@@ -207,7 +207,15 @@ export default function TableSheet({
   const [dragOverIdx, setDragOverIdx]   = useState<number | null>(null)
   const [dragOverGroup, setDragOverGroup] = useState<string | null>(null)
 
+  // `searchInput` updates immediately so the text box feels responsive;
+  // `searchQuery` (used by the filteredRows memo) is debounced so typing
+  // doesn't trigger a full re-filter+sort pass on every keystroke.
+  const [searchInput, setSearchInput]         = useState("")
   const [searchQuery, setSearchQuery]         = useState("")
+  useEffect(() => {
+    const t = setTimeout(() => setSearchQuery(searchInput), 200)
+    return () => clearTimeout(t)
+  }, [searchInput])
   const [showFilterPopover, setShowFilterPopover] = useState(false)
   const [filters, setFilters] = useState<FilterState>({
     platform: "all", niche: "all", location: "all", gender: "all",
@@ -373,7 +381,10 @@ export default function TableSheet({
     document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h)
   }, [openRowMenuId])
 
-  const filteredRows = (() => {
+  // Memoized so this O(n log n) filter+sort pass only recomputes when rows,
+  // the (debounced) search query, filters, or sort order actually change —
+  // not on every unrelated re-render (active cell, editing, popups, etc).
+  const filteredRows = useMemo(() => {
     const filtered = rows.filter(row => {
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase()
@@ -400,7 +411,7 @@ export default function TableSheet({
       return true
     })
     return sortRows(filtered, sortOrder)
-  })()
+  }, [rows, searchQuery, filters, sortOrder])
 
   const totalRows  = filteredRows.length
   const totalPages = Math.max(1, Math.ceil(totalRows / rowsPerPage))
@@ -1147,7 +1158,7 @@ export default function TableSheet({
           <div className="relative flex-1 min-w-[180px] max-w-xs">
             <IconSearch size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
             <input
-              type="text" value={searchQuery} onChange={e => { setSearchQuery(e.target.value); setCurrentPage(1) }}
+              type="text" value={searchInput} onChange={e => { setSearchInput(e.target.value); setCurrentPage(1) }}
               placeholder="Search influencers…"
               className="w-full pl-8 pr-3 py-2 text-xs border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-200 bg-white"
             />

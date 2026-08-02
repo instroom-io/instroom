@@ -261,7 +261,7 @@ function FilterModal({
       onClick={onClose}
     >
       <div
-        className="bg-white w-[480px] max-h-[85vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+        className="bg-white w-[480px] max-w-[95vw] max-h-[85vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -537,7 +537,7 @@ function HistoryModal({
       onClick={onClose}
     >
       <div
-        className="bg-white w-[520px] max-h-[80vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+        className="bg-white w-[520px] max-w-[95vw] max-h-[80vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -746,8 +746,8 @@ export default function InfluencerList() {
       <div className="p-6 flex flex-col gap-6">
 
         {/* HEADER */}
-        <div className="flex items-center justify-between gap-6 flex-wrap">
-          <div className="flex-1 min-w-[280px] max-w-[560px] relative">
+        <div className="flex items-center justify-between gap-3 sm:gap-6 flex-wrap">
+          <div className="w-full sm:flex-1 sm:w-auto sm:min-w-[280px] sm:max-w-[560px] relative">
             <IconSearch
               size={16}
               className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
@@ -861,6 +861,7 @@ export default function InfluencerList() {
         {/* TABLE VIEW */}
         {view === "table" && (
           <div className="border rounded-xl overflow-hidden">
+            <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="border-b bg-gray-50/60">
                 <tr>
@@ -1034,6 +1035,7 @@ export default function InfluencerList() {
                 )}
               </tbody>
             </table>
+            </div>
           </div>
         )}
 
@@ -1146,7 +1148,7 @@ export default function InfluencerList() {
       {/* ── Add Influencer Modals ── */}
       {openModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white w-[560px] rounded-2xl shadow-xl p-8">
+          <div className="bg-white w-[560px] max-w-[95vw] max-h-[90vh] overflow-y-auto rounded-2xl shadow-xl p-5 sm:p-8">
             {modalType === "select" && (
               <AddInfluencerModal
                 setType={setModalType}

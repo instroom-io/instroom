@@ -42,15 +42,17 @@ function DropdownHero({
         justifyContent: "space-between",
         background: "linear-gradient(135deg, #0F6B3E 0%, #1FAE5B 100%)",
         borderRadius: 12,
-        padding: "18px 22px",
+        padding: "clamp(14px, 3vw, 18px) clamp(14px, 4vw, 22px)",
         marginBottom: 16,
         cursor: "pointer",
         position: "relative",
         overflow: "hidden",
+        flexWrap: "wrap",
+        gap: 12,
       }}>
         {/* decorative circles */}
-        <div style={{ position: "absolute", top: -30, right: -30, width: 120, height: 120, background: "rgba(255,255,255,0.07)", borderRadius: "50%" }} />
-        <div style={{ position: "absolute", bottom: -20, right: 60, width: 80, height: 80, background: "rgba(255,255,255,0.05)", borderRadius: "50%" }} />
+        <div style={{ position: "absolute", top: -30, right: -30, width: 120, height: 120, background: "rgba(255,255,255,0.07)", borderRadius: "50%", maxWidth: "40%", maxHeight: "40%" }} />
+        <div style={{ position: "absolute", bottom: -20, right: 60, width: 80, height: 80, background: "rgba(255,255,255,0.05)", borderRadius: "50%", maxWidth: "30%", maxHeight: "30%" }} />
 
         <div style={{ display: "flex", alignItems: "center", gap: 14, position: "relative" }}>
           <div style={{ width: 44, height: 44, background: "rgba(255,255,255,0.18)", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -62,7 +64,7 @@ function DropdownHero({
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end", maxWidth: 420, position: "relative" }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end", maxWidth: "100%", position: "relative" }}>
           {pills.map(({ label, soon }) => (
             <span key={label} style={{
               display: "inline-flex", alignItems: "center", gap: 5,
@@ -72,7 +74,6 @@ function DropdownHero({
               borderRadius: 99,
               fontSize: 11.5, fontWeight: 500,
               color: "rgba(255,255,255,0.95)",
-              whiteSpace: "nowrap",
             }}>
               {!soon && (
                 <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
@@ -120,7 +121,7 @@ function ProductDropdown() {
           background: "none",
           border: "none",
           cursor: "pointer",
-          fontSize: "0.9375rem",
+          fontSize: "0.8125rem",
           fontWeight: 500,
           color: "var(--charcoal)",
           display: "flex",
@@ -357,7 +358,7 @@ function NavDropdownShell({
           background: "none",
           border: "none",
           cursor: "pointer",
-          fontSize: "0.9375rem",
+          fontSize: "0.8125rem",
           fontWeight: 500,
           color: "var(--charcoal)",
           display: "flex",
@@ -535,16 +536,51 @@ function ResourcesDropdown() {
   )
 }
 
+function MobileAccordionSection({
+  label, open, onToggle, children,
+}: {
+  label: string
+  open: boolean
+  onToggle: () => void
+  children: ReactNode
+}) {
+  return (
+    <li style={{ listStyle: "none" }}>
+      <button
+        onClick={onToggle}
+        style={{
+          width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+          background: "none", border: "none", cursor: "pointer", padding: 0,
+          fontSize: "0.9375rem", fontWeight: 500, color: "var(--charcoal)", fontFamily: "inherit",
+        }}
+      >
+        {label}
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style={{ transition: "transform 0.2s", transform: open ? "rotate(180deg)" : "rotate(0deg)" }}>
+          <path d="M3 5l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      {open && (
+        <ul style={{ display: "flex", flexDirection: "column", gap: 12, listStyle: "none", margin: 0, padding: "14px 0 0 12px", borderLeft: "2px solid rgba(15,107,62,0.15)", marginTop: 12 }}>
+          {children}
+        </ul>
+      )}
+    </li>
+  )
+}
+
 export function MainHeader() {
   const pathname = usePathname()
   const [showBookDemo, setShowBookDemo] = useState(false)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [mobileOpenSection, setMobileOpenSection] = useState<"products" | "solutions" | "resources" | null>(null)
+  const toggleMobileSection = (s: "products" | "solutions" | "resources") =>
+    setMobileOpenSection(prev => (prev === s ? null : s))
 
   const navLinkStyle = (href: string) => ({
     textDecoration: "none",
     color: pathname === href ? "var(--green)" : "var(--charcoal)",
     fontWeight: pathname === href ? 600 : 500,
-    fontSize: "0.9375rem",
+    fontSize: "0.8125rem",
   })
 
   return (
@@ -579,7 +615,7 @@ export function MainHeader() {
         <ul
           className="nav-links hidden lg:flex"
           style={{
-            gap: 32,
+            gap: 22,
             alignItems: "center",
             listStyle: "none",
             margin: 0,
@@ -607,18 +643,18 @@ export function MainHeader() {
           <ResourcesDropdown />
         </ul>
 
-        <div className="nav-cta hidden lg:flex" style={{ gap: 18, alignItems: "center", marginLeft: "auto" }}>
+        <div className="nav-cta hidden lg:flex" style={{ gap: 16, alignItems: "center", marginLeft: "auto" }}>
           <button
             onClick={() => setShowBookDemo(true)}
-            style={{ fontSize: "0.9375rem", background: "none", border: "none", cursor: "pointer", padding: 0, color: "var(--charcoal)", fontFamily: "inherit" }}
+            style={{ fontSize: "0.8125rem", background: "none", border: "none", cursor: "pointer", padding: 0, color: "var(--charcoal)", fontFamily: "inherit" }}
           >
             Book a demo
           </button>
-          <Link href="/login" style={{ fontSize: "0.9375rem", fontWeight: "500", textDecoration: "none", color: "var(--charcoal)" }}>
+          <Link href="/login" style={{ fontSize: "0.8125rem", fontWeight: "500", textDecoration: "none", color: "var(--charcoal)" }}>
             Log in
           </Link>
           <Link href="/early-access">
-            <Button className="bg-gradient-to-r from-[#0F6B3E] to-[#1FAE5B] text-white font-semibold hover:from-[#0a5a2f] hover:to-[#158a48] shadow-lg shadow-emerald-500/25">
+            <Button className="bg-gradient-to-r from-[#0F6B3E] to-[#1FAE5B] text-white font-semibold hover:from-[#0a5a2f] hover:to-[#158a48] shadow-lg shadow-emerald-500/25 text-[0.8125rem]">
               Get Early Access
             </Button>
           </Link>
@@ -643,14 +679,31 @@ export function MainHeader() {
       </div>
 
       {mobileMenuOpen && (
-        <div className="lg:hidden" style={{ background: "#F4F7F5", borderTop: "1px solid rgba(0,0,0,0.06)", padding: "16px 20px 24px" }}>
+        <div className="lg:hidden" style={{ background: "#F4F7F5", borderTop: "1px solid rgba(0,0,0,0.06)", padding: "16px 20px 24px", maxHeight: "calc(100svh - 64px)", overflowY: "auto" }}>
           <ul style={{ display: "flex", flexDirection: "column", gap: 16, listStyle: "none", margin: 0, padding: 0 }}>
-            <li><Link href="/features" onClick={() => setMobileMenuOpen(false)} style={navLinkStyle("/features")}>Products</Link></li>
-            <li><Link href="/solutions" onClick={() => setMobileMenuOpen(false)} style={navLinkStyle("/solutions")}>Solutions</Link></li>
+            <MobileAccordionSection label="Products" open={mobileOpenSection === "products"} onToggle={() => toggleMobileSection("products")}>
+              <li><Link href="/#pricing" onClick={() => setMobileMenuOpen(false)} style={{ ...navLinkStyle("/#pricing"), fontSize: "0.875rem" }}>Instroom Platform</Link></li>
+              <li><a href="https://posttracker.instroom.io" target="_blank" rel="noopener noreferrer" onClick={() => setMobileMenuOpen(false)} style={{ fontSize: "0.875rem", color: "var(--charcoal)", textDecoration: "none" }}>Post Tracker <span style={{ fontSize: "0.6875rem", color: "#9ca3af" }}>(standalone)</span></a></li>
+              <li><a href="https://chromewebstore.google.com/detail/instroomio/ehgceomekjhamiakclkpgadphbenlmmj" target="_blank" rel="noopener noreferrer" onClick={() => setMobileMenuOpen(false)} style={{ fontSize: "0.875rem", color: "var(--charcoal)", textDecoration: "none" }}>Chrome Extension <span style={{ fontSize: "0.6875rem", color: "#9ca3af" }}>(standalone)</span></a></li>
+              <li><Link href="/features" onClick={() => setMobileMenuOpen(false)} style={{ ...navLinkStyle("/features"), fontSize: "0.875rem", color: "#1FAE5B", fontWeight: 600 }}>Explore all features →</Link></li>
+            </MobileAccordionSection>
+
+            <MobileAccordionSection label="Solutions" open={mobileOpenSection === "solutions"} onToggle={() => toggleMobileSection("solutions")}>
+              <li><Link href="/solutions?type=freelancer" onClick={() => setMobileMenuOpen(false)} style={{ ...navLinkStyle("/solutions"), fontSize: "0.875rem" }}>For Freelancers</Link></li>
+              <li><Link href="/solutions?type=agency" onClick={() => setMobileMenuOpen(false)} style={{ ...navLinkStyle("/solutions"), fontSize: "0.875rem" }}>For Agency Owners</Link></li>
+              <li><Link href="/solutions?type=dtc" onClick={() => setMobileMenuOpen(false)} style={{ ...navLinkStyle("/solutions"), fontSize: "0.875rem" }}>For DTC Founders</Link></li>
+              <li><Link href="/solutions" onClick={() => setMobileMenuOpen(false)} style={{ ...navLinkStyle("/solutions"), fontSize: "0.875rem", color: "#1FAE5B", fontWeight: 600 }}>Explore all solutions →</Link></li>
+            </MobileAccordionSection>
+
             <li><Link href="/landing-nav/features" onClick={() => setMobileMenuOpen(false)} style={navLinkStyle("/landing-nav/features")}>What's Inside</Link></li>
             <li><Link href="/about" onClick={() => setMobileMenuOpen(false)} style={navLinkStyle("/about")}>About Us</Link></li>
             <li><Link href="/landing-nav/pricing" onClick={() => setMobileMenuOpen(false)} style={navLinkStyle("/landing-nav/pricing")}>Pricing</Link></li>
-            <li><Link href="/blog" onClick={() => setMobileMenuOpen(false)} style={navLinkStyle("/blog")}>Resources</Link></li>
+
+            <MobileAccordionSection label="Resources" open={mobileOpenSection === "resources"} onToggle={() => toggleMobileSection("resources")}>
+              <li><Link href="/blog" onClick={() => setMobileMenuOpen(false)} style={{ ...navLinkStyle("/blog"), fontSize: "0.875rem" }}>Blog</Link></li>
+              <li><Link href="/#faq" onClick={() => setMobileMenuOpen(false)} style={{ ...navLinkStyle("/#faq"), fontSize: "0.875rem" }}>FAQs</Link></li>
+              <li><Link href="/demo" onClick={() => setMobileMenuOpen(false)} style={{ ...navLinkStyle("/demo"), fontSize: "0.875rem" }}>Demo</Link></li>
+            </MobileAccordionSection>
           </ul>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 20, paddingTop: 20, borderTop: "1px solid rgba(0,0,0,0.06)" }}>
@@ -663,9 +716,9 @@ export function MainHeader() {
             <Link href="/login" onClick={() => setMobileMenuOpen(false)} style={{ fontSize: "0.9375rem", fontWeight: "500", textDecoration: "none", color: "var(--charcoal)" }}>
               Log in
             </Link>
-            <Link href="/signup" onClick={() => setMobileMenuOpen(false)}>
+            <Link href="/early-access" onClick={() => setMobileMenuOpen(false)}>
               <Button className="w-full bg-gradient-to-r from-[#0F6B3E] to-[#1FAE5B] text-white font-semibold hover:from-[#0a5a2f] hover:to-[#158a48] shadow-lg shadow-emerald-500/25">
-                Start free
+                Get Early Access
               </Button>
             </Link>
           </div>

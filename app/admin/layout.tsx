@@ -18,10 +18,10 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   }
 
   return (
-    <div className="min-h-svh flex bg-[#F7F9F8]">
+    <div className="min-h-svh flex flex-col md:flex-row bg-[#F7F9F8]">
       <AdminSidebar />
       <main className="flex-1 min-w-0 overflow-x-hidden">
-        <div className="max-w-[1400px] mx-auto p-6 sm:p-8">{children}</div>
+        <div className="max-w-[1400px] mx-auto p-4 sm:p-6 md:p-8">{children}</div>
       </main>
     </div>
   )

@@ -23,18 +23,18 @@ const values = [
 
 export function AboutValues() {
   return (
-    <section style={{ background: "#F7F9F8", padding: "100px 32px" }}>
+    <section style={{ background: "#F7F9F8", padding: "clamp(48px,10vw,100px) clamp(16px,5vw,32px)" }}>
       <div className="max-w-6xl mx-auto">
-        <div className="mb-16">
+        <div className="mb-10 sm:mb-12 lg:mb-16">
           <p className="text-xs font-bold uppercase tracking-widest text-emerald-600 mb-4">What We Stand For</p>
           <h2
-            style={{ fontFamily: "'Manrope', sans-serif", fontSize: "36px", fontWeight: 800, letterSpacing: "-0.02em" }}
+            style={{ fontFamily: "'Manrope', sans-serif", fontSize: "clamp(1.5rem, 4vw, 2.25rem)", fontWeight: 800, letterSpacing: "-0.02em" }}
             className="text-zinc-900"
           >
             Our Brand Values
           </h2>
         </div>
-        <div className="grid grid-cols-4 gap-5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
           {values.map((value, idx) => (
             <div
               key={idx}

@@ -162,6 +162,11 @@ export async function GET(
         },
       },
       orderBy: { updated_at: "desc" },
+      // Bound the result set — this endpoint loads on every Post Tracker visit
+      // and the OR clause can otherwise match a brand's entire (ever-growing)
+      // influencer roster. 500 comfortably covers real-world board/list sizes;
+      // ordering by updated_at desc keeps the most recently active rows first.
+      take: 500,
     })
 
     const data = rows.map((row) => {

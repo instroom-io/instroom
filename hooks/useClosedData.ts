@@ -234,14 +234,22 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
   const [isLoading, setIsLoading] = useState(true)
   const [error,     setError]     = useState<string | null>(null)
   const pendingRef  = useRef(0)
+  // Tracks the brandId this hook is "currently" fetching for, so a response
+  // from a stale in-flight request (previous brandId) can't overwrite the
+  // newer brand's data if it resolves after a subsequent fetch has started.
+  const latestBrandIdRef = useRef(brandId)
 
   // ── Fetch ─────────────────────────────────────────────────────────────────
   const fetchData = useCallback(async (showSpinner = true) => {
+    latestBrandIdRef.current = brandId
+
     if (!brandId) {
       setData([])
       setIsLoading(false)
       return
     }
+
+    const requestedBrandId = brandId
 
     try {
       if (showSpinner) setIsLoading(true)
@@ -255,11 +263,15 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
 
       const json = await res.json()
       const mapped = (json.data || []).map(mapItem)
+
+      // Ignore this response if a newer brandId has since taken over.
+      if (latestBrandIdRef.current !== requestedBrandId) return
       setData(mapped)
     } catch (err: any) {
+      if (latestBrandIdRef.current !== requestedBrandId) return
       setError(err.message || "Error loading data")
     } finally {
-      if (showSpinner) setIsLoading(false)
+      if (latestBrandIdRef.current === requestedBrandId && showSpinner) setIsLoading(false)
     }
   }, [brandId])
 

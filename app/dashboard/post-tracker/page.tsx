@@ -8,7 +8,7 @@
 
 "use client"
 
-import { useState, useCallback, Suspense, useEffect } from "react"
+import { useState, useCallback, useMemo, Suspense, useEffect } from "react"
 import { useSearchParams } from "next/navigation"
 import { useSession } from "next-auth/react"
 import {
@@ -28,6 +28,7 @@ import { SubscriptionGate } from "@/components/ui/subscription-gate"
 import { HistoryTab } from "@/components/InfluencerProfileSidebar"
 import { PaidCollabTab } from "@/components/table-sheet/profile-sidebar"
 import { BoardSkeleton } from "@/components/shared/skeletons"
+import AutoPostDetectionCard from "./AutoPostDetection"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const NICHES    = ["Beauty","Fitness","Lifestyle","Food","Tech","Fashion","Travel"]
@@ -211,24 +212,24 @@ function PostTrackerCard({ inf, onOpen, onMove, canApproveInfluencers }: {
 
       {/* Stage action buttons — same pattern as pipeline cards */}
       {!isTerminal && (
-        <div className="flex gap-2 mt-3 pt-2 border-t border-gray-100 flex-wrap">
+        <div className="flex gap-1.5 mt-3 pt-2 border-t border-gray-100 flex-nowrap">
           {nextStage && (
             <button
               onClick={e => { e.stopPropagation(); if (!canApproveInfluencers) return; onMove(inf.id, nextStage) }}
               disabled={!canApproveInfluencers}
               title={!canApproveInfluencers ? "Only Owners and Managers can update post status" : undefined}
-              className="text-xs px-2 py-1 rounded bg-gray-100 text-gray-700 hover:bg-gray-200 transition flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="text-[11px] font-medium px-2 py-1 rounded-full border bg-[#EAF7EF] text-[#0F6B3E] border-[#bfe5cf] hover:bg-[#d7f0e0] transition flex items-center gap-1 min-w-0 flex-1 justify-center disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              <IconArrowRight size={11}/> {nextStage}
+              <IconArrowRight size={11} className="flex-shrink-0"/> <span className="truncate">{nextStage}</span>
             </button>
           )}
           <button
             onClick={e => { e.stopPropagation(); if (!canApproveInfluencers) return; onMove(inf.id, "No post") }}
             disabled={!canApproveInfluencers}
             title={!canApproveInfluencers ? "Only Owners and Managers can update post status" : undefined}
-            className="text-xs px-2 py-1 rounded bg-red-50 text-red-600 hover:bg-red-100 transition disabled:opacity-40 disabled:cursor-not-allowed"
+            className="text-[11px] font-medium px-2 py-1 rounded-full border bg-red-50 text-red-600 border-red-200 hover:bg-red-100 transition flex items-center gap-1 min-w-0 flex-1 justify-center disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            ✕ No post
+            <IconX size={11} className="flex-shrink-0"/> <span className="truncate">No post</span>
           </button>
         </div>
       )}
@@ -266,18 +267,18 @@ function DraggableCard({ id, children, onClick, disabled }: { id: string; childr
 const STAGE_OPTIONS: ClosedColumn[] = ["For Order Creation", "In-Transit", "Delivered", "Posted", "No post"]
 const PROFILE_TABS = ["Basic", "Order", "Post", "Stats", "Paid collab details", "History"]
 
-function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChange, canApproveInfluencers }: {
+function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChange, canApproveInfluencers, subscriptionStatus }: {
   inf: ClosedInfluencer; brandId?: string; onClose: () => void
   onColumnChange: (id: string, col: ClosedColumn) => Promise<boolean>
   onCollabTypeChange: (id: string, type: string) => Promise<boolean>
   canApproveInfluencers: boolean
+  subscriptionStatus?: string
 }) {
   const [profileTab, setProfileTab] = useState(0)
   const [drawerToast, setDT]        = useState("")
   const showToast = (msg: string) => { setDT(msg); setTimeout(()=>setDT(""),2600) }
 
   const campaignType = inf.campaignType ?? "gifting"
-  const selectedCampaignMeta = CAMPAIGN_TYPES.find(c => c.value === campaignType)
   const showPaidCollabTab = PAID_COLLAB_TYPES.has(campaignType)
 
   // If the collab type changes (from Pipeline) while this tab is open and it's
@@ -372,13 +373,6 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
             </div>
           </div>
 
-          {selectedCampaignMeta && (
-            <div className="collab-implied">
-              <span className="collab-implied-type">{selectedCampaignMeta.label}</span>
-              <span className="collab-implied-sep">·</span>
-              <span className="collab-implied-text">{selectedCampaignMeta.implied}</span>
-            </div>
-          )}
 
           {inf.closedStatus === "No post" && (
             <div style={{ marginTop: 8, padding: "6px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, fontSize: 11, color: "#dc2626", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -461,13 +455,23 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
                 <div className="pfg"><div className="pfl">Currency</div><input className="pfi" value={orderData.currency} onChange={e => setOrderData(d => ({ ...d, currency: e.target.value }))} /></div>
               </div>
               <div className="pfg"><div className="pfl">Deliverables</div><input className="pfi" value={orderData.deliverables} onChange={e => setOrderData(d => ({ ...d, deliverables: e.target.value }))} placeholder="Deliverables" /></div>
-              <div style={{ display: "flex", justifyContent: "flex-end" }}><button className="btn-primary">Save</button></div>
+              <div
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8,
+                  position: "sticky", bottom: -18, margin: "8px -20px -18px",
+                  padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
+                }}
+              >
+                <button className="btn-secondary">Cancel</button>
+                <button className="btn-primary">Save</button>
+              </div>
             </div>
           )}
 
           {/* ════ POST TAB ════ */}
           {profileTab === 2 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {brandId && <AutoPostDetectionCard brandId={brandId} biId={inf.id} subscriptionStatus={subscriptionStatus} />}
               <div className="pfg"><div className="pfl">Post URL</div><input className="pfi" value={postData.postUrl} onChange={e => setPostData(d => ({ ...d, postUrl: e.target.value }))} placeholder="Post URL" /></div>
               <div className="pfr">
                 <div className="pfg"><div className="pfl">Posted At</div><input type="date" className="pfi" value={postData.postedAt} onChange={e => setPostData(d => ({ ...d, postedAt: e.target.value }))} /></div>
@@ -494,7 +498,16 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
                   </select>
                 </div>
               </div>
-              <div style={{ display: "flex", justifyContent: "flex-end" }}><button className="btn-primary">Save</button></div>
+              <div
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8,
+                  position: "sticky", bottom: -18, margin: "8px -20px -18px",
+                  padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
+                }}
+              >
+                <button className="btn-secondary">Cancel</button>
+                <button className="btn-primary">Save</button>
+              </div>
             </div>
           )}
 
@@ -542,10 +555,6 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
           .phd { font-size:12px; color:#6b7280; margin-top:2px; }
           .ssel { font-size:11px; padding:5px 10px; border-radius:8px; border:.5px solid #f4b740; background:#fffbeb; color:#854f0b; cursor:pointer; font-family:inherit; font-weight:500; transition:all .15s; }
           .csel { font-size:11px; padding:5px 10px; border-radius:8px; border:1px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; font-family:inherit; font-weight:600; transition:all .15s; min-width:130px; }
-          .collab-implied { display:inline-flex; align-items:center; gap:6px; padding:5px 12px; border-radius:20px; border:1px solid #e5e7eb; background:#f9fafb; color:#374151; font-size:11px; margin-bottom:6px; flex-wrap:wrap; }
-          .collab-implied-type { font-weight:700; font-size:11px; }
-          .collab-implied-sep { opacity:.4; font-size:11px; }
-          .collab-implied-text { font-size:11px; opacity:.75; }
           .close-btn { width:30px; height:30px; border-radius:50%; border:1.5px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; flex-shrink:0; line-height:1; margin-top:14px; transition:background .15s,border-color .15s,color .15s; }
           .close-btn:hover { background:#fee2e2; color:#dc2626; border-color:#fca5a5; }
           .atag { font-size:12px; font-weight:500; padding:6px 14px; border-radius:20px; cursor:pointer; border:1px solid #e5e7eb; background:#f9fafb; color:#555; }
@@ -581,7 +590,9 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
           .skv-green { font-size:16px; font-weight:700; color:#1fae5b; }
           .skv-dark  { font-size:16px; font-weight:700; color:#111827; }
           .skv-blue  { font-size:16px; font-weight:700; color:#2c8ec4; }
-          .btn-primary { background:#1fae5b; color:#fff; border:none; padding:8px 18px; border-radius:8px; cursor:pointer; font-size:12px; font-weight:600; font-family:inherit; transition:background .15s; }
+          .btn-primary { background:#1fae5b; color:#fff; border:none; padding:9px 20px; border-radius:8px; cursor:pointer; font-size:13px; font-weight:600; font-family:inherit; transition:background .15s; }
+          .btn-secondary { background:transparent; color:#6b7280; border:1.5px solid #e5e7eb; padding:9px 18px; border-radius:8px; cursor:pointer; font-size:13px; font-weight:600; font-family:inherit; transition:background .15s,border-color .15s; }
+          .btn-secondary:hover { background:#f9fafb; border-color:#d1d5db; }
           .btn-primary:hover { background:#0f6b3e; }
           .drawer-toast { position:absolute; bottom:20px; right:20px; background:#111827; color:#fff; font-size:13px; padding:8px 16px; border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,.2); z-index:600; }
         `}</style>
@@ -606,7 +617,13 @@ function PostTrackerContent() {
   const { canApproveInfluencers, loading: capabilitiesLoading } = useBrandCapabilities(brandId)
   const canApprove = !capabilitiesLoading && canApproveInfluencers
   const [isSubscribed, setIsSubscribed] = useState<boolean | null>(null)
-  const [subscriptionStatus, setSubscriptionStatus] = useState<string>("inactive")
+  // Deliberately starts undefined (not "inactive") — AutoPostDetectionCard's
+  // usePlanAccess treats a defined prop as "already resolved, trust it";
+  // seeding a placeholder string here made it look resolved before the real
+  // /api/subscription/status check below ever ran, briefly unlocking a
+  // premium feature for free-tier users. undefined correctly signals "not
+  // loaded yet" until the fetch below sets the real value.
+  const [subscriptionStatus, setSubscriptionStatus] = useState<string | undefined>(undefined)
 
   useEffect(() => {
     const checkSubscription = async () => {
@@ -658,20 +675,23 @@ function PostTrackerContent() {
     return ok
   }, [data, updateColumn, canApprove])
 
-  let filteredData = data.filter(inf =>
-    inf.influencer.toLowerCase().includes(search.toLowerCase()) ||
-    inf.handle.toLowerCase().includes(search.toLowerCase())
-  )
-  if (selectedColumnStatus)     filteredData = filteredData.filter(inf=>inf.closedStatus===selectedColumnStatus)
-  if (filters.influencer)       filteredData = filteredData.filter(inf=>inf.influencer.toLowerCase().includes(filters.influencer.toLowerCase()))
-  if (filters.handle)           filteredData = filteredData.filter(inf=>inf.handle.toLowerCase().includes(filters.handle.toLowerCase()))
-  if (filters.location!=="all") filteredData = filteredData.filter(inf=>inf.location===filters.location)
-  if (filters.niche!=="all")    filteredData = filteredData.filter(inf=>inf.niche===filters.niche)
-  filteredData = [...filteredData].sort((a,b)=>{
-    const da = new Date(a.createdAt ?? 0).getTime()
-    const db = new Date(b.createdAt ?? 0).getTime()
-    return sortOrder === "newest" ? db - da : da - db
-  })
+  const filteredData = useMemo(() => {
+    let result = data.filter(inf =>
+      inf.influencer.toLowerCase().includes(search.toLowerCase()) ||
+      inf.handle.toLowerCase().includes(search.toLowerCase())
+    )
+    if (selectedColumnStatus)     result = result.filter(inf=>inf.closedStatus===selectedColumnStatus)
+    if (filters.influencer)       result = result.filter(inf=>inf.influencer.toLowerCase().includes(filters.influencer.toLowerCase()))
+    if (filters.handle)           result = result.filter(inf=>inf.handle.toLowerCase().includes(filters.handle.toLowerCase()))
+    if (filters.location!=="all") result = result.filter(inf=>inf.location===filters.location)
+    if (filters.niche!=="all")    result = result.filter(inf=>inf.niche===filters.niche)
+    result = [...result].sort((a,b)=>{
+      const da = new Date(a.createdAt ?? 0).getTime()
+      const db = new Date(b.createdAt ?? 0).getTime()
+      return sortOrder === "newest" ? db - da : da - db
+    })
+    return result
+  }, [data, search, selectedColumnStatus, filters, sortOrder])
 
   const hasActiveFilters   = filters.influencer!==""||filters.handle!==""||filters.location!=="all"||filters.niche!=="all"||search!==""||selectedColumnStatus!==null
   const activeInf          = activeId ? data.find(d=>d.id===activeId) : null
@@ -748,7 +768,8 @@ function PostTrackerContent() {
 
       {selectedInf&&(
         <ProfileDrawer inf={selectedInf} brandId={brandId} onClose={()=>setSelectedInf(null)}
-          onColumnChange={handleMove} onCollabTypeChange={handleCollabTypeChange} canApproveInfluencers={canApprove}/>
+          onColumnChange={handleMove} onCollabTypeChange={handleCollabTypeChange} canApproveInfluencers={canApprove}
+          subscriptionStatus={subscriptionStatus}/>
       )}
 
       {/* ── Single inline toolbar row — matches Manage Influencers layout ── */}
@@ -844,14 +865,14 @@ function PostTrackerContent() {
       {/* ── KANBAN ── */}
       {view==="Board"&&(
         <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-          <div className="rounded-xl border border-[#0F6B3E]/10 bg-white p-5 overflow-x-auto">
+          <div className="rounded-xl border border-[#0F6B3E]/10 bg-white p-5 overflow-x-auto" style={{ scrollSnapType: "x proximity" }}>
             <div className="flex gap-4 min-w-max">
 
               {/* Main columns */}
               {COLUMNS.filter(c=>c.key!=="No post").map(col => {
                 const items = getItemsByColumn(col.key)
                 return (
-                  <div key={col.key} className="w-[240px] flex-shrink-0">
+                  <div key={col.key} className="w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0" style={{ scrollSnapAlign: "start" }}>
                     <DroppableColumn id={col.key}>
                       {/* ── Column header — identical structure to pipeline ── */}
                       <div className={`${col.color} text-white rounded-lg px-3 py-2 text-sm font-semibold flex items-center justify-between`}>
@@ -893,7 +914,7 @@ function PostTrackerContent() {
                 const col   = COLUMNS.find(c=>c.key==="No post")!
                 const items = getItemsByColumn(col.key)
                 return (
-                  <div className="w-[240px] flex-shrink-0">
+                  <div className="w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0" style={{ scrollSnapAlign: "start" }}>
                     <DroppableColumn id={col.key} isExit>
                       {/* Soft red style matching pipeline NI header */}
                       <div className="bg-red-100 text-red-700 border border-red-200 rounded-lg px-3 py-2 text-sm font-semibold flex items-center justify-between">
@@ -925,7 +946,7 @@ function PostTrackerContent() {
           </div>
           <DragOverlay>
             {activeInf&&(
-              <div className="bg-white border border-[#1FAE5B] rounded-lg p-3 shadow-lg rotate-1 w-[220px] ring-2 ring-[#1FAE5B]/20">
+              <div className="bg-white border border-[#1FAE5B] rounded-lg p-3 shadow-lg rotate-1 w-[min(72vw,220px)] sm:w-[220px] ring-2 ring-[#1FAE5B]/20">
                 <div className="font-medium text-sm text-gray-900">{activeInf.influencer}</div>
                 <div className="text-xs text-gray-500 mt-0.5">@{activeInf.handle}</div>
                 <div className="text-[11px] text-gray-400 mt-1">{activeInf.platform} · {activeInf.followers}</div>

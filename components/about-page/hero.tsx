@@ -8,10 +8,11 @@ export function AboutHero() {
         background: "#F7F9F8",
         backgroundImage: "radial-gradient(circle, rgba(31,174,91,0.12) 1px, transparent 1px)",
         backgroundSize: "28px 28px",
+        overflow: "hidden",
       }}
     >
-      <div className="max-w-7xl mx-auto px-8 pb-16 grid grid-cols-[1fr_1.3fr] gap-12 items-center">
-        <div>
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-16 grid grid-cols-1 lg:grid-cols-[1fr_1.3fr] gap-10 lg:gap-12 items-center">
+        <div className="min-w-0">
           <div className="inline-flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-full px-4 py-2 mb-6">
             <span className="w-1.5 h-1.5 bg-emerald-600 rounded-full" />
             <span className="text-xs font-bold uppercase tracking-widest text-emerald-700">
@@ -22,7 +23,7 @@ export function AboutHero() {
           <h1
             style={{
               fontFamily: "'Manrope', sans-serif",
-              fontSize: "52px",
+              fontSize: "clamp(2rem, 6vw, 3.25rem)",
               fontWeight: 800,
               lineHeight: 1.08,
               letterSpacing: "-0.03em",
@@ -42,7 +43,7 @@ export function AboutHero() {
             not another bloated platform.
           </p>
 
-          <div className="flex gap-12">
+          <div className="flex flex-wrap gap-6 sm:gap-10 lg:gap-12">
             <div>
               <div
                 style={{
@@ -95,7 +96,7 @@ export function AboutHero() {
 
         {/* Visual column — sized and positioned exactly like .heroRight/.heroMockup on the homepage hero */}
         <div
-          className="relative"
+          className="relative w-full min-w-0"
           style={{ display: "flex", alignItems: "center", justifyContent: "center", alignSelf: "start" }}
         >
           {/* floating accent circles, sit behind the card */}
@@ -123,15 +124,11 @@ export function AboutHero() {
           />
 
           <div
-            className="bg-white overflow-hidden flex flex-col"
+            className="bg-white overflow-hidden flex flex-col w-full h-[260px] sm:h-[340px] lg:h-[440px] ml-0 lg:ml-[-35px] lg:w-[calc(100%-25px)] lg:scale-[1.04]"
             style={{
-              width: "calc(100% - 25px)",
-              height: "440px",
-              marginLeft: "-35px",
               borderRadius: "16px",
               boxShadow: "0 24px 64px rgba(15,107,62,0.14), 0 0 0 1px rgba(30,30,30,0.09)",
               position: "relative",
-              transform: "scale(1.04)",
               transformOrigin: "right center",
             }}
           >

@@ -4,7 +4,7 @@ import Link from "next/link"
 import Image from "next/image"
 import { usePathname, useSearchParams } from "next/navigation"
 import { Suspense } from "react"
-import { IconBrandFacebook, IconBrandInstagram, IconBrandTiktok, IconBrandLinkedin } from "@tabler/icons-react"
+import { IconBrandFacebook, IconBrandInstagram, IconBrandTiktok, IconBrandLinkedin, IconPhone, IconMail, IconMapPin } from "@tabler/icons-react"
 
 const FREE_TOOLS = [
   { title: "TikTok Downloader Without Watermark", href: "/tools/tiktok-downloader", soon: false },
@@ -38,7 +38,7 @@ function FooterInner() {
 
   return (
     <footer className="bg-zinc-950 text-zinc-400 pt-10 pb-16 border-t border-zinc-800">
-      <div className="max-w-[1280px] mx-auto px-8">
+      <div className="max-w-[1280px] mx-auto px-4 sm:px-6 lg:px-8">
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:flex lg:justify-between gap-8 sm:gap-10 mb-12">
           <div className="lg:max-w-[280px]">
             <Link href="/" style={{ display: "inline-block" }}>
@@ -122,13 +122,33 @@ function FooterInner() {
             <h4 className="text-white text-xs font-bold uppercase tracking-widest mb-4">Company</h4>
             <ul className="space-y-4 text-sm">
               <li><Link href="/about" className="hover:text-white transition">About</Link></li>
-              <li><Link href="mailto:support@instroom.io" className="hover:text-white transition">Contact</Link></li>
+            </ul>
+          </div>
+          <div>
+            <h4 className="text-white text-xs font-bold uppercase tracking-widest mb-4">Contact Information</h4>
+            <ul className="space-y-4 text-sm">
+              <li>
+                <a href="tel:+639508933543" className="flex items-center gap-2 hover:text-white transition">
+                  <IconPhone size={15} className="flex-shrink-0" />
+                  +639508933543
+                </a>
+              </li>
+              <li>
+                <a href="mailto:support@instroom.io" className="flex items-center gap-2 hover:text-white transition">
+                  <IconMail size={15} className="flex-shrink-0" />
+                  support@instroom.io
+                </a>
+              </li>
+              <li className="flex items-center gap-2">
+                <IconMapPin size={15} className="flex-shrink-0" />
+                Oriental Mindoro, Philippines
+              </li>
             </ul>
           </div>
         </div>
-        <div className="border-t border-zinc-800 pt-8 flex justify-between text-sm text-zinc-500">
+        <div className="border-t border-zinc-800 pt-8 flex flex-col sm:flex-row sm:justify-between gap-4 text-sm text-zinc-500">
           <p>&copy; 2026 Instroom. All rights reserved.</p>
-          <div className="flex gap-6">
+          <div className="flex flex-wrap gap-4 sm:gap-6">
             <Link href="/terms-of-service" className="hover:text-white transition">Terms of Service</Link>
             <Link href="/privacy" className="hover:text-white transition">Privacy Policy</Link>
             <Link href="/refund" className="hover:text-white transition">Refund Policy</Link>

@@ -7,13 +7,13 @@ export function AboutStory() {
         borderBottom: "1px solid rgba(0,0,0,0.08)",
       }}
     >
-      <div className="max-w-6xl mx-auto px-8 py-20 grid grid-cols-2 gap-20">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16 lg:py-20 grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-20">
         <div>
           <p className="text-xs font-bold uppercase tracking-widest text-emerald-600 mb-4">The Origin</p>
           <h2
             style={{
               fontFamily: "'Manrope', sans-serif",
-              fontSize: "36px",
+              fontSize: "clamp(1.5rem, 4vw, 2.25rem)",
               fontWeight: 800,
               lineHeight: 1.2,
               letterSpacing: "-0.02em",

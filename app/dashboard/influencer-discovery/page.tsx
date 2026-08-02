@@ -5,6 +5,40 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { useSession } from "next-auth/react"
 import { ChevronDown, Search, Plus, Loader2, CheckCircle2, AlertCircle, X, Users, UserPlus, Check } from "lucide-react"
 
+// ─── Skeleton preview config (static, non-functional) ───────────────────────
+const DISCOVERY_FILTER_LABELS = ["Platform", "Niche", "Location", "Audience size", "Engagement rate", "Sort"]
+const DISCOVERY_SKELETON_CARD_COUNT = 12
+
+function SkeletonBlock({ className = "" }: { className?: string }) {
+  return <div className={`animate-pulse bg-gray-200 rounded ${className}`} />
+}
+
+function DiscoveryCardSkeleton() {
+  return (
+    <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-3 flex flex-col gap-2">
+      <div className="flex items-center gap-2.5">
+        <SkeletonBlock className="w-8 h-8 rounded-full flex-shrink-0" />
+        <div className="min-w-0 flex-1 flex flex-col gap-1">
+          <SkeletonBlock className="h-2.5 w-3/4" />
+          <SkeletonBlock className="h-2 w-1/2" />
+        </div>
+        <SkeletonBlock className="h-4 w-12 rounded-full flex-shrink-0" />
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        {Array.from({ length: 2 }).map((_, j) => (
+          <div key={j} className="flex flex-col gap-1">
+            <SkeletonBlock className="h-1.5 w-8" />
+            <SkeletonBlock className="h-2.5 w-12" />
+          </div>
+        ))}
+      </div>
+
+      <SkeletonBlock className="h-6 w-full rounded-lg" />
+    </div>
+  )
+}
+
 // ─── API Config ─────────────────────────────────────────────────────────────
 const API_ENDPOINTS = {
   instagram: (u: string) => `https://api.instroom.io/v2/${u}/instagram`,
@@ -150,48 +184,30 @@ function Toast({ message, type, onClose }: { message: string; type: "success" | 
   )
 }
 
-// ─── Coming Soon Overlay ─────────────────────────────────────────────────────
+// ─── Coming Soon Modal ───────────────────────────────────────────────────────
+// Absolutely positioned within the page's own (position:relative) container
+// only — never fixed to the viewport, no page-level backdrop. It can only
+// ever cover THIS page's content and can never reach the sidebar or header,
+// which live outside this component's DOM subtree entirely.
 function ComingSoonOverlay() {
   return (
-    <div
-      className="absolute inset-0 z-50 flex items-start justify-center pt-16"
-      style={{
-        backdropFilter: "blur(6px)",
-        WebkitBackdropFilter: "blur(6px)",
-        backgroundColor: "rgba(247, 249, 248, 0.75)",
-      }}
-    >
-      <div className="text-center px-10 py-10 bg-white rounded-3xl border border-gray-100 shadow-2xl w-full max-w-2xl mx-4">
-        {/* Icon */}
-        <div className="w-16 h-16 bg-gradient-to-br from-[#0F6B3E] to-[#2A9D6E] rounded-2xl flex items-center justify-center mx-auto mb-5">
-          <svg className="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+    <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-4 py-6">
+      <div className="pointer-events-auto text-center px-7 py-7 sm:px-10 sm:py-9 bg-white rounded-2xl border border-gray-100 shadow-2xl w-full max-w-[600px]">
+        <div className="w-12 h-12 bg-gradient-to-br from-[#0F6B3E] to-[#2A9D6E] rounded-xl flex items-center justify-center mx-auto mb-4">
+          <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 15.803M10.5 7.5v3m0 0v3m0-3h3m-3 0H7.5" />
           </svg>
         </div>
 
-        {/* Badge */}
-        <span className="inline-block bg-[#0F6B3E]/10 text-[#0F6B3E] text-xs font-semibold tracking-widest uppercase px-3 py-1 rounded-full mb-4">
+        <span className="inline-block bg-[#0F6B3E]/10 text-[#0F6B3E] text-[11px] font-semibold tracking-widest uppercase px-3 py-1 rounded-full mb-3">
           Coming Soon
         </span>
 
-        <h2 className="text-2xl font-bold text-gray-900 mb-3">
+        <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-2">
           Influencer Discovery
         </h2>
-        <p className="text-gray-500 text-sm leading-relaxed mb-6">
-          We're building something powerful — search 15M+ creators across Instagram and TikTok, filter by niche, location, engagement rate, and add them directly to your campaigns.
-        </p>
-
-        {/* Feature pills */}
-        <div className="flex flex-wrap justify-center gap-2 mb-6">
-          {["15M+ profiles", "Instagram & TikTok", "Email capture", "1-click add"].map((f) => (
-            <span key={f} className="bg-gray-50 border border-gray-200 text-gray-600 text-xs px-3 py-1.5 rounded-full">
-              {f}
-            </span>
-          ))}
-        </div>
-
-        <p className="text-xs text-gray-400">
-          We'll notify you when it launches.
+        <p className="text-gray-500 text-sm leading-relaxed">
+          Search 15M+ creators, filter by niche, location, and engagement — we'll notify you when it launches.
         </p>
       </div>
     </div>
@@ -461,147 +477,55 @@ function InfluencerDiscoveryContent() {
     : false
 
   return (
-    <>
-      {/* ─── Outer wrapper positions the Coming Soon overlay over the page ─── */}
-      <div className="relative">
-        {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+    <div className="relative h-[calc(100vh-var(--header-height))] overflow-hidden bg-gradient-to-br from-[#F7F9F8] via-white to-[#F7F9F8]">
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
 
-        {/* ─── Page content — blurred & non-interactive behind the overlay ─── */}
-        <div
-          className="min-h-screen bg-gradient-to-br from-[#F7F9F8] via-white to-[#F7F9F8] pointer-events-none select-none"
-          aria-hidden="true"
-          style={{ filter: "blur(2px)" }}
-        >
-          <div className="max-w-6xl mx-auto py-16 px-4 sm:px-6 lg:px-8">
-
-            {/* Header */}
-            <div className="text-center mb-12">
-              <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold mb-4">
-                Find creators who
-                <br />
-                <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#0F6B3E] to-[#2A9D6E]">
-                  influence your customers
-                </span>
-              </h1>
-              <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-                Connect with authentic voices that resonate with your brand
-              </p>
-            </div>
-
-            {/* Search Card */}
-            <div className="max-w-4xl mx-auto mb-12">
-              <div className="bg-white rounded-2xl shadow-xl border border-gray-100 overflow-visible">
-                <div className="p-2">
-                  <div className="flex flex-col sm:flex-row gap-2">
-
-                    {/* Platform Selector */}
-                    <div ref={dropdownRef} className="relative z-10">
-                      <button
-                        type="button"
-                        className="bg-gray-50 hover:bg-gray-100 rounded-xl px-5 py-4 flex items-center justify-center gap-2 transition-colors"
-                      >
-                        <div
-                          className={`${
-                            selectedPlatform === "Instagram"
-                              ? "text-[#E4405F]"
-                              : selectedPlatform === "TikTok"
-                              ? "text-black"
-                              : "text-[#FF0000]"
-                          }`}
-                        >
-                          {currentPlatform?.icon}
-                        </div>
-                        <ChevronDown size={18} />
-                      </button>
-                    </div>
-
-                    {/* Topic Input */}
-                    <div className="flex-1 relative">
-                      <input
-                        value={topic}
-                        readOnly
-                        placeholder={`Search by topic on ${selectedPlatform}...`}
-                        className="w-full px-4 py-4 bg-gray-50 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#0F6B3E]/20"
-                      />
-                    </div>
-
-                    {/* Search Button */}
-                    <button
-                      disabled
-                      className="bg-gradient-to-r from-[#0F6B3E] to-[#2A9D6E] text-white font-semibold px-8 py-4 rounded-xl opacity-50 cursor-not-allowed"
-                    >
-                      Find Creators
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Quick Username Lookup */}
-            <div className="max-w-4xl mx-auto mb-12">
-              <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-6">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="w-10 h-10 bg-gradient-to-br from-[#0F6B3E] to-[#2A9D6E] rounded-xl flex items-center justify-center">
-                    <Users size={20} className="text-white" />
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-gray-900">Look up by Username</h3>
-                    <p className="text-sm text-gray-500">
-                      Fetch real data from {selectedPlatform} API instantly
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex gap-2">
-                  <div className="flex-1 relative">
-                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
-                      @
-                    </span>
-                    <input
-                      readOnly
-                      placeholder="username"
-                      className="w-full pl-9 pr-4 py-3 bg-gray-50 rounded-xl text-sm"
-                    />
-                  </div>
-                  <button
-                    disabled
-                    className="bg-gradient-to-r from-[#0F6B3E] to-[#2A9D6E] text-white font-medium px-6 py-3 rounded-xl opacity-50 cursor-not-allowed flex items-center gap-2 text-sm"
-                  >
-                    <Search size={16} />
-                    Lookup
-                  </button>
-                </div>
-
-                <p className="text-xs text-gray-400 mt-3">
-                  Supported: Instagram &amp; TikTok · YouTube coming soon
-                </p>
-              </div>
-            </div>
-
-            {/* Recommended Searches */}
-            <div className="max-w-4xl mx-auto mb-16">
-              <h3 className="text-sm font-semibold text-gray-700 mb-3 px-2">
-                Recommended Searches
-              </h3>
-              <div className="flex flex-wrap gap-3 justify-center">
-                {recommendedSearches.map((tag) => (
-                  <button
-                    key={tag}
-                    disabled
-                    className="px-6 py-2.5 rounded-full bg-white border-2 border-gray-200 text-gray-600 cursor-not-allowed"
-                  >
-                    {tag}
-                  </button>
-                ))}
-              </div>
-            </div>
+      {/*
+        Skeleton preview of the future page — static, non-functional. The outer
+        wrapper above is bounded to the viewport height below the header and
+        clips overflow, so a second row of cards can render underneath (to
+        show there's "more page" beneath the modal) without ever producing a
+        page-level scrollbar — this crops intentional extra content, it does
+        not mask a broken/overflowing layout.
+      */}
+      <div
+        className="pointer-events-none select-none max-w-6xl mx-auto pt-4 pb-5 px-4 sm:px-6 lg:px-8"
+        aria-hidden="true"
+        style={{ opacity: 0.8 }}
+      >
+        {/* Search bar skeleton */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-1.5 mb-3">
+          <div className="flex flex-col sm:flex-row gap-1.5">
+            <SkeletonBlock className="h-9 w-full sm:w-24 rounded-lg" />
+            <SkeletonBlock className="h-9 flex-1 rounded-lg" />
+            <SkeletonBlock className="h-9 w-full sm:w-32 rounded-lg" />
           </div>
         </div>
 
-        {/* ─── Coming Soon overlay ─── */}
-        <ComingSoonOverlay />
+        {/* Filter row skeleton */}
+        <div className="flex flex-wrap gap-1.5 mb-3">
+          {DISCOVERY_FILTER_LABELS.map((label) => (
+            <SkeletonBlock key={label} className="h-6 w-[90px] rounded-full" />
+          ))}
+        </div>
+
+        {/*
+          Results grid skeleton — enough rows to fill down toward the bottom
+          of the viewport on most screens. The outer wrapper is bounded to
+          the viewport height and clips overflow, so on shorter screens this
+          naturally ends mid-row (a "there's more below" peek) instead of a
+          hard, empty cutoff — and never produces a page-level scrollbar.
+        */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {Array.from({ length: DISCOVERY_SKELETON_CARD_COUNT }).map((_, i) => (
+            <DiscoveryCardSkeleton key={i} />
+          ))}
+        </div>
       </div>
-    </>
+
+      {/* ─── Coming Soon modal — centered above the skeleton, scoped to this page only ─── */}
+      <ComingSoonOverlay />
+    </div>
   )
 }
 

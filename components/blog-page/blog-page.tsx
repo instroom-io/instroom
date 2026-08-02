@@ -332,6 +332,7 @@ const ARTICLE_BODY_STYLES = `
   .metric-box-label { font-size: 11px; color: #888; font-weight: 500; }
   .article-divider { border: none; border-top: 0.5px solid rgba(0,0,0,0.08); margin: 40px 0; }
   @media (max-width: 900px) { .metric-row { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 420px) { .metric-row { grid-template-columns: 1fr; } }
 `;
 
 // ─── Article View ─────────────────────────────────────────────────────────────
@@ -621,7 +622,7 @@ function IndexView({ onSelectArticle }: { onSelectArticle: (slug: ArticleSlug) =
               />
               <div style={{ position: "absolute", inset: 0, background: "linear-gradient(135deg, rgba(10,26,15,0.6) 0%, rgba(15,107,62,0.3) 100%)", display: "flex", alignItems: "center", justifyContent: "center" }}>
                 <div style={{ textAlign: "center" }}>
-                  <div style={{ fontFamily: "'Manrope', sans-serif", fontSize: 60, fontWeight: 800, color: "#fff", lineHeight: 1, letterSpacing: "-2px", textShadow: "0 2px 20px rgba(0,0,0,0.4)" }}>3.8×</div>
+                  <div style={{ fontFamily: "'Manrope', sans-serif", fontSize: "clamp(38px, 9vw, 60px)", fontWeight: 800, color: "#fff", lineHeight: 1, letterSpacing: "-2px", textShadow: "0 2px 20px rgba(0,0,0,0.4)" }}>3.8×</div>
                   <div style={{ fontSize: 10, fontWeight: 600, color: "rgba(255,255,255,0.65)", letterSpacing: "0.08em", textTransform: "uppercase", marginTop: 6 }}>Average ROI Uplift</div>
                 </div>
               </div>
@@ -629,9 +630,9 @@ function IndexView({ onSelectArticle }: { onSelectArticle: (slug: ArticleSlug) =
                 ⭐ Editor&apos;s Pick
               </span>
             </div>
-            <div style={{ padding: "36px 32px", background: "#fff", display: "flex", flexDirection: "column", justifyContent: "center" }}>
+            <div style={{ padding: "clamp(20px, 4vw, 36px) clamp(18px, 4vw, 32px)", background: "#fff", display: "flex", flexDirection: "column", justifyContent: "center" }}>
               <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#1FAE5B", marginBottom: 12 }}>Strategy</p>
-              <h2 style={{ fontFamily: "'Manrope', sans-serif", fontSize: 21, fontWeight: 700, color: "#1E1E1E", lineHeight: 1.3, letterSpacing: "-0.3px", marginBottom: 12 }}>
+              <h2 style={{ fontFamily: "'Manrope', sans-serif", fontSize: "clamp(18px, 3.5vw, 21px)", fontWeight: 700, color: "#1E1E1E", lineHeight: 1.3, letterSpacing: "-0.3px", marginBottom: 12 }}>
                 The 5 Metrics That Actually Predict Influencer Campaign ROI
               </h2>
               <p style={{ fontSize: 13, color: "#888", lineHeight: 1.65, marginBottom: 24 }}>

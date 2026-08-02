@@ -15,12 +15,12 @@ const founders = [
 
 export function AboutTeam() {
   return (
-    <section style={{ background: "#FFFFFF", padding: "100px 32px" }}>
+    <section style={{ background: "#FFFFFF", padding: "clamp(48px,10vw,100px) clamp(16px,5vw,32px)" }}>
       <div className="max-w-6xl mx-auto">
-        <div className="mb-16">
+        <div className="mb-10 sm:mb-12 lg:mb-16">
           <p className="text-xs font-bold uppercase tracking-widest text-emerald-600 mb-4">The Team Behind It</p>
           <h2
-            style={{ fontFamily: "'Manrope', sans-serif", fontSize: "36px", fontWeight: 800, letterSpacing: "-0.02em" }}
+            style={{ fontFamily: "'Manrope', sans-serif", fontSize: "clamp(1.5rem, 4vw, 2.25rem)", fontWeight: 800, letterSpacing: "-0.02em" }}
             className="text-zinc-900 mb-3"
           >
             Meet Our Founders
@@ -30,22 +30,22 @@ export function AboutTeam() {
             efforts with data-driven, results-focused strategies.
           </p>
         </div>
-        <div className="grid grid-cols-2 gap-8">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-8">
           {founders.map((founder, idx) => (
             <div
               key={idx}
-              className="bg-white border border-zinc-200 rounded-2xl overflow-hidden flex hover:shadow-lg transition-all"
+              className="bg-white border border-zinc-200 rounded-2xl overflow-hidden flex flex-col sm:flex-row hover:shadow-lg transition-all"
             >
               {idx === 0 ? (
-                <div className="relative w-48 flex-shrink-0">
+                <div className="relative w-full h-56 sm:w-48 sm:h-auto flex-shrink-0">
                   <Image src="/images/CEO.jpg" alt={founder.name} fill className="object-cover" />
                 </div>
               ) : (
-                <div className="relative w-48 flex-shrink-0">
+                <div className="relative w-full h-56 sm:w-48 sm:h-auto flex-shrink-0">
                   <Image src="/images/CTO.png" alt={founder.name} fill className="object-cover" />
                 </div>
               )}
-              <div className="p-8 flex flex-col justify-center flex-1">
+              <div className="p-6 sm:p-8 flex flex-col justify-center flex-1">
                 <div className="inline-block bg-emerald-50 border border-emerald-200 rounded-full px-3 py-1 mb-3 w-fit">
                   <span className="text-xs font-bold uppercase tracking-widest text-emerald-700">
                     {founder.role}

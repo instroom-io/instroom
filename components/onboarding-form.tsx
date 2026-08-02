@@ -319,11 +319,11 @@ export function OnboardingForm({
               />
             ))}
           </div>
-          <div className="flex gap-3">
+          <div className="flex flex-wrap gap-2 sm:gap-3 justify-end">
             {step === 1 ? (
               <button
                 onClick={onSkip}
-                className="text-sm text-gray-500 hover:text-[#1FAE5B]"
+                className="text-sm text-gray-500 hover:text-[#1FAE5B] whitespace-nowrap"
                 disabled={isLoading}
               >
                 Skip ≫
@@ -331,7 +331,7 @@ export function OnboardingForm({
             ) : (
               <button
                 onClick={onBack}
-                className="px-4 sm:px-6 py-2 border-2 border-gray-300 rounded-full text-xs sm:text-sm font-semibold text-gray-600 hover:border-gray-400 whitespace-nowrap"
+                className="px-3 sm:px-6 py-2 border-2 border-gray-300 rounded-full text-xs sm:text-sm font-semibold text-gray-600 hover:border-gray-400 whitespace-nowrap"
                 disabled={isLoading}
               >
                 Back
@@ -340,7 +340,7 @@ export function OnboardingForm({
             <Button
               onClick={handleNext}
               disabled={isLoading}
-              className="px-6 sm:px-8 h-9 sm:h-10 text-xs sm:text-sm bg-[#1FAE5B] text-white font-semibold hover:bg-[#17a04e] rounded-full whitespace-nowrap"
+              className="px-4 sm:px-8 h-9 sm:h-10 text-xs sm:text-sm bg-[#1FAE5B] text-white font-semibold hover:bg-[#17a04e] rounded-full whitespace-nowrap"
             >
               {step === STEPS.length ? (isLoading ? 'Completing...' : 'Complete Setup →') : 'Next Step →'}
             </Button>
