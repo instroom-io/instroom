@@ -127,6 +127,95 @@ export function ListSkeleton({ rows = 6, label }: { rows?: number; label?: strin
   )
 }
 
+/** Row of toggle/list items inside a settings Card — e.g. 2FA switches, notification toggles, team members. */
+function ToggleRowsSkeleton({
+  rows = 3,
+  iconShape,
+  rightShape = "pill",
+}: {
+  rows?: number
+  iconShape?: "circle" | "square"
+  rightShape?: "pill" | "button"
+}) {
+  return (
+    <div className="flex flex-col">
+      {Array.from({ length: rows }).map((_, r) => (
+        <div
+          key={r}
+          className="flex items-center justify-between gap-3 py-3 border-b border-gray-100 last:border-b-0"
+          style={{ animationDelay: `${r * 30}ms` }}
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            {iconShape && (
+              <div
+                className={`h-8 w-8 flex-shrink-0 bg-gray-200 animate-pulse ${iconShape === "circle" ? "rounded-full" : "rounded-md"}`}
+              />
+            )}
+            <div className="flex flex-col gap-1.5 min-w-0">
+              <Bar className="h-3 w-32" />
+              <Bar className="h-2.5 w-48" />
+            </div>
+          </div>
+          <Bar className={rightShape === "pill" ? "h-5 w-9 rounded-full flex-shrink-0" : "h-8 w-20 rounded-md flex-shrink-0"} />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+type SettingsSection = {
+  /** Grid of labeled inputs, e.g. name/email fields. */
+  fields?: number
+  /** List of toggle/member/integration rows. */
+  rows?: number
+  iconShape?: "circle" | "square"
+  rightShape?: "pill" | "button"
+}
+
+/** Account settings pages (Profile, Security, Notifications, Branding, Billing, etc.) — title + stacked Card sections, each with an icon header and either a field grid or a row list. */
+export function SettingsSkeleton({
+  sections = [{ fields: 4 }],
+  label,
+}: {
+  sections?: SettingsSection[]
+  label?: string
+}) {
+  return (
+    <div className="max-w-3xl px-4 py-5 sm:px-6 sm:py-6 md:px-9 md:py-7 flex flex-col gap-4">
+      {label && <SkeletonLabel>{label}</SkeletonLabel>}
+      <div className="flex flex-col gap-1.5">
+        <Bar className="h-4 w-28" />
+        <Bar className="h-2.5 w-56" />
+      </div>
+      {sections.map((section, s) => (
+        <Block key={s} style={{ animationDelay: `${s * 40}ms` }}>
+          <div className="flex items-center gap-3 border-b border-gray-200 px-5 py-3">
+            <div className="h-8 w-8 flex-shrink-0 rounded-md bg-gray-200" />
+            <div className="flex flex-col gap-1.5">
+              <Bar className="h-3 w-32" />
+              <Bar className="h-2.5 w-48" />
+            </div>
+          </div>
+          <div className="p-5">
+            {section.fields ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                {Array.from({ length: section.fields }).map((_, f) => (
+                  <div key={f} className="flex flex-col gap-1.5">
+                    <Bar className="h-2.5 w-16" />
+                    <Bar className="h-9 w-full" />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <ToggleRowsSkeleton rows={section.rows ?? 3} iconShape={section.iconShape} rightShape={section.rightShape} />
+            )}
+          </div>
+        </Block>
+      ))}
+    </div>
+  )
+}
+
 /** Kanban / board columns — same shape as the Pipeline skeleton, reusable for Post Tracker's board view. */
 export function BoardSkeleton({ columns = 4, cardsPerColumn = 3, label }: { columns?: number; cardsPerColumn?: number; label?: string }) {
   return (

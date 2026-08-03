@@ -86,7 +86,7 @@ export function EarlyAccessForm({ className }: { className?: string }) {
             {[
               { title: "You're confirmed", desc: "Nothing more to do. Your spot is saved." },
               { title: "We open the next batch", desc: "We activate new workspaces in small groups so onboarding stays smooth for everyone." },
-              { title: "You get the email", desc: "Your login goes live and you can set up your first campaign — 30 days, full platform, no card." },
+              { title: "You get the email", desc: "Your login goes live and you can set up your first campaign — 3 months, full platform, no card." },
             ].map((step, i) => (
               <div key={step.title} className="flex gap-3.5 py-3">
                 <div className="flex-none w-[26px] h-[26px] rounded-full bg-[#EAF7F0] text-[#0F6B3E] text-xs font-bold flex items-center justify-center">

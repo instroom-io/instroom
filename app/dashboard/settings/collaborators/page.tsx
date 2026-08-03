@@ -15,9 +15,10 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { AlertCircle, Trash2, Mail, Zap, Loader2 } from "lucide-react"
+import { AlertCircle, Trash2, Mail, Zap } from "lucide-react"
 import Script from "next/script"
 import { cn } from "@/lib/utils"
+import { SettingsSkeleton } from "@/components/shared/skeletons"
 
 interface Collaborator {
   id: string
@@ -44,10 +45,10 @@ declare global {
 
 function LoadingScreen() {
   return (
-    <div className="flex min-h-[400px] flex-col items-center justify-center gap-3">
-      <Loader2 className="h-7 w-7 animate-spin text-emerald-600" />
-      <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Loading</p>
-    </div>
+    <SettingsSkeleton
+      sections={[{ rows: 4, iconShape: "circle", rightShape: "button" }]}
+      label="Loading collaborators…"
+    />
   )
 }
 

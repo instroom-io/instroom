@@ -8,9 +8,10 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Card, CardContent } from "@/components/ui/card"
-import { KeyRound, ShieldCheck, Loader2 } from "lucide-react"
+import { KeyRound, ShieldCheck } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { TwoFactorSetup } from "@/components/two-factor-setup"
+import { SettingsSkeleton } from "@/components/shared/skeletons"
 
 type Toast = { message: string; type: "success" | "error" }
 
@@ -21,15 +22,6 @@ function useToast() {
     setTimeout(() => setToast(null), 3500)
   }
   return { toast, show }
-}
-
-function LoadingScreen() {
-  return (
-    <div className="flex min-h-[400px] flex-col items-center justify-center gap-3">
-      <Loader2 className="h-7 w-7 animate-spin text-emerald-600" />
-      <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Loading</p>
-    </div>
-  )
 }
 
 export default function SecurityPage() {
@@ -117,7 +109,7 @@ export default function SecurityPage() {
   }
 
   if (status === "loading" || !securityLoaded) {
-    return <LoadingScreen />
+    return <SettingsSkeleton sections={[{ fields: 3 }, { rows: 2 }]} label="Loading security settings…" />
   }
 
   return (

@@ -21,19 +21,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { User, CreditCard, Loader2 } from "lucide-react"
+import { User, CreditCard } from "lucide-react"
 import { toast } from "sonner" // swap for your shadcn toast hook if you use a different one
-
-// ─── Loading ──────────────────────────────────────────────────────────────────
-
-function LoadingScreen() {
-  return (
-    <div className="flex min-h-[400px] flex-col items-center justify-center gap-3">
-      <Loader2 className="h-7 w-7 animate-spin text-emerald-600" />
-      <p className="text-[11px] uppercase tracking-wider text-stone-400">Loading</p>
-    </div>
-  )
-}
+import { SettingsSkeleton } from "@/components/shared/skeletons"
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
@@ -212,7 +202,7 @@ export default function ProfilePage() {
 
   // Spinner stays up until session resolves AND both fetches complete.
   if (status === "loading" || !dataLoaded) {
-    return <LoadingScreen />
+    return <SettingsSkeleton sections={[{ fields: 4 }, { fields: 3 }]} label="Loading profile…" />
   }
 
   return (
