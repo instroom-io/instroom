@@ -71,6 +71,7 @@ export type FilterState = {
   niche: string;
   location: string;
   gender: string;
+  sortOrder: SortOrder;
 }
 
 export type ToastNotification = {

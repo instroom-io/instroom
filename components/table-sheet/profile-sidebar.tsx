@@ -271,11 +271,20 @@ export function PaidCollabTab({ influencerName, rateHint }: { influencerName: st
   ])
   const nextIdRef = React.useRef(3)
 
-  const [rate, setRate] = useState(String(rateHint ?? 500))
+  // Payment starts in a blank / zero state. An agreed fee already stored on the
+  // record is real data and is still honoured; everything else (no rate, or 0)
+  // starts empty so nothing is calculated until the user enters a fee. No
+  // template amount, no pre-marked "paid" milestone.
+  const initialRate = rateHint && rateHint > 0 ? String(rateHint) : ""
+  const [rate, setRate] = useState(initialRate)
+  // Committed value that drives every amount — the draft above only becomes
+  // committed once the user leaves the field or presses Enter, so milestones
+  // don't churn on each keystroke.
+  const [committedRate, setCommittedRate] = useState(initialRate)
   const [paymentMethod, setPaymentMethod] = useState("Bank transfer")
-  const [paymentStatus, setPaymentStatus] = useState("Partially paid")
+  const [paymentStatus, setPaymentStatus] = useState("Unpaid")
   const [payStructure, setPayStructure] = useState<PayStructure>("5050")
-  const [milestoneStatuses, setMilestoneStatuses] = useState<MilestoneStatus[]>(["paid", "due"])
+  const [milestoneStatuses, setMilestoneStatuses] = useState<MilestoneStatus[]>([])
 
   const updateDeliverable = (id: number, patch: Partial<PaidDeliverable>) =>
     setDeliverables(ds => ds.map(d => d.id === id ? { ...d, ...patch } : d))
@@ -304,7 +313,9 @@ export function PaidCollabTab({ influencerName, rateHint }: { influencerName: st
   const doneSteps = steps.filter(Boolean).length
   const pct = steps.length > 0 ? Math.round((doneSteps / steps.length) * 100) : 0
 
-  const rateNum = parseFloat(rate) || 0
+  // Amounts derive from the committed fee only, and never go negative
+  const rateNum = Math.max(0, parseFloat(committedRate) || 0)
+  const hasAgreedFee = rateNum > 0
   const milestones: { label: string; amount: number; dot: string }[] =
     payStructure === "upfront" ? [{ label: "100% upfront — before shoot", amount: rateNum, dot: "#1fae5b" }]
     : payStructure === "5050" ? [{ label: "50% upfront — before shoot", amount: rateNum / 2, dot: "#1fae5b" }, { label: "50% — after post goes live", amount: rateNum / 2, dot: "#ef9f27" }]
@@ -516,7 +527,16 @@ export function PaidCollabTab({ influencerName, rateHint }: { influencerName: st
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, margin: "10px 0 14px" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <label style={{ fontSize: 11, color: "#888" }}>Rate agreed ($)</label>
-          <input type="number" style={P.smallInput} value={rate} onChange={e => setRate(e.target.value)} />
+          <input
+            type="number"
+            min={0}
+            placeholder="0"
+            style={P.smallInput}
+            value={rate}
+            onChange={e => setRate(e.target.value)}
+            onBlur={() => setCommittedRate(rate)}
+            onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); setCommittedRate(rate) } }}
+          />
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <label style={{ fontSize: 11, color: "#888" }}>Payment method</label>
@@ -545,6 +565,11 @@ export function PaidCollabTab({ influencerName, rateHint }: { influencerName: st
           <span style={{ fontSize: 12, fontWeight: 600, color: "#333" }}>Payment milestones</span>
           <span style={{ fontSize: 11, color: "#888" }}>Agreed fee: <strong>${rateNum.toLocaleString()}</strong></span>
         </div>
+        {!hasAgreedFee && (
+          <div style={{ padding: "8px 14px", fontSize: 11, color: "#9ca3af", borderBottom: "1px solid #f5f5f5" }}>
+            Enter an agreed fee above to calculate milestone amounts.
+          </div>
+        )}
         {milestones.map((m, i) => (
           <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", borderBottom: i < milestones.length - 1 ? "1px solid #f5f5f5" : "none", flexWrap: "wrap" as const }}>
             <div style={{ width: 8, height: 8, borderRadius: "50%", background: m.dot, flexShrink: 0 }} />

@@ -9,10 +9,10 @@ import {
   IconTrash, IconPlus, IconX, IconExternalLink, IconCheck, IconCalendar,
   IconGripVertical, IconSearch, IconFilter, IconTags, IconMapPin,
   IconChecklist, IconCopy, IconAlertTriangle, IconDownload, IconUpload,
-  IconSettings, IconChevronDown, IconLoader2, IconArrowsSort, IconDots, IconEye,
+  IconSettings, IconChevronDown, IconLoader2, IconArrowsSort, IconDots, IconDotsVertical, IconEye,
 } from "@tabler/icons-react"
 
-import type { InfluencerRow, CustomColumn, AnyColDef, CustomColDef, CellAddress, FilterState, ToastNotification, SortOrder } from "./types"
+import type { InfluencerRow, CustomColumn, AnyColDef, CustomColDef, CellAddress, FilterState, ToastNotification } from "./types"
 import {
   DEFAULT_NICHES, DEFAULT_LOCATIONS, DEFAULT_GENDERS, DEFAULT_CONTACT_STATUSES,
   OUTREACH_FIELDS, platforms, STATUS_STYLE, STATUS_LABEL, APPROVAL_STYLE,
@@ -32,8 +32,6 @@ import {
 import { ToastContainer } from "./toast"
 import ProfileSidebar from "./profile-sidebar"
 import { useBrandTaxonomy } from "@/hooks/useBrandTaxonomy"
-
-import { IconArrowDown, IconArrowUp } from "@tabler/icons-react"
 
 /* ═══════════════════════════════════════════════════════════════════════════════
    EMPTY STATE
@@ -117,40 +115,6 @@ function EmptyState({
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════
-   SORT TOGGLE  — now used inside FilterPopover via props (see toolbar below)
-   ═══════════════════════════════════════════════════════════════════════════════ */
-function SortToggle({ sortOrder, onChange }: { sortOrder: SortOrder; onChange: (o: SortOrder) => void }) {
-  return (
-    <div className="inline-flex h-9 items-center rounded-lg border border-[#0F6B3E]/20 bg-white p-1">
-      <button
-        onClick={() => onChange("newest")}
-        title="Newest first"
-        className={`h-7 px-3 rounded-md text-xs font-medium flex items-center gap-1.5 transition-all ${
-          sortOrder === "newest"
-            ? "bg-[#1FAE5B] text-white shadow-sm"
-            : "text-gray-600 hover:bg-gray-50 hover:text-[#0F6B3E]"
-        }`}
-      >
-        <IconArrowDown size={14} />
-        Newest
-      </button>
-      <button
-        onClick={() => onChange("oldest")}
-        title="Oldest first"
-        className={`h-7 px-3 rounded-md text-xs font-medium flex items-center gap-1.5 transition-all ${
-          sortOrder === "oldest"
-            ? "bg-[#1FAE5B] text-white shadow-sm"
-            : "text-gray-600 hover:bg-gray-50 hover:text-[#0F6B3E]"
-        }`}
-      >
-        <IconArrowUp size={14} />
-        Oldest
-      </button>
-    </div>
-  )
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════════
    MAIN TABLE SHEET
    ═══════════════════════════════════════════════════════════════════════════════ */
 export default function TableSheet({
@@ -175,7 +139,6 @@ export default function TableSheet({
 }) {
   const [rows, setRows] = useState<InfluencerRow[]>(initialRows)
   const [customCols, setCustomCols] = useState<CustomColumn[]>(initialCustomColumns)
-  const [sortOrder, setSortOrder] = useState<SortOrder>("newest")
 
   const swapIdRef = useRef<(tempId: string, realId: string) => void>(() => {})
   useEffect(() => {
@@ -219,7 +182,7 @@ export default function TableSheet({
   const [showFilterPopover, setShowFilterPopover] = useState(false)
   const [filters, setFilters] = useState<FilterState>({
     platform: "all", niche: "all", location: "all", gender: "all",
-    approval: "all", dateFrom: "", dateTo: "",
+    approval: "all", dateFrom: "", dateTo: "", sortOrder: "newest",
   })
 
   const [showAddRowsModal, setShowAddRowsModal]   = useState(false)
@@ -410,8 +373,8 @@ export default function TableSheet({
       }
       return true
     })
-    return sortRows(filtered, sortOrder)
-  }, [rows, searchQuery, filters, sortOrder])
+    return sortRows(filtered, filters.sortOrder)
+  }, [rows, searchQuery, filters])
 
   const totalRows  = filteredRows.length
   const totalPages = Math.max(1, Math.ceil(totalRows / rowsPerPage))
@@ -492,7 +455,7 @@ export default function TableSheet({
 
   const handleApplyFilters  = (nf: FilterState) => { setFilters(nf); setCurrentPage(1) }
   const handleClearFilters  = () => {
-    setFilters({ platform: "all", niche: "all", location: "all", gender: "all", approval: "all", dateFrom: "", dateTo: "" })
+    setFilters({ platform: "all", niche: "all", location: "all", gender: "all", approval: "all", dateFrom: "", dateTo: "", sortOrder: "newest" })
     setCurrentPage(1)
   }
 
@@ -653,7 +616,7 @@ export default function TableSheet({
   const addRow = () => {
     const r = newEmptyRow(customCols)
     setRows(prev => { const n = [...prev, r]; onRowsChange?.(n); return n })
-    setCurrentPage(sortOrder === "newest" ? 1 : Math.ceil((rows.length + 1) / rowsPerPage))
+    setCurrentPage(filters.sortOrder === "newest" ? 1 : Math.ceil((rows.length + 1) / rowsPerPage))
     setActiveCell({ rowIdx: 0, colIdx: 0 }); containerRef.current?.focus()
   }
 
@@ -1180,9 +1143,6 @@ export default function TableSheet({
             )}
           </div>
 
-          {/* ── Sort toggle — moved here from its own row ── */}
-          <SortToggle sortOrder={sortOrder} onChange={v => { setSortOrder(v); setCurrentPage(1) }} />
-
           {/* Right-side controls */}
           <div className="flex items-center gap-1.5 ml-auto">
             {!readOnly && (
@@ -1216,7 +1176,7 @@ export default function TableSheet({
             </div>
 
             <div className="relative">
-              <button ref={settingsBtnRef} onClick={() => setShowSettingsMenu(v => !v)} className="flex items-center gap-1.5 px-2.5 py-2 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 transition" title="Settings"><IconSettings size={13} /> Settings</button>
+              <button ref={settingsBtnRef} onClick={() => setShowSettingsMenu(v => !v)} className="flex items-center px-2.5 py-2 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 transition" title="Settings" aria-label="Settings"><IconDotsVertical size={13} /></button>
               {showSettingsMenu && (
                 <div ref={settingsMenuRef} className="absolute right-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-lg shadow-xl w-52 py-1">
                   <button onClick={() => { setShowManageNiches(true); setShowSettingsMenu(false) }} className="flex items-center gap-2 w-full text-left px-3 py-2 text-xs hover:bg-gray-50 transition text-gray-700"><IconTags size={13} className="text-gray-400" /> Add Niche</button>

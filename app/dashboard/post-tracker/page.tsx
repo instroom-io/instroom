@@ -8,7 +8,7 @@
 
 "use client"
 
-import { useState, useCallback, useMemo, Suspense, useEffect } from "react"
+import { useState, useCallback, useMemo, useRef, Suspense, useEffect } from "react"
 import { useSearchParams } from "next/navigation"
 import { useSession } from "next-auth/react"
 import {
@@ -20,7 +20,7 @@ import { useDraggable } from "@dnd-kit/core"
 import {
   IconSearch, IconX, IconChevronDown, IconChevronUp,
   IconLayoutKanban, IconList, IconFilter, IconLocation,
-  IconLayoutList, IconLink, IconArrowRight,
+  IconLayoutList, IconLink, IconArrowRight, IconAlertTriangle,
 } from "@tabler/icons-react"
 import { useClosedData, type ClosedInfluencer, type ClosedColumn } from "@/hooks/useClosedData"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
@@ -28,6 +28,7 @@ import { SubscriptionGate } from "@/components/ui/subscription-gate"
 import { HistoryTab } from "@/components/InfluencerProfileSidebar"
 import { PaidCollabTab } from "@/components/table-sheet/profile-sidebar"
 import { BoardSkeleton } from "@/components/shared/skeletons"
+import { StageDropdown, type StageOption } from "@/components/shared/stage-dropdown"
 import AutoPostDetectionCard from "./AutoPostDetection"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -72,6 +73,59 @@ const COLUMNS: { key: ClosedColumn; title: string; color: string; description: s
   },
 ]
 
+// Badge colours for the stage dropdown — the soft 100/800 shades the Pipeline
+// board's status badges use (getStatusColor in kanban-board.tsx), so both
+// surfaces read as one system. "Posted" is the darker green end state.
+const STAGE_BADGE_CLASS: Record<ClosedColumn, string> = {
+  "For Order Creation": "bg-green-100 text-green-800 border-green-300",
+  "In-Transit":         "bg-amber-100 text-amber-800 border-amber-300",
+  "Delivered":          "bg-cyan-100 text-cyan-800 border-cyan-300",
+  "Posted":             "bg-emerald-100 text-emerald-900 border-emerald-400",
+  "No post":            "bg-red-100 text-red-800 border-red-300",
+}
+
+// Options for the shared badge dropdown (same component the Pipeline uses)
+const STAGE_DROPDOWN_OPTIONS: StageOption[] = COLUMNS.map((c) => ({
+  value:      c.key,
+  label:      c.title,
+  dotColor:   c.color,
+  badgeClass: STAGE_BADGE_CLASS[c.key],
+}))
+
+// ─── Filter state ─────────────────────────────────────────────────────────────
+// No name/handle fields — the global search bar is the only search input.
+interface PostTrackerFilters {
+  location: string
+  niche:    string
+  stages:   ClosedColumn[]
+  types:    string[]
+}
+
+const EMPTY_FILTERS: PostTrackerFilters = { location: "all", niche: "all", stages: [], types: [] }
+
+const STAGE_FILTER_OPTIONS = COLUMNS.map((c) => ({ value: c.key, label: c.title }))
+
+// Stage order, used to gate quick actions on cards. Purely a UI concern — the
+// stage dropdown and drag-and-drop still allow every transition.
+const STAGE_RANK: Record<ClosedColumn, number> = {
+  "For Order Creation": 0,
+  "In-Transit":         1,
+  "Delivered":          2,
+  "Posted":             3,
+  "No post":            4,
+}
+
+// "No post" is only a meaningful outcome once the product has actually landed,
+// so the quick action stays hidden until Delivered. Before that a stray click
+// would drop an influencer straight out of the workflow.
+const canQuickMarkNoPost = (stage: ClosedColumn) => STAGE_RANK[stage] >= STAGE_RANK["Delivered"]
+
+// ─── "Posted" requires evidence of a published post ───────────────────────────
+// A manual move to Posted is only allowed when a Post URL exists. Automatic
+// post detection is unaffected: it updates the record server-side and never
+// goes through these user-initiated paths.
+const hasPostUrl = (inf: Pick<ClosedInfluencer, "postUrl">) => Boolean(inf.postUrl?.trim())
+
 // Forward flow
 const NEXT_STAGE: Record<ClosedColumn, ClosedColumn | null> = {
   "For Order Creation": "In-Transit",
@@ -103,6 +157,99 @@ const PAID_COLLAB_TYPES = new Set(["paid", "paid-affiliate", "ugc-paid", "tiktok
 function getAvatarColor(name: string) {
   const colors = ["bg-pink-500","bg-purple-500","bg-indigo-500","bg-blue-500","bg-cyan-500","bg-teal-500","bg-green-500","bg-yellow-500","bg-orange-500","bg-red-500","bg-rose-500"]
   return colors[name.charCodeAt(0) % colors.length]
+}
+// ─── Missing Post URL warning ─────────────────────────────────────────────────
+function PostUrlRequiredDialog({ count, onGoToPostDetails, onCancel }: {
+  /** How many influencers were blocked — >1 when a bulk move is rejected */
+  count: number
+  onGoToPostDetails: (() => void) | null
+  onCancel: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-[500] flex items-center justify-center bg-black/50 p-4" onClick={onCancel}>
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="post-url-required-title"
+        className="bg-white rounded-2xl shadow-2xl w-[440px] max-w-full overflow-hidden"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-start gap-3 px-6 pt-6 pb-4">
+          <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0">
+            <IconAlertTriangle size={20} className="text-amber-600"/>
+          </div>
+          <div className="flex-1">
+            <h2 id="post-url-required-title" className="text-base font-semibold text-gray-900">Cannot Move to Posted</h2>
+            <p className="text-sm text-gray-600 mt-2 leading-relaxed">
+              A Post URL is required before manually moving {count > 1 ? `these ${count} influencers` : "this influencer"} to the Posted stage.
+            </p>
+            <p className="text-sm text-gray-600 mt-2 leading-relaxed">
+              Please add the post link first, or enable Automatic Post Detection to let the system update the stage automatically.
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-2 px-6 py-4 bg-gray-50 border-t border-gray-100">
+          <button
+            onClick={onCancel}
+            className="px-4 py-1.5 text-sm font-medium text-gray-600 rounded-lg border border-gray-200 hover:bg-gray-100 transition focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-1"
+          >
+            Cancel
+          </button>
+          {onGoToPostDetails && (
+            <button
+              autoFocus
+              onClick={onGoToPostDetails}
+              className="px-4 py-1.5 text-sm font-medium bg-[#1FAE5B] text-white rounded-lg hover:bg-[#178a48] transition focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] focus:ring-offset-1"
+            >
+              Go to Post Details
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Chip multi-select for the filter panel. Deliberately local rather than
+// imported from the Pipeline board — the two pages stay independent.
+function TagSelect({ label, options, selected, onChange, colorClass = "bg-[#1FAE5B]/10 text-[#0F6B3E] border-[#1FAE5B]/30" }: {
+  label: string
+  options: { value: string; label: string }[]
+  selected: string[]
+  onChange: (values: string[]) => void
+  colorClass?: string
+}) {
+  const toggle = (value: string) =>
+    onChange(selected.includes(value) ? selected.filter(s => s !== value) : [...selected, value])
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <label className="text-xs font-medium text-gray-600">{label}</label>
+        {selected.length > 0 && (
+          <button onClick={()=>onChange([])} className="text-[10px] text-gray-400 hover:text-gray-600 transition underline underline-offset-2">Clear</button>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {options.map(option => {
+          const isSelected = selected.includes(option.value)
+          return (
+            <button
+              key={option.value}
+              onClick={()=>toggle(option.value)}
+              aria-pressed={isSelected}
+              className={`px-2.5 py-1 rounded-full text-xs border transition-all font-medium focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] focus:ring-offset-1 ${
+                isSelected ? `${colorClass} border-transparent` : "bg-gray-50 text-gray-500 border-gray-200 hover:border-gray-300 hover:bg-gray-100"
+              }`}
+            >
+              {isSelected && <span className="mr-1 text-[9px]">✓</span>}
+              {option.label}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 function CampaignBadge({ type }: { type: string | null }) {
   const found = CAMPAIGN_TYPES.find(t => t.value === type)
@@ -159,6 +306,7 @@ function PostTrackerCard({ inf, onOpen, onMove, canApproveInfluencers }: {
   const nextStage  = NEXT_STAGE[inf.closedStatus]
   const isExit     = inf.closedStatus === "No post"
   const isTerminal = inf.closedStatus === "Posted" || isExit
+  const showNoPost = !isTerminal && canQuickMarkNoPost(inf.closedStatus)
 
   return (
     <div className={`bg-white border rounded-lg p-3 hover:shadow-md transition-shadow ${
@@ -211,7 +359,7 @@ function PostTrackerCard({ inf, onOpen, onMove, canApproveInfluencers }: {
       </div>
 
       {/* Stage action buttons — same pattern as pipeline cards */}
-      {!isTerminal && (
+      {!isTerminal && (nextStage || showNoPost) && (
         <div className="flex gap-1.5 mt-3 pt-2 border-t border-gray-100 flex-nowrap">
           {nextStage && (
             <button
@@ -223,14 +371,16 @@ function PostTrackerCard({ inf, onOpen, onMove, canApproveInfluencers }: {
               <IconArrowRight size={11} className="flex-shrink-0"/> <span className="truncate">{nextStage}</span>
             </button>
           )}
-          <button
-            onClick={e => { e.stopPropagation(); if (!canApproveInfluencers) return; onMove(inf.id, "No post") }}
-            disabled={!canApproveInfluencers}
-            title={!canApproveInfluencers ? "Only Owners and Managers can update post status" : undefined}
-            className="text-[11px] font-medium px-2 py-1 rounded-full border bg-red-50 text-red-600 border-red-200 hover:bg-red-100 transition flex items-center gap-1 min-w-0 flex-1 justify-center disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            <IconX size={11} className="flex-shrink-0"/> <span className="truncate">No post</span>
-          </button>
+          {showNoPost && (
+            <button
+              onClick={e => { e.stopPropagation(); if (!canApproveInfluencers) return; onMove(inf.id, "No post") }}
+              disabled={!canApproveInfluencers}
+              title={!canApproveInfluencers ? "Only Owners and Managers can update post status" : undefined}
+              className="text-[11px] font-medium px-2 py-1 rounded-full border bg-red-50 text-red-600 border-red-200 hover:bg-red-100 transition flex items-center gap-1 min-w-0 flex-1 justify-center disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <IconX size={11} className="flex-shrink-0"/> <span className="truncate">No post</span>
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -267,16 +417,34 @@ function DraggableCard({ id, children, onClick, disabled }: { id: string; childr
 const STAGE_OPTIONS: ClosedColumn[] = ["For Order Creation", "In-Transit", "Delivered", "Posted", "No post"]
 const PROFILE_TABS = ["Basic", "Order", "Post", "Stats", "Paid collab details", "History"]
 
-function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChange, canApproveInfluencers, subscriptionStatus }: {
+function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChange, onPostUrlChange, canApproveInfluencers, subscriptionStatus, initialTab = 0, focusPostUrl = false }: {
   inf: ClosedInfluencer; brandId?: string; onClose: () => void
   onColumnChange: (id: string, col: ClosedColumn) => Promise<boolean>
   onCollabTypeChange: (id: string, type: string) => Promise<boolean>
+  onPostUrlChange: (id: string, postUrl: string) => Promise<boolean>
   canApproveInfluencers: boolean
   subscriptionStatus?: string
+  /** Tab to open on — used by the "Go to Post Details" warning action */
+  initialTab?: number
+  /** Focus + scroll the Post URL field once the drawer opens */
+  focusPostUrl?: boolean
 }) {
-  const [profileTab, setProfileTab] = useState(0)
+  const [profileTab, setProfileTab] = useState(initialTab)
   const [drawerToast, setDT]        = useState("")
+  const [savingPost, setSavingPost] = useState(false)
+  const postUrlRef = useRef<HTMLInputElement>(null)
   const showToast = (msg: string) => { setDT(msg); setTimeout(()=>setDT(""),2600) }
+
+  // Land the user directly on the Post URL field when sent here from the
+  // "Cannot Move to Posted" warning.
+  useEffect(() => {
+    if (!focusPostUrl) return
+    const t = setTimeout(() => {
+      postUrlRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })
+      postUrlRef.current?.focus()
+    }, 120)
+    return () => clearTimeout(t)
+  }, [focusPostUrl])
 
   const campaignType = inf.campaignType ?? "gifting"
   const showPaidCollabTab = PAID_COLLAB_TYPES.has(campaignType)
@@ -308,6 +476,12 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
   const handleCollabTypeChange = async (newType: string) => {
     const ok = await onCollabTypeChange(inf.id, newType)
     if (ok) showToast("Collaboration type updated")
+  }
+  const handleSavePost = async () => {
+    setSavingPost(true)
+    const ok = await onPostUrlChange(inf.id, postData.postUrl)
+    setSavingPost(false)
+    showToast(ok ? "Post details saved" : "Failed to save post details")
   }
 
   return (
@@ -472,7 +646,7 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
           {profileTab === 2 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {brandId && <AutoPostDetectionCard brandId={brandId} biId={inf.id} subscriptionStatus={subscriptionStatus} />}
-              <div className="pfg"><div className="pfl">Post URL</div><input className="pfi" value={postData.postUrl} onChange={e => setPostData(d => ({ ...d, postUrl: e.target.value }))} placeholder="Post URL" /></div>
+              <div className="pfg"><div className="pfl">Post URL</div><input ref={postUrlRef} className="pfi" value={postData.postUrl} onChange={e => setPostData(d => ({ ...d, postUrl: e.target.value }))} placeholder="Post URL" /></div>
               <div className="pfr">
                 <div className="pfg"><div className="pfl">Posted At</div><input type="date" className="pfi" value={postData.postedAt} onChange={e => setPostData(d => ({ ...d, postedAt: e.target.value }))} /></div>
                 <div className="pfg"><div className="pfl">Internal Rating</div>
@@ -505,8 +679,8 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
                   padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
                 }}
               >
-                <button className="btn-secondary">Cancel</button>
-                <button className="btn-primary">Save</button>
+                <button className="btn-secondary" onClick={() => setPostData(d => ({ ...d, postUrl: inf.postUrl || "" }))}>Cancel</button>
+                <button className="btn-primary" onClick={handleSavePost} disabled={savingPost}>{savingPost ? "Saving…" : "Save"}</button>
               </div>
             </div>
           )}
@@ -644,7 +818,7 @@ function PostTrackerContent() {
     }
   }, [session.status, brandId])
 
-  const { data, isLoading, error, updateColumn, updateCampaignType, refetch } = useClosedData(brandId)
+  const { data, isLoading, error, updateColumn, updateCampaignType, updatePostUrl, refetch } = useClosedData(brandId)
 
   const [view,                 setView]                 = useState<"Board"|"list">("Board")
   const [search,               setSearch]               = useState("")
@@ -652,9 +826,26 @@ function PostTrackerContent() {
   const [selectedInf,          setSelectedInf]          = useState<ClosedInfluencer|null>(null)
   const [toastMsg,             setToastMsg]             = useState<string|null>(null)
   const [showFilterPanel,      setShowFilterPanel]      = useState(false)
-  const [filters,              setFilters]              = useState({influencer:"",handle:"",location:"all",niche:"all"})
+  // Name/handle filtering lives in the global search bar only — the panel
+  // holds filters that search can't express.
+  const [filters,              setFilters]              = useState<PostTrackerFilters>(EMPTY_FILTERS)
   const [selectedColumnStatus, setSelectedColumnStatus] = useState<ClosedColumn|null>(null)
   const [sortOrder,            setSortOrder]            = useState<"newest"|"oldest">("newest")
+
+  // ── Bulk selection (list view) ─────────────────────────────────────────────
+  // Keyed on brandInfluencer ids, so a selection survives scrolling, sorting,
+  // searching and filter changes. Mirrors the Pipeline list view.
+  const [selectedIds,       setSelectedIds]       = useState<Set<string>>(new Set())
+  const [showBulkStageMenu, setShowBulkStageMenu] = useState(false)
+  const [bulkBusy,          setBulkBusy]          = useState(false)
+  const bulkMenuRef  = useRef<HTMLDivElement>(null)
+  const bulkBtnRef   = useRef<HTMLButtonElement>(null)
+  const selectAllRef = useRef<HTMLInputElement>(null)
+
+  // Influencer(s) blocked from moving to Posted for want of a Post URL
+  const [postUrlBlocked, setPostUrlBlocked] = useState<ClosedInfluencer[]>([])
+  // Set when the drawer is opened from the warning's "Go to Post Details"
+  const [drawerFocusPostUrl, setDrawerFocusPostUrl] = useState(false)
 
   const showToast = (msg: string) => { setToastMsg(msg); setTimeout(()=>setToastMsg(null),3000) }
   const sensors   = useSensors(useSensor(PointerSensor,{activationConstraint:{distance:5}}))
@@ -665,6 +856,12 @@ function PostTrackerContent() {
       return false
     }
     const inf = data.find(d=>d.id===id)
+    // A manual move to Posted needs evidence of a published post. Automatic
+    // detection writes the record server-side and never runs through here.
+    if (col === "Posted" && inf && !hasPostUrl(inf)) {
+      setPostUrlBlocked([inf])
+      return false
+    }
     const ok  = await updateColumn(id, col)
     if (ok) {
       showToast(`${inf?.influencer} moved to ${col}`)
@@ -681,10 +878,11 @@ function PostTrackerContent() {
       inf.handle.toLowerCase().includes(search.toLowerCase())
     )
     if (selectedColumnStatus)     result = result.filter(inf=>inf.closedStatus===selectedColumnStatus)
-    if (filters.influencer)       result = result.filter(inf=>inf.influencer.toLowerCase().includes(filters.influencer.toLowerCase()))
-    if (filters.handle)           result = result.filter(inf=>inf.handle.toLowerCase().includes(filters.handle.toLowerCase()))
     if (filters.location!=="all") result = result.filter(inf=>inf.location===filters.location)
     if (filters.niche!=="all")    result = result.filter(inf=>inf.niche===filters.niche)
+    if (filters.stages.length)    result = result.filter(inf=>filters.stages.includes(inf.closedStatus))
+    // Rows with no collab type set read as Gifting, matching CampaignBadge
+    if (filters.types.length)     result = result.filter(inf=>filters.types.includes(inf.campaignType ?? "gifting"))
     result = [...result].sort((a,b)=>{
       const da = new Date(a.createdAt ?? 0).getTime()
       const db = new Date(b.createdAt ?? 0).getTime()
@@ -693,7 +891,115 @@ function PostTrackerContent() {
     return result
   }, [data, search, selectedColumnStatus, filters, sortOrder])
 
-  const hasActiveFilters   = filters.influencer!==""||filters.handle!==""||filters.location!=="all"||filters.niche!=="all"||search!==""||selectedColumnStatus!==null
+  // ── Bulk selection helpers ─────────────────────────────────────────────────
+  // Ids that no longer exist in the dataset are ignored rather than pruned in
+  // an effect, so the count can never overstate what's actually selected.
+  const selectedInfluencers = useMemo(() => data.filter(d => selectedIds.has(d.id)), [data, selectedIds])
+  const selectedCount       = selectedInfluencers.length
+  const allVisibleSelected  = filteredData.length > 0 && filteredData.every(d => selectedIds.has(d.id))
+  const someVisibleSelected = filteredData.some(d => selectedIds.has(d.id))
+
+  const clearSelection   = () => setSelectedIds(new Set())
+  const toggleRowSelection = (id: string) => setSelectedIds(prev => {
+    const next = new Set(prev)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    return next
+  })
+  const toggleSelectAllVisible = () => setSelectedIds(prev => {
+    const next = new Set(prev)
+    if (allVisibleSelected) filteredData.forEach(d => next.delete(d.id))
+    else filteredData.forEach(d => next.add(d.id))
+    return next
+  })
+
+  // Header checkbox shows a partial state when only some visible rows are selected
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = someVisibleSelected && !allVisibleSelected
+  }, [someVisibleSelected, allVisibleSelected])
+
+  // Close the Move to Stage menu on outside click / Escape
+  useEffect(() => {
+    if (!showBulkStageMenu) return
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (!bulkMenuRef.current?.contains(t) && !bulkBtnRef.current?.contains(t)) setShowBulkStageMenu(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { setShowBulkStageMenu(false); bulkBtnRef.current?.focus() }
+    }
+    document.addEventListener("mousedown", onDown)
+    document.addEventListener("keydown", onKey)
+    return () => {
+      document.removeEventListener("mousedown", onDown)
+      document.removeEventListener("keydown", onKey)
+    }
+  }, [showBulkStageMenu])
+
+  // ── Bulk stage move ────────────────────────────────────────────────────────
+  // Reuses the same per-row `updateColumn` that the single-row dropdown, the
+  // card arrows and drag-and-drop all use — no new endpoint, no duplicated
+  // stage logic. Sequential on purpose: `updateColumn` rolls back from a
+  // full-list snapshot on failure, so overlapping calls could undo each
+  // other's successful writes. Sequential keeps every success intact.
+  const runBulkStageMove = async (col: ClosedColumn) => {
+    const candidates = selectedInfluencers.filter(d => d.closedStatus !== col)
+
+    // Same rule as the single-row paths: no Post URL, no manual move to Posted.
+    // If any selected row is missing one, block the whole batch and name them,
+    // rather than silently moving a subset.
+    if (col === "Posted") {
+      const missing = candidates.filter(d => !hasPostUrl(d))
+      if (missing.length > 0) {
+        setPostUrlBlocked(missing)
+        return
+      }
+    }
+
+    const targets = candidates
+    const skipped = selectedCount - targets.length
+    if (targets.length === 0) {
+      showToast(`Nothing to move — the selected influencers are already in ${col}`)
+      return
+    }
+
+    setBulkBusy(true)
+    const failedIds: string[] = []
+    let moved = 0
+    for (const target of targets) {
+      const ok = await updateColumn(target.id, col)
+      if (ok) {
+        moved += 1
+        setSelectedInf(p => (p?.id === target.id ? { ...p, closedStatus: col } : p))
+      } else {
+        failedIds.push(target.id)
+      }
+    }
+    setBulkBusy(false)
+
+    // Keep only failures selected so they can be retried directly
+    setSelectedIds(new Set(failedIds))
+
+    const skippedNote = skipped > 0 ? ` · ${skipped} skipped` : ""
+    showToast(failedIds.length === 0
+      ? `${moved} influencer${moved === 1 ? "" : "s"} moved to ${col} ✓${skippedNote}`
+      : `${moved} moved to ${col}, ${failedIds.length} failed${skippedNote} — the failed ones are still selected`)
+  }
+
+  const handleBulkStageSelect = (col: ClosedColumn) => {
+    setShowBulkStageMenu(false)
+    if (!canApprove) { showToast("Only Owners and Managers can update post status"); return }
+    if (selectedCount === 0) return
+    void runBulkStageMove(col)
+  }
+
+  const activeFilterCount  =
+    (filters.location!=="all" ? 1 : 0) +
+    (filters.niche!=="all" ? 1 : 0) +
+    filters.stages.length +
+    filters.types.length +
+    (search ? 1 : 0) +
+    (selectedColumnStatus ? 1 : 0)
+  const hasActiveFilters   = activeFilterCount > 0
   const activeInf          = activeId ? data.find(d=>d.id===activeId) : null
   const selectedColumnInfo = selectedColumnStatus ? COLUMNS.find(col=>col.key===selectedColumnStatus) : null
   const getItemsByColumn   = (columnKey: ClosedColumn) => filteredData.filter(item=>item.closedStatus===columnKey)
@@ -709,6 +1015,12 @@ function PostTrackerContent() {
     if (!inf||inf.closedStatus===newCol) return
     await handleMove(id, newCol)
   }
+
+  const handlePostUrlChange = useCallback(async (id: string, postUrl: string): Promise<boolean> => {
+    const ok = await updatePostUrl(id, postUrl)
+    if (ok) setSelectedInf(p => (p?.id === id ? { ...p, postUrl: postUrl.trim() || null } : p))
+    return ok
+  }, [updatePostUrl])
 
   const handleCollabTypeChange = useCallback(async (id: string, type: string): Promise<boolean> => {
     if (!canApprove) {
@@ -766,10 +1078,32 @@ function PostTrackerContent() {
       <div className="flex flex-col gap-4 p-6">
       {toastMsg&&<div className="fixed top-4 right-4 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg z-50 animate-in slide-in-from-top-2">{toastMsg}</div>}
 
+      {postUrlBlocked.length>0&&(
+        <PostUrlRequiredDialog
+          count={postUrlBlocked.length}
+          // With one influencer we can take the user straight to its Post tab;
+          // for a bulk rejection there's no single record to open.
+          onGoToPostDetails={postUrlBlocked.length===1 ? ()=>{
+            const target = postUrlBlocked[0]
+            setPostUrlBlocked([])
+            setDrawerFocusPostUrl(true)
+            setSelectedInf(target)
+          } : null}
+          onCancel={()=>setPostUrlBlocked([])}
+        />
+      )}
+
       {selectedInf&&(
-        <ProfileDrawer inf={selectedInf} brandId={brandId} onClose={()=>setSelectedInf(null)}
-          onColumnChange={handleMove} onCollabTypeChange={handleCollabTypeChange} canApproveInfluencers={canApprove}
-          subscriptionStatus={subscriptionStatus}/>
+        <ProfileDrawer
+          // Remount when the target or the "jump to Post URL" intent changes,
+          // so initialTab/focus apply even if the drawer is already open.
+          key={`${selectedInf.id}${drawerFocusPostUrl ? ":post" : ""}`}
+          inf={selectedInf} brandId={brandId}
+          onClose={()=>{ setSelectedInf(null); setDrawerFocusPostUrl(false) }}
+          onColumnChange={handleMove} onCollabTypeChange={handleCollabTypeChange}
+          onPostUrlChange={handlePostUrlChange} canApproveInfluencers={canApprove}
+          subscriptionStatus={subscriptionStatus}
+          initialTab={drawerFocusPostUrl ? 2 : 0} focusPostUrl={drawerFocusPostUrl}/>
       )}
 
       {/* ── Single inline toolbar row — matches Manage Influencers layout ── */}
@@ -786,18 +1120,31 @@ function PostTrackerContent() {
           <button onClick={()=>setShowFilterPanel(!showFilterPanel)}
             className={`h-9 px-3 rounded-lg text-sm flex items-center gap-1.5 border transition-colors ${hasActiveFilters?"bg-[#1FAE5B] text-white border-[#1FAE5B]":"border-[#0F6B3E]/20 hover:border-[#0F6B3E]/40"}`}>
             <IconFilter size={15}/> Filters
+            {activeFilterCount > 0 && (
+              <span className={`text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center ${hasActiveFilters?"bg-white/20 text-white":"bg-[#1FAE5B] text-white"}`}>
+                {activeFilterCount}
+              </span>
+            )}
           </button>
           {showFilterPanel&&(
-            <div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-30 w-[340px] max-w-[90vw] p-5">
+            <div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-30 w-[420px] max-w-[90vw] p-5">
               <div className="flex items-center justify-between mb-4">
                 <span className="text-xs font-bold text-gray-800 uppercase tracking-wide">Filter by</span>
-                {hasActiveFilters&&<button className="text-xs text-gray-400 hover:text-red-500 transition flex items-center gap-1" onClick={()=>setFilters({influencer:"",handle:"",location:"all",niche:"all"})}><IconX size={12}/> Clear all</button>}
+                {hasActiveFilters&&<button className="text-xs text-gray-400 hover:text-red-500 transition flex items-center gap-1" onClick={()=>setFilters(EMPTY_FILTERS)}><IconX size={12}/> Clear all</button>}
               </div>
-              <div className="grid grid-cols-2 gap-x-4 gap-y-4">
-                <div className="flex flex-col gap-1"><label className="text-xs text-gray-500">Influencer</label><input type="text" value={filters.influencer} onChange={e=>setFilters(p=>({...p,influencer:e.target.value}))} placeholder="Search by name..." className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B]"/></div>
-                <div className="flex flex-col gap-1"><label className="text-xs text-gray-500">Handle</label><input type="text" value={filters.handle} onChange={e=>setFilters(p=>({...p,handle:e.target.value}))} placeholder="@username..." className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B]"/></div>
-                <div className="flex flex-col gap-1"><label className="text-xs text-gray-500">Location</label><select value={filters.location} onChange={e=>setFilters(p=>({...p,location:e.target.value}))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] appearance-none cursor-pointer"><option value="all">All Locations</option>{LOCATIONS.map(l=><option key={l}>{l}</option>)}</select></div>
-                <div className="flex flex-col gap-1"><label className="text-xs text-gray-500">Niche</label><select value={filters.niche} onChange={e=>setFilters(p=>({...p,niche:e.target.value}))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] appearance-none cursor-pointer"><option value="all">All Niches</option>{NICHES.map(n=><option key={n}>{n}</option>)}</select></div>
+              <div className="flex flex-col gap-5">
+                <TagSelect label="Post Stage" options={STAGE_FILTER_OPTIONS} selected={filters.stages}
+                  onChange={v=>setFilters(p=>({...p,stages:v as ClosedColumn[]}))}
+                  colorClass="bg-purple-50 text-purple-700 border-purple-200"/>
+                <div className="border-t border-gray-100"/>
+                <TagSelect label="Post Type" options={CAMPAIGN_TYPES.map(t=>({value:t.value,label:t.label}))} selected={filters.types}
+                  onChange={v=>setFilters(p=>({...p,types:v}))}
+                  colorClass="bg-amber-50 text-amber-700 border-amber-200"/>
+                <div className="border-t border-gray-100"/>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-4">
+                  <div className="flex flex-col gap-1"><label className="text-xs text-gray-500">Location</label><select value={filters.location} onChange={e=>setFilters(p=>({...p,location:e.target.value}))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] appearance-none cursor-pointer"><option value="all">All Locations</option>{LOCATIONS.map(l=><option key={l}>{l}</option>)}</select></div>
+                  <div className="flex flex-col gap-1"><label className="text-xs text-gray-500">Niche</label><select value={filters.niche} onChange={e=>setFilters(p=>({...p,niche:e.target.value}))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] appearance-none cursor-pointer"><option value="all">All Niches</option>{NICHES.map(n=><option key={n}>{n}</option>)}</select></div>
+                </div>
               </div>
               {/* Sort inside filter panel */}
               <div className="mt-4 pt-4 border-t border-gray-100">
@@ -956,6 +1303,58 @@ function PostTrackerContent() {
         </DndContext>
       )}
 
+      {/* ── BULK ACTION TOOLBAR — list view, only with a live selection ── */}
+      {view==="list" && selectedCount > 0 && (
+        <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg flex-wrap">
+          <span className="text-xs text-blue-700 font-medium">{selectedCount} selected</span>
+
+          <div className="relative ml-auto sm:ml-0">
+            <button
+              ref={bulkBtnRef}
+              onClick={()=>setShowBulkStageMenu(v=>!v)}
+              disabled={bulkBusy}
+              aria-haspopup="menu"
+              aria-expanded={showBulkStageMenu}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium bg-[#1FAE5B] text-white rounded-lg hover:bg-[#178a48] transition disabled:opacity-60 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] focus:ring-offset-1"
+            >
+              {bulkBusy ? (
+                <><span className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin"/> Moving…</>
+              ) : (
+                <>Move to Stage <IconChevronDown size={13}/></>
+              )}
+            </button>
+            {showBulkStageMenu && !bulkBusy && (
+              <div
+                ref={bulkMenuRef}
+                role="menu"
+                aria-label="Move selected influencers to stage"
+                className="absolute left-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-lg shadow-xl w-52 py-1"
+              >
+                {COLUMNS.map(col=>(
+                  <button
+                    key={col.key}
+                    role="menuitem"
+                    onClick={()=>handleBulkStageSelect(col.key)}
+                    className="flex items-center gap-2 w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 focus:bg-gray-50 focus:outline-none transition"
+                  >
+                    <span className={`w-2 h-2 rounded-full ${col.color}`}/>
+                    {col.title}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <button
+            onClick={clearSelection}
+            disabled={bulkBusy}
+            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-blue-700 rounded-lg hover:bg-blue-100 transition disabled:opacity-60 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-1"
+          >
+            <IconX size={13}/> Clear Selection
+          </button>
+        </div>
+      )}
+
       {/* ── LIST ── */}
       {view==="list"&&(
         <div className="bg-white border rounded-xl overflow-hidden">
@@ -968,13 +1367,35 @@ function PostTrackerContent() {
           <div style={{overflowX:"auto"}}>
             <table className="w-full text-sm" style={{borderCollapse:"collapse"}}>
               <thead className="bg-gray-50 border-b">
-                <tr>{["Influencer","Platform","Handle","Location","Followers","Engagement","Niche","Type","Stage"].map(h=><th key={h} className="px-4 py-3 text-left font-medium text-gray-600">{h}</th>)}</tr>
+                <tr>
+                  <th className="px-4 py-3 text-left font-medium text-gray-600 w-10">
+                    <input
+                      ref={selectAllRef}
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      onChange={toggleSelectAllVisible}
+                      disabled={filteredData.length===0}
+                      aria-label={allVisibleSelected ? "Deselect all visible influencers" : "Select all visible influencers"}
+                      className="w-4 h-4 rounded accent-[#1FAE5B] cursor-pointer disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] focus:ring-offset-1"
+                    />
+                  </th>
+                  {["Influencer","Platform","Handle","Location","Followers","Engagement","Niche","Type","Stage"].map(h=><th key={h} className="px-4 py-3 text-left font-medium text-gray-600">{h}</th>)}
+                </tr>
               </thead>
               <tbody>
                 {filteredData.length===0?(
-                  <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-500">No influencers found</td></tr>
+                  <tr><td colSpan={10} className="px-4 py-8 text-center text-gray-500">No influencers found</td></tr>
                 ):filteredData.map(inf=>(
-                  <tr key={inf.id} className="border-t hover:bg-gray-50 cursor-pointer transition" onClick={()=>setSelectedInf(inf)}>
+                  <tr key={inf.id} className={`border-t hover:bg-gray-50 cursor-pointer transition ${selectedIds.has(inf.id)?"bg-blue-50/60":""}`} onClick={()=>setSelectedInf(inf)}>
+                    <td className="px-4 py-3" onClick={e=>e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(inf.id)}
+                        onChange={()=>toggleRowSelection(inf.id)}
+                        aria-label={`Select ${inf.influencer}`}
+                        className="w-4 h-4 rounded accent-[#1FAE5B] cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] focus:ring-offset-1"
+                      />
+                    </td>
                     <td className="px-4 py-3"><div className="flex items-center gap-3">{inf.profileImageUrl?<img src={inf.profileImageUrl} alt="" className="w-8 h-8 rounded-full object-cover flex-shrink-0"/>:<div className={`w-8 h-8 rounded-full flex-shrink-0 ${getAvatarColor(inf.influencer)} bg-opacity-20 flex items-center justify-center text-[#0F6B3E] font-semibold text-xs`}>{inf.influencer.charAt(0).toUpperCase()}</div>}<span className="font-medium">{inf.influencer}</span></div></td>
                     <td className="px-4 py-3">{inf.platform||"Instagram"}</td>
                     <td className="px-4 py-3 text-[#0F6B3E] font-medium">@{inf.handle}</td>
@@ -983,7 +1404,18 @@ function PostTrackerContent() {
                     <td className="px-4 py-3">{inf.engagementRate||"—"}</td>
                     <td className="px-4 py-3"><span className="px-2 py-1 rounded text-xs bg-gray-100 text-gray-700">{inf.niche||"—"}</span></td>
                     <td className="px-4 py-3"><CampaignBadge type={inf.campaignType}/></td>
-                    <td className="px-4 py-3"><div onClick={e=>e.stopPropagation()}><select className="text-[11px] px-2 py-1 rounded-lg border border-gray-200 bg-gray-50 text-gray-700 font-medium outline-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed" value={inf.closedStatus} disabled={!canApprove} title={!canApprove ? "Only Owners and Managers can update post status" : undefined} onChange={async e=>{if(!canApprove)return;await handleMove(inf.id,e.target.value as ClosedColumn)}}>{COLUMNS.map(c=><option key={c.key} value={c.key}>{c.title}</option>)}</select></div></td>
+                    <td className="px-4 py-3 align-middle">
+                      <div className="flex items-center" onClick={e=>e.stopPropagation()}>
+                        <StageDropdown
+                          value={inf.closedStatus}
+                          options={STAGE_DROPDOWN_OPTIONS}
+                          onChange={s=>{void handleMove(inf.id, s as ClosedColumn)}}
+                          disabled={!canApprove}
+                          disabledTitle="Only Owners and Managers can update post status"
+                          ariaLabel="Change post tracker stage"
+                        />
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
