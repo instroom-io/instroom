@@ -32,7 +32,7 @@ export default function EarlyAccessApprovedEmail({
           with this email address.
         </Text>
         <Text style={stepItem}>
-          <strong>2.</strong> You'll get 30 days of full platform access — no
+          <strong>2.</strong> You'll get 3 months of full platform access — no
           credit card required.
         </Text>
         <Text style={stepItem}>

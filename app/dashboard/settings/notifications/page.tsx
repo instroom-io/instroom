@@ -6,8 +6,9 @@ import { useSession } from "next-auth/react"
 import { useRouter } from "next/navigation"
 import { Switch } from "@/components/ui/switch"
 import { Card, CardContent } from "@/components/ui/card"
-import { Bell, Loader2 } from "lucide-react"
+import { Bell } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { SettingsSkeleton } from "@/components/shared/skeletons"
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
 
@@ -20,19 +21,6 @@ function useToast() {
     setTimeout(() => setToast(null), 3500)
   }
   return { toast, show }
-}
-
-// ── Loading screen ────────────────────────────────────────────────────────────
-
-function LoadingScreen() {
-  return (
-    <div className="flex min-h-[400px] flex-col items-center justify-center gap-3">
-      <Loader2 className="h-7 w-7 animate-spin text-emerald-600" />
-      <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
-        Loading
-      </p>
-    </div>
-  )
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -218,7 +206,9 @@ export default function NotificationsPage() {
     }
   }
 
-  if (status === "loading" || !notifsLoaded) return <LoadingScreen />
+  if (status === "loading" || !notifsLoaded) {
+    return <SettingsSkeleton sections={[{ rows: 6 }]} label="Loading notifications…" />
+  }
 
   return (
     <div className="max-w-3xl px-4 py-5 sm:px-6 sm:py-6 md:px-9 md:py-7">

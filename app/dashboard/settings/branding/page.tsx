@@ -8,16 +8,12 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { AlertCircle, Palette, Lock, ArrowRight, Loader2 } from "lucide-react"
+import { AlertCircle, Palette, Lock, ArrowRight } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { SettingsSkeleton } from "@/components/shared/skeletons"
 
 function LoadingScreen() {
-  return (
-    <div className="flex min-h-[400px] flex-col items-center justify-center gap-3">
-      <Loader2 className="h-7 w-7 animate-spin text-emerald-600" />
-      <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Loading</p>
-    </div>
-  )
+  return <SettingsSkeleton sections={[{ fields: 2 }]} label="Loading branding…" />
 }
 
 function BrandingContent() {
