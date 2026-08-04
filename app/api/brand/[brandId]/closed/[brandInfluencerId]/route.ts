@@ -145,7 +145,7 @@ export async function PATCH(
     }
 
     const body = await req.json()
-    const { closedStatus, paidCollabData, campaignType } = body
+    const { closedStatus, paidCollabData, campaignType, postUrl } = body
 
     // ✅ Validate closedStatus
     const validStatuses: ClosedColumn[] = [
@@ -195,10 +195,21 @@ export async function PATCH(
       productDetails.campaignType = campaignType
     }
 
+    // ✅ Validate postUrl
+    if (postUrl !== undefined && postUrl !== null && typeof postUrl !== "string") {
+      return NextResponse.json({ error: "Invalid postUrl" }, { status: 400 })
+    }
+
     // ✅ Base update payload
     let updateData: any = {
       product_details: JSON.stringify(productDetails),
       updated_at: new Date(),
+    }
+
+    // ✅ Post URL — persisted so the "Posted" stage can require evidence of a
+    // published post. An empty string clears it.
+    if (postUrl !== undefined) {
+      updateData.post_url = typeof postUrl === "string" ? (postUrl.trim() || null) : null
     }
 
     // ✅ Apply pipeline mapping

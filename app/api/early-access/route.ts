@@ -37,8 +37,17 @@ async function syncToGhl(signup: { id: string; email: string; name: string | nul
             ghl_sync_error: result.error,
           },
     })
+
+    // Record the outcome either way. A failure here is invisible to the user
+    // by design (their signup still succeeds), so the log is the only signal
+    // that contacts have stopped reaching GoHighLevel.
+    if (result.success) {
+      console.log(`[ghl] synced ${signup.email} -> contact ${result.contactId}`)
+    } else {
+      console.error(`[ghl] sync FAILED for ${signup.email}, recorded on signup ${signup.id}: ${result.error}`)
+    }
   } catch (err) {
-    console.error("GHL sync failed unexpectedly:", err instanceof Error ? err.message : String(err))
+    console.error("[ghl] sync failed unexpectedly:", err instanceof Error ? err.message : String(err))
   }
 }
 
@@ -86,9 +95,13 @@ export async function POST(req: NextRequest) {
         select: { id: true, email: true, name: true, role: true, phone: true },
       })
 
-      if (existing.ghl_sync_status !== "synced") {
-        await syncToGhl(signup)
-      }
+      // Always re-sync on a re-submit, including rows already marked "synced".
+      // The GHL endpoint is an upsert keyed by email, so this can't create a
+      // duplicate contact — but it does repair rows whose stored status is
+      // stale (e.g. marked synced against a different GHL location, or a
+      // contact since deleted in GHL), which the old `!== "synced"` guard
+      // would silently skip forever.
+      await syncToGhl(signup)
 
       return NextResponse.json({ success: true, alreadyOnList: true })
     }

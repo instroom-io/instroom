@@ -3,9 +3,9 @@
 // All modal dialogs: Confirm, AddRows, Decline, ManageOptions, AddColumn, FilterPopover
 
 import React, { useState, useEffect, useRef, type ReactNode } from "react"
-import { IconX, IconAlertTriangle, IconAlertCircle, IconCheck, IconPlus, IconEdit, IconTrash, IconBulb, IconSearch } from "@tabler/icons-react"
+import { IconX, IconAlertTriangle, IconAlertCircle, IconCheck, IconPlus, IconEdit, IconTrash, IconBulb, IconSearch, IconArrowDown, IconArrowUp } from "@tabler/icons-react"
 import { DEFAULT_PLATFORMS, DEFAULT_GENDERS, FIELD_TYPE_INFO } from "./constants"
-import type { CustomColumn, FilterState } from "./types"
+import type { CustomColumn, FilterState, SortOrder } from "./types"
 
 // ── ConfirmationDialog ────────────────────────────────────────────────────────
 
@@ -450,7 +450,7 @@ export function FilterPopover({ isOpen, onClose, filters, onApplyFilters, onClea
     <div ref={ref} className="absolute top-full right-0 mt-2 z-50 bg-white border border-gray-200 rounded-xl shadow-xl w-[400px] max-w-[90vw]" onClick={e => e.stopPropagation()}>
       <div className="px-4 pt-4 pb-2 flex items-center justify-between">
         <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider">Filters</h4>
-        <button onClick={() => { setLf({ platform:"all",niche:"all",location:"all",gender:"all",approval:"all",dateFrom:"",dateTo:"" }); onClearFilters() }} className="text-[10px] text-gray-400 hover:text-gray-600 transition">Clear all</button>
+        <button onClick={() => { setLf({ platform:"all",niche:"all",location:"all",gender:"all",approval:"all",dateFrom:"",dateTo:"",sortOrder:"newest" }); onClearFilters() }} className="text-[10px] text-gray-400 hover:text-gray-600 transition">Clear all</button>
       </div>
       <div className="px-4 pb-3 space-y-3">
         <div className="grid grid-cols-2 gap-3">
@@ -467,6 +467,30 @@ export function FilterPopover({ isOpen, onClose, filters, onApplyFilters, onClea
           <div className="grid grid-cols-2 gap-2">
             <div><label className="block text-[10px] text-gray-400 mb-0.5">From</label><input type="date" value={lf.dateFrom} onChange={e => setLf(p => ({ ...p, dateFrom: e.target.value }))} className={inputCls} /></div>
             <div><label className="block text-[10px] text-gray-400 mb-0.5">To</label><input type="date" value={lf.dateTo} onChange={e => setLf(p => ({ ...p, dateTo: e.target.value }))} className={inputCls} /></div>
+          </div>
+        </div>
+        <div>
+          <label className="block text-[10px] font-semibold text-gray-500 mb-1 uppercase tracking-wide">Sort By</label>
+          <div className="grid grid-cols-2 gap-1 rounded-lg border border-[#0F6B3E]/20 bg-white p-1">
+            {([
+              { value: "newest", label: "Newest First", Icon: IconArrowDown },
+              { value: "oldest", label: "Oldest First", Icon: IconArrowUp   },
+            ] as { value: SortOrder; label: string; Icon: typeof IconArrowDown }[]).map(({ value, label, Icon }) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setLf(p => ({ ...p, sortOrder: value }))}
+                aria-pressed={lf.sortOrder === value}
+                className={`h-7 px-2 rounded-md text-xs font-medium flex items-center justify-center gap-1.5 transition-all ${
+                  lf.sortOrder === value
+                    ? "bg-[#1FAE5B] text-white shadow-sm"
+                    : "text-gray-600 hover:bg-gray-50 hover:text-[#0F6B3E]"
+                }`}
+              >
+                <Icon size={14} />
+                {label}
+              </button>
+            ))}
           </div>
         </div>
       </div>

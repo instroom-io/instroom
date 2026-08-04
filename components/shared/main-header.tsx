@@ -230,7 +230,7 @@ function ProductDropdown() {
 
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 4px 2px" }}>
             <span style={{ fontSize: 12, color: "#9ca3af" }}>The complete influencer management stack</span>
-            <Link href="/features" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12.5, fontWeight: 600, color: "#1FAE5B", textDecoration: "none" }}>
+            <Link href="/landing-nav/features" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12.5, fontWeight: 600, color: "#1FAE5B", textDecoration: "none" }}>
               Explore all features
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                 <path d="M3 7h8M8 4l3 3-3 3" stroke="#1FAE5B" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
@@ -255,7 +255,8 @@ function DropdownCard({
   soon,
   onClick,
 }: {
-  href: string
+  /** Omit to render an action button instead of a link (see `onClick`) */
+  href?: string
   external?: boolean
   icon: ReactNode
   iconBg: string
@@ -308,6 +309,20 @@ function DropdownCard({
   )
 
   if (soon) return inner
+
+  // No href → this card performs an action (e.g. opens the demo modal) rather
+  // than navigating, so it must be a real button for semantics and keyboard use.
+  if (!href) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        style={{ display: "block", width: "100%", textAlign: "left", background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit" }}
+      >
+        {inner}
+      </button>
+    )
+  }
 
   if (external) {
     return (
@@ -473,7 +488,7 @@ function SolutionsDropdown() {
   )
 }
 
-function ResourcesDropdown() {
+function ResourcesDropdown({ onBookDemo }: { onBookDemo: () => void }) {
   return (
     <NavDropdownShell label="Resources" width={760}>
       <DropdownHero
@@ -520,7 +535,7 @@ function ResourcesDropdown() {
           }
         />
         <DropdownCard
-          href="/demo"
+          onClick={onBookDemo}
           iconBg="#e8f8ef"
           title="Demo"
           desc="See Instroom in action"
@@ -640,7 +655,7 @@ export function MainHeader() {
               Pricing
             </Link>
           </li>
-          <ResourcesDropdown />
+          <ResourcesDropdown onBookDemo={() => setShowBookDemo(true)} />
         </ul>
 
         <div className="nav-cta hidden lg:flex" style={{ gap: 16, alignItems: "center", marginLeft: "auto" }}>
@@ -685,7 +700,7 @@ export function MainHeader() {
               <li><Link href="/#pricing" onClick={() => setMobileMenuOpen(false)} style={{ ...navLinkStyle("/#pricing"), fontSize: "0.875rem" }}>Instroom Platform</Link></li>
               <li><a href="https://posttracker.instroom.io" target="_blank" rel="noopener noreferrer" onClick={() => setMobileMenuOpen(false)} style={{ fontSize: "0.875rem", color: "var(--charcoal)", textDecoration: "none" }}>Post Tracker <span style={{ fontSize: "0.6875rem", color: "#9ca3af" }}>(standalone)</span></a></li>
               <li><a href="https://chromewebstore.google.com/detail/instroomio/ehgceomekjhamiakclkpgadphbenlmmj" target="_blank" rel="noopener noreferrer" onClick={() => setMobileMenuOpen(false)} style={{ fontSize: "0.875rem", color: "var(--charcoal)", textDecoration: "none" }}>Chrome Extension <span style={{ fontSize: "0.6875rem", color: "#9ca3af" }}>(standalone)</span></a></li>
-              <li><Link href="/features" onClick={() => setMobileMenuOpen(false)} style={{ ...navLinkStyle("/features"), fontSize: "0.875rem", color: "#1FAE5B", fontWeight: 600 }}>Explore all features →</Link></li>
+              <li><Link href="/landing-nav/features" onClick={() => setMobileMenuOpen(false)} style={{ ...navLinkStyle("/landing-nav/features"), fontSize: "0.875rem", color: "#1FAE5B", fontWeight: 600 }}>Explore all features →</Link></li>
             </MobileAccordionSection>
 
             <MobileAccordionSection label="Solutions" open={mobileOpenSection === "solutions"} onToggle={() => toggleMobileSection("solutions")}>
@@ -702,7 +717,15 @@ export function MainHeader() {
             <MobileAccordionSection label="Resources" open={mobileOpenSection === "resources"} onToggle={() => toggleMobileSection("resources")}>
               <li><Link href="/blog" onClick={() => setMobileMenuOpen(false)} style={{ ...navLinkStyle("/blog"), fontSize: "0.875rem" }}>Blog</Link></li>
               <li><Link href="/#faq" onClick={() => setMobileMenuOpen(false)} style={{ ...navLinkStyle("/#faq"), fontSize: "0.875rem" }}>FAQs</Link></li>
-              <li><Link href="/demo" onClick={() => setMobileMenuOpen(false)} style={{ ...navLinkStyle("/demo"), fontSize: "0.875rem" }}>Demo</Link></li>
+              <li>
+                <button
+                  type="button"
+                  onClick={() => { setShowBookDemo(true); setMobileMenuOpen(false) }}
+                  style={{ ...navLinkStyle("/demo"), fontSize: "0.875rem", background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit", textAlign: "left" }}
+                >
+                  Demo
+                </button>
+              </li>
             </MobileAccordionSection>
           </ul>
 

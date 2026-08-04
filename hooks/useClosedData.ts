@@ -103,6 +103,7 @@ interface UseClosedDataReturn {
   updateColumn: (id: string, newColumn: ClosedColumn) => Promise<boolean>
   updatePaidCollab: (id: string, paidCollabData: PaidCollabData) => Promise<boolean>
   updateCampaignType: (id: string, campaignType: string) => Promise<boolean>
+  updatePostUrl: (id: string, postUrl: string) => Promise<boolean>
   refetch: () => void
 }
 
@@ -391,6 +392,43 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
     [brandId]
   )
 
+  // ── Update Post URL (optimistic) ──────────────────────────────────────────
+  // Evidence that a post exists — the Posted stage requires it for manual moves.
+  const updatePostUrl = useCallback(
+    async (id: string, postUrl: string): Promise<boolean> => {
+      if (!brandId) return false
+
+      const trimmed = postUrl.trim()
+      let snapshot: ClosedInfluencer[] = []
+
+      setData((prev) => {
+        snapshot = prev
+        return prev.map((item) =>
+          item.id !== id ? item : { ...item, postUrl: trimmed || null }
+        )
+      })
+
+      try {
+        const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
+          method:  "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ postUrl: trimmed }),
+        })
+
+        if (!res.ok) {
+          setData(snapshot)
+          return false
+        }
+
+        return true
+      } catch {
+        setData(snapshot)
+        return false
+      }
+    },
+    [brandId]
+  )
+
   return {
     data,
     isLoading,
@@ -398,6 +436,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
     updateColumn,
     updatePaidCollab,
     updateCampaignType,
+    updatePostUrl,
     refetch: () => fetchData(false), // background sync, no spinner
   }
 }
