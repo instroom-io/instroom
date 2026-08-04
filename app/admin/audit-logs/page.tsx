@@ -33,12 +33,11 @@ export default function AdminAuditLogsPage() {
   return (
     <div className="flex flex-col gap-5">
       <div>
-        <h1 className="text-xl font-bold text-gray-900">Audit Logs</h1>
-        <p className="text-sm text-gray-500 mt-0.5">Every administrator action, most recent first</p>
+        <p className="text-sm text-gray-500">Every administrator action, most recent first</p>
       </div>
 
-      <div className="bg-white border border-gray-200 rounded-xl overflow-x-auto">
-        <table className="w-full text-sm">
+      <div className="bg-white border border-[#0F6B3E]/10 rounded-xl shadow-sm overflow-x-auto">
+        <table className="w-full min-w-[860px] text-sm">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
               {["Action", "Target", "Admin", "Date & Time"].map((h) => (

@@ -3,7 +3,8 @@
 import Link from "next/link"
 import Image from "next/image"
 import { usePathname, useSearchParams } from "next/navigation"
-import { Suspense } from "react"
+import { Suspense, useState } from "react"
+import { BookDemoModal } from "@/components/shared/book-demo-modal"
 import { IconBrandFacebook, IconBrandInstagram, IconBrandTiktok, IconBrandLinkedin, IconPhone, IconMail, IconMapPin } from "@tabler/icons-react"
 
 const FREE_TOOLS = [
@@ -25,6 +26,7 @@ function splitFirstTwoWords(title: string) {
 }
 
 function FooterInner() {
+  const [showBookDemo, setShowBookDemo] = useState(false)
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const solutionType = searchParams.get("type")
@@ -69,7 +71,7 @@ function FooterInner() {
           <div className="lg:ml-10">
             <h4 className="text-white text-xs font-bold uppercase tracking-widest mb-4">Products</h4>
             <ul className="space-y-4 text-sm">
-              <li><Link href="/features" className="hover:text-white transition">Instroom Platform</Link></li>
+              <li><Link href="/landing-nav/features" className="hover:text-white transition">Instroom Platform</Link></li>
               <li><Link href="/pricing" className="hover:text-white transition">Pricing</Link></li>
               <li><Link href="https://chromewebstore.google.com" target="_blank" rel="noopener noreferrer" className="hover:text-white transition">Chrome Extension</Link></li>
               <li><Link href="https://posttracker.instroom.io" target="_blank" rel="noopener noreferrer" className="hover:text-white transition">Post Tracker</Link></li>
@@ -88,7 +90,17 @@ function FooterInner() {
             <ul className="space-y-4 text-sm">
               <li><Link href="/blog" className="hover:text-white transition">Blog</Link></li>
               <li><Link href="/#faq" className="hover:text-white transition">FAQs</Link></li>
-              <li><Link href="/demo" className="hover:text-white transition">Demo</Link></li>
+              {/* Opens the booking modal, same as every other "Book a demo"
+                  affordance — there is no /demo route. */}
+              <li>
+                <button
+                  type="button"
+                  onClick={() => setShowBookDemo(true)}
+                  className="hover:text-white transition text-left bg-transparent border-0 p-0 font-inherit cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1FAE5B] focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950 rounded"
+                >
+                  Book a Demo
+                </button>
+              </li>
             </ul>
           </div>
           <div>
@@ -155,6 +167,7 @@ function FooterInner() {
           </div>
         </div>
       </div>
+      <BookDemoModal open={showBookDemo} onClose={() => setShowBookDemo(false)} />
     </footer>
   )
 }

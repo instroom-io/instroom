@@ -49,25 +49,26 @@ export default function AdminDashboardPage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-xl font-bold text-gray-900">Dashboard</h1>
-        <p className="text-sm text-gray-500 mt-0.5">Platform-wide overview</p>
+        <p className="text-sm text-gray-500">Platform-wide overview</p>
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
         {CARDS.map(({ key, label, icon: Icon }) => (
-          <div key={key} className="bg-white border border-gray-200 rounded-xl p-4 flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-gray-500">{label}</span>
-              <Icon size={16} className="text-[#1FAE5B]" />
+          <div key={key} className="bg-white border border-[#0F6B3E]/10 rounded-xl shadow-sm p-4 flex flex-col gap-2">
+            <div className="flex items-start justify-between gap-2">
+              {/* Long labels ("Pending Influencer Approvals") overflowed the
+                  tile at the 2-column mobile size — allow them to wrap. */}
+              <span className="text-xs font-medium text-gray-500 min-w-0 break-words">{label}</span>
+              <Icon size={16} className="text-[#1FAE5B] shrink-0" />
             </div>
-            <div className="text-2xl font-bold text-gray-900">
+            <div className="text-xl sm:text-2xl font-bold text-gray-900 tabular-nums">
               {loading ? "—" : stats?.[key] ?? 0}
             </div>
           </div>
         ))}
       </div>
 
-      <div className="bg-white border border-gray-200 rounded-xl p-5">
+      <div className="bg-white border border-[#0F6B3E]/10 rounded-xl shadow-sm p-5">
         <h2 className="text-sm font-semibold text-gray-900 mb-4">Recent Activity</h2>
         {loading ? (
           <p className="text-sm text-gray-400">Loading…</p>

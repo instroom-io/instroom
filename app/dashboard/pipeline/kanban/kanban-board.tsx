@@ -32,6 +32,7 @@ import {
   IconX,
   IconLayoutList,
   IconChevronDown,
+  IconChevronUp,
   IconAlertCircle,
   IconArrowRight,
   IconPackage,
@@ -274,11 +275,17 @@ const getAvatarColor    = (name: string) => {
 }
 
 // ─── Sequential pipeline: each stage only moves to the NEXT stage + Not Interested ──
-// For Outreach    → Contacted
-// Contacted       → In Conversation
-// In Conversation → Deal Agreed (triggers collab type modal)
+// For Outreach    → Contacted (no NI shortcut — see below)
+// Contacted       → In Conversation + Not Interested
+// In Conversation → Deal Agreed (triggers collab type modal) + Not Interested
 // Deal Agreed     → (only Move to Post Tracker button, + Not Interested)
 // Terminal stages → nothing
+//
+// "Not Interested" is a destructive, terminal move, so the card shortcut is
+// hidden at For Outreach — nobody has been contacted yet, so there's nothing to
+// decline, and a stray click would drop the influencer out of the pipeline. The
+// status is still reachable there from the profile drawer, the list-view status
+// dropdown and by dragging onto the Not Interested column.
 const getNextStages = (currentStatus: string): string[] => {
   if (isTerminal(currentStatus)) return []
   const sequence: Record<string, string> = {
@@ -288,6 +295,7 @@ const getNextStages = (currentStatus: string): string[] => {
   }
   const next = sequence[currentStatus]
   if (!next) return ["Not Interested"] // Deal Agreed: only NI (move to PT is a dedicated button)
+  if (currentStatus === "For Outreach") return [next]
   return [next, "Not Interested"]
 }
 
@@ -360,9 +368,12 @@ interface TagSelectProps {
   selected: string[]
   onChange: (values: string[]) => void
   colorClass?: string
+  /** "wrap" flows chips in a row; "grid" keeps them in even columns so a long
+   *  option list doesn't read as one crowded block. */
+  layout?: "wrap" | "grid"
 }
 
-function TagSelect({ label, options, selected, onChange, colorClass = "bg-[#1FAE5B]/10 text-[#0F6B3E] border-[#1FAE5B]/30" }: TagSelectProps) {
+function TagSelect({ label, options, selected, onChange, colorClass = "bg-[#1FAE5B]/10 text-[#0F6B3E] border-[#1FAE5B]/30", layout = "wrap" }: TagSelectProps) {
   const toggle = (option: string) => {
     if (selected.includes(option)) {
       onChange(selected.filter((s) => s !== option))
@@ -384,26 +395,129 @@ function TagSelect({ label, options, selected, onChange, colorClass = "bg-[#1FAE
           </button>
         )}
       </div>
-      <div className="flex flex-wrap gap-1.5">
+      <div className={layout === "grid" ? "grid grid-cols-2 sm:grid-cols-3 gap-2" : "flex flex-wrap gap-1.5"}>
         {options.map((option) => {
           const isSelected = selected.includes(option)
           return (
             <button
               key={option}
               onClick={() => toggle(option)}
-              className={`px-2.5 py-1 rounded-full text-xs border transition-all font-medium ${
+              aria-pressed={isSelected}
+              className={`rounded-full text-xs border transition-all font-medium focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] focus:ring-offset-1 ${
+                layout === "grid"
+                  ? "h-8 px-2 flex items-center justify-center text-center min-w-0"
+                  : "px-2.5 py-1"
+              } ${
                 isSelected
                   ? `${colorClass} border-transparent`
                   : "bg-gray-50 text-gray-500 border-gray-200 hover:border-gray-300 hover:bg-gray-100"
               }`}
             >
               {isSelected && (
-                <span className="mr-1 text-[9px]">✓</span>
+                <span className="mr-1 text-[9px] flex-shrink-0">✓</span>
               )}
-              {option}
+              <span className={layout === "grid" ? "truncate" : ""}>{option}</span>
             </button>
           )
         })}
+      </div>
+    </div>
+  )
+}
+
+// ─── Searchable Multi-Select ──────────────────────────────────────────────────
+// Renders as a single dropdown box (same shape as the Post Tracker's Location /
+// Niche selects) but keeps the pipeline's existing multi-select semantics, and
+// adds a type-ahead so long option lists stay usable.
+function SearchableMultiSelect({ label, options, selected, onChange, allLabel }: {
+  label: string
+  options: string[]
+  selected: string[]
+  onChange: (values: string[]) => void
+  allLabel: string
+}) {
+  const [open, setOpen]   = useState(false)
+  const [query, setQuery] = useState("")
+  const wrapRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false) }
+    document.addEventListener("mousedown", onDown)
+    document.addEventListener("keydown", onKey)
+    return () => {
+      document.removeEventListener("mousedown", onDown)
+      document.removeEventListener("keydown", onKey)
+    }
+  }, [open])
+
+  const matches = options.filter((o) => o.toLowerCase().includes(query.trim().toLowerCase()))
+  const summary = selected.length === 0 ? allLabel : selected.length === 1 ? selected[0] : `${selected.length} selected`
+  const toggle  = (option: string) =>
+    onChange(selected.includes(option) ? selected.filter((s) => s !== option) : [...selected, option])
+
+  return (
+    <div className="flex flex-col gap-1" ref={wrapRef}>
+      <div className="flex items-center justify-between">
+        <label className="text-xs text-gray-500">{label}</label>
+        {selected.length > 0 && (
+          <button onClick={() => onChange([])} className="text-[10px] text-gray-400 hover:text-gray-600 transition underline underline-offset-2">Clear</button>
+        )}
+      </div>
+      <div className="relative">
+        <button
+          type="button"
+          onClick={() => { setOpen((v) => !v); setQuery("") }}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          className={`w-full px-3 py-2 border rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] cursor-pointer flex items-center justify-between gap-1 text-left ${
+            selected.length > 0 ? "border-[#1FAE5B]/40 text-gray-800" : "border-gray-200 text-gray-500"
+          }`}
+        >
+          <span className="truncate">{summary}</span>
+          <IconChevronDown size={14} className={`flex-shrink-0 text-gray-400 transition-transform ${open ? "rotate-180" : ""}`} />
+        </button>
+
+        {open && (
+          <div role="listbox" aria-label={label} className="absolute left-0 right-0 top-full mt-1 z-40 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+            <div className="p-2 border-b border-gray-100">
+              <input
+                autoFocus
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={`Search ${label.toLowerCase()}...`}
+                className="w-full px-2 py-1.5 text-xs border border-gray-200 rounded-md outline-none focus:ring-2 focus:ring-[#1FAE5B]"
+              />
+            </div>
+            <div className="max-h-44 overflow-y-auto py-1">
+              {matches.length === 0 ? (
+                <p className="px-3 py-2 text-xs text-gray-400">No matches</p>
+              ) : matches.map((option) => {
+                const isSelected = selected.includes(option)
+                return (
+                  <button
+                    key={option}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    onClick={() => toggle(option)}
+                    className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-gray-50 focus:bg-gray-50 focus:outline-none transition"
+                  >
+                    <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center flex-shrink-0 text-[9px] ${
+                      isSelected ? "bg-[#1FAE5B] border-[#1FAE5B] text-white" : "border-gray-300"
+                    }`}>
+                      {isSelected && "✓"}
+                    </span>
+                    <span className="truncate text-gray-700">{option}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -414,9 +528,12 @@ interface NIModalProps {
   influencer: PipelineInfluencer
   onConfirm: (reason: string) => void
   onCancel: () => void
+  /** Set when the modal drives a bulk move — the single-influencer card is
+   *  swapped for a "N influencers" summary and one reason applies to all. */
+  bulkCount?: number
 }
 
-function NotInterestedModal({ influencer, onConfirm, onCancel }: NIModalProps) {
+function NotInterestedModal({ influencer, onConfirm, onCancel, bulkCount }: NIModalProps) {
   const [selectedReason, setSelectedReason] = useState<string | null>(null)
   const hardReasons = NI_REASONS.filter((r) => r.bucket === "hard")
   const softReasons = NI_REASONS.filter((r) => r.bucket === "soft")
@@ -428,21 +545,37 @@ function NotInterestedModal({ influencer, onConfirm, onCancel }: NIModalProps) {
         <div className="flex items-start justify-between px-7 pt-6 pb-4 border-b border-gray-100">
           <div>
             <h2 className="text-base font-semibold text-gray-900">Mark as not interested</h2>
-            <p className="text-xs text-gray-500 mt-0.5">Select the reason why this influencer declined or is not moving forward.</p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {bulkCount
+                ? `Select the reason to apply to all ${bulkCount} selected influencers.`
+                : "Select the reason why this influencer declined or is not moving forward."}
+            </p>
           </div>
           <button onClick={onCancel} className="text-gray-400 hover:text-gray-600 transition ml-4 mt-0.5"><IconX size={18} /></button>
         </div>
         <div className="px-7 pt-5">
           <div className="flex items-center gap-3 bg-gray-50 rounded-xl px-4 py-3 border border-gray-100">
-            {influencer.profileImageUrl ? (
-              <img src={influencer.profileImageUrl} alt={influencer.influencer} className="w-9 h-9 rounded-full object-cover" />
+            {bulkCount ? (
+              <>
+                <div className="w-9 h-9 rounded-full bg-red-100 flex items-center justify-center text-red-600 font-semibold text-sm">{bulkCount}</div>
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">{bulkCount} influencers selected</p>
+                  <p className="text-xs text-gray-500">The reason below applies to all of them</p>
+                </div>
+              </>
             ) : (
-              <div className="w-9 h-9 rounded-full bg-red-100 flex items-center justify-center text-red-600 font-semibold text-sm">{initials}</div>
+              <>
+                {influencer.profileImageUrl ? (
+                  <img src={influencer.profileImageUrl} alt={influencer.influencer} className="w-9 h-9 rounded-full object-cover" />
+                ) : (
+                  <div className="w-9 h-9 rounded-full bg-red-100 flex items-center justify-center text-red-600 font-semibold text-sm">{initials}</div>
+                )}
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">{influencer.influencer}</p>
+                  <p className="text-xs text-gray-500">{influencer.instagramHandle}</p>
+                </div>
+              </>
             )}
-            <div>
-              <p className="text-sm font-semibold text-gray-900">{influencer.influencer}</p>
-              <p className="text-xs text-gray-500">{influencer.instagramHandle}</p>
-            </div>
           </div>
         </div>
         <div className="px-7 pt-5 pb-3 grid grid-cols-2 gap-x-5 gap-y-5">
@@ -514,9 +647,11 @@ interface CollabTypeModalProps {
   influencer: PipelineInfluencer
   onConfirm: (collabType: CollabType) => void
   onCancel: () => void
+  /** Set when the modal drives a bulk move — one collab type applies to all. */
+  bulkCount?: number
 }
 
-function CollabTypeModal({ influencer, onConfirm, onCancel }: CollabTypeModalProps) {
+function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabTypeModalProps) {
   const [selectedType, setSelectedType] = useState<CollabType | null>(null)
   const initials = influencer.influencer.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()
 
@@ -529,7 +664,11 @@ function CollabTypeModal({ influencer, onConfirm, onCancel }: CollabTypeModalPro
         <div className="flex items-start justify-between px-7 pt-6 pb-4 border-b border-gray-100">
           <div>
             <h2 className="text-base font-semibold text-gray-900">Select Collaboration Type</h2>
-            <p className="text-xs text-gray-500 mt-0.5">Choose the collaboration type to mark this deal agreed and move it to Post Tracker.</p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {bulkCount
+                ? `Choose the collaboration type to apply to all ${bulkCount} selected influencers and move them to Post Tracker.`
+                : "Choose the collaboration type to mark this deal agreed and move it to Post Tracker."}
+            </p>
           </div>
           <button onClick={onCancel} className="text-gray-400 hover:text-gray-600 transition ml-4 mt-0.5">
             <IconX size={18} />
@@ -539,15 +678,27 @@ function CollabTypeModal({ influencer, onConfirm, onCancel }: CollabTypeModalPro
         {/* Influencer Info */}
         <div className="px-7 pt-5 pb-2">
           <div className="flex items-center gap-3 bg-gray-50 rounded-xl px-4 py-3 border border-gray-100">
-            {influencer.profileImageUrl ? (
-              <img src={influencer.profileImageUrl} alt={influencer.influencer} className="w-10 h-10 rounded-full object-cover" />
+            {bulkCount ? (
+              <>
+                <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center text-green-600 font-semibold text-sm">{bulkCount}</div>
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">{bulkCount} influencers selected</p>
+                  <p className="text-xs text-gray-500">The collaboration type below applies to all of them</p>
+                </div>
+              </>
             ) : (
-              <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center text-green-600 font-semibold text-sm">{initials}</div>
+              <>
+                {influencer.profileImageUrl ? (
+                  <img src={influencer.profileImageUrl} alt={influencer.influencer} className="w-10 h-10 rounded-full object-cover" />
+                ) : (
+                  <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center text-green-600 font-semibold text-sm">{initials}</div>
+                )}
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">{influencer.influencer}</p>
+                  <p className="text-xs text-gray-500">{influencer.instagramHandle}</p>
+                </div>
+              </>
             )}
-            <div>
-              <p className="text-sm font-semibold text-gray-900">{influencer.influencer}</p>
-              <p className="text-xs text-gray-500">{influencer.instagramHandle}</p>
-            </div>
             <div className="ml-auto flex items-center gap-1.5 text-xs text-gray-400">
               <IconArrowRight size={14} />
               <span>Moving to Post Tracker</span>
@@ -634,8 +785,8 @@ function PipelineCard({ influencer, onOpenSidebar, onStatusChange, canApproveInf
   onStatusChange: (id: string, newStatus: string) => void
   canApproveInfluencers: boolean
 }) {
-  // nextStages is now always ["Deal Agreed", "Not Interested"] for pre-deal cards,
-  // ["Not Interested"] for Deal Agreed cards, and [] for terminal cards
+  // See getNextStages: [next stage] at For Outreach, [next stage, "Not Interested"]
+  // for the middle stages, ["Not Interested"] at Deal Agreed, [] when terminal
   const nextStages = getNextStages(influencer.pipelineStatus)
   const terminal   = isTerminal(influencer.pipelineStatus)
 
@@ -733,7 +884,8 @@ function StatusDropdown({ currentStatus, onStatusChange, canApproveInfluencers }
     const spaceRight = window.innerWidth - rect.left
     const top  = spaceBelow >= dropdownHeight ? rect.bottom + 4 : rect.top - dropdownHeight - 4
     const left = spaceRight >= dropdownWidth  ? rect.left       : rect.right - dropdownWidth
-    setDropdownStyle({ position: "fixed", top: Math.max(8, top), left: Math.max(8, left), zIndex: 9999, minWidth: dropdownWidth })
+    // Never narrower than the trigger, so the open menu lines up with it
+    setDropdownStyle({ position: "fixed", top: Math.max(8, top), left: Math.max(8, left), zIndex: 9999, minWidth: Math.max(dropdownWidth, rect.width) })
   }, [isOpen])
 
   useEffect(() => {
@@ -766,12 +918,15 @@ function StatusDropdown({ currentStatus, onStatusChange, canApproveInfluencers }
 
   return (
     <>
+      {/* Fixed width (sized to the longest status, "For Order Creation") so
+          every row's dropdown lines up; `max-w-full` lets it shrink inside a
+          narrow cell, where the label truncates rather than wrapping. */}
       <button ref={buttonRef}
         onClick={(e) => { e.stopPropagation(); if (!canApproveInfluencers) return; setIsOpen((p) => !p) }}
         disabled={!canApproveInfluencers}
-        title={!canApproveInfluencers ? "Only Owners and Managers can approve influencers" : undefined}
-        className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium whitespace-nowrap border ${getStatusColor(currentStatus)} ${!canApproveInfluencers ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}>
-        {currentStatus}
+        title={!canApproveInfluencers ? "Only Owners and Managers can approve influencers" : currentStatus}
+        className={`inline-flex items-center justify-between gap-1 w-[150px] max-w-full px-2 py-1 rounded text-xs font-medium text-left whitespace-nowrap border ${getStatusColor(currentStatus)} ${!canApproveInfluencers ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}>
+        <span className="truncate">{currentStatus}</span>
         <IconChevronDown size={12} className={`transition-transform flex-shrink-0 ${isOpen ? "rotate-180" : ""}`} />
       </button>
       {mounted && dropdown && typeof document !== "undefined"
@@ -809,19 +964,26 @@ function DraggableCard({ id, disabled, children }: { id: string; disabled?: bool
 }
 
 // ─── Filter state type ────────────────────────────────────────────────────────
+// Name/handle filtering lives in the global search bar only — the panel holds
+// filters that search can't express.
 interface FilterState {
-  influencer: string
-  handle:     string
-  locations:  string[]
-  niches:     string[]
+  locations: string[]
+  niches:    string[]
+  stages:    string[]
+  approvals: string[]
 }
 
 const EMPTY_FILTERS: FilterState = {
-  influencer: "",
-  handle:     "",
-  locations:  [],
-  niches:     [],
+  locations: [],
+  niches:    [],
+  stages:    [],
+  approvals: [],
 }
+
+// Every stage a row can hold, including the hidden "For Order Creation" column
+// so list-view rows in that stage are still filterable.
+const STAGE_OPTIONS   = columns.map((c) => c.status)
+const APPROVAL_OPTIONS = ["Approved", "Pending", "Declined"]
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 interface PipelinePageProps { brandId?: string }
@@ -843,6 +1005,19 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   // ── Collab type modal — fires when moving TO "Deal Agreed" ──
   const [collabModalInfluencer, setCollabModalInfluencer] = useState<PipelineInfluencer | null>(null)
   const [pendingCollabId,       setPendingCollabId]       = useState<string | null>(null)
+
+  // ── Bulk selection (list view) ──────────────────────────────────────────────
+  // Selection lives on brandInfluencer ids, not row indexes, so it survives
+  // re-sorts, filter changes and scrolling. Rows hidden by a filter stay
+  // selected — the toolbar count always reflects the true selection.
+  const [selectedIds,       setSelectedIds]       = useState<Set<string>>(new Set())
+  const [showBulkStageMenu, setShowBulkStageMenu] = useState(false)
+  const [bulkBusy,          setBulkBusy]          = useState(false)
+  const [bulkNiOpen,        setBulkNiOpen]        = useState(false)
+  const [bulkCollabOpen,    setBulkCollabOpen]    = useState(false)
+  const bulkMenuRef  = useRef<HTMLDivElement>(null)
+  const bulkBtnRef   = useRef<HTMLButtonElement>(null)
+  const selectAllRef = useRef<HTMLInputElement>(null)
 
   const { data, isLoading, error, updateStatus, refetch } = usePipelineData(brandId)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
@@ -974,6 +1149,88 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
       : `Failed to update ${influencer?.influencer}`, 2000)
   }
 
+  // ── Bulk selection helpers ────────────────────────────────────────────────
+  const clearSelection = () => setSelectedIds(new Set())
+
+  const toggleRowSelection = (id: string) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+
+  // ── Bulk stage move ───────────────────────────────────────────────────────
+  // Reuses the exact same per-row `updateStatus` the single-row dropdown and
+  // drag-and-drop use — no new endpoint, no duplicated status logic. Runs
+  // sequentially on purpose: `updateStatus` rolls back from a full-list
+  // snapshot on failure, so overlapping calls could roll back each other's
+  // successful writes. Sequential keeps every success intact when one fails.
+  const runBulkUpdate = async (
+    newStatus: string,
+    extra?: { niReason?: string; collaborationType?: string }
+  ) => {
+    const selected = data.filter((d) => selectedIds.has(d.id))
+    // Same guards the single-row paths apply: terminal rows can't move, and
+    // rows already in the target stage are a no-op.
+    const targets = selected.filter((d) => !isTerminal(d.pipelineStatus) && d.pipelineStatus !== newStatus)
+    const skipped = selected.length - targets.length
+    const stageTitle = columns.find((c) => c.status === newStatus)?.title ?? newStatus
+
+    if (targets.length === 0) {
+      toast(`Nothing to move — the selected influencers are already in ${stageTitle} or can't be moved`, 3500)
+      return
+    }
+
+    setBulkBusy(true)
+    const failedIds: string[] = []
+    let moved = 0
+    for (const target of targets) {
+      const success = await updateStatus(target.id, newStatus, extra)
+      if (success) moved += 1
+      else failedIds.push(target.id)
+    }
+    setBulkBusy(false)
+
+    // Keep only the failures selected so the user can retry them directly;
+    // everything that succeeded stays updated either way.
+    setSelectedIds(new Set(failedIds))
+
+    const skippedNote = skipped > 0 ? ` · ${skipped} skipped` : ""
+    if (failedIds.length === 0) {
+      toast(`${moved} influencer${moved === 1 ? "" : "s"} moved to ${stageTitle} ✓${skippedNote}`, 3500)
+    } else {
+      toast(
+        `${moved} moved to ${stageTitle}, ${failedIds.length} failed${skippedNote} — the failed ones are still selected`,
+        5000
+      )
+    }
+  }
+
+  const handleBulkStageSelect = (newStatus: string) => {
+    setShowBulkStageMenu(false)
+    if (!canApprove) {
+      toast("Only Owners and Managers can approve influencers", 2500)
+      return
+    }
+    if (selectedIds.size === 0) return
+    // These two stages need extra input before they can be written; reuse the
+    // existing modals, collecting one answer that applies to the whole batch.
+    if (newStatus === "Not Interested") { setBulkNiOpen(true); return }
+    if (newStatus === "Deal Agreed")    { setBulkCollabOpen(true); return }
+    void runBulkUpdate(newStatus)
+  }
+
+  const handleBulkNiConfirm = async (reason: string) => {
+    setBulkNiOpen(false)
+    await runBulkUpdate("Not Interested", { niReason: reason })
+  }
+
+  const handleBulkCollabConfirm = async (collabType: CollabType) => {
+    setBulkCollabOpen(false)
+    await runBulkUpdate("Deal Agreed", { collaborationType: collabType })
+  }
+
   const openSidebar = (inf: PipelineInfluencer) => {
     setSelectedPartner(influencerToPartner(inf, brandId))
     setSidebarOpen(true)
@@ -1002,10 +1259,11 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
       )
       .filter((d) => selectedColumnStatus ? d.pipelineStatus === selectedColumnStatus : true)
 
-    if (filters.influencer)           result = result.filter((p) => p.influencer.toLowerCase().includes(filters.influencer.toLowerCase()))
-    if (filters.handle)               result = result.filter((p) => p.instagramHandle.toLowerCase().includes(filters.handle.toLowerCase()))
     if (filters.locations.length > 0) result = result.filter((p) => filters.locations.includes(p.location ?? ""))
     if (filters.niches.length > 0)    result = result.filter((p) => filters.niches.includes(p.niche ?? ""))
+    if (filters.stages.length > 0)    result = result.filter((p) => filters.stages.includes(p.pipelineStatus))
+    // A row with no approval decision yet reads as Pending
+    if (filters.approvals.length > 0) result = result.filter((p) => filters.approvals.includes(p.approvalStatus ?? "Pending"))
     result = [...result].sort((a, b) => {
       const da = new Date(a.createdAt ?? 0).getTime()
       const db = new Date(b.createdAt ?? 0).getTime()
@@ -1014,11 +1272,54 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     return result
   }, [data, search, filters, selectedColumnStatus, sortOrder])
 
+  // ── Bulk selection derived state ──────────────────────────────────────────
+  // Derived, not stored: ids that no longer exist in the dataset (e.g. after a
+  // refetch) are ignored rather than pruned in an effect, so the count can
+  // never claim more than is actually selectable.
+  const selectedInfluencers = useMemo(
+    () => data.filter((d) => selectedIds.has(d.id)),
+    [data, selectedIds]
+  )
+  const selectedCount        = selectedInfluencers.length
+  const allVisibleSelected   = filteredData.length > 0 && filteredData.every((d) => selectedIds.has(d.id))
+  const someVisibleSelected  = filteredData.some((d) => selectedIds.has(d.id))
+
+  // Header checkbox shows a partial state when only some visible rows are selected
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = someVisibleSelected && !allVisibleSelected
+  }, [someVisibleSelected, allVisibleSelected])
+
+  const toggleSelectAllVisible = () =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (allVisibleSelected) filteredData.forEach((d) => next.delete(d.id))
+      else filteredData.forEach((d) => next.add(d.id))
+      return next
+    })
+
+  // Close the Move to Stage menu on outside click / Escape
+  useEffect(() => {
+    if (!showBulkStageMenu) return
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (!bulkMenuRef.current?.contains(t) && !bulkBtnRef.current?.contains(t)) setShowBulkStageMenu(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { setShowBulkStageMenu(false); bulkBtnRef.current?.focus() }
+    }
+    document.addEventListener("mousedown", onDown)
+    document.addEventListener("keydown", onKey)
+    return () => {
+      document.removeEventListener("mousedown", onDown)
+      document.removeEventListener("keydown", onKey)
+    }
+  }, [showBulkStageMenu])
+
   const activeFilterCount =
-    (filters.influencer ? 1 : 0) +
-    (filters.handle ? 1 : 0) +
     filters.locations.length +
     filters.niches.length +
+    filters.stages.length +
+    filters.approvals.length +
     (search ? 1 : 0) +
     (selectedColumnStatus ? 1 : 0)
 
@@ -1062,6 +1363,24 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
           influencer={collabModalInfluencer}
           onConfirm={handleCollabTypeConfirm}
           onCancel={handleCollabTypeCancel}
+        />
+      )}
+
+      {/* Bulk variants of the same modals — one answer applied to the batch */}
+      {bulkNiOpen && selectedCount > 0 && (
+        <NotInterestedModal
+          influencer={data.find((d) => selectedIds.has(d.id))!}
+          bulkCount={selectedCount}
+          onConfirm={handleBulkNiConfirm}
+          onCancel={() => setBulkNiOpen(false)}
+        />
+      )}
+      {bulkCollabOpen && selectedCount > 0 && (
+        <CollabTypeModal
+          influencer={data.find((d) => selectedIds.has(d.id))!}
+          bulkCount={selectedCount}
+          onConfirm={handleBulkCollabConfirm}
+          onCancel={() => setBulkCollabOpen(false)}
         />
       )}
 
@@ -1120,46 +1439,55 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                   </button>
                 )}
               </div>
+              {/* Section order, spacing and dividers mirror the Post Tracker
+                  panel: chip groups first, then the two dropdowns in one row. */}
               <div className="flex flex-col gap-5">
+                <TagSelect label="Pipeline Stage" options={STAGE_OPTIONS} selected={filters.stages}
+                  onChange={(v) => setFilters((p) => ({ ...p, stages: v }))}
+                  colorClass="bg-purple-50 text-purple-700 border-purple-200"
+                  layout="grid" />
+                <div className="border-t border-gray-100" />
+                <TagSelect label="Approval Status" options={APPROVAL_OPTIONS} selected={filters.approvals}
+                  onChange={(v) => setFilters((p) => ({ ...p, approvals: v }))}
+                  colorClass="bg-amber-50 text-amber-700 border-amber-200" />
+                <div className="border-t border-gray-100" />
                 <div className="grid grid-cols-2 gap-x-4 gap-y-4">
-                  {([
-                    { label: "Influencer", key: "influencer" as const, placeholder: "Search by name..." },
-                    { label: "Handle",     key: "handle"     as const, placeholder: "@username..."      },
-                  ] as const).map(({ label, key, placeholder }) => (
-                    <div key={key} className="flex flex-col gap-1">
-                      <label className="text-xs text-gray-500">{label}</label>
-                      <input type="text" value={filters[key]}
-                        onChange={(e) => setFilters((p) => ({ ...p, [key]: e.target.value }))}
-                        placeholder={placeholder}
-                        className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B]" />
-                    </div>
-                  ))}
-                </div>
-                <div className="border-t border-gray-100" />
-                <TagSelect label="Location" options={LOCATIONS} selected={filters.locations}
-                  onChange={(v) => setFilters((p) => ({ ...p, locations: v }))}
-                  colorClass="bg-blue-50 text-blue-700 border-blue-200" />
-                <div className="border-t border-gray-100" />
-                <TagSelect label="Niche" options={NICHES} selected={filters.niches}
-                  onChange={(v) => setFilters((p) => ({ ...p, niches: v }))}
-                  colorClass="bg-[#1FAE5B]/10 text-[#0F6B3E] border-[#1FAE5B]/30" />
-                <div className="border-t border-gray-100" />
-                <div>
-                  <label className="text-xs text-gray-500 block mb-2">Sort by date</label>
-                  <div className="flex gap-2">
-                    <button onClick={() => setSortOrder("newest")}
-                      className={`flex-1 h-9 rounded-lg text-sm flex items-center justify-center gap-1.5 border font-medium transition-colors ${sortOrder === "newest" ? "bg-[#1FAE5B] text-white border-[#1FAE5B]" : "border-gray-200 text-gray-600 hover:border-gray-300"}`}>
-                      <IconChevronDown size={14} /> Newest
-                    </button>
-                    <button onClick={() => setSortOrder("oldest")}
-                      className={`flex-1 h-9 rounded-lg text-sm flex items-center justify-center gap-1.5 border font-medium transition-colors ${sortOrder === "oldest" ? "bg-[#1FAE5B] text-white border-[#1FAE5B]" : "border-gray-200 text-gray-600 hover:border-gray-300"}`}>
-                      <IconChevronDown size={14} className="rotate-180" /> Oldest
-                    </button>
-                  </div>
+                  <SearchableMultiSelect label="Location" options={LOCATIONS} selected={filters.locations}
+                    onChange={(v) => setFilters((p) => ({ ...p, locations: v }))}
+                    allLabel="All Locations" />
+                  <SearchableMultiSelect label="Niche" options={NICHES} selected={filters.niches}
+                    onChange={(v) => setFilters((p) => ({ ...p, niches: v }))}
+                    allLabel="All Niches" />
                 </div>
               </div>
-              {(filters.locations.length > 0 || filters.niches.length > 0) && (
-                <div className="mt-4 pt-3 border-t border-gray-100 flex flex-wrap gap-1.5">
+              {/* Sort inside filter panel */}
+              <div className="mt-4 pt-4 border-t border-gray-100">
+                <label className="text-xs text-gray-500 block mb-2">Sort by date</label>
+                <div className="flex gap-2">
+                  <button onClick={() => setSortOrder("newest")}
+                    className={`flex-1 h-9 rounded-lg text-sm flex items-center justify-center gap-1.5 border font-medium transition-colors ${sortOrder === "newest" ? "bg-[#1FAE5B] text-white border-[#1FAE5B]" : "border-gray-200 text-gray-600 hover:border-gray-300"}`}>
+                    <IconChevronDown size={14} /> Newest
+                  </button>
+                  <button onClick={() => setSortOrder("oldest")}
+                    className={`flex-1 h-9 rounded-lg text-sm flex items-center justify-center gap-1.5 border font-medium transition-colors ${sortOrder === "oldest" ? "bg-[#1FAE5B] text-white border-[#1FAE5B]" : "border-gray-200 text-gray-600 hover:border-gray-300"}`}>
+                    <IconChevronUp size={14} /> Oldest
+                  </button>
+                </div>
+              </div>
+              {(filters.locations.length > 0 || filters.niches.length > 0 || filters.stages.length > 0 || filters.approvals.length > 0) && (
+                <div className="mt-4 pt-4 border-t border-gray-100 flex flex-wrap gap-1.5">
+                  {filters.stages.map((s) => (
+                    <span key={s} className="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-50 text-purple-700 rounded-full text-[11px] font-medium">
+                      {s}
+                      <button onClick={() => setFilters((p) => ({ ...p, stages: p.stages.filter((x) => x !== s) }))} className="hover:text-purple-900 transition"><IconX size={10} /></button>
+                    </span>
+                  ))}
+                  {filters.approvals.map((a) => (
+                    <span key={a} className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-50 text-amber-700 rounded-full text-[11px] font-medium">
+                      {a}
+                      <button onClick={() => setFilters((p) => ({ ...p, approvals: p.approvals.filter((x) => x !== a) }))} className="hover:text-amber-900 transition"><IconX size={10} /></button>
+                    </span>
+                  ))}
                   {filters.locations.map((l) => (
                     <span key={l} className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 rounded-full text-[11px] font-medium">
                       {l}
@@ -1306,6 +1634,65 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
         </DndContext>
       )}
 
+      {/* ── BULK ACTION TOOLBAR — list view, only with a live selection ── */}
+      {view === "list" && selectedCount > 0 && (
+        <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg flex-wrap">
+          <span className="text-xs text-blue-700 font-medium">
+            {selectedCount} selected
+          </span>
+
+          <div className="relative ml-auto sm:ml-0">
+            <button
+              ref={bulkBtnRef}
+              onClick={() => setShowBulkStageMenu((v) => !v)}
+              disabled={bulkBusy}
+              aria-haspopup="menu"
+              aria-expanded={showBulkStageMenu}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium bg-[#1FAE5B] text-white rounded-lg hover:bg-[#178a48] transition disabled:opacity-60 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] focus:ring-offset-1"
+            >
+              {bulkBusy ? (
+                <>
+                  <span className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                  Moving…
+                </>
+              ) : (
+                <>
+                  Move to Stage <IconChevronDown size={13} />
+                </>
+              )}
+            </button>
+            {showBulkStageMenu && !bulkBusy && (
+              <div
+                ref={bulkMenuRef}
+                role="menu"
+                aria-label="Move selected influencers to stage"
+                className="absolute left-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-lg shadow-xl w-52 py-1"
+              >
+                {visibleColumns.map((col) => (
+                  <button
+                    key={col.key}
+                    role="menuitem"
+                    onClick={() => handleBulkStageSelect(col.status)}
+                    className="flex items-center gap-2 w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 focus:bg-gray-50 focus:outline-none transition"
+                  >
+                    <span className={`w-2 h-2 rounded-full ${col.color}`} />
+                    {col.title}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <button
+            onClick={clearSelection}
+            disabled={bulkBusy}
+            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-blue-700 rounded-lg hover:bg-blue-100 transition disabled:opacity-60 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-1"
+          >
+            <IconX size={13} /> Clear Selection
+          </button>
+        </div>
+      )}
+
       {/* ── LIST VIEW ── */}
       {view === "list" && (
         <div className="bg-white border rounded-xl overflow-hidden">
@@ -1325,6 +1712,17 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
             <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
               <thead className="bg-gray-50 border-b">
                 <tr>
+                  <th className="px-4 py-3 text-left font-medium text-gray-600 w-10">
+                    <input
+                      ref={selectAllRef}
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      onChange={toggleSelectAllVisible}
+                      disabled={filteredData.length === 0}
+                      aria-label={allVisibleSelected ? "Deselect all visible influencers" : "Select all visible influencers"}
+                      className="w-4 h-4 rounded accent-[#1FAE5B] cursor-pointer disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] focus:ring-offset-1"
+                    />
+                  </th>
                   <th className="px-4 py-3 text-left font-medium text-gray-600">Influencer</th>
                   <th className="px-4 py-3 text-left font-medium text-gray-600">Platform</th>
                   <th className="px-4 py-3 text-left font-medium text-gray-600">Handle</th>
@@ -1337,10 +1735,23 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
               </thead>
               <tbody>
                 {filteredData.length === 0 ? (
-                  <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-500">No influencers found</td></tr>
+                  <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-500">No influencers found</td></tr>
                 ) : (
                   filteredData.map((inf) => (
-                    <tr key={inf.id} className="border-t hover:bg-gray-50 cursor-pointer transition" onClick={() => openSidebar(inf)}>
+                    <tr
+                      key={inf.id}
+                      className={`border-t hover:bg-gray-50 cursor-pointer transition ${selectedIds.has(inf.id) ? "bg-blue-50/60" : ""}`}
+                      onClick={() => openSidebar(inf)}
+                    >
+                      <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(inf.id)}
+                          onChange={() => toggleRowSelection(inf.id)}
+                          aria-label={`Select ${inf.influencer}`}
+                          className="w-4 h-4 rounded accent-[#1FAE5B] cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] focus:ring-offset-1"
+                        />
+                      </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-3">
                           {inf.profileImageUrl ? (
@@ -1408,8 +1819,8 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                           <span className="text-gray-400">—</span>
                         )}
                       </td>
-                      <td className="px-4 py-3">
-                        <div onClick={(e) => e.stopPropagation()}>
+                      <td className="px-4 py-3 align-middle">
+                        <div className="flex items-center" onClick={(e) => e.stopPropagation()}>
                           <StatusDropdown currentStatus={inf.pipelineStatus} onStatusChange={(s) => handleStatusUpdate(inf.id, s)} canApproveInfluencers={canApprove} />
                         </div>
                       </td>

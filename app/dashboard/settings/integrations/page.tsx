@@ -16,15 +16,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Link2, ShoppingCart, FolderOpen, Loader2 } from "lucide-react"
+import { Link2, ShoppingCart, FolderOpen } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { SettingsSkeleton } from "@/components/shared/skeletons"
 
 function LoadingScreen() {
   return (
-    <div className="flex min-h-[400px] flex-col items-center justify-center gap-3">
-      <Loader2 className="h-7 w-7 animate-spin text-emerald-600" />
-      <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Loading</p>
-    </div>
+    <SettingsSkeleton
+      sections={[{ rows: 5, iconShape: "square", rightShape: "button" }]}
+      label="Loading integrations…"
+    />
   )
 }
 

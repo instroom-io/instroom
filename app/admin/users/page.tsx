@@ -68,8 +68,7 @@ export default function AdminUsersPage() {
   return (
     <div className="flex flex-col gap-5">
       <div>
-        <h1 className="text-xl font-bold text-gray-900">User Management</h1>
-        <p className="text-sm text-gray-500 mt-0.5">Manage all registered users</p>
+        <p className="text-sm text-gray-500">Manage all registered users</p>
       </div>
 
       <div className="relative max-w-xs">
@@ -77,12 +76,12 @@ export default function AdminUsersPage() {
         <input
           value={q} onChange={(e) => setQ(e.target.value)}
           placeholder="Search by name or email…"
-          className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-200"
+          className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-[#1FAE5B]/40 focus:border-[#1FAE5B]"
         />
       </div>
 
-      <div className="bg-white border border-gray-200 rounded-xl overflow-x-auto">
-        <table className="w-full text-sm">
+      <div className="bg-white border border-[#0F6B3E]/10 rounded-xl shadow-sm overflow-x-auto">
+        <table className="w-full min-w-[860px] text-sm">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
               {["Profile", "Name", "Email", "Account Type", "Status", "Join Date", ""].map((h) => (
@@ -146,8 +145,8 @@ export default function AdminUsersPage() {
       </div>
 
       {viewUser && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setViewUser(null)}>
-          <div className="bg-white rounded-xl shadow-xl w-[420px] max-w-[92vw] p-6" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setViewUser(null)}>
+          <div className="bg-white rounded-xl shadow-xl w-[420px] max-w-[92vw] max-h-[90svh] overflow-y-auto p-5 sm:p-6" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-3 mb-4">
               {viewUser.image
                 ? <img src={viewUser.image} alt="" className="w-12 h-12 rounded-full object-cover" />

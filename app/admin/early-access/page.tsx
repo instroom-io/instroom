@@ -102,8 +102,7 @@ export default function AdminEarlyAccessPage() {
   return (
     <div className="flex flex-col gap-5">
       <div>
-        <h1 className="text-xl font-bold text-gray-900">Early Access Signups</h1>
-        <p className="text-sm text-gray-500 mt-0.5">People who requested early access via the waitlist</p>
+        <p className="text-sm text-gray-500">People who requested early access via the waitlist</p>
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -112,7 +111,7 @@ export default function AdminEarlyAccessPage() {
           <input
             value={q} onChange={(e) => setQ(e.target.value)}
             placeholder="Search by name or email…"
-            className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-200"
+            className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-[#1FAE5B]/40 focus:border-[#1FAE5B]"
           />
         </div>
         <button onClick={exportCsv} className="flex items-center gap-1.5 text-sm font-medium px-3 py-2 rounded-lg border border-gray-200 hover:bg-gray-50">
@@ -120,8 +119,8 @@ export default function AdminEarlyAccessPage() {
         </button>
       </div>
 
-      <div className="bg-white border border-gray-200 rounded-xl overflow-x-auto">
-        <table className="w-full text-sm">
+      <div className="bg-white border border-[#0F6B3E]/10 rounded-xl shadow-sm overflow-x-auto">
+        <table className="w-full min-w-[860px] text-sm">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
               {["Name", "Email", "Role", "Registration Date", "Status", "GHL Sync", ""].map((h) => (

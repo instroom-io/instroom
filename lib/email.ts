@@ -6,6 +6,7 @@ import PasswordResetEmail from "@/emails/password-reset"
 import OTPEmail from "@/emails/otp"
 import BrandInvitationEmail from "@/emails/brand-invitation"
 import EarlyAccessApprovedEmail from "@/emails/early-access-approved"
+import SubscriptionExpiringEmail from "@/emails/subscription-expiring"
 import NotificationEmail, { type NotifType } from "@/emails/notification"
 
 // ── Nodemailer transporter ────────────────────────────────────────────────────
@@ -98,6 +99,24 @@ export async function sendEarlyAccessApprovedEmail(
   return sendEmail({
     to:      email,
     subject: "You're approved for Instroom early access!",
+    html,
+  })
+}
+
+export async function sendSubscriptionExpiringEmail(
+  email:     string,
+  name:      string,
+  planName:  string,
+  daysLeft:  number,
+  expiresOn: string,
+  renewUrl:  string,
+): Promise<boolean> {
+  const html = await render(
+    SubscriptionExpiringEmail({ name, planName, daysLeft, expiresOn, renewUrl }),
+  )
+  return sendEmail({
+    to:      email,
+    subject: `Your Instroom trial ends in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`,
     html,
   })
 }

@@ -43,7 +43,10 @@ export function AboutHero() {
             not another bloated platform.
           </p>
 
-          <div className="flex flex-wrap gap-6 sm:gap-10 lg:gap-12">
+          {/* Three even columns rather than a wrapping flex row — wrapping left
+              the third stat stranded on its own line with a dead gap beside the
+              second one at mobile widths. */}
+          <div className="grid grid-cols-3 gap-4 sm:gap-10 lg:gap-12">
             <div>
               <div
                 style={{

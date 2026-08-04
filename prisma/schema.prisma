@@ -130,6 +130,7 @@ model UserSubscription {
   ended_at                DateTime?
   current_period_start    DateTime  @default(now())
   current_period_end      DateTime?
+  reminder_sent_at        DateTime?
   created_at              DateTime  @default(now())
   updated_at              DateTime  @updatedAt
 

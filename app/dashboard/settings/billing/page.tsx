@@ -9,12 +9,12 @@ import {
   CreditCard,
   AlertCircle,
   FileText,
-  Loader2,
   ArrowRight,
 } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { SettingsSkeleton } from "@/components/shared/skeletons"
 
 type PaymentMethod = {
   cardBrand: string | null
@@ -30,15 +30,6 @@ type PaymentRecord = {
   description: string | null
   invoice_url: string | null
   created_at: string
-}
-
-function LoadingScreen() {
-  return (
-    <div className="flex min-h-[400px] flex-col items-center justify-center gap-3">
-      <Loader2 className="h-7 w-7 animate-spin text-emerald-600" />
-      <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Loading</p>
-    </div>
-  )
 }
 
 export default function BillingPage() {
@@ -191,7 +182,12 @@ export default function BillingPage() {
   const allLoaded = subscriptionLoaded && paymentMethodLoaded && paymentsLoaded
 
   if (status === "loading" || !allLoaded) {
-    return <LoadingScreen />
+    return (
+      <SettingsSkeleton
+        sections={[{ fields: 2 }, { rows: 1 }, { rows: 3 }]}
+        label="Loading billing…"
+      />
+    )
   }
 
   return (

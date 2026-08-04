@@ -17,9 +17,10 @@ function toChartData(days: string[], values: number[]) {
 
 function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="bg-white border border-gray-200 rounded-xl p-4">
+    <div className="bg-white border border-[#0F6B3E]/10 rounded-xl shadow-sm p-4">
       <h2 className="text-sm font-semibold text-gray-900 mb-3">{title}</h2>
-      <div style={{ width: "100%", height: 220 }}>{children}</div>
+      {/* Taller on phones so 30 daily ticks don't collide at narrow widths */}
+      <div className="h-[260px] sm:h-[220px] w-full">{children}</div>
     </div>
   )
 }
@@ -38,8 +39,7 @@ export default function AdminAnalyticsPage() {
   return (
     <div className="flex flex-col gap-5">
       <div>
-        <h1 className="text-xl font-bold text-gray-900">Analytics</h1>
-        <p className="text-sm text-gray-500 mt-0.5">Last 30 days</p>
+        <p className="text-sm text-gray-500">Last 30 days</p>
       </div>
 
       {loading || !data ? (

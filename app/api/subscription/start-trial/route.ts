@@ -47,9 +47,13 @@ export async function POST(req: Request) {
       )
     }
 
-    // Create trial subscription for 30 days
+    // Early access beta gives Solo trials 3 months instead of the usual 30-day trial
     const trialEndDate = new Date()
-    trialEndDate.setDate(trialEndDate.getDate() + 30)
+    if (planName === "solo") {
+      trialEndDate.setMonth(trialEndDate.getMonth() + 3)
+    } else {
+      trialEndDate.setDate(trialEndDate.getDate() + 30)
+    }
 
     const subscription = await prisma.userSubscription.create({
       data: {
@@ -69,7 +73,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ 
       success: true, 
       subscription,
-      message: "Trial started successfully. You have 30 days to try the plan.",
+      message: planName === "solo"
+        ? "Trial started successfully. You have 3 months to try the plan."
+        : "Trial started successfully. You have 30 days to try the plan.",
     })
   } catch (error) {
     console.error("Error starting trial:", error)
