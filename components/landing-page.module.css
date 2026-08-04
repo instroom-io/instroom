@@ -1287,11 +1287,27 @@
     flex-wrap: nowrap;
     max-width: 100%;
     padding: 4px;
+    margin-bottom: 32px;
+    /* Snap each tab to the strip's left edge so a swipe always lands on a
+       whole tab instead of halfway through one. */
+    scroll-snap-type: x proximity;
+    scroll-padding-left: 4px;
+    -webkit-overflow-scrolling: touch;
+    /* Hide the scrollbar — the edge fade below is the affordance instead */
+    scrollbar-width: none;
+    -ms-overflow-style: none;
   }
+
+  .insideFeatTabs::-webkit-scrollbar { display: none; }
 
   .insideFeatTab {
     padding: 10px 14px;
     font-size: 0.875rem;
+    /* The fix: as flex items these were shrinking below their text width, so
+       "Creator CRM" / "Brand Partners" got squashed and clipped instead of
+       the strip scrolling. Never shrink; let the row scroll. */
+    flex: 0 0 auto;
+    scroll-snap-align: start;
   }
 
   .problemCards,
@@ -1342,6 +1358,15 @@
   .statsRow { gap: 36px; }
   .trustLogos { gap: 16px; }
   .footerInner { grid-template-columns: 1fr; }
+
+  /* Tighter tabs on phones so 2.5 of the 5 are visible at 375px — enough for
+     the row to read as scrollable rather than as the complete set. */
+  .insideFeatTab {
+    padding: 9px 12px;
+    font-size: 0.8125rem;
+  }
+
+  .insideFeatTabs { margin-bottom: 28px; }
 
   .problemCards,
   .outcomesGrid,

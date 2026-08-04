@@ -22,9 +22,11 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   return (
     // Same shell contract as app/dashboard/layout.tsx — identical sidebar
     // width and header height variables, so both areas line up pixel-for-pixel.
+    // `sidebar-shell` (app/globals.css) carries the responsive rail widths and
+    // the off-canvas drawer rules — shared with the dashboard layout.
     <SidebarProvider
+      className="sidebar-shell"
       style={{
-        "--sidebar-width": "calc(var(--spacing) * 72)",
         "--header-height": "calc(var(--spacing) * 12)",
       } as React.CSSProperties}
     >

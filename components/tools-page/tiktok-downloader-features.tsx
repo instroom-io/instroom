@@ -27,13 +27,9 @@ const FEATURES = [
       <path d="M9 3a6 6 0 1 1-5.6 8M3 3v4h4" stroke="#1FAE5B" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
     ),
   },
-  {
-    title: "Fast and Convenient",
-    desc: "No need to wait for influencers to send raw footage. Our downloader allows you to get the final video quickly, free from watermarks, and ready to use for your marketing efforts.",
-    icon: (
-      <path d="M4 3h8l-1 6h3l-6 8 1-6H6l-2 8" stroke="#1FAE5B" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-    ),
-  },
+  // "Fast and Convenient" was dropped to make this a clean 4-up grid — it was
+  // the most redundant of the five: the hero already badges "Fast and Secure",
+  // and "Easy-to-Use Interface" covers the convenience claim.
 ]
 
 export function TikTokDownloaderFeatures() {
@@ -47,11 +43,13 @@ export function TikTokDownloaderFeatures() {
           Why Use Our <span style={{ color: "#1FAE5B" }}>TikTok Video Downloader</span>?
         </h2>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+        {/* 4-up on desktop, 2-up on tablet (even 2×2), single column on phones.
+            h-full keeps cards in a row the same height despite uneven copy. */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {FEATURES.map((f) => (
             <div
               key={f.title}
-              className="bg-white"
+              className="bg-white h-full flex flex-col"
               style={{ borderRadius: 16, padding: "22px 18px", border: "1px solid #eef1ef", boxShadow: "0 4px 16px rgba(0,0,0,0.03)" }}
             >
               <div
@@ -62,7 +60,7 @@ export function TikTokDownloaderFeatures() {
                   {f.icon}
                 </svg>
               </div>
-              <h3 style={{ fontFamily: "'Manrope', sans-serif", fontSize: "0.9375rem", fontWeight: 700, color: "#1E1E1E", marginBottom: 8 }}>
+              <h3 style={{ fontFamily: "'Manrope', sans-serif", fontSize: "0.9375rem", fontWeight: 700, color: "#1E1E1E", marginBottom: 8, textWrap: "balance" }}>
                 {f.title}
               </h3>
               <p style={{ fontSize: "0.75rem", color: "#6b7280", lineHeight: 1.5 }}>{f.desc}</p>
