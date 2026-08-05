@@ -16,10 +16,12 @@ export default function DashboardLayout({
   children: React.ReactNode
 }) {
   return (
+    // `sidebar-shell` (app/globals.css) carries the responsive rail widths and
+    // the off-canvas drawer rules — shared with the admin layout.
     <SidebarProvider
+      className="sidebar-shell"
       style={
         {
-          "--sidebar-width": "calc(var(--spacing) * 72)",
           "--header-height": "calc(var(--spacing) * 12)",
         } as React.CSSProperties
       }

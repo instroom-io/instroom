@@ -14,10 +14,9 @@ export function AdminHeader() {
       <div className="flex w-full items-center gap-1 px-4 lg:px-6">
         <SidebarTrigger className="-ml-1" />
         <Separator orientation="vertical" className="mx-2 h-4" />
-        <h1 className="text-base font-medium truncate">{title}</h1>
-        <span className="ml-auto text-[10px] font-bold uppercase tracking-wider text-[#0F6B3E] bg-[#1FAE5B]/10 border border-[#1FAE5B]/30 rounded-full px-2 py-0.5 shrink-0">
-          Admin
-        </span>
+        {/* No branding here — the Admin identity lives in the sidebar only.
+            This bar carries the trigger, the current page title, and actions. */}
+        <h1 className="min-w-0 truncate text-base font-medium">{title}</h1>
       </div>
     </header>
   )

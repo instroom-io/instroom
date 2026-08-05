@@ -1,11 +1,26 @@
 import { MainHeader } from "@/components/shared/main-header"
 import { MainFooter } from "@/components/shared/main-footer"
-import { LegalHero, LegalSection, LegalP, LegalH3, PlainList, Callout, HighlightBox, ContactCard } from "@/components/legal-page/shared"
+import { LegalHero, LegalSection, LegalP, LegalH3, PlainList, Callout, ContactCard } from "@/components/legal-page/shared"
 
 export const metadata = {
   title: "Terms of Service | Instroom",
   description: "Instroom's terms of service: the rules and conditions for creating an account and using the Instroom platform.",
 }
+
+const tocItems = [
+  { label: "Agreement to Terms", href: "#s1" },
+  { label: "Description of Services", href: "#s2" },
+  { label: "Account Registration", href: "#s3" },
+  { label: "Subscriptions & Billing", href: "#s4" },
+  { label: "Acceptable Use", href: "#s5" },
+  { label: "Intellectual Property", href: "#s6" },
+  { label: "Third-Party Integrations", href: "#s7" },
+  { label: "Disclaimers & Limitations", href: "#s8" },
+  { label: "Termination", href: "#s9" },
+  { label: "Governing Law", href: "#s10" },
+  { label: "Changes to These Terms", href: "#s11" },
+  { label: "Contact", href: "#s12" },
+]
 
 export default function InstroomTermsOfService() {
   return (
@@ -21,10 +36,11 @@ export default function InstroomTermsOfService() {
           { label: "Entity", value: "Armful OPC, trading as Armful Media" },
         ]}
         lede="Please read these Terms of Service carefully before using Instroom. By creating an account or using any part of our platform, you agree to be bound by these terms. If you do not agree, do not use the Service."
+        toc={tocItems}
       />
 
       <div className="max-w-[860px] mx-auto px-4 sm:px-6 pb-20">
-        <LegalSection number="Section 01" heading="Agreement to Terms">
+        <LegalSection id="s1" number="Section 01" heading="Agreement to Terms">
           <LegalP>
             These Terms of Service ("Terms") constitute a legally binding agreement between you ("User," "you," or
             "your") and Armful OPC, a One Person Corporation registered in the Republic of the Philippines, trading
@@ -40,33 +56,56 @@ export default function InstroomTermsOfService() {
           </LegalP>
         </LegalSection>
 
-        <LegalSection number="Section 02" heading="Description of Services">
+        <LegalSection id="s2" number="Section 02" heading="Description of Services">
           <LegalP>
             Instroom is an influencer relationship management (IRM) platform designed for small businesses, solo
-            operators, and agencies. The Service includes the following products, available individually or as
-            part of a subscription:
+            operators, and agencies. The Service comprises:
           </LegalP>
           <LegalH3>Core Products</LegalH3>
           <PlainList
             items={[
-              <><strong className="text-[#1E1E1E] font-semibold">Chrome Extension</strong> — Captures influencer data while browsing Instagram and TikTok. Available in Free, Pro ($9/mo), and Team ($19/mo) tiers, or as a workspace add-on ($6/workspace/month).</>,
-              <><strong className="text-[#1E1E1E] font-semibold">Post Tracker</strong> — Tracks influencer posts and campaign content, enables watermark-free content downloads, and auto-saves to Google Drive. Available standalone or as a workspace add-on ($12/workspace/month).</>,
-              <><strong className="text-[#1E1E1E] font-semibold">Instroom Platform</strong> — Core CRM for influencer list management, campaign tracking, outreach, deal management, and team collaboration with role-based access control.</>,
+              <>
+                <strong className="text-[#1E1E1E] font-semibold">Instroom Platform</strong> — the core CRM and
+                workspace for influencer list management, a visual pipeline, an embedded inbox, outreach, deal,
+                contract, and payment tracking, reporting and analytics, and team collaboration with role-based
+                access control. Offered on a free-forever Basic plan and paid Solo, Team, and Agency plans, as
+                described in Section 4.
+              </>,
+              <>
+                <strong className="text-[#1E1E1E] font-semibold">Chrome Extension</strong> — surfaces influencer
+                insights (engagement rate, follower count, email, and location) while you browse Instagram and
+                TikTok. Currently available as a free tool with a daily usage limit; any future paid tier will be
+                introduced under these Terms.
+              </>,
             ]}
           />
-          <LegalH3>Optional Add-ons</LegalH3>
+          <LegalH3>Integrations</LegalH3>
+          <LegalP>
+            The Service connects with third-party tools including Gmail and Outlook (for the embedded inbox),
+            Shopify (for sales, revenue, conversion, and automatic shipment tracking), and GoAffPro (for affiliate
+            sales and payout tracking). See Section 7.
+          </LegalP>
+          <LegalH3>Coming soon</LegalH3>
           <PlainList
             items={[
-              "Post Tracker Pro ($12/workspace/month)",
-              "Discovery ($29/workspace/month) — Powered by Instagram and TikTok API plus a curated creator database of 15M+ profiles.",
-              "Shopify Connect ($19/workspace/month)",
-              "Affiliate Tracking ($19/workspace/month)",
+              <>
+                <strong className="text-[#1E1E1E] font-semibold">Post Tracker</strong> — automatic post monitoring
+                and content downloads to Google Drive. An optional add-on, not yet available.
+              </>,
+              <>
+                <strong className="text-[#1E1E1E] font-semibold">Discovery</strong> — creator search across a
+                curated database. Not yet available.
+              </>,
             ]}
           />
-          <LegalP>We reserve the right to modify, suspend, or discontinue any feature of the Service with reasonable notice.</LegalP>
+          <LegalP>
+            When these tools launch — whether as standalone products or workspace add-ons — their availability,
+            pricing, and terms will be introduced under these Terms. We reserve the right to modify, suspend, or
+            discontinue any feature of the Service with reasonable notice.
+          </LegalP>
         </LegalSection>
 
-        <LegalSection number="Section 03" heading="Account Registration">
+        <LegalSection id="s3" number="Section 03" heading="Account Registration">
           <LegalP>
             To access the Service, you must create an account and provide accurate, complete, and current
             information. You are responsible for maintaining the confidentiality of your login credentials and for
@@ -75,15 +114,17 @@ export default function InstroomTermsOfService() {
           <LegalH3>Account Types</LegalH3>
           <PlainList
             items={[
+              <><strong className="text-[#1E1E1E] font-semibold">Basic Account</strong> — Free forever. Includes 1 owned workspace, subject to usage limits. No credit card required.</>,
               <><strong className="text-[#1E1E1E] font-semibold">Solo Account</strong> — Includes 1 owned workspace. Cannot be expanded. Suitable for individual operators and freelancers.</>,
               <><strong className="text-[#1E1E1E] font-semibold">Team Account</strong> — Includes 3 owned workspaces by default, expandable for an additional fee. Suitable for agencies and in-house teams.</>,
+              <><strong className="text-[#1E1E1E] font-semibold">Agency Account</strong> — A custom plan with volume workspaces and support, arranged by agreement.</>,
             ]}
           />
           <LegalH3>Workspace Rules</LegalH3>
           <PlainList
             items={[
               "Each workspace has exactly one Admin at all times.",
-              "All roles (Manager, Researcher, Viewer) are free and unlimited.",
+              "All other roles (Manager, Researcher, Viewer) are free and unlimited.",
               "Shared workspace access does not count toward your workspace quota.",
               "Transferring the Admin role does not transfer the billing subscription.",
             ]}
@@ -91,28 +132,35 @@ export default function InstroomTermsOfService() {
           <LegalP>You agree to notify us immediately of any unauthorized use of your account. We are not liable for any loss resulting from unauthorized account access.</LegalP>
         </LegalSection>
 
-        <LegalSection number="Section 04" heading="Subscriptions & Billing">
+        <LegalSection id="s4" number="Section 04" heading="Subscriptions & Billing">
           <LegalP>Instroom uses workspace-based billing. You are billed per workspace you own, not per user or seat. All roles are free and unlimited.</LegalP>
+          <LegalH3>Free Plan &amp; Trials</LegalH3>
+          <LegalP>
+            The <strong className="text-[#1E1E1E] font-semibold">Basic plan is free forever</strong> and is not
+            billed; no credit card is required. <strong className="text-[#1E1E1E] font-semibold">We do not offer
+            a free trial</strong> on paid plans — you may evaluate Instroom on the Basic plan for as long as you
+            like before deciding to upgrade.
+          </LegalP>
           <LegalH3>Billing Cycle</LegalH3>
           <PlainList
             items={[
-              <><strong className="text-[#1E1E1E] font-semibold">Monthly plans</strong> are billed on a recurring monthly basis.</>,
+              <><strong className="text-[#1E1E1E] font-semibold">Monthly plans</strong> are billed on a recurring monthly basis (Solo: $19/mo; Team: $49/mo).</>,
               <><strong className="text-[#1E1E1E] font-semibold">Annual plans</strong> are billed annually at a discounted rate (Solo: $15/mo; Team: $39/mo).</>,
               "No annual contracts are required on any plan. You may cancel at any time.",
             ]}
           />
           <LegalH3>Add-ons</LegalH3>
-          <LegalP>Add-ons are billed per workspace per month. Enabling an add-on across multiple workspaces will be charged at the add-on price multiplied by the number of workspaces using it.</LegalP>
+          <LegalP>When paid add-ons become available, they will be billed per workspace per month. Enabling an add-on across multiple workspaces will be charged at the add-on price multiplied by the number of workspaces using it.</LegalP>
           <LegalH3>Payment</LegalH3>
           <LegalP>All payments are processed in United States Dollars (USD) via our authorized payment processor. By subscribing, you authorize us to charge your designated payment method on a recurring basis.</LegalP>
-          <HighlightBox>
-            <strong className="text-[#1FAE5B]">Note:</strong> Billing is tied to the account record, not the Admin
-            user. If you transfer the Admin role of a workspace, the billing subscription remains with the
-            original account holder.
-          </HighlightBox>
+          <Callout>
+            <strong className="text-[#1E1E1E] font-semibold">Note:</strong> Billing is tied to the account record,
+            not the Admin user. If you transfer the Admin role of a workspace, the billing subscription remains
+            with the original account holder.
+          </Callout>
         </LegalSection>
 
-        <LegalSection number="Section 05" heading="Acceptable Use">
+        <LegalSection id="s5" number="Section 05" heading="Acceptable Use">
           <LegalP>You agree to use the Service only for lawful purposes and in accordance with these Terms. You must not:</LegalP>
           <PlainList
             items={[
@@ -128,13 +176,12 @@ export default function InstroomTermsOfService() {
           <LegalP>We reserve the right to suspend or terminate accounts that violate these provisions without prior notice.</LegalP>
         </LegalSection>
 
-        <LegalSection number="Section 06" heading="Intellectual Property">
+        <LegalSection id="s6" number="Section 06" heading="Intellectual Property">
           <LegalP>
             All content, features, functionality, branding, and technology comprising the Instroom platform —
-            including but not limited to the software, databases (including the 15M+ curated creator profile
-            database), design elements, trademarks, and documentation — are the exclusive property of Instroom and
-            are protected under applicable intellectual property laws of the Philippines and international
-            treaties.
+            including but not limited to the software, databases, design elements, trademarks, and documentation
+            — are the exclusive property of Instroom and are protected under applicable intellectual property laws
+            of the Philippines and international treaties.
           </LegalP>
           <LegalP>
             You are granted a limited, non-exclusive, non-transferable, revocable license to use the Service
@@ -150,21 +197,23 @@ export default function InstroomTermsOfService() {
           </LegalP>
         </LegalSection>
 
-        <LegalSection number="Section 07" heading="Third-Party Integrations">
+        <LegalSection id="s7" number="Section 07" heading="Third-Party Integrations">
           <LegalP>
-            The Service integrates with third-party platforms including Instagram, TikTok, Google Drive, Shopify,
-            and GoAffPro. Your use of these integrations is subject to the respective terms of service and privacy
-            policies of those platforms.
+            The Service integrates with third-party platforms including Instagram and TikTok (via the Chrome
+            Extension), Gmail and Outlook (for the embedded inbox), Shopify (for sales and shipment tracking),
+            Google Drive (for Post Tracker, upon its availability), and GoAffPro (for affiliate tracking). Your use
+            of these integrations is subject to the respective terms of service and privacy policies of those
+            platforms.
           </LegalP>
           <LegalP>
             We are not responsible for the availability, accuracy, or reliability of any third-party service.
             Platform policy changes (e.g., Instagram or TikTok API restrictions) may affect the functionality of
-            certain features, such as the Discovery add-on, and we do not guarantee uninterrupted access to
-            features dependent on third-party APIs.
+            certain features, such as the Discovery tool, and we do not guarantee uninterrupted access to features
+            dependent on third-party APIs.
           </LegalP>
         </LegalSection>
 
-        <LegalSection number="Section 08" heading="Disclaimers & Limitations of Liability">
+        <LegalSection id="s8" number="Section 08" heading="Disclaimers & Limitations of Liability">
           <LegalP>
             The Service is provided on an "as is" and "as available" basis without warranties of any kind, either
             express or implied, including but not limited to warranties of merchantability, fitness for a
@@ -186,7 +235,7 @@ export default function InstroomTermsOfService() {
           </Callout>
         </LegalSection>
 
-        <LegalSection number="Section 09" heading="Termination">
+        <LegalSection id="s9" number="Section 09" heading="Termination">
           <LegalP>
             You may cancel your subscription at any time through your account settings. Cancellation takes effect
             at the end of your current billing period; you will retain access to the Service until that date.
@@ -203,7 +252,7 @@ export default function InstroomTermsOfService() {
           </LegalP>
         </LegalSection>
 
-        <LegalSection number="Section 10" heading="Governing Law & Dispute Resolution">
+        <LegalSection id="s10" number="Section 10" heading="Governing Law & Dispute Resolution">
           <LegalP>
             These Terms shall be governed by and construed in accordance with the laws of the Republic of the
             Philippines, without regard to its conflict of law principles.
@@ -216,7 +265,7 @@ export default function InstroomTermsOfService() {
           </LegalP>
         </LegalSection>
 
-        <LegalSection number="Section 11" heading="Changes to These Terms">
+        <LegalSection id="s11" number="Section 11" heading="Changes to These Terms">
           <LegalP>
             We may update these Terms from time to time to reflect changes in our practices, technology, or
             applicable law. When we make material changes, we will notify you via email or a prominent notice
@@ -229,15 +278,15 @@ export default function InstroomTermsOfService() {
           </LegalP>
         </LegalSection>
 
-        <LegalSection number="Section 12" heading="Contact Us">
+        <LegalSection id="s12" number="Section 12" heading="Contact Us">
           <LegalP>If you have any questions about these Terms of Service, please contact us at:</LegalP>
           <ContactCard
             heading="Armful OPC, trading as Armful Media"
             rows={[
               { label: "SEC Registration No.", value: "2024090169123-01" },
+              { label: "Email", value: "legal@instroom.io" },
               { label: "Registered Address", value: "2/F Armful Media Bldg., Santiago, Naujan, Oriental Mindoro, Philippines 5204" },
               { label: "Website", value: "instroom.io" },
-              { label: "Email", value: "legal@instroom.io" },
             ]}
           />
         </LegalSection>
