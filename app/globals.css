@@ -48,6 +48,39 @@
 }
 
 :root {
+  /* Brand tokens used by the SHARED header/footer (components/shared/*).
+     These were previously only declared inside components/landing-page.module.css,
+     so they existed on the landing page and nowhere else. On /about,
+     /landing-nav/features and /landing-nav/pricing the mobile hamburger's
+     `stroke="var(--charcoal)"` resolved to an invalid value and fell back to
+     `stroke: none` — the button was still there and clickable, but the icon
+     was invisible. Declared here so any page using the shared chrome has them.
+     Deliberately NOT re-declaring --border/--muted: those are shadcn tokens
+     below and the landing module's values would break the component library. */
+  --charcoal: #1E1E1E;
+  --green: #1FAE5B;
+
+  /* ── Sidebar design tokens ──────────────────────────────────────────────
+     One source of truth for BOTH the dashboard rail and the admin rail, so
+     the two can't drift again. Change a value here and both update.
+     Consumed via components/sidebar/nav-primitives.tsx.                    */
+  --sb-bg: #0F6B3E;          /* rail background — brand deep green          */
+  --sb-accent: #1FAE5B;      /* active accent — brand green                 */
+  --sb-item-h: 40px;         /* navigation item height                      */
+  --sb-item-px: 12px;        /* item horizontal padding                     */
+  --sb-item-radius: 10px;    /* item corner radius                          */
+  --sb-icon-gap: 10px;       /* gap between icon and label                  */
+  --sb-icon-size: 18px;      /* Lucide/Tabler icon size                     */
+  --sb-font-size: 14px;      /* navigation label size                       */
+  --sb-line-height: 20px;    /* navigation label line height                */
+  --sb-label-size: 10px;     /* GENERAL / MANAGEMENT / SYSTEM               */
+  --sb-transition: 180ms;    /* hover/active animation duration             */
+
+  /* Rail widths. Desktop 256, tablet 240, mobile drawer min(82vw, 300px).
+     These have to be CSS (not an inline style prop) because an inline custom
+     property can't carry a media query. */
+  --sb-width: 256px;
+
   --radius: 0.625rem;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
@@ -124,3 +157,38 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* ── Shared sidebar shell ──────────────────────────────────────────────────
+   Applied to the SidebarProvider of both /dashboard and /admin. Lives in CSS
+   rather than an inline style prop for two reasons: an inline custom property
+   can't carry a media query, and the mobile drawer is a Radix Sheet rendered
+   in a portal outside the layout tree, reachable only by attribute selector. */
+.sidebar-shell {
+  --sidebar-width: var(--sb-width);
+  --sidebar: var(--sb-bg);
+}
+
+@media (max-width: 1024px) {
+  .sidebar-shell { --sidebar-width: 240px; }
+}
+
+/* Off-canvas drawer. The !important is deliberate and scoped to this single
+   portalled node: the Sheet sets --sidebar-width *inline*, and an inline custom
+   property beats any stylesheet value, so overriding width is the only way in.
+
+   The background is set here too, not just via a class on <Sidebar>: the mobile
+   drawer is a Sheet whose className the Sidebar component never forwards, and
+   it renders in a portal on <body>, outside .sidebar-shell — so neither the
+   class nor a scoped --sidebar override can reach it. */
+[data-slot="sidebar"][data-mobile="true"] {
+  width: min(82vw, 300px) !important;
+  max-width: 300px;
+  background: var(--sb-bg);
+  color: #fff;
+}
+
+/* NOTE: do not add backdrop-filter to [data-slot="sheet-overlay"].
+   The overlay and the sheet content are siblings both at z-50; a filter
+   promotes the overlay to its own compositing layer and it ends up painting
+   OVER the drawer, which then renders washed out and unreadable. That rule
+   would also apply to every Sheet in the app, not just this one. */

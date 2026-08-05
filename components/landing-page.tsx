@@ -139,6 +139,11 @@ export function LandingPage() {
         tab.classList.add(styles.tabActive)
         const panel = container.querySelector(`[data-panel="${target}"]`)
         if (panel) panel.classList.add(styles.panelActive)
+
+        // On mobile the tab strip scrolls horizontally, so a tab tapped at the
+        // edge can sit half out of view. Pull it fully into the strip without
+        // scrolling the page itself (block: "nearest").
+        ;(tab as HTMLElement).scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" })
       })
     })
   }, [])
