@@ -610,7 +610,10 @@ export function MainHeader() {
       }}
     >
         <div
-          className="nav-inner px-8"
+          // px-8 at every width pushed the logo further in than the page
+          // content below it (which uses px-4 on mobile). Step the padding so
+          // the logo lines up with the content's left edge on phones.
+          className="nav-inner px-4 sm:px-6 lg:px-8"
           style={{
             display: "flex",
             alignItems: "center",

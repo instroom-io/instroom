@@ -107,6 +107,18 @@ export default function FeaturesPage() {
       <style jsx global>{`
         @import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap");
 
+        /* Jump-nav scroller: no visible scrollbar, snap to whole tabs, and a
+           trailing gap so the last item clears the container padding. */
+        .jumpnav-scroll {
+          scroll-snap-type: x proximity;
+          -webkit-overflow-scrolling: touch;
+          scrollbar-width: none;
+          -ms-overflow-style: none;
+        }
+        .jumpnav-scroll::-webkit-scrollbar { display: none; }
+        .jumpnav-scroll > a { scroll-snap-align: start; }
+        .jumpnav-scroll::after { content: ""; flex: 0 0 8px; }
+
         @keyframes cardDrag {
           0%{opacity:0;left:3%;top:34%;transform:rotate(0) scale(1);box-shadow:0 2px 6px rgba(0,0,0,.10)}
           6%{opacity:1}
@@ -160,12 +172,15 @@ export default function FeaturesPage() {
         className="jumpnav sticky z-50 bg-white/95 backdrop-blur-sm border-b border-black/[0.09]"
         style={{ top: "var(--header-h, 65px)" }}
       >
-        <div className="flex justify-center items-center gap-1 max-w-[1140px] mx-auto px-6 overflow-x-auto">
+        {/* `justify-center` + `overflow-x-auto` clips the overflow equally on
+            BOTH sides and the left-hand items become unreachable by scrolling.
+            Start-aligned while it scrolls; centered only once it fits. */}
+        <div className="jumpnav-scroll flex justify-start lg:justify-center items-center gap-1 max-w-[1140px] mx-auto px-4 sm:px-6 overflow-x-auto">
           {NAV_LINKS.map((link) => (
             <a
               key={link.id}
               href={`#${link.id}`}
-              className={`text-sm font-medium no-underline px-4 py-3.5 border-b-2 whitespace-nowrap transition-colors ${
+              className={`shrink-0 text-sm font-medium no-underline px-3 sm:px-4 py-3.5 border-b-2 whitespace-nowrap transition-colors ${
                 activeSection === link.id
                   ? "text-[#1FAE5B] border-[#1FAE5B]"
                   : "text-[#52525b] border-transparent hover:text-[#1FAE5B] hover:border-[#1FAE5B]"

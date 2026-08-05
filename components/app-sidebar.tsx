@@ -1,43 +1,12 @@
 "use client"
 
 import * as React from "react"
-import { Suspense, useEffect, useState } from "react"
+import { Suspense } from "react"
 import { useSearchParams } from "next/navigation"
-import {
-  IconChartBar,
-  IconDashboard,
-  IconSearch,
-  IconUsers,
-  IconGitBranch,
-  IconCircleCheck,
-  IconMail,
-  IconBuildingStore,
-  IconMessageCircle2,
-} from "@tabler/icons-react"
 
-import { NavMain } from "@/components/nav-main"
-
-import {
-  Sidebar,
-  SidebarContent,
-  SidebarHeader,
-} from "@/components/ui/sidebar"
-
-import Image from "next/image"
-
-const navData = {
-  navMain: [
-    // { title: "Dashboard", url: "/dashboard", icon: IconDashboard },
-    { title: "Discovery", url: "/dashboard/influencer-discovery", icon: IconSearch },
-    { title: "Inbox", url: "/dashboard/inbox", icon: IconMail },
-    { title: "Influencers List", url: "/dashboard/manage-influencers", icon: IconUsers },
-    { title: "Pipeline", url: "/dashboard/pipeline", icon: IconGitBranch },
-    { title: "Post Tracker", url: "/dashboard/post-tracker", icon: IconCircleCheck },
-    { title: "Brand Partners", url: "/dashboard/brand-partners", icon: IconBuildingStore },
-    { title: "Community", url: "/dashboard/community", icon: IconMessageCircle2 },
-    { title: "Analytics", url: "/dashboard/analytics", icon: IconChartBar },
-  ],
-}
+import type { Sidebar } from "@/components/ui/sidebar"
+import { DASHBOARD_NAV } from "@/components/sidebar/nav-config"
+import { PortalSidebar } from "@/components/sidebar/portal-sidebar"
 
 function AppSidebarInner({
   setView,
@@ -45,7 +14,6 @@ function AppSidebarInner({
 }: React.ComponentProps<typeof Sidebar> & {
   setView?: (view: string) => void
 }) {
-  const [mounted, setMounted] = useState(false)
   // useSearchParams is reactive to query-string-only changes (unlike usePathname),
   // which matters here: the brand selector often adds/updates ?brandId on the
   // SAME route (no pathname change) right after a first-time login. Reading it
@@ -54,40 +22,26 @@ function AppSidebarInner({
   const searchParams = useSearchParams()
   const brandId = searchParams.get("brandId")
 
-  useEffect(() => {
-    setMounted(true)
-  }, [])
-
-  if (!mounted) return null
+  // Preserved from the previous NavMain implementation: brandId is threaded
+  // onto every destination so it survives navigation.
+  const transformHref = React.useCallback(
+    (href: string) => {
+      if (!brandId) return href
+      const separator = href.includes("?") ? "&" : "?"
+      return `${href}${separator}brandId=${brandId}`
+    },
+    [brandId]
+  )
 
   return (
-    <Sidebar
-      collapsible="offcanvas"
-      className="bg-[#0F6B3E] text-[#F7F9F8]"
+    // Presentation is shared with the admin rail; only the config differs.
+    <PortalSidebar
+      sections={DASHBOARD_NAV}
+      onBrandClick={() => setView?.("dashboard")}
+      brandAlt="Instroom Logo"
+      transformHref={transformHref}
       {...props}
-    >
-      {/* HEADER */}
-      <SidebarHeader className="h-24 flex items-center px-4 border-b border-white/10 bg-[#0F6B3E]">
-        <button
-          onClick={() => setView?.("dashboard")}
-          className="flex items-center w-full"
-        >
-          <Image
-            src="/INSTROOM WHITE.png"
-            alt="Instroom Logo"
-            width={150}
-            height={32}
-            className="object-contain"
-            priority
-          />
-        </button>
-      </SidebarHeader>
-
-      {/* MENU */}
-      <SidebarContent className="bg-[#0F6B3E] text-[#F7F9F8] px-2">
-        <NavMain items={navData.navMain} brandId={brandId} />
-      </SidebarContent>
-    </Sidebar>
+    />
   )
 }
 

@@ -29,6 +29,7 @@ import {
   ConfirmationDialog, AddRowsModal, DeclineConfirmationModal,
   ManageOptionsModal, AddColumnModal, FilterPopover,
 } from "./modals"
+import { MobileRowCards } from "./mobile-row-cards"
 import { ToastContainer } from "./toast"
 import ProfileSidebar from "./profile-sidebar"
 import { useBrandTaxonomy } from "@/hooks/useBrandTaxonomy"
@@ -1259,8 +1260,68 @@ export default function TableSheet({
 
       {/* ── Table ── */}
       <div className="w-full min-w-0">
+        {/* ── Phone layout: same rows, card list. The spreadsheet grid below
+            takes over from md up. The table's own empty state and "add row"
+            footer live inside <tbody>/<tfoot>, so both need phone equivalents
+            here or they'd vanish under md. ── */}
+        {totalRows === 0 && (
+          <div className="md:hidden rounded-2xl border border-gray-200 bg-white p-6 text-center shadow-sm">
+            <p className="text-sm font-medium text-gray-700">No influencers yet</p>
+            <p className="mt-1 text-[13px] text-gray-500">
+              {readOnly ? "Nothing to show here." : "Add your first influencer to get started."}
+            </p>
+            {!readOnly && (
+              <div className="mt-4 flex flex-col gap-2">
+                <button
+                  onClick={addRow}
+                  className="flex h-11 w-full items-center justify-center gap-1.5 rounded-xl bg-[#1FAE5B] text-sm font-medium text-white transition-colors active:bg-[#178a48]"
+                >
+                  <IconPlus size={16} /> Add influencer
+                </button>
+                <button
+                  onClick={() => setShowAddRowsModal(true)}
+                  className="flex h-11 w-full items-center justify-center gap-1.5 rounded-xl border border-gray-200 text-sm font-medium text-gray-700 transition-colors active:bg-gray-50"
+                >
+                  <IconCopy size={16} /> Add multiple
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {totalRows > 0 && (
+          <MobileRowCards
+            rows={pageRows}
+            selectedRowIds={selectedRowIds}
+            fetchingRows={fetchingRows}
+            duplicateRowIds={duplicateRowIds}
+            readOnly={readOnly}
+            onToggleSelect={handleCheckboxToggle}
+            onOpenProfile={setSidebarRowId}
+            onDelete={deleteRow}
+          />
+        )}
+
+        {/* Phone equivalent of the table's <tfoot> add-row bar */}
+        {totalRows > 0 && !readOnly && (
+          <div className="md:hidden mt-2.5 flex gap-2">
+            <button
+              onClick={addRow}
+              className="flex h-11 flex-1 items-center justify-center gap-1.5 rounded-xl border border-gray-200 bg-white text-[13px] font-medium text-gray-700 shadow-sm transition-colors active:bg-gray-50"
+            >
+              <IconPlus size={15} /> Add row
+            </button>
+            <button
+              onClick={() => setShowAddRowsModal(true)}
+              className="flex h-11 flex-1 items-center justify-center gap-1.5 rounded-xl border border-gray-200 bg-white text-[13px] font-medium text-gray-700 shadow-sm transition-colors active:bg-gray-50"
+            >
+              <IconCopy size={15} /> Add multiple
+            </button>
+          </div>
+        )}
+
         <div ref={containerRef} tabIndex={0}
-          className="instroom-table-wrap overflow-auto border border-gray-200 rounded-xl shadow-sm outline-none focus:ring-2 focus:ring-blue-200"
+          className="instroom-table-wrap hidden md:block overflow-auto border border-gray-200 rounded-xl shadow-sm outline-none focus:ring-2 focus:ring-blue-200"
           onKeyDown={handleContainerKeyDown}
           onMouseDown={e => { const t = e.target as HTMLElement; if (t.closest("input, select, button, [tabindex]") && t !== containerRef.current) return; setTimeout(() => containerRef.current?.focus(), 0) }}>
           <table className="text-sm border-collapse w-full" style={{ tableLayout: "auto" }}>
