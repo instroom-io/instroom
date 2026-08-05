@@ -139,17 +139,22 @@ export function LandingPage() {
         tab.classList.add(styles.tabActive)
         const panel = container.querySelector(`[data-panel="${target}"]`)
         if (panel) panel.classList.add(styles.panelActive)
+
+        // On mobile the tab strip scrolls horizontally, so a tab tapped at the
+        // edge can sit half out of view. Pull it fully into the strip without
+        // scrolling the page itself (block: "nearest").
+        ;(tab as HTMLElement).scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" })
       })
     })
   }, [])
 
   const faqs = [
-    { q: "Do I need the full platform, or can I start with just the Chrome Extension?", a: "Either works. The Chrome Extension and Post Tracker are standalone products with their own pricing. You can use them without ever signing up for the full platform. If you want everything in one workspace later, you can connect them to Instroom and your data carries over." },
-    { q: "What happens after the 30-day trial?", a: "Nothing automatic. We don't ask for a credit card to start, so the trial doesn't convert into a paid plan on its own. If you decide to keep using Instroom, you pick a plan and add payment details. If you don't, your account stays read-only and your data is preserved for 30 days." },
+    { q: "Do I need the full platform, or can I start with just the Chrome Extension?", a: "Either works. The Chrome Extension is a free standalone tool — you can use it without ever signing up for the full platform. If you want everything in one workspace later, you can connect it to Instroom and your data carries over." },
+    { q: "What happens after I get early access?", a: "We onboard beta users in small batches, so you'll get an email the moment your workspace is ready. From there, Basic is free forever — no credit card, no time limit. Upgrade to Solo or Team whenever you need more workspaces and campaigns." },
     { q: "Can I import my existing creator data from spreadsheets?", a: "Yes. You can import creators via CSV during setup or any time after. We keep the import flexible because we know every agency's spreadsheet is laid out differently." },
     { q: "Is my data secure, especially if I'm managing client campaigns?", a: "Yes. Each workspace is isolated, and access is controlled by role-based permissions (Admin, Manager, Viewer, Researcher). Shared workspaces work like Google Drive, you control who can see and edit what. See our Privacy Policy for full details." },
-    { q: "What if I outgrow my plan?", a: "Upgrade any time. Solo accounts can move to Team when they need more than one workspace. Team accounts can add extra workspaces at $12/month each. Everything you've built carries over, no migration required." },
-    { q: "You said the product is still being built. What does that mean for me?", a: "The core platform (campaigns, creator CRM, outreach, tracking) is live and working. Some add-ons like Discovery, Shopify Connect, and Affiliate Tracking are still in development. If you sign up now, you get the core, and new tools roll out as they're ready. Early users have a direct line to us for feedback and feature requests." },
+    { q: "What if I outgrow my plan?", a: "Upgrade any time. Solo accounts can move to Team when they need more than one workspace. Team accounts can add extra workspaces at $19/month each. Everything you've built carries over, no migration required." },
+    { q: "You said the product is still being built. What does that mean for me?", a: "The core platform (campaigns, creator CRM, embedded inbox, outreach, tracking) is live and working, along with Shopify and GoAffPro integrations for reporting. Post Tracker and Discovery are still in development. If you get early access now, you get the core, and new tools roll out as they're ready. Early users have a direct line to us for feedback and feature requests." },
   ]
 
   const problems = [
@@ -162,14 +167,6 @@ export function LandingPage() {
     { label: "Problem 1", problem: "Every campaign starts from zero", solution: "Pre-built, ready on day one.", desc: "Campaign structure, creator fields, pipeline stages, all set up for you. You import your creators and start running, not building." },
     { label: "Problem 2", problem: "Your campaign lives in five different places", solution: "One workspace. One source of truth.", desc: "Outreach, tracking, content, and reporting all live in the same place. Your whole team sees the same thing without chasing anyone." },
     { label: "Problem 3", problem: "You're funding features you've never opened", solution: "Pay for the core. Add only what you use.", desc: "Start with the main platform. Add the Chrome Extension, Post Tracker, or other tools only when you need them. Or just use them standalone, no platform required." }
-  ]
-
-  const features = [
-    { eyebrow: "Pipeline management", title: "See your campaign the way you think.", desc: "Every agency has someone who wants a spreadsheet and someone who wants a board. In Instroom, you get both. Flip between list view and Kanban with one click. The data is the same, the view changes with how your brain is working that day.", link: "instroom_features.html#pipeline" },
-    { eyebrow: "Embedded email", title: "Reach out without leaving the room.", desc: "Send outreach, reply to creators, and track every thread inside Instroom. Every email is tied to the right creator and the right pipeline stage, so nothing gets lost in someone's Gmail folder. When a teammate picks up a reply at 9am, they have the full context.", link: "instroom_features.html#email" },
-    { eyebrow: "Creator CRM", title: "Every creator, every detail, remembered.", desc: "Profiles hold everything. Every campaign they've run. Every post they've published. Every payment, every note, every tag. Six months from now when you're deciding who to bring back, the history is right there. No more digging through old threads.", link: "instroom_features.html#crm" },
-    { eyebrow: "Reporting", title: "Client reports in one click.", desc: "No more Sunday nights spent copying screenshots into a slide deck. Pick the campaign, pick the date range, and Instroom pulls a clean report with posts, results, and revenue per creator. Share it as a link or export a PDF.", link: "instroom_features.html#reporting" },
-    { eyebrow: "Brand Partners", title: "Turn one-off creators into long-term partners.", desc: "The creators who consistently deliver deserve more than a spreadsheet row. Brand Partners gives them a real home. Tiered status (Bronze, Silver, Gold) based on actual performance. Retainer tracking. Full history of every campaign they've run with you. So the next budget conversation isn't a guess.", link: "instroom_features.html#brand-partners" }
   ]
 
   const comparisons = [
@@ -269,7 +266,7 @@ export function LandingPage() {
                 </Button>
               </a>
             </div>
-            <p className={styles.heroSub}>No credit card required · 30-day free trial</p>
+            <p className={styles.heroSub}>Free forever on Basic · No credit card required</p>
           </div>
 
         {/* RIGHT: product mockup */}
@@ -399,7 +396,7 @@ export function LandingPage() {
 
           <div className={`${styles.heroFloatBadge} ${styles.heroFloatTop}`}>
             <IconStarFilled size={12} className="text-[#F4C24A]" />
-            4.9/5 average rating
+            4.9/5 client satisfaction
           </div>
 
           <div className={`${styles.heroFloatBadge} ${styles.heroFloatBottom}`}>
@@ -450,7 +447,7 @@ export function LandingPage() {
               <div className={styles.statLabel}>In sales generated</div>
             </div>
           </div>
-          <p className="text-xs text-zinc-400 italic mt-4 text-center">Approximate totals across the brands we've worked with.</p>
+          <p className="text-xs text-zinc-400 italic mt-4 text-center">Internal metrics from our own agency, Armful Media — not yet aggregated across Instroom's customer base.</p>
         </div>
       </section>
 
@@ -614,13 +611,13 @@ export function LandingPage() {
         <div className={styles.containerMd}>
           <div className={styles.sectionHeader}>
             <h2>Get started in minutes.</h2>
-            <p>No onboarding call required. No setup fees. Just sign up and go.</p>
+            <p>No onboarding call required. No setup fees. Just request access and go.</p>
           </div>
           <div className={styles.howGrid}>
             <div className={styles.howStep}>
               <div className={styles.howNum}>1</div>
-              <h3>Sign up free</h3>
-              <p>30 days, full platform, no credit card. Create your workspace in under a minute.</p>
+              <h3>Request early access</h3>
+              <p>We're onboarding in small batches. Join the list and we'll email you the moment your workspace is ready.</p>
             </div>
             <div className={styles.howStep}>
               <div className={styles.howNum}>2</div>
@@ -630,7 +627,7 @@ export function LandingPage() {
             <div className={styles.howStep}>
               <div className={styles.howNum}>3</div>
               <h3>Run your first campaign</h3>
-              <p>Outreach, tracking, and reporting from the same place. See how it feels before you pay a cent.</p>
+              <p>Outreach, tracking, and reporting from the same place. Free forever on Basic, no credit card required.</p>
             </div>
           </div>
         </div>
@@ -708,18 +705,27 @@ export function LandingPage() {
         <div className={styles.containerMd}>
           <div className={styles.sectionHeader}>
             <h2>Not ready for the full workspace? Start with a piece.</h2>
-            <p>The Chrome Extension and Post Tracker also work on their own. Use one today, grow into the full platform when you're ready.</p>
+            <p>The Chrome Extension works on its own today, and Post Tracker is coming soon as a standalone tool too. Grow into the full platform when you're ready.</p>
           </div>
           <div className={styles.standaloneGrid}>
             <div className={styles.standaloneCard}>
               <h3>Chrome Extension</h3>
-              <p>Capture creator data while you browse Instagram and TikTok. Free forever, or $9/mo for pro tools.</p>
-              <a href="#" className={styles.standaloneLink}>Learn more →</a>
+              <p>Capture creator data while you browse Instagram and TikTok. Free, with a daily usage limit.</p>
+              <a
+                href="https://chromewebstore.google.com/detail/instroom-%E2%80%94-instagram-tikt/ehgceomekjhamiakclkpgadphbenlmmj"
+                target="_blank"
+                rel="noopener noreferrer"
+                className={styles.standaloneLink}
+              >
+                Learn more →
+              </a>
             </div>
             <div className={styles.standaloneCard}>
               <h3>Post Tracker</h3>
-              <p>Download and archive every piece of creator content, automatically. From $19/mo.</p>
-              <a href="#" className={styles.standaloneLink}>Learn more →</a>
+              <p>Download and archive every piece of creator content, automatically. Coming soon.</p>
+              <a href="https://posttracker.instroom.io" target="_blank" rel="noopener noreferrer" className={styles.standaloneLink}>
+                Learn more →
+              </a>
             </div>
           </div>
         </div>

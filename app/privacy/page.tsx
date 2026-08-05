@@ -5,9 +5,9 @@ import {
   LegalSection,
   LegalP,
   LegalH3,
+  LegalH4,
   PlainList,
   Callout,
-  HighlightBox,
   ContactCard,
   DocTable,
 } from "@/components/legal-page/shared"
@@ -22,7 +22,9 @@ const dataTableRows = [
   ["Account information", "You, directly", "Account creation, authentication, billing"],
   ["Usage data", "Automatically collected", "Platform operation, analytics, troubleshooting"],
   ["Campaign & influencer data", "You, directly", "Service delivery"],
-  ["Third-party API data", "Instagram, TikTok, Shopify, GoAffPro", "Feature functionality (Discovery, Affiliate Tracking)"],
+  ["Email data", "Gmail / Outlook (with your consent)", "Powering the embedded inbox"],
+  ["Store & sales data", "Shopify", "Campaign attribution and reporting"],
+  ["Third-party API data", "Instagram, TikTok, GoAffPro", "Creator insights & affiliate tracking"],
   ["Payment data", "Payment processor", "Billing and subscription management"],
 ]
 
@@ -33,6 +35,22 @@ const privacyRights = [
   { title: "Right to Erasure", desc: "You may request deletion of your personal information, subject to legal retention obligations." },
   { title: "Right to Object", desc: "You may object to the processing of your personal data for purposes other than those consented to or required by law." },
   { title: "Right to Data Portability", desc: "You may request your personal data in a structured, machine-readable format for transfer to another service." },
+]
+
+const tocItems = [
+  { label: "Introduction", href: "#s1" },
+  { label: "Data We Collect", href: "#s2" },
+  { label: "How We Use Your Data", href: "#s3" },
+  { label: "Legal Basis for Processing", href: "#s4" },
+  { label: "Data Sharing & Disclosure", href: "#s5" },
+  { label: "Influencer Data", href: "#s6" },
+  { label: "Cookies & Tracking", href: "#s7" },
+  { label: "Data Retention", href: "#s8" },
+  { label: "Data Security", href: "#s9" },
+  { label: "Your Privacy Rights", href: "#s10" },
+  { label: "Children's Privacy", href: "#s11" },
+  { label: "Changes to This Policy", href: "#s12" },
+  { label: "Contact & DPO", href: "#s13" },
 ]
 
 export default function InstroomPrivacyPolicy() {
@@ -49,10 +67,12 @@ export default function InstroomPrivacyPolicy() {
           { label: "Entity", value: "Armful OPC, trading as Armful Media" },
         ]}
         lede="Your privacy is important to us. This Policy explains what personal information Instroom collects, how we use it, and the rights you have under Philippine law. We are committed to full compliance with the Data Privacy Act of 2012 (RA 10173)."
+        compliance="Compliant with the Data Privacy Act of 2012 (RA 10173)"
+        toc={tocItems}
       />
 
       <div className="max-w-[860px] mx-auto px-4 sm:px-6 pb-20">
-        <LegalSection number="Section 01" heading="Introduction">
+        <LegalSection id="s1" number="Section 01" heading="Introduction">
           <LegalP>
             Armful OPC, a One Person Corporation registered in the Republic of the Philippines, trading as Armful
             Media, owns and operates the Instroom influencer relationship management platform accessible at
@@ -61,13 +81,13 @@ export default function InstroomPrivacyPolicy() {
             Tracker, and related services (the "Service").
           </LegalP>
           <LegalP>
-            This Policy applies to all registered users, free trial users, and visitors to our website. It does
+            This Policy applies to all registered users, free-plan users, and visitors to our website. It does
             not apply to third-party services linked from our platform — please review their individual privacy
             policies.
           </LegalP>
         </LegalSection>
 
-        <LegalSection number="Section 02" heading="Data We Collect">
+        <LegalSection id="s2" number="Section 02" heading="Data We Collect">
           <LegalP>We collect information in the following categories:</LegalP>
           <LegalH3>Account & Identity Information</LegalH3>
           <PlainList
@@ -83,25 +103,40 @@ export default function InstroomPrivacyPolicy() {
               "Log data: IP address, browser type, pages visited, actions taken within the platform",
               "Workspace structure, campaign data, and influencer records you create",
               "Chrome Extension activity (profile captures, searches) associated with your account",
-              "Post Tracker data: post links, content downloads, Google Drive export activity",
+              <>
+                Post Tracker data — post links, content downloads, and Google Drive export activity — where you
+                use Post Tracker (available upon its release)
+              </>,
             ]}
           />
           <LegalH3>Integration Data</LegalH3>
           <PlainList
             items={[
-              "OAuth tokens for Google Drive, Shopify, and other connected services",
-              "Data returned from Instagram and TikTok APIs when using the Discovery add-on",
-              "GoAffPro data (discount codes, affiliate links, sales data) when using Affiliate Tracking",
+              <>
+                <strong className="text-[#1E1E1E] font-semibold">Email integration</strong> — when you connect
+                Gmail or Outlook, we access the email messages and metadata needed to power your inbox and match
+                conversations to the relevant campaign and creator
+              </>,
+              <>
+                <strong className="text-[#1E1E1E] font-semibold">Shopify</strong> — order, sales, revenue, and
+                shipment-status data when you connect your store, used for campaign attribution and reporting
+              </>,
+              <>
+                <strong className="text-[#1E1E1E] font-semibold">GoAffPro</strong> — discount codes, affiliate
+                links, and sales data when you use affiliate tracking
+              </>,
+              "OAuth tokens for Google (Gmail, Outlook, Google Drive), Shopify, and other connected services",
+              "Data returned from Instagram and TikTok (via the Chrome Extension, and via Discovery upon its release)",
             ]}
           />
           <DocTable headers={["Data Type", "Source", "Purpose"]} rows={dataTableRows} />
         </LegalSection>
 
-        <LegalSection number="Section 03" heading="How We Use Your Data">
+        <LegalSection id="s3" number="Section 03" heading="How We Use Your Data">
           <LegalP>We use the personal information we collect for the following purposes:</LegalP>
           <PlainList
             items={[
-              <><strong className="text-[#1E1E1E] font-semibold">To provide and operate the Service</strong> — including managing workspaces, campaigns, influencer lists, and add-on features.</>,
+              <><strong className="text-[#1E1E1E] font-semibold">To provide and operate the Service</strong> — including managing workspaces, campaigns, influencer lists, the embedded inbox, and connected integrations.</>,
               <><strong className="text-[#1E1E1E] font-semibold">To process payments</strong> — billing, subscription management, and invoicing.</>,
               <><strong className="text-[#1E1E1E] font-semibold">To communicate with you</strong> — transactional emails, product updates, security alerts, and support responses.</>,
               <><strong className="text-[#1E1E1E] font-semibold">To improve the Service</strong> — analyzing usage patterns to enhance features and fix issues.</>,
@@ -112,7 +147,7 @@ export default function InstroomPrivacyPolicy() {
           <LegalP>We do not sell your personal information to third parties for their own marketing purposes.</LegalP>
         </LegalSection>
 
-        <LegalSection number="Section 04" heading="Legal Basis for Processing">
+        <LegalSection id="s4" number="Section 04" heading="Legal Basis for Processing">
           <LegalP>Under the Data Privacy Act of 2012 (RA 10173), we process personal information on the following legal bases:</LegalP>
           <PlainList
             items={[
@@ -124,7 +159,7 @@ export default function InstroomPrivacyPolicy() {
           />
         </LegalSection>
 
-        <LegalSection number="Section 05" heading="Data Sharing & Disclosure">
+        <LegalSection id="s5" number="Section 05" heading="Data Sharing & Disclosure">
           <LegalP>We share personal information only in the following circumstances:</LegalP>
           <LegalH3>Service Providers</LegalH3>
           <LegalP>
@@ -134,9 +169,9 @@ export default function InstroomPrivacyPolicy() {
           </LegalP>
           <LegalH3>Third-Party Integrations</LegalH3>
           <LegalP>
-            When you connect third-party services (Google Drive, Shopify, GoAffPro), data may be exchanged with
-            those platforms as necessary to fulfill the integration. Your use of those services is governed by
-            their respective privacy policies.
+            When you connect third-party services (Gmail, Outlook, Google Drive, Shopify, GoAffPro), data may be
+            exchanged with those platforms as necessary to fulfill the integration. Your use of those services is
+            governed by their respective privacy policies.
           </LegalP>
           <LegalH3>Legal Requirements</LegalH3>
           <LegalP>
@@ -149,13 +184,13 @@ export default function InstroomPrivacyPolicy() {
             transferred as part of that transaction. We will notify you before any such transfer and your data
             becomes subject to a different privacy policy.
           </LegalP>
-          <HighlightBox>
-            <strong className="text-[#1FAE5B]">We do not sell, rent, or trade your personal information</strong> to
-            third parties for advertising or marketing purposes.
-          </HighlightBox>
+          <LegalP>
+            <strong className="text-[#1E1E1E] font-semibold">We do not sell, rent, or trade your personal information</strong>{" "}
+            to third parties for advertising or marketing purposes.
+          </LegalP>
         </LegalSection>
 
-        <LegalSection number="Section 06" heading="Influencer Data">
+        <LegalSection id="s6" number="Section 06" heading="Influencer Data">
           <LegalP>
             Instroom is a B2B tool. When you use the platform to manage influencer campaigns, you may input
             personal information about third-party individuals (influencers), such as their name, social media
@@ -174,7 +209,7 @@ export default function InstroomPrivacyPolicy() {
           </LegalP>
         </LegalSection>
 
-        <LegalSection number="Section 07" heading="Cookies & Tracking Technologies">
+        <LegalSection id="s7" number="Section 07" heading="Cookies & Tracking Technologies">
           <LegalP>We use cookies and similar technologies to operate and improve the Service. These include:</LegalP>
           <PlainList
             items={[
@@ -190,7 +225,7 @@ export default function InstroomPrivacyPolicy() {
           </LegalP>
         </LegalSection>
 
-        <LegalSection number="Section 08" heading="Data Retention">
+        <LegalSection id="s8" number="Section 08" heading="Data Retention">
           <LegalP>
             We retain your personal information for as long as your account is active or as necessary to provide
             the Service. Specific retention periods:
@@ -209,7 +244,7 @@ export default function InstroomPrivacyPolicy() {
           </LegalP>
         </LegalSection>
 
-        <LegalSection number="Section 09" heading="Data Security">
+        <LegalSection id="s9" number="Section 09" heading="Data Security">
           <LegalP>
             We implement appropriate technical and organizational measures to protect your personal information
             against unauthorized access, disclosure, alteration, or destruction. These include encrypted data
@@ -228,18 +263,14 @@ export default function InstroomPrivacyPolicy() {
           </LegalP>
         </LegalSection>
 
-        <LegalSection number="Section 10" heading="Your Privacy Rights">
+        <LegalSection id="s10" number="Section 10" heading="Your Privacy Rights">
           <LegalP>Under the Data Privacy Act of 2012, you have the following rights with respect to your personal information:</LegalP>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 my-5">
-            {privacyRights.map(({ title, desc }) => (
-              <div key={title} className="bg-white border border-[#E4E7E5] rounded-xl p-4">
-                <h4 className="text-[13px] font-bold text-[#0F6B3E] mb-1.5" style={{ fontFamily: "'Manrope', sans-serif" }}>
-                  {title}
-                </h4>
-                <p className="text-[13px] text-[#4B4B4B] m-0">{desc}</p>
-              </div>
-            ))}
-          </div>
+          {privacyRights.map(({ title, desc }) => (
+            <div key={title}>
+              <LegalH4>{title}</LegalH4>
+              <LegalP>{desc}</LegalP>
+            </div>
+          ))}
           <LegalP>
             To exercise any of these rights, contact us at{" "}
             <strong className="text-[#1E1E1E] font-semibold">privacy@instroom.io</strong>. We will respond within
@@ -249,7 +280,7 @@ export default function InstroomPrivacyPolicy() {
           </LegalP>
         </LegalSection>
 
-        <LegalSection number="Section 11" heading="Children's Privacy">
+        <LegalSection id="s11" number="Section 11" heading="Children's Privacy">
           <LegalP>
             The Service is not directed to individuals under the age of 18. We do not knowingly collect personal
             information from minors. If we become aware that a minor has provided us with personal information
@@ -258,7 +289,7 @@ export default function InstroomPrivacyPolicy() {
           </LegalP>
         </LegalSection>
 
-        <LegalSection number="Section 12" heading="Changes to This Policy">
+        <LegalSection id="s12" number="Section 12" heading="Changes to This Policy">
           <LegalP>
             We may update this Privacy Policy from time to time. When we make material changes, we will notify
             you by email or via a prominent notice within the platform, with at least 15 days' notice before the
@@ -270,7 +301,7 @@ export default function InstroomPrivacyPolicy() {
           </LegalP>
         </LegalSection>
 
-        <LegalSection number="Section 13" heading="Contact & Data Protection Officer">
+        <LegalSection id="s13" number="Section 13" heading="Contact & Data Protection Officer">
           <LegalP>
             For any questions, concerns, or requests related to this Privacy Policy or your personal data, please
             contact our Data Protection Officer (DPO):
@@ -279,8 +310,8 @@ export default function InstroomPrivacyPolicy() {
             heading="Armful OPC, trading as Armful Media — Data Protection Officer"
             rows={[
               { label: "SEC Registration No.", value: "2024090169123-01" },
-              { label: "Registered Address", value: "2/F Armful Media Bldg., Santiago, Naujan, Oriental Mindoro, Philippines 5204" },
               { label: "Email", value: "privacy@instroom.io" },
+              { label: "Registered Address", value: "2/F Armful Media Bldg., Santiago, Naujan, Oriental Mindoro, Philippines 5204" },
               { label: "Website", value: "instroom.io" },
             ]}
           />

@@ -117,36 +117,55 @@ export function TikTokDownloaderHero() {
 
         <div className="tiktok-dl-input-row mt-8 flex flex-col sm:flex-row gap-3 items-stretch">
           <input
-            type="text"
+            type="url"
+            inputMode="url"
+            autoComplete="off"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            aria-label="TikTok video link"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             placeholder="Paste TikTok video link here..."
+            // `flex: 1` used to live in the style below. It expands to
+            // `flex: 1 1 0%`, and in the mobile `flex-col` layout the main axis
+            // is vertical — so that 0% basis overrode `height: 56` and squashed
+            // the field into a thin pill. Grow only in the sm: row layout.
+            className="w-full sm:flex-1"
             style={{
-              flex: 1,
               minWidth: 0,
               height: 56,
+              // Belt and braces: never let flex shrink the field vertically
+              minHeight: 56,
+              flexShrink: 0,
               borderRadius: 999,
               border: "1px solid rgba(255,255,255,0.15)",
               padding: "0 22px",
-              fontSize: "0.95rem",
+              // Must stay >= 16px: iOS Safari force-zooms the whole page when
+              // focusing an input smaller than that, which broke the layout
+              // as soon as you tapped the field.
+              fontSize: "1rem",
               outline: "none",
               background: "#fff",
               color: "#1E1E1E",
               boxShadow: "0 4px 16px rgba(0,0,0,0.15)",
-              width: "100%",
+              // Long pasted URLs shouldn't push the pill wider than the screen
+              textOverflow: "ellipsis",
             }}
           />
           <button
             onClick={() => handleDownload()}
             disabled={loading}
+            className="w-full sm:w-auto"
             style={{
               height: 56,
+              minHeight: 56,
               borderRadius: 999,
               border: "none",
               padding: "0 32px",
-              fontSize: "0.95rem",
+              fontSize: "1rem",
               fontWeight: 600,
               color: "#fff",
               background: loading ? "#1c4a37" : "#1FAE5B",
@@ -253,9 +272,11 @@ export function TikTokDownloaderHero() {
         )}
 
         {!result && (
-          <div className="mt-6 flex flex-wrap items-center justify-center gap-x-6 gap-y-2">
+          // Tighter gaps on phones so the five items wrap to two tidy rows
+          // instead of three ragged ones
+          <div className="mt-6 flex flex-wrap items-center justify-center gap-x-4 sm:gap-x-6 gap-y-2">
             {CHECKLIST.map((label) => (
-              <span key={label} className="inline-flex items-center gap-1.5 text-sm" style={{ color: "rgba(255,255,255,0.75)" }}>
+              <span key={label} className="inline-flex items-center gap-1.5 text-[0.8125rem] sm:text-sm" style={{ color: "rgba(255,255,255,0.75)" }}>
                 <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
                   <circle cx="7.5" cy="7.5" r="6.5" stroke="#1FAE5B" strokeWidth="1.4" />
                   <path d="M4.8 7.6l1.8 1.8L10.4 5.6" stroke="#1FAE5B" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />

@@ -120,12 +120,23 @@ export function SettingsSidebar() {
 
   return (
     <div
-      className="flex flex-row md:flex-col flex-shrink-0 w-full md:w-[220px] overflow-x-auto md:overflow-y-auto overflow-y-hidden md:overflow-x-hidden border-b md:border-b-0 md:border-r border-black/[0.08]"
+      className="settings-nav sticky top-0 z-20 flex flex-row md:static md:flex-col flex-shrink-0 w-full md:w-[220px] overflow-x-auto md:overflow-y-auto overflow-y-hidden md:overflow-x-hidden border-b md:border-b-0 md:border-r border-black/[0.08]"
       style={{
         background: "#ffffff",
         alignSelf: "stretch",
       }}
     >
+      <style>{`
+        .settings-nav { scrollbar-width: none; -ms-overflow-style: none; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; }
+        .settings-nav::-webkit-scrollbar { display: none; }
+        .settings-nav > div > [role="button"] { scroll-snap-align: start; }
+        /* Active marker follows the strip's orientation */
+        .settings-nav [data-active="true"] { box-shadow: inset 0 -2px 0 #1fae5b; }
+        @media (min-width: 768px) {
+          .settings-nav { scroll-snap-type: none; }
+          .settings-nav [data-active="true"] { box-shadow: inset 2px 0 0 #1fae5b; }
+        }
+      `}</style>
       {/* Header */}
       <div className="hidden md:block" style={{ padding: "16px 20px 12px" }}>
         <p style={{ fontSize: 15, fontWeight: 700, color: "#1e1e1e", margin: 0 }}>
@@ -170,14 +181,13 @@ export function SettingsSidebar() {
                 role="button"
                 tabIndex={0}
                 onKeyDown={(e) => e.key === "Enter" && router.push(item.href)}
-                className="flex items-center gap-2.5 whitespace-nowrap flex-shrink-0 px-3 py-2 md:px-5 md:py-[9px]"
+                data-active={isActive}
+                className="flex items-center gap-2.5 whitespace-nowrap flex-shrink-0 px-4 min-h-11 md:min-h-0 md:px-5 md:py-[9px] text-[13px] md:text-xs"
                 style={{
                   cursor: "pointer",
-                  fontSize: 12,
                   fontWeight: isActive ? 600 : 500,
                   color: isActive ? "#1fae5b" : "#555",
                   background: isActive ? "#f0faf5" : "transparent",
-                  borderLeft: isActive ? "2px solid #1fae5b" : "2px solid transparent",
                   transition: "background 0.12s, color 0.12s",
                   userSelect: "none",
                 }}

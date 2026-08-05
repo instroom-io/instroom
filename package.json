@@ -20,6 +20,7 @@
     "@tailwindcss/oxide": "^4.2.1",
     "@tailwindcss/oxide-win32-x64-msvc": "^4.2.1",
     "@tanstack/react-table": "^8.21.3",
+    "@vercel/speed-insights": "^2.0.0",
     "bcryptjs": "^3.0.3",
     "class-variance-authority": "^0.7.1",
     "cloudinary": "^2.10.0",

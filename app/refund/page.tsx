@@ -6,7 +6,6 @@ import {
   LegalP,
   PlainList,
   Callout,
-  HighlightBox,
   ContactCard,
   DocTable,
   ScenarioCard,
@@ -109,7 +108,7 @@ export default function RefundPolicy() {
         title="Refund"
         emphasis="Policy"
         meta={[
-          { label: "Effective", value: "July 24, 2026" },
+          { label: "Effective", value: "April 21, 2026" },
           { label: "Jurisdiction", value: "Republic of the Philippines" },
           { label: "Entity", value: "Armful OPC, trading as Armful Media" },
         ]}
@@ -220,13 +219,6 @@ export default function RefundPolicy() {
               </>,
             ]}
           />
-          <HighlightBox>
-            No annual contracts are required — but once an annual plan is activated beyond the 7-day window, the
-            subscription is non-refundable.{" "}
-            <strong className="text-[#1FAE5B]">
-              We recommend trialing the platform on a monthly plan before committing annually.
-            </strong>
-          </HighlightBox>
         </LegalSection>
 
         <LegalSection number="Section 07" heading="Companion Tools & Upcoming Features">

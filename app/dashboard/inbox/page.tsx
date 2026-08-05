@@ -1054,10 +1054,10 @@ function InboxContent() {
             </div>
           ) : (
             <>
-              <div className="flex-shrink-0 p-4 border-b border-gray-200 bg-white">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <h1 className="text-lg font-semibold text-gray-900">
+              <div className="flex-shrink-0 px-4 py-3 sm:p-4 border-b border-gray-200 bg-white">
+                <div className="flex items-center justify-between gap-3 mb-3 sm:mb-4">
+                  <div className="min-w-0">
+                    <h1 className="truncate text-[17px] sm:text-lg font-semibold leading-tight text-gray-900">
                       {selectedStage === "ALL" ? "All Messages" : currentStageConfig?.label}
                     </h1>
                     <div className="flex items-center gap-2 mt-0.5">
@@ -1070,7 +1070,7 @@ function InboxContent() {
                       <button
                         onClick={loadGmailThreads}
                         title="Refresh Gmail"
-                        className="p-2 rounded-lg hover:bg-gray-100 transition-colors text-gray-500"
+                        className="flex h-11 w-11 sm:h-9 sm:w-9 items-center justify-center rounded-xl hover:bg-gray-100 active:bg-gray-200 transition-colors text-gray-500"
                       >
                         <IconRefresh size={16} />
                       </button>
@@ -1079,14 +1079,14 @@ function InboxContent() {
                       <button
                         onClick={loadOutlookThreads}
                         title="Refresh Outlook"
-                        className="p-2 rounded-lg hover:bg-gray-100 transition-colors text-gray-500"
+                        className="flex h-11 w-11 sm:h-9 sm:w-9 items-center justify-center rounded-xl hover:bg-gray-100 active:bg-gray-200 transition-colors text-gray-500"
                       >
                         <IconRefresh size={16} />
                       </button>
                     )}
                     <button
                       onClick={() => { setComposeSource(gmailConnected ? "gmail" : outlookConnected ? "outlook" : "gmail"); setOpenCompose(true) }}
-                      className="p-2 rounded-lg bg-[#1FAE5B] text-white hover:bg-[#0F6B3E] transition-all duration-200 shadow-sm"
+                      className="flex h-11 w-11 sm:h-9 sm:w-9 shrink-0 items-center justify-center rounded-xl bg-[#1FAE5B] text-white hover:bg-[#0F6B3E] active:bg-[#0F6B3E] transition-colors shadow-sm"
                       title="New Message"
                     >
                       <IconMailPlus size={18} />
@@ -1100,14 +1100,17 @@ function InboxContent() {
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder="Search conversations..."
-                    className="w-full pl-10 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-[#1FAE5B]/20 focus:border-[#1FAE5B] transition-all"
+                    aria-label="Search conversations"
+                    // text-base on phones is deliberate: under 16px iOS Safari
+                    // zooms the page on focus. sm:text-sm restores desktop size.
+                    className="h-11 sm:h-9 w-full pl-10 pr-4 text-base sm:text-sm bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#1FAE5B]/20 focus:border-[#1FAE5B] transition-all"
                   />
                 </div>
               </div>
 
               <div className="flex-1 overflow-y-auto">
                 {filteredEmails.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-12 text-gray-400">
+                  <div className="flex flex-col items-center justify-center px-6 py-16 text-center text-gray-400">
                     <IconInbox size={48} stroke={1.5} />
                     <p className="mt-3 text-sm font-medium">No conversations</p>
                     <p className="text-xs mt-1">No messages in this stage</p>
@@ -1117,12 +1120,12 @@ function InboxContent() {
                     <DraggableEmailRow key={email.id} id={String(email.id)}>
                       <div
                         onClick={() => { setSelectedEmail(email); markAsRead(email.id) }}
-                        className={`flex items-start gap-3 px-4 py-3 cursor-pointer transition-all duration-150 ${
-                          selectedEmail?.id === email.id ? "bg-gray-100 border-l-4 border-l-[#1FAE5B]" : "hover:bg-gray-50"
+                        className={`flex items-start gap-3 px-4 py-3.5 sm:py-3 min-h-[68px] sm:min-h-0 cursor-pointer transition-colors duration-150 active:bg-gray-100 ${
+                          selectedEmail?.id === email.id ? "bg-gray-100 shadow-[inset_3px_0_0_#1FAE5B]" : "hover:bg-gray-50"
                         } ${!email.read ? "bg-blue-50/40" : ""}`}
                       >
                         <div className="relative flex-shrink-0">
-                          <img src={email.avatar} alt={email.name} className="w-10 h-10 rounded-full object-cover" />
+                          <img src={email.avatar} alt="" className="w-11 h-11 sm:w-10 sm:h-10 rounded-full object-cover" />
                           {!email.read && (
                             <div className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-[#1FAE5B] rounded-full ring-2 ring-white" />
                           )}
