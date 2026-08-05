@@ -22,10 +22,11 @@ export function PricingFinalCTA() {
           style={{ fontFamily: "'Manrope', sans-serif", fontWeight: 900, letterSpacing: "-0.03em" }}
           className="text-white mb-6 leading-tight text-3xl sm:text-4xl lg:text-[44px]"
         >
-          Start free. Upgrade only when you outgrow it.
+          Start building your influencer workflow today.
         </h2>
         <p className="text-base leading-relaxed text-white/60 mb-8">
-          Basic is free forever — no credit card, no time limit. Upgrade to Solo or Team whenever you need more workspaces and campaigns.
+          Join brands and agencies who&apos;ve moved from messy spreadsheets to structured, scalable influencer
+          marketing — with Instroom.
         </p>
         <div className="flex gap-3 justify-center mb-4 flex-wrap">
           <Link href="/early-access">
