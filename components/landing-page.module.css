@@ -295,9 +295,11 @@
 
 .trustCarousel {
   display: flex;
+  flex-shrink: 0;
+  width: max-content;
   gap: 24px;
   overflow: hidden;
-  animation: scrollLeft 60s linear infinite;
+  animation: scrollLeft 30s linear infinite;
   will-change: transform;
 }
 
