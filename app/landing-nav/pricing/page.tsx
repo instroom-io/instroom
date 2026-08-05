@@ -1,17 +1,94 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { getActivePlans } from "@/prisma/plans";
 import { MainHeader } from "@/components/shared/main-header";
 import { MainFooter } from "@/components/shared/main-footer";
 import { PricingFinalCTA } from "@/components/pricing-page/final-cta";
+import { DemoCtaButton } from "@/components/pricing-page/demo-cta-button";
+import { PricingFaq } from "@/components/pricing-page/pricing-faq";
 
-function getPlanSummary(plan: any) {
-  if (plan.name === "basic") return "1 workspace (free)";
-  if (plan.name === "solo") return "1 workspace (cannot add more)";
-  if (plan.name === "team") return "3 workspaces included (can buy more)";
-  if (plan.name === "agency") return "10 workspaces included (can buy more)";
-  return "";
+const PLAN_TAGLINES: Record<string, string> = {
+  basic: "Run one brand, free — for as long as you like.",
+  solo: "For one brand, running at full scale.",
+  team: "For scaling brands and multi-brand teams.",
+};
+
+const AGENCY_PLAN = {
+  id: "agency-static",
+  name: "agency",
+  display_name: "Agency",
+};
+
+const FEATURE_MATRIX: Record<string, { insights: boolean; inbox: boolean; importExport: boolean; whiteLabel: boolean }> = {
+  basic: { insights: true, inbox: false, importExport: false, whiteLabel: false },
+  solo: { insights: true, inbox: true, importExport: true, whiteLabel: false },
+  team: { insights: true, inbox: true, importExport: true, whiteLabel: false },
+  agency: { insights: true, inbox: true, importExport: true, whiteLabel: true },
+};
+
+const SUPPORT_TEXT: Record<string, string> = { basic: "Email", solo: "Email", team: "Priority", agency: "Dedicated manager" };
+const ONBOARDING_TEXT: Record<string, string> = { basic: "—", solo: "Self-serve", team: "Guided", agency: "White-glove" };
+
+function getPlanFeatures(plan: any): ReactNode[] {
+  if (plan.name === "basic") {
+    return [
+      <><b>Unlimited</b> seats</>,
+      <><b>{plan.included_brands}</b> workspace{plan.included_brands !== 1 ? "s" : ""}</>,
+      <><b>{plan.max_influencers}</b> influencers <span className="muted">(one-time)</span></>,
+      "Auto-enriched profiles — engagement, followers, email & location",
+      "Pipeline, approvals & payment tracking",
+    ];
+  }
+  if (plan.name === "solo") {
+    return [
+      "Everything in Basic, plus:",
+      <><b>{plan.max_influencers}</b> new influencers / month</>,
+      "Inbox — Gmail & Outlook",
+      "Import & export",
+    ];
+  }
+  if (plan.name === "team") {
+    return [
+      "Everything in Solo, plus:",
+      <><b>{plan.max_influencers}</b> new influencers / month</>,
+      <><b>{plan.included_brands}</b> workspaces <span className="muted">(add more anytime)</span></>,
+      "Priority support",
+    ];
+  }
+  return [];
 }
 
+const AGENCY_FEATURES: ReactNode[] = [
+  "Everything in Team, plus:",
+  <><b>Custom</b> influencer volume</>,
+  <><b>Unlimited</b> workspaces</>,
+  "White-label reports & dedicated manager",
+];
+
+function formatPrice(plan: any, cycle: "monthly" | "yearly") {
+  const price = cycle === "yearly" ? plan.price_yearly : plan.price_monthly;
+  if (Number(price) === 0) return { amount: "Free", period: "" };
+  return { amount: `$${Number(price).toLocaleString()}`, period: "/mo" };
+}
+
+function formatPriceSub(plan: any, cycle: "monthly" | "yearly") {
+  if (Number(plan.price_monthly) === 0) return "Free forever · no credit card";
+  if (cycle === "monthly") return "Billed monthly";
+  return `$${(Number(plan.price_yearly) * 12).toLocaleString()} billed annually`;
+}
+
+function ctaFor(plan: any) {
+  if (plan.name === "basic") return { href: "/signup", label: "Get started free", cls: "plan-cta-quiet" };
+  return { href: `/signup?plan=${plan.name}`, label: "Get started", cls: "plan-cta-solid" };
+}
+
+function Check() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" strokeWidth="2.6" width="16" height="16">
+      <path d="M5 13l4 4L19 7" stroke="#1FAE5B" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
 
 export default async function PricingPage({ searchParams }: { searchParams?: { cycle?: string } }) {
   const allPlans = await getActivePlans();
@@ -21,6 +98,8 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
 
   const params = await searchParams;
   const cycle = params?.cycle === "monthly" ? "monthly" : "yearly";
+
+  const tableColumns = [...plans, AGENCY_PLAN];
 
   return (
     <div className="features-page">
@@ -86,7 +165,11 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
           font-weight: 800;
           line-height: 1.12;
           letter-spacing: -0.02em;
-          color: #1E1E1E;
+          color: #0F6B3E;
+        }
+
+        .page-hero h1 .accent {
+          color: #1FAE5B;
         }
 
         .page-hero .lead {
@@ -146,18 +229,22 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
           font-weight: 700;
         }
 
+        .billing-toggle a.active .save-badge {
+          background: rgba(255,255,255,0.9);
+          color: #178C49;
+        }
+
         /* ── Plans section ── */
         .plans-section {
-          padding: 80px 0 96px;
+          padding: 80px 0 56px;
           background: white;
         }
 
         .plans-grid {
           display: grid;
-          grid-template-columns: repeat(3, minmax(0, 320px));
-          justify-content: center;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
           align-items: stretch;
-          gap: 24px;
+          gap: 20px;
         }
 
         .plan-card {
@@ -197,10 +284,11 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
           white-space: nowrap;
           box-shadow: 0 4px 12px rgba(31,174,91,0.35);
           letter-spacing: 0.04em;
+          text-transform: uppercase;
         }
 
         .plan-inner {
-          padding: 32px;
+          padding: 28px 24px;
           display: flex;
           flex-direction: column;
           flex: 1;
@@ -208,7 +296,7 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
 
         .plan-name {
           font-family: 'Manrope', sans-serif;
-          font-size: 1.375rem;
+          font-size: 1.25rem;
           font-weight: 700;
           color: #1E1E1E;
           margin-bottom: 4px;
@@ -217,20 +305,20 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
         .plan-summary {
           font-size: 0.8125rem;
           color: #71717a;
-          margin-bottom: 24px;
+          margin-bottom: 20px;
           line-height: 1.5;
+          min-height: 38px;
         }
 
         .plan-price {
           display: flex;
           align-items: baseline;
           gap: 4px;
-          margin-bottom: 28px;
         }
 
         .plan-price-amount {
           font-family: 'Manrope', sans-serif;
-          font-size: 3rem;
+          font-size: 2.75rem;
           font-weight: 800;
           color: #1E1E1E;
           line-height: 1;
@@ -242,10 +330,17 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
           font-weight: 500;
         }
 
+        .plan-price-sub {
+          font-size: 0.8125rem;
+          color: #71717a;
+          margin-top: 6px;
+          min-height: 18px;
+        }
+
         .plan-features {
           list-style: none;
           padding: 0;
-          margin: 0 0 28px;
+          margin: 0 0 24px;
           flex: 1;
           display: flex;
           flex-direction: column;
@@ -256,16 +351,29 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
           display: flex;
           align-items: flex-start;
           gap: 10px;
-          font-size: 0.9375rem;
+          font-size: 0.875rem;
           color: #3f3f46;
           line-height: 1.5;
         }
 
         .plan-features li .check {
-          color: #1FAE5B;
-          font-weight: 700;
-          flex-shrink: 0;
+          flex: 0 0 18px;
+          width: 18px;
+          height: 18px;
+          border-radius: 9999px;
+          background: #EAF7F0;
+          display: grid;
+          place-items: center;
           margin-top: 1px;
+        }
+
+        .plan-features li .check svg {
+          width: 11px;
+          height: 11px;
+        }
+
+        .plan-features li .muted {
+          color: #7C7C7C;
         }
 
         /* ── Plan CTA button ── */
@@ -279,100 +387,298 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
           text-align: center;
           text-decoration: none;
           transition: all 0.15s;
-          border: 2px solid #0F6B3E;
-          color: #0F6B3E;
+          border: 1.5px solid transparent;
+          cursor: pointer;
+          margin: 20px 0 22px;
+        }
+
+        .plan-cta-quiet {
           background: white;
+          color: #1E1E1E;
+          border-color: #D2D6D3;
         }
 
-        .plan-cta:hover {
-          background: rgba(15,107,62,0.05);
+        .plan-cta-quiet:hover {
+          border-color: #7C7C7C;
         }
 
-        .plan-cta-popular {
+        .plan-cta-solid {
           background: linear-gradient(to right, #1FAE5B, #0F6B3E);
           color: white;
           border-color: transparent;
           box-shadow: 0 4px 14px rgba(31,174,91,0.35);
         }
 
-        .plan-cta-popular:hover {
+        .plan-cta-solid:hover {
           box-shadow: 0 6px 20px rgba(31,174,91,0.45);
-          background: linear-gradient(to right, #1FAE5B, #0a5a34);
         }
 
-        /* ── Additional Features (inside card) ── */
-        .card-additional-features {
-          margin-top: 20px;
-          padding-top: 16px;
-          border-top: 1px solid rgba(15,107,62,0.12);
+        .plan-cta-blue {
+          background: transparent;
+          color: #2C8EC4;
+          border-color: #2C8EC4;
         }
 
-        .card-additional-features-label {
-          font-size: 0.625rem;
-          font-weight: 700;
-          text-transform: uppercase;
-          letter-spacing: 0.12em;
-          color: #a1a1aa;
-          margin-bottom: 8px;
-          display: block;
+        .plan-cta-blue:hover {
+          background: rgba(44,142,196,0.08);
         }
 
-        .card-additional-features-list {
-          list-style: none;
-          padding: 0;
+        @media (max-width: 1040px) {
+          .plans-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+
+        @media (max-width: 560px) {
+          .plans-grid { grid-template-columns: 1fr; }
+        }
+
+        /* ── Reassurance row ── */
+        .reassure {
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: center;
+          gap: 14px 32px;
+          margin-top: 40px;
+          padding: 8px 0 8px;
+        }
+
+        .reassure div {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          color: #4B4B4B;
+          font-size: 0.90625rem;
+          font-weight: 500;
+        }
+
+        /* ── Compare table ── */
+        .compare-section {
+          padding: 64px 0 24px;
+          background: #F4F7F5;
+        }
+
+        .section-head {
+          text-align: center;
+          margin-bottom: 36px;
+        }
+
+        .section-head h2 {
+          font-family: 'Manrope', sans-serif;
+          font-size: clamp(1.75rem, 4vw, 2.5rem);
+          font-weight: 800;
+          letter-spacing: -0.02em;
+          line-height: 1.1;
+          color: #0F6B3E;
           margin: 0;
         }
 
-        .card-additional-features-list li {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          padding: 8px 0;
-          border-bottom: 1px solid rgba(15,107,62,0.08);
-          font-size: 0.8125rem;
-          color: #52525b;
-        }
-
-        .card-additional-features-list li:last-child {
-          border-bottom: none;
-          padding-bottom: 0;
-        }
-
-        .card-additional-features-info {
+        .info {
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          width: 16px;
-          height: 16px;
+          width: 15px;
+          height: 15px;
           border-radius: 9999px;
-          border: 1.5px solid #d4d4d8;
-          color: #a1a1aa;
-          font-size: 0.5625rem;
+          border: 1px solid #D2D6D3;
+          color: #7C7C7C;
+          font-size: 10px;
           font-weight: 700;
-          flex-shrink: 0;
-          cursor: default;
-          line-height: 1;
-          transition: border-color 0.15s, color 0.15s;
+          font-style: normal;
+          margin-left: 6px;
+          cursor: help;
+          position: relative;
+          vertical-align: middle;
         }
 
-        .card-additional-features-list li:hover .card-additional-features-info {
-          border-color: #1FAE5B;
+        .info .tip {
+          position: absolute;
+          bottom: 100%;
+          left: 50%;
+          transform: translate(-50%, 2px);
+          background: #1E1E1E;
+          color: #fff;
+          font-weight: 400;
+          font-size: 12.5px;
+          line-height: 1.4;
+          padding: 9px 12px;
+          border-radius: 9px;
+          width: 240px;
+          text-align: left;
+          opacity: 0;
+          visibility: hidden;
+          transition: 0.16s ease;
+          z-index: 20;
+          box-shadow: 0 8px 24px rgba(0,0,0,0.22);
+        }
+
+        .info:hover .tip,
+        .info:focus .tip {
+          opacity: 1;
+          visibility: visible;
+          transform: translate(-50%, -4px);
+        }
+
+        .section-head p {
+          color: #52525b;
+          max-width: 540px;
+          margin: 12px auto 0;
+        }
+
+        .compare-scroll {
+          overflow-x: auto;
+          border: 1px solid #E4E7E5;
+          border-radius: 20px;
+          background: white;
+          box-shadow: 0 4px 24px rgba(0,0,0,0.06);
+        }
+
+        .compare-table {
+          border-collapse: collapse;
+          width: 100%;
+          min-width: 720px;
+        }
+
+        .compare-table th,
+        .compare-table td {
+          text-align: left;
+          padding: 16px 20px;
+          font-size: 0.90625rem;
+          border-bottom: 1px solid #E4E7E5;
+        }
+
+        .compare-table thead th {
+          font-family: 'Manrope', sans-serif;
+          font-size: 0.9375rem;
+          font-weight: 700;
+          color: #0F6B3E;
+        }
+
+        .compare-table thead th.plan {
+          text-align: center;
+        }
+
+        .compare-table thead th.plan.pop {
           color: #1FAE5B;
         }
 
-        @media (max-width: 900px) {
-          .plans-grid { grid-template-columns: 1fr; justify-items: center; }
+        .compare-table tbody td:not(:first-child) {
+          text-align: center;
         }
 
-        @media (max-width: 640px) {
-          .page-hero { padding: 64px 0 48px; }
-          .plan-card { max-width: 360px; }
-          .plan-inner { padding: 24px; }
-          .container { padding: 0 16px; }
-          .billing-toggle { flex-wrap: wrap; }
-          .billing-toggle a { padding: 8px 16px; font-size: 0.875rem; }
-          .plans-section { padding: 48px 0 56px; }
+        .compare-table tbody tr td:first-child {
+          font-weight: 500;
+          color: #4B4B4B;
         }
+
+        .compare-table tbody tr:last-child td {
+          border-bottom: 0;
+        }
+
+        .compare-table .yes {
+          display: inline-flex;
+        }
+
+        .compare-table .no {
+          color: #D2D6D3;
+          font-size: 18px;
+          line-height: 1;
+        }
+
+        .compare-table .col-pop {
+          background: rgba(31,174,91,0.05);
+        }
+
+        .compare-table .big {
+          font-family: 'Manrope', sans-serif;
+          font-weight: 700;
+          color: #1E1E1E;
+        }
+
+        .compare-cta {
+          display: inline-block;
+          padding: 8px 16px;
+          font-size: 0.875rem;
+          border-radius: 10px;
+          font-weight: 600;
+          text-decoration: none;
+          border: 1.5px solid transparent;
+          cursor: pointer;
+        }
+
+        /* ── Add-ons ── */
+        .addons-section {
+          padding: 40px 0 24px;
+        }
+
+        .addon-grid {
+          display: grid;
+          grid-template-columns: repeat(2, 1fr);
+          gap: 20px;
+          max-width: 760px;
+          margin: 0 auto;
+        }
+
+        @media (max-width: 820px) {
+          .addon-grid { grid-template-columns: 1fr; }
+        }
+
+        .addon {
+          border: 1px dashed #D2D6D3;
+          border-radius: 20px;
+          padding: 26px 24px;
+          display: flex;
+          flex-direction: column;
+        }
+
+        .addon h3 {
+          font-family: 'Manrope', sans-serif;
+          font-size: 1.1875rem;
+          font-weight: 800;
+          color: #0F6B3E;
+          margin: 0 0 8px;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+
+        .addon p {
+          color: #4B4B4B;
+          font-size: 0.90625rem;
+          margin: 0 0 20px;
+          flex: 1;
+        }
+
+        .addon-price {
+          font-family: 'Manrope', sans-serif;
+          font-weight: 800;
+          color: #7C7C7C;
+          font-size: 1.25rem;
+        }
+
+        .addon-link {
+          display: inline-block;
+          margin-top: 10px;
+          color: #2C8EC4;
+          font-size: 0.875rem;
+          font-weight: 600;
+          text-decoration: none;
+        }
+
+        .addon-link:hover {
+          text-decoration: underline;
+        }
+
+        .soon-tag {
+          font-size: 0.6875rem;
+          font-weight: 700;
+          letter-spacing: 0.05em;
+          text-transform: uppercase;
+          background: #EEF0EF;
+          color: #7C7C7C;
+          padding: 3px 9px;
+          border-radius: 9999px;
+        }
+
       `}</style>
 
       {/* NAV */}
@@ -385,9 +691,9 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
             <span className="eyebrow-dot" />
             Pricing
           </div>
-          <h1>Simple, transparent pricing.</h1>
+          <h1>Simple, <span className="accent">transparent</span> pricing.</h1>
           <p className="lead">
-            Choose the perfect plan for your influencer marketing needs. No hidden fees. Cancel anytime.
+            Start free and stay free for as long as you like. Unlimited seats on every plan — no hidden fees, cancel anytime.
           </p>
           <div className="billing-toggle">
             <a href="?cycle=monthly" className={cycle === "monthly" ? "active" : ""}>
@@ -405,70 +711,282 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
       <section className="plans-section">
         <div className="container">
           <div className="plans-grid">
-            {plans.map((plan: any, idx: number) => {
-              const price = cycle === "yearly" ? plan.price_yearly : plan.price_monthly;
-              const priceLabel = cycle === "yearly" ? "/yr" : "/mo";
-              const isPopular = plan.name === "solo";
-              const showAdditionalFeatures = plan.name === "solo" || plan.name === "team";
+            {plans.map((plan: any) => {
+              const isPopular = plan.name === "team";
+              const price = formatPrice(plan, cycle);
+              const cta = ctaFor(plan);
               return (
                 <div key={plan.id} className={`plan-card${isPopular ? " popular" : ""}`}>
-                  {isPopular && <div className="popular-badge">⭐ MOST POPULAR</div>}
+                  {isPopular && <div className="popular-badge">Most Popular</div>}
                   <div className="plan-inner">
                     <div className="plan-name">{plan.display_name}</div>
-                    <div className="plan-summary">{getPlanSummary(plan)}</div>
+                    <div className="plan-summary">{PLAN_TAGLINES[plan.name] ?? ""}</div>
                     <div className="plan-price">
-                      <span className="plan-price-amount">${Number(price).toLocaleString()}</span>
-                      <span className="plan-price-period">{priceLabel}</span>
+                      <span className="plan-price-amount">{price.amount}</span>
+                      {price.period && <span className="plan-price-period">{price.period}</span>}
                     </div>
-                    <ul className="plan-features">
-                      <li><span className="check">✓</span><span><strong>Unlimited seats</strong></span></li>
-                      <li>
-                        <span className="check">✓</span>
-                        <span><strong>{plan.included_brands}</strong> workspace{plan.included_brands !== 1 ? "s" : ""}</span>
-                      </li>
-                      {plan.max_influencers && (
-                        <li>
-                          <span className="check">✓</span>
-                          <span><strong>{plan.name !== "basic" ? "Unlimited" : plan.max_influencers}</strong> influencers per brand</span>
-                        </li>
-                      )}
-                      {plan.max_campaigns && (
-                        <li>
-                          <span className="check">✓</span>
-                          <span><strong>{plan.max_campaigns}</strong> active campaigns</span>
-                        </li>
-                      )}
-                    </ul>
-                    <Link
-                      href="/signup"
-                      className={`plan-cta${isPopular ? " plan-cta-popular" : ""}`}
-                    >
-                      {plan.name === "basic" ? "Get Started Free" : "Get Started"}
+                    <div className="plan-price-sub">{formatPriceSub(plan, cycle)}</div>
+                    <Link href={cta.href} className={`plan-cta ${cta.cls}`}>
+                      {cta.label}
                     </Link>
-
-                    <div
-                      className="card-additional-features"
-                      style={showAdditionalFeatures ? undefined : { visibility: "hidden" }}
-                    >
-                      <span className="card-additional-features-label">Additional Features</span>
-                      <ul className="card-additional-features-list">
-                        <li>
-                          <span>Instroom Post Tracker</span>
-                          <span className="card-additional-features-info" title="Track influencer posts and performance across all your campaigns.">i</span>
+                    <ul className="plan-features">
+                      {getPlanFeatures(plan).map((feature, i) => (
+                        <li key={i}>
+                          <span className="check"><Check /></span>
+                          <span>{feature}</span>
                         </li>
-                        <li>
-                          <span>Instroom Chrome Extension</span>
-                          <span className="card-additional-features-info" title="Discover and save influencer profiles directly from your browser.">i</span>
-                        </li>
-                      </ul>
-                    </div>
+                      ))}
+                    </ul>
                   </div>
                 </div>
               );
             })}
+
+            {/* AGENCY — custom plan, not tied to a subscription row */}
+            <div className="plan-card">
+              <div className="plan-inner">
+                <div className="plan-name">Agency</div>
+                <div className="plan-summary">For agencies managing clients at scale.</div>
+                <div className="plan-price">
+                  <span className="plan-price-amount">Custom</span>
+                </div>
+                <div className="plan-price-sub">Volume influencers &amp; workspaces</div>
+                <DemoCtaButton className="plan-cta plan-cta-blue">Contact sales</DemoCtaButton>
+                <ul className="plan-features">
+                  {AGENCY_FEATURES.map((feature, i) => (
+                    <li key={i}>
+                      <span className="check"><Check /></span>
+                      <span>{feature}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div className="reassure">
+            <div><Check /> Free forever plan</div>
+            <div><Check /> Unlimited seats</div>
+            <div><Check /> Cancel anytime</div>
+            <div><Check /> 7-day money-back for new subscribers</div>
           </div>
         </div>
       </section>
+
+      {/* COMPARE */}
+      <section className="compare-section">
+        <div className="container">
+          <div className="section-head">
+            <h2>Compare plans</h2>
+            <p>Every plan runs on the same core toolkit. Here&apos;s what changes as you scale.</p>
+          </div>
+          <div className="compare-scroll">
+            <table className="compare-table">
+              <thead>
+                <tr>
+                  <th>&nbsp;</th>
+                  {tableColumns.map((plan: any) => (
+                    <th key={plan.id} className={`plan${plan.name === "team" ? " pop" : ""}`}>
+                      {plan.display_name}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Price</td>
+                  {tableColumns.map((plan: any) => {
+                    const isTeam = plan.name === "team";
+                    if (plan.name === "agency") {
+                      return <td key={plan.id} className="big">Custom</td>;
+                    }
+                    const price = formatPrice(plan, cycle);
+                    return (
+                      <td key={plan.id} className={`big${isTeam ? " col-pop" : ""}`}>
+                        {price.amount}{price.period}
+                      </td>
+                    );
+                  })}
+                </tr>
+                <tr>
+                  <td>
+                    Workspaces
+                    <span className="info" tabIndex={0}>
+                      i
+                      <span className="tip">
+                        A workspace is a dedicated space for one brand or client — its own influencers, pipeline,
+                        and reports. One workspace = one brand.
+                      </span>
+                    </span>
+                  </td>
+                  {tableColumns.map((plan: any) => {
+                    const isTeam = plan.name === "team";
+                    const value =
+                      plan.name === "agency" ? "Unlimited" :
+                      plan.name === "team" ? `${plan.included_brands} (add more)` :
+                      `${plan.included_brands}`;
+                    return <td key={plan.id} className={isTeam ? "col-pop" : ""}>{value}</td>;
+                  })}
+                </tr>
+                <tr>
+                  <td>
+                    Influencers
+                    <span className="info" tabIndex={0}>
+                      i
+                      <span className="tip">
+                        How many influencers you can add to your list. Basic is a one-time allotment. Solo and
+                        Team refresh monthly — every add auto-fills the creator&apos;s engagement, followers,
+                        email, and location.
+                      </span>
+                    </span>
+                  </td>
+                  {tableColumns.map((plan: any) => {
+                    const isTeam = plan.name === "team";
+                    const count = Number(plan.max_influencers).toLocaleString();
+                    const value =
+                      plan.name === "agency" ? "Custom" :
+                      plan.name === "basic" ? `${count} one-time` :
+                      `${count}/mo`;
+                    return <td key={plan.id} className={isTeam ? "col-pop" : ""}>{value}</td>;
+                  })}
+                </tr>
+                <tr>
+                  <td>Creator insights</td>
+                  {tableColumns.map((plan: any) => {
+                    const isTeam = plan.name === "team";
+                    const has = FEATURE_MATRIX[plan.name]?.insights;
+                    return (
+                      <td key={plan.id} className={isTeam ? "col-pop" : ""}>
+                        {has ? <span className="yes"><Check /></span> : <span className="no">–</span>}
+                      </td>
+                    );
+                  })}
+                </tr>
+                <tr>
+                  <td>
+                    Inbox — Gmail &amp; Outlook
+                    <span className="info" tabIndex={0}>
+                      i
+                      <span className="tip">
+                        Connect Gmail or Outlook to message and track influencers in one place. Chats outside
+                        email (like IG DMs) are still tracked in the pipeline.
+                      </span>
+                    </span>
+                  </td>
+                  {tableColumns.map((plan: any) => {
+                    const isTeam = plan.name === "team";
+                    const has = FEATURE_MATRIX[plan.name]?.inbox;
+                    return (
+                      <td key={plan.id} className={isTeam ? "col-pop" : ""}>
+                        {has ? <span className="yes"><Check /></span> : <span className="no">–</span>}
+                      </td>
+                    );
+                  })}
+                </tr>
+                <tr>
+                  <td>Import &amp; export</td>
+                  {tableColumns.map((plan: any) => {
+                    const isTeam = plan.name === "team";
+                    const has = FEATURE_MATRIX[plan.name]?.importExport;
+                    return (
+                      <td key={plan.id} className={isTeam ? "col-pop" : ""}>
+                        {has ? <span className="yes"><Check /></span> : <span className="no">–</span>}
+                      </td>
+                    );
+                  })}
+                </tr>
+                <tr>
+                  <td>White-label / custom client reports</td>
+                  {tableColumns.map((plan: any) => {
+                    const isTeam = plan.name === "team";
+                    const has = FEATURE_MATRIX[plan.name]?.whiteLabel;
+                    return (
+                      <td key={plan.id} className={isTeam ? "col-pop" : ""}>
+                        {has ? <span className="yes"><Check /></span> : <span className="no">–</span>}
+                      </td>
+                    );
+                  })}
+                </tr>
+                <tr>
+                  <td>Support</td>
+                  {tableColumns.map((plan: any) => (
+                    <td key={plan.id} className={plan.name === "team" ? "col-pop" : ""}>
+                      {SUPPORT_TEXT[plan.name]}
+                    </td>
+                  ))}
+                </tr>
+                <tr>
+                  <td>Onboarding</td>
+                  {tableColumns.map((plan: any) => (
+                    <td key={plan.id} className={plan.name === "team" ? "col-pop" : ""}>
+                      {ONBOARDING_TEXT[plan.name]}
+                    </td>
+                  ))}
+                </tr>
+                <tr>
+                  <td></td>
+                  {tableColumns.map((plan: any) => {
+                    const isTeam = plan.name === "team";
+                    if (plan.name === "agency") {
+                      return (
+                        <td key={plan.id}>
+                          <DemoCtaButton className="compare-cta plan-cta-blue">Contact sales</DemoCtaButton>
+                        </td>
+                      );
+                    }
+                    const cta = ctaFor(plan);
+                    return (
+                      <td key={plan.id} className={isTeam ? "col-pop" : ""}>
+                        <Link href={cta.href} className={`compare-cta ${isTeam ? "plan-cta-solid" : "plan-cta-quiet"}`}>
+                          {plan.name === "basic" ? "Start free" : `Choose ${plan.display_name}`}
+                        </Link>
+                      </td>
+                    );
+                  })}
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      {/* ADD-ONS */}
+      <section className="addons-section">
+        <div className="container">
+          <div className="section-head">
+            <h2>Optional power tools</h2>
+            <p>Add these when you&apos;re ready to go deeper. Both are on the way.</p>
+          </div>
+          <div className="addon-grid">
+            <div className="addon">
+              <h3>Post Tracker <span className="soon-tag">Coming soon</span></h3>
+              <p>
+                Automatically detect every post from your campaign influencers by hashtag or mention, and save
+                the content to Google Drive when usage rights are granted. An opt-in add-on — not required to
+                run Instroom.
+              </p>
+              <div className="addon-price">Coming soon</div>
+              <a className="addon-link" href="https://posttracker.instroom.io" target="_blank" rel="noopener noreferrer">
+                Learn more about Post Tracker →
+              </a>
+            </div>
+            <div className="addon">
+              <h3>Discovery <span className="soon-tag">Coming soon</span></h3>
+              <p>
+                Find and vet new creators to work with — search by platform, niche, audience, and engagement —
+                without ever leaving Instroom.
+              </p>
+              <div className="addon-price">Coming soon</div>
+              <Link className="addon-link" href="/early-access">
+                Get early access →
+              </Link>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* FAQ */}
+      <PricingFaq />
 
       {/* FINAL CTA */}
       <PricingFinalCTA />

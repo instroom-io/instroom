@@ -162,7 +162,7 @@ export function EmailMockup({ className = "" }: { className?: string }) {
         <FeatureSidebar active="email" />
         <div className="flex-1 min-w-0 flex flex-col">
           <div className="flex flex-wrap gap-1 px-3 py-2 border-b border-[#eef1f0]">
-            <span className="text-[7px] font-bold px-1.5 py-[3px] rounded-full bg-[#1E1E1E] text-white shrink-0">42 All</span>
+            <span className="text-[7px] font-bold px-1.5 py-[3px] rounded-full bg-[#1E1E1E] text-white shrink-0">52 All</span>
             {[
               { label: "Prospects", count: 8, cls: "bg-gray-100 text-gray-700" },
               { label: "Reached Out", count: 12, cls: "bg-blue-100 text-blue-700" },
