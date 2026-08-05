@@ -7,6 +7,9 @@ import { prisma } from  "@/lib/prisma";
 import { PricingPlanButton } from "@/components/pricing-plan-button";
 import { GetEarlyAccessButton } from "@/components/get-early-access-button";
 
+// Reads plans from the DB — render at request time, not at build.
+export const dynamic = "force-dynamic";
+
 function getPlanSummary(plan: any) {
   if (plan.name === "basic") {
     return "1 workspace (30-day free trial)";
