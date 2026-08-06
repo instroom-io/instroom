@@ -227,27 +227,25 @@ export function LandingPage() {
             </div>
             <h1 className={styles.heroH1} style={{ fontFamily: "'Manrope', sans-serif", fontWeight: 800, lineHeight: 1.08, letterSpacing: "-0.03em", marginBottom: "24px" }}>Influencer marketing isn't{" "}
             <span style={{ position: "relative", display: "inline-block" }}>
-              <span style={{ position: "relative", zIndex: 1 }}>complicated</span>
-              <svg
-                viewBox="0 0 200 100"
-                preserveAspectRatio="none"
+              <span style={{ position: "relative", zIndex: 1, color: "#0F6B3E" }}>complicated</span>
+              <Image
+                src="/images/strike-complicated.png"
+                alt=""
+                width={1698}
+                height={30}
+                aria-hidden="true"
                 style={{
                   position: "absolute",
-                  inset: 0,
-                  width: "100%",
-                  height: "100%",
+                  top: "52%",
+                  left: "0%",
+                  transform: "translateY(-50%)",
+                  width: "116%",
+                  height: "auto",
                   pointerEvents: "none",
+                  zIndex: 2,
                 }}
-              >
-                <path
-                  d="M4,60 C36,66 62,54 92,62 C118,69 142,56 168,64 C182,68 190,64 196,58"
-                  fill="none"
-                  stroke="#E4483C"
-                  strokeWidth="8"
-                  strokeLinecap="round"
-                />
-              </svg>
-            </span>.<br />Managing it without the <span style={{ color: "#1FAE5B" }}>right system</span> is.</h1>
+              />
+            </span>.<br />Managing it without the <span style={{ color: "#0F6B3E" }}>right system</span> is.</h1>
             <p className={styles.heroLead}>
               Instroom is the system. Every creator, every campaign, every result — in one workspace. Built by people who've done the work.
             </p>
@@ -412,17 +410,19 @@ export function LandingPage() {
       <section className={`${styles.trust} ${styles.secEven}`}>
         <div className={styles.containerMd}>
           <p className={styles.trustLabel}>Built from 200+ brands, campaigns, and hard-won lessons</p>
+        </div>
+        <div className={styles.trustLogosWide}>
           <div className={styles.trustLogos}>
             <div className={styles.trustCarousel}>
               {[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17].map((num) => (
                 <div key={num} className={styles.trustLogo}>
-                  <Image src={`/images/brandLogo/${num}.png`} alt={`Brand ${num}`} width={380} height={105} style={{ objectFit: "contain", height: "105px", width: "auto", maxWidth: "380px" }} />
+                  <Image src={`/images/brandLogo/${num}.png`} alt={`Brand ${num}`} width={280} height={64} />
                 </div>
               ))}
               {/* Duplicate logos for seamless loop */}
               {[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17].map((num) => (
                 <div key={`dup-${num}`} className={styles.trustLogo}>
-                  <Image src={`/images/brandLogo/${num}.png`} alt={`Brand ${num}`} width={380} height={105} style={{ objectFit: "contain", height: "105px", width: "auto", maxWidth: "380px" }} />
+                  <Image src={`/images/brandLogo/${num}.png`} alt={`Brand ${num}`} width={280} height={64} />
                 </div>
               ))}
             </div>

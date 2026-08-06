@@ -1,6 +1,6 @@
 @import url('https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=Patrick+Hand&family=Alex+Brush&display=swap');
 
-:root {
+:global(:root) {
   --green: #1FAE5B;
   --deep-green: #0F6B3E;
   --charcoal: #1E1E1E;
@@ -61,7 +61,7 @@
 
 /* ── Hero ── */
 .hero {
-  padding: 72px 0 64px;
+  padding: 72px 0 32px;
   background-image: radial-gradient(circle, rgba(31,174,91,0.12) 1px, transparent 1px);
   background-size: 28px 28px;
 }
@@ -260,7 +260,7 @@
 
 /* ── Trust ── */
 .trust {
-  padding: 40px 0 44px;
+  padding: 24px 0 28px;
 }
 
 .trustLabel {
@@ -284,13 +284,19 @@
   background-color: #d4d4d8;
 }
 
+.trustLogosWide {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 0 clamp(16px, 4vw, 32px);
+}
+
 .trustLogos {
   display: flex;
   align-items: center;
   gap: 24px;
   overflow: hidden;
   position: relative;
-  height: 140px;
+  height: 96px;
 }
 
 .trustCarousel {
@@ -313,7 +319,7 @@
 }
 
 .trustLogo {
-  height: 110px;
+  height: 80px;
   padding: 0 16px;
   display: flex;
   align-items: center;
@@ -322,9 +328,9 @@
 }
 
 .trustLogo img {
-  height: 80px !important;
+  height: 64px !important;
   width: auto !important;
-  max-width: 250px !important;
+  max-width: 280px !important;
   object-fit: contain !important;
 }
 
@@ -1356,9 +1362,14 @@
 }
 
 @media (max-width: 640px) {
-  .hero { padding: 64px 0 48px; }
+  .hero { padding: 64px 0 32px; }
   .statsRow { gap: 36px; }
-  .trustLogos { gap: 16px; }
+  .trustLogos { gap: 16px; height: 64px; }
+  .trustLogo { height: 56px; padding: 0 12px; }
+  .trustLogo img {
+    height: 44px !important;
+    max-width: 180px !important;
+  }
   .footerInner { grid-template-columns: 1fr; }
 
   /* Tighter tabs on phones so 2.5 of the 5 are visible at 375px — enough for
