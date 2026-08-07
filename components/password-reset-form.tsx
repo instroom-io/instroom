@@ -38,7 +38,7 @@ const getPasswordStrengthLevel = (requirements: ReturnType<typeof checkPasswordS
   return 'strong'
 }
 
-export function PasswordResetForm({ token, className = "" }: { token?: string; className?: string }) {
+export function PasswordResetForm({ token, isWelcome = false, className = "" }: { token?: string; isWelcome?: boolean; className?: string }) {
   const router = useRouter()
   const [mounted, setMounted] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
@@ -153,9 +153,13 @@ export function PasswordResetForm({ token, className = "" }: { token?: string; c
       <Card className={`rounded-2xl shadow-lg p-6 sm:p-8 border border-[#0F6B3E]/15 bg-gradient-to-b from-white via-white to-[#0F6B3E]/5 relative overflow-hidden ${className}`}>
         <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-transparent via-[#1FAE5B] to-transparent" />
         <CardHeader className="gap-2 pb-2 pt-4">
-          <CardTitle className="text-xl sm:text-2xl font-bold text-gray-900">Reset Your Password</CardTitle>
+          <CardTitle className="text-xl sm:text-2xl font-bold text-gray-900">
+            {isWelcome ? "Set Your Password" : "Reset Your Password"}
+          </CardTitle>
           <CardDescription className="text-xs sm:text-sm text-gray-600">
-            Enter a new password to regain access to your account
+            {isWelcome
+              ? "Welcome to Instroom — create a password to activate your account"
+              : "Enter a new password to regain access to your account"}
           </CardDescription>
         </CardHeader>
         <CardContent className="pt-6">
@@ -163,10 +167,12 @@ export function PasswordResetForm({ token, className = "" }: { token?: string; c
             <div className="space-y-4">
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
                 <p className="text-sm text-amber-900 font-medium">
-                  ⚠️ Missing Reset Link
+                  ⚠️ {isWelcome ? "Missing Activation Link" : "Missing Reset Link"}
                 </p>
                 <p className="text-sm text-amber-800 mt-2">
-                  The password reset link appears to be invalid or missing. Please request a new password reset link from the login page.
+                  {isWelcome
+                    ? "This activation link appears to be invalid or missing. Please use the link from your approval email, or request a password reset from the login page."
+                    : "The password reset link appears to be invalid or missing. Please request a new password reset link from the login page."}
                 </p>
               </div>
               <div className="space-y-3">
@@ -189,7 +195,7 @@ export function PasswordResetForm({ token, className = "" }: { token?: string; c
             <div className="space-y-4">
               <div className="rounded-lg border border-green-200 bg-green-50 p-4">
                 <p className="text-sm text-green-800 font-medium text-center">
-                  ✓ Password reset successfully!
+                  {isWelcome ? "✓ Account activated!" : "✓ Password reset successfully!"}
                 </p>
                 <p className="text-xs text-green-700 mt-2 text-center">
                   You'll be redirected to login in a moment...
@@ -303,7 +309,7 @@ export function PasswordResetForm({ token, className = "" }: { token?: string; c
                     disabled={isLoading}
                     className="h-11 w-full bg-[#1FAE5B] text-white font-semibold rounded-lg shadow-md hover:bg-[#17a04e] hover:shadow-lg transition-all disabled:opacity-50"
                   >
-                    {isLoading ? "Resetting..." : "Reset Password"}
+                    {isLoading ? (isWelcome ? "Activating..." : "Resetting...") : (isWelcome ? "Activate Account" : "Reset Password")}
                   </Button>
                   <Link href="/login" className="block">
                     <Button

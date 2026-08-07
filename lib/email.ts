@@ -91,11 +91,12 @@ export async function sendBrandInvitationEmail(
 }
 
 export async function sendEarlyAccessApprovedEmail(
-  email:     string,
-  name:      string,
-  signupUrl: string,
+  email:              string,
+  name:               string,
+  actionUrl:          string,
+  hasExistingAccount: boolean = false,
 ): Promise<boolean> {
-  const html = await render(EarlyAccessApprovedEmail({ name, signupUrl }))
+  const html = await render(EarlyAccessApprovedEmail({ name, actionUrl, hasExistingAccount }))
   return sendEmail({
     to:      email,
     subject: "You're approved for Instroom early access!",

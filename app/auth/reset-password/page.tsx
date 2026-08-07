@@ -4,10 +4,10 @@ import { PasswordResetForm } from "@/components/password-reset-form"
 export default async function PasswordResetPage({
   searchParams,
 }: {
-  searchParams: Promise<{ token?: string }>
+  searchParams: Promise<{ token?: string; welcome?: string }>
 }) {
   const params = await searchParams
-  
+
   return (
     <div className="min-h-svh w-full bg-[#F7F9F8] text-[#1E1E1E] relative overflow-hidden">
       <div className="fixed top-4 sm:top-6 left-4 sm:left-12 z-50">
@@ -27,7 +27,7 @@ export default async function PasswordResetPage({
       <div className="hidden sm:block absolute top-1/3 right-1/4 w-64 h-64 rounded-full bg-[#2C8EC4]/5 blur-3xl" />
 
       <div className="min-h-svh flex items-center justify-center px-4 sm:px-6 py-8 sm:py-0 relative z-20">
-        <PasswordResetForm token={params.token} className="rounded-2xl shadow-lg p-6 sm:p-8 border border-[#0F6B3E]/15 bg-gradient-to-b from-white via-white to-[#0F6B3E]/5 relative overflow-hidden" />
+        <PasswordResetForm token={params.token} isWelcome={params.welcome === "1"} className="rounded-2xl shadow-lg p-6 sm:p-8 border border-[#0F6B3E]/15 bg-gradient-to-b from-white via-white to-[#0F6B3E]/5 relative overflow-hidden" />
       </div>
     </div>
   )

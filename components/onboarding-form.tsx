@@ -153,7 +153,7 @@ export function OnboardingForm({
               disabled={isLoading}
               className="h-10 sm:h-12 px-8 sm:px-12 text-sm sm:text-base bg-[#1FAE5B] text-white font-semibold hover:bg-[#17a04e] rounded-full"
             >
-              {isLoading ? 'Taking you to pricing...' : 'View pricing plans →'}
+              {isLoading ? 'Taking you in...' : 'Continue →'}
             </Button>
           </div>
         </div>
