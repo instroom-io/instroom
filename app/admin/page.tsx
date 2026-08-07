@@ -54,7 +54,7 @@ export default function AdminDashboardPage() {
 
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
         {CARDS.map(({ key, label, icon: Icon }) => (
-          <div key={key} className="bg-white border border-[#0F6B3E]/10 rounded-xl shadow-sm p-4 flex flex-col gap-2">
+          <div key={key} className="bg-white border border-[#0F6B3E]/10 rounded-2xl shadow-sm p-4 flex flex-col gap-2">
             <div className="flex items-start justify-between gap-2">
               {/* Long labels ("Pending Influencer Approvals") overflowed the
                   tile at the 2-column mobile size — allow them to wrap. */}
@@ -68,7 +68,7 @@ export default function AdminDashboardPage() {
         ))}
       </div>
 
-      <div className="bg-white border border-[#0F6B3E]/10 rounded-xl shadow-sm p-5">
+      <div className="bg-white border border-[#0F6B3E]/10 rounded-2xl shadow-sm p-5">
         <h2 className="text-sm font-semibold text-gray-900 mb-4">Recent Activity</h2>
         {loading ? (
           <p className="text-sm text-gray-400">Loading…</p>

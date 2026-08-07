@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button"
+import { LogoLockup } from "@/components/brand/logo"
 import Image from "next/image"
 import {
   Card,
@@ -168,16 +169,11 @@ export function OnboardingForm({
       {/* Left Content Area */}
       <div className="flex-1 px-6 sm:px-10 py-4 sm:py-6 flex flex-col overflow-y-auto">
         {/* Logo */}
-        <div className="flex items-center gap-2 mb-4 sm:mb-6">
-          <Image 
-            src="/images/instroomLogo.png" 
-            alt="Instroom Logo" 
-            width={24}
-            height={24}
-            className="rounded-lg w-6 h-6"
-          />
-          <span className="font-bold text-sm sm:text-base text-gray-900">Instroom</span>
-        </div>
+        <LogoLockup
+          size="sm"
+          className="mb-4 sm:mb-6"
+          textClassName="text-sm sm:text-base"
+        />
 
         {/* Step Indicator */}
         <div className="text-xs font-semibold text-gray-500 mb-1.5 tracking-wider">

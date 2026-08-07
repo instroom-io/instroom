@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
+import { safeRedirectPath } from "@/lib/safe-redirect"
 import { signIn } from "next-auth/react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -44,7 +45,11 @@ export function LoginForm({
     const messageParam = searchParams?.get("message")
     const authErrorParam = searchParams?.get("authError")
 
-    if (authErrorParam === "use-email-password") {
+    const reasonParam = searchParams?.get("reason")
+
+    if (reasonParam === "expired") {
+      setError("Your session has expired. Please sign in again.")
+    } else if (authErrorParam === "use-email-password") {
       setError("This account was created with email and password. Please sign in using your email and password.")
     } else if (authErrorParam === "account-exists-with-password") {
       setError("This email is already registered with email and password. Please sign in using your email and password.")
@@ -64,6 +69,18 @@ export function LoginForm({
       router.push("/admin")
       return
     }
+
+    // Return the user to whatever protected page bounced them here. Validated,
+    // because this value came out of the query string.
+    const intended = searchParams?.get("callbackUrl")
+    if (intended) {
+      const target = safeRedirectPath(intended, "")
+      if (target) {
+        router.push(target)
+        return
+      }
+    }
+
     try {
       const onboardingResponse = await fetch("/api/check-onboarding", {
         method: "POST",
@@ -184,16 +201,25 @@ export function LoginForm({
   }
 
   const handleGoogleLogin = async () => {
+    // Guard against a second click while the first is still navigating —
+    // two concurrent OAuth round trips race to set the session cookie.
+    if (isLoading) return
     try {
       setIsLoading(true)
       setError(null)
-      await signIn("google", {
-        callbackUrl: "/api/auth/redirect",
-        redirect: true
-      })
+
+      // The intended destination has to survive the trip to Google and back,
+      // so it rides on the callbackUrl that /api/auth/redirect receives.
+      const intended = safeRedirectPath(searchParams?.get("callbackUrl"), "")
+      const target = intended
+        ? `/api/auth/redirect?callbackUrl=${encodeURIComponent(intended)}`
+        : "/api/auth/redirect"
+
+      await signIn("google", { callbackUrl: target, redirect: true })
+      // No setIsLoading(false) on success: the browser is navigating away, and
+      // re-enabling the button would let it be clicked mid-redirect.
     } catch (err) {
       setError("Google login failed. Please try again.")
-    } finally {
       setIsLoading(false)
     }
   }

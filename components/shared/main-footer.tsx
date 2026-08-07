@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import Image from "next/image"
+import { Logo } from "@/components/brand/logo"
 import { usePathname, useSearchParams } from "next/navigation"
 import { Suspense, useState } from "react"
 import { BookDemoModal } from "@/components/shared/book-demo-modal"
@@ -44,13 +44,7 @@ function FooterInner() {
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:flex lg:justify-between gap-8 sm:gap-10 mb-12">
           <div className="lg:max-w-[280px]">
             <Link href="/" style={{ display: "inline-block" }}>
-              <Image
-                src="/images/instroomLogoWhiteFooter.png"
-                alt="Instroom logo"
-                width={180}
-                height={67}
-                style={{ marginBottom: "12px" }}
-              />
+              <Logo variant="footer" size="xl" alt="Instroom" className="mb-3" />
             </Link>
             <p className="text-sm text-zinc-500">The influencer marketing workspace for eCommerce brands and agencies.</p>
             <div className="flex items-center gap-3 mt-5">

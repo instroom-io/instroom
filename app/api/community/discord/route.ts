@@ -13,6 +13,34 @@ const DISCORD_COMMUNITY_KEY = "discord_community"
 type DiscordConfig = {
   serverName: string
   inviteUrl: string
+  /** Numeric Discord guild (server) ID — required for live presence. */
+  guildId?: string
+}
+
+/**
+ * Resolve an invite code to its guild ID via Discord's public invite endpoint.
+ * No credentials needed. Best-effort: if it fails the connection still saves,
+ * just without live presence, and the admin can supply the ID manually.
+ */
+async function resolveGuildIdFromInvite(inviteUrl: string): Promise<string | null> {
+  const code = inviteUrl.split("?")[0].replace(/\/+$/, "").split("/").pop()
+  if (!code) return null
+  try {
+    const res = await fetch(`https://discord.com/api/v10/invites/${encodeURIComponent(code)}`, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(8000),
+      cache: "no-store",
+    })
+    if (!res.ok) {
+      console.warn(`[community/discord] invite lookup failed: HTTP ${res.status}`)
+      return null
+    }
+    const data = await res.json()
+    return typeof data?.guild?.id === "string" ? data.guild.id : null
+  } catch (err) {
+    console.warn("[community/discord] invite lookup errored:", err instanceof Error ? err.message : err)
+    return null
+  }
 }
 
 // GET /api/community/discord?brandId=...
@@ -48,6 +76,7 @@ export async function GET(req: NextRequest) {
       connectedAs: connection.connected_as,
       serverName: config?.serverName ?? null,
       inviteUrl: config?.inviteUrl ?? null,
+      guildId: config?.guildId ?? null,
     })
   } catch (error) {
     console.error("[GET /community/discord]", error)
@@ -70,7 +99,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json()
-    const { brandId, serverName, inviteUrl } = body
+    const { brandId, serverName, inviteUrl, guildId } = body
 
     if (!brandId || !serverName?.trim() || !inviteUrl?.trim()) {
       return NextResponse.json({ error: "brandId, serverName, and inviteUrl are required" }, { status: 400 })
@@ -86,7 +115,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
-    const config: DiscordConfig = { serverName: serverName.trim(), inviteUrl: inviteUrlTrimmed }
+    // An explicitly supplied ID wins; otherwise try to resolve it from the
+    // invite so the admin doesn't have to enable Developer Mode to find it.
+    const explicitGuildId = typeof guildId === "string" && /^\d{17,20}$/.test(guildId.trim())
+      ? guildId.trim()
+      : null
+    const resolvedGuildId = explicitGuildId ?? (await resolveGuildIdFromInvite(inviteUrlTrimmed))
+
+    const config: DiscordConfig = {
+      serverName: serverName.trim(),
+      inviteUrl: inviteUrlTrimmed,
+      ...(resolvedGuildId ? { guildId: resolvedGuildId } : {}),
+    }
 
     const connection = await prisma.integrationConnection.upsert({
       where: { brand_id_integration_key: { brand_id: brandId, integration_key: DISCORD_COMMUNITY_KEY } },
@@ -109,6 +149,9 @@ export async function POST(req: NextRequest) {
       connectedAs: connection.connected_as,
       serverName: config.serverName,
       inviteUrl: config.inviteUrl,
+      guildId: config.guildId ?? null,
+      // Lets the UI prompt for the ID when it couldn't be resolved.
+      guildIdResolved: Boolean(config.guildId),
     })
   } catch (error) {
     console.error("[POST /community/discord]", error)

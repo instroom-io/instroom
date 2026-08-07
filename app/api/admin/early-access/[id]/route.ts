@@ -4,8 +4,9 @@ import { requireAdmin, getAdminSession, ADMIN_EMAIL } from "@/lib/admin-auth"
 import { logAdminAction } from "@/lib/admin-audit-log"
 import { sendEarlyAccessApprovedEmail } from "@/lib/email"
 import { upsertGhlContact } from "@/lib/ghl"
+import { appUrl } from "@/lib/app-url"
 
-const APP_URL = process.env.NEXTAUTH_URL ?? "https://instroom.io"
+// Resolved per request so a preview deployment links to itself, not to prod.
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const gate = await requireAdmin()
@@ -61,7 +62,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     data: { invited_at: new Date() },
   })
 
-  const signupUrl = `${APP_URL}/signup?email=${encodeURIComponent(updated.email)}`
+  const signupUrl = appUrl(`/signup?email=${encodeURIComponent(updated.email)}`, req)
   await sendEarlyAccessApprovedEmail(updated.email, updated.name || "there", signupUrl)
 
   await logAdminAction({

@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import { Logo } from "@/components/brand/logo"
 import Image from "next/image"
 import { Button } from "@/components/ui/button"
 import { useState, useEffect } from "react"
@@ -275,7 +276,7 @@ export function LandingPage() {
             <div className="h-full w-full flex font-[Inter,system-ui,-apple-system,sans-serif] overflow-hidden">
               {/* Sidebar */}
               <div className={`${styles.heroMockupSidebar} shrink-0 bg-[#0F6B3E] flex flex-col pt-3 pb-2 px-2 gap-3`}>
-                <Image src="/INSTROOM WHITE.png" alt="Instroom" width={72} height={15} className="object-contain self-center" />
+                <Logo variant="fullWhite" size="xs" alt="" className="self-center" />
                 <div className="w-full h-px bg-white/20" />
                 <div className="flex flex-col gap-1">
                   {HERO_SIDEBAR_ICONS.map(({ Icon, label, active }, i) => (

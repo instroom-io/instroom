@@ -1,4 +1,4 @@
-import Image from "next/image"
+import { Logo } from "@/components/brand/logo"
 import {
   IconSearch,
   IconMail,
@@ -24,7 +24,7 @@ const FEATURE_NAV_ICONS = [
 export function FeatureSidebar({ active }: { active: string }) {
   return (
     <div className="w-[54px] shrink-0 bg-[#0F6B3E] flex flex-col items-center pt-2.5 pb-2 gap-2">
-      <Image src="/INSTROOM WHITE.png" alt="Instroom" width={36} height={8} className="object-contain mb-1" />
+      <Logo variant="fullWhite" size="xs" alt="" className="mb-1" />
       {FEATURE_NAV_ICONS.map(({ key, Icon }) => (
         <div
           key={key}

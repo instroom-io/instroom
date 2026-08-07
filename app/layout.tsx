@@ -4,7 +4,7 @@ import { Inter, Manrope } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "./providers";
 import { Toaster } from "sonner";
-import InactivityProvider from "@/components/InactivityProvider";
+import SessionGuard from "@/components/SessionGuard";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -33,9 +33,9 @@ export default function RootLayout({
         suppressHydrationWarning
       >
         <AuthProvider>
-          <InactivityProvider>
+          <SessionGuard>
             {children}
-          </InactivityProvider>
+          </SessionGuard>
         </AuthProvider>
         <Toaster />
       </body>

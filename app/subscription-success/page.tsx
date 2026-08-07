@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect } from "react";
+import { Logo } from "@/components/brand/logo"
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { CheckCircle2 } from "lucide-react";
-import Image from "next/image";
 
 export default function SubscriptionSuccessPage() {
   const router = useRouter();
@@ -20,8 +20,23 @@ export default function SubscriptionSuccessPage() {
       return;
     }
 
+    // Honour a return target set before checkout (currently the Post Tracker
+    // Add-on flow, which sends the user back to the influencer's Post tab).
+    // Falls back to /dashboard exactly as before when nothing is stored, and
+    // only same-origin relative paths are accepted so this can't be used as an
+    // open redirect.
+    let destination = "/dashboard";
+    try {
+      const returnTo = window.sessionStorage.getItem("ptAddonReturnTo");
+      if (returnTo && returnTo.startsWith("/") && !returnTo.startsWith("//")) {
+        destination = returnTo;
+      }
+    } catch {
+      /* storage unavailable — keep the default */
+    }
+
     const timeout = setTimeout(() => {
-      router.push("/dashboard");
+      router.push(destination);
     }, 3000);
 
     return () => clearTimeout(timeout);
@@ -33,15 +48,7 @@ export default function SubscriptionSuccessPage() {
       <div className="pointer-events-none fixed bottom-0 right-0 w-56 sm:w-80 h-56 sm:h-80 rounded-full bg-[#0F6B3E]/6 blur-3xl translate-x-1/3 translate-y-1/3" />
 
       <div className="fixed top-4 sm:top-6 left-4 sm:left-12 z-50">
-        <Image
-          src="/images/INSTROOM LOGO 1.png"
-          alt="Instroom Logo"
-          width={180}
-          height={180}
-          priority
-          quality={95}
-          className="drop-shadow-sm w-32 sm:w-44 h-auto"
-        />
+        <Logo size="page" alt="Instroom" priority className="drop-shadow-sm" />
       </div>
 
       <div className="relative min-h-screen flex items-center justify-center px-4 py-12">

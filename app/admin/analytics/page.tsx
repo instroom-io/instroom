@@ -17,7 +17,7 @@ function toChartData(days: string[], values: number[]) {
 
 function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="bg-white border border-[#0F6B3E]/10 rounded-xl shadow-sm p-4">
+    <div className="bg-white border border-[#0F6B3E]/10 rounded-2xl shadow-sm p-4">
       <h2 className="text-sm font-semibold text-gray-900 mb-3">{title}</h2>
       {/* Taller on phones so 30 daily ticks don't collide at narrow widths */}
       <div className="h-[260px] sm:h-[220px] w-full">{children}</div>

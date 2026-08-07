@@ -145,7 +145,7 @@ export async function PATCH(
     }
 
     const body = await req.json()
-    const { closedStatus, paidCollabData, campaignType, postUrl } = body
+    const { closedStatus, paidCollabData, campaignType, postUrl, resetWorkflow } = body
 
     // ✅ Validate closedStatus
     const validStatuses: ClosedColumn[] = [
@@ -183,6 +183,47 @@ export async function PATCH(
 
     // ✅ Parse existing JSON safely
     const productDetails = safeParse(record.product_details)
+
+    // ── POSTED is terminal ────────────────────────────────────────────────────
+    // Once a row is Posted it stays Posted. Any move to another stage is
+    // refused unless the caller explicitly asks to reset the workflow AND has
+    // approval capability on the brand. This is enforced here, at the only
+    // write path, so no client (drag, dropdown, bulk, drawer) can bypass it.
+    const storedStatus = productDetails.closedStatus as ClosedColumn | undefined
+    if (
+      closedStatus !== undefined &&
+      storedStatus === "Posted" &&
+      closedStatus !== "Posted"
+    ) {
+      if (!resetWorkflow) {
+        return NextResponse.json(
+          {
+            error:
+              "This influencer has already Posted. Posted is a final stage — reset the workflow to move it back.",
+            terminalState: true,
+            currentStatus: "Posted",
+          },
+          { status: 409 }
+        )
+      }
+
+      const canReset = await hasBrandCapability(brandId, session.user.id, "approveInfluencers")
+      if (!canReset) {
+        return NextResponse.json(
+          {
+            error: "Only a brand owner or manager can reset a Posted workflow.",
+            terminalState: true,
+            currentStatus: "Posted",
+          },
+          { status: 403 }
+        )
+      }
+
+      console.warn(
+        `[closed PATCH] workflow RESET from Posted → ${closedStatus} ` +
+          `for brandInfluencer ${brandInfluencerId} by user ${session.user.id}`
+      )
+    }
 
     // ✅ Merge JSON updates (no overwrite loss)
     if (closedStatus !== undefined) {

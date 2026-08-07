@@ -75,11 +75,11 @@ export default function AdminInfluencersPage() {
         <input
           value={q} onChange={(e) => setQ(e.target.value)}
           placeholder="Search by handle or name…"
-          className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-[#1FAE5B]/40 focus:border-[#1FAE5B]"
+          className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#1FAE5B]/40 focus:border-[#1FAE5B]"
         />
       </div>
 
-      <div className="bg-white border border-[#0F6B3E]/10 rounded-xl shadow-sm overflow-x-auto">
+      <div className="bg-white border border-[#0F6B3E]/10 rounded-2xl shadow-sm overflow-x-auto">
         <table className="w-full min-w-[860px] text-sm">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
@@ -121,14 +121,14 @@ export default function AdminInfluencersPage() {
                 <td className="px-4 py-2.5 text-gray-700">{inf.campaignCount}</td>
                 <td className="px-4 py-2.5">
                   <div className="flex items-center gap-2 justify-end">
-                    <button onClick={() => setViewInf(inf)} className="text-xs font-medium px-2.5 py-1 rounded-lg border border-gray-200 hover:bg-gray-50">View</button>
+                    <button onClick={() => setViewInf(inf)} className="text-xs font-medium px-2.5 py-1 rounded-xl border border-gray-200 hover:bg-gray-50">View</button>
                     {inf.verificationStatus !== "verified" && (
-                      <button disabled={busyId === inf.id} onClick={() => act(inf.id, "approve")} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-[#1FAE5B] text-white hover:bg-[#178a48] disabled:opacity-50">Approve</button>
+                      <button disabled={busyId === inf.id} onClick={() => act(inf.id, "approve")} className="text-xs font-medium px-2.5 py-1 rounded-xl bg-[#1FAE5B] text-white hover:bg-[#178a48] disabled:opacity-50">Approve</button>
                     )}
                     {inf.verificationStatus !== "rejected" && (
-                      <button disabled={busyId === inf.id} onClick={() => act(inf.id, "reject")} className="text-xs font-medium px-2.5 py-1 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50">Reject</button>
+                      <button disabled={busyId === inf.id} onClick={() => act(inf.id, "reject")} className="text-xs font-medium px-2.5 py-1 rounded-xl border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50">Reject</button>
                     )}
-                    <button disabled={busyId === inf.id} onClick={() => act(inf.id, inf.isSuspended ? "reactivate" : "suspend")} className="text-xs font-medium px-2.5 py-1 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-50">
+                    <button disabled={busyId === inf.id} onClick={() => act(inf.id, inf.isSuspended ? "reactivate" : "suspend")} className="text-xs font-medium px-2.5 py-1 rounded-xl border border-gray-200 hover:bg-gray-50 disabled:opacity-50">
                       {inf.isSuspended ? "Reactivate" : "Suspend"}
                     </button>
                   </div>
@@ -141,7 +141,7 @@ export default function AdminInfluencersPage() {
 
       {viewInf && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setViewInf(null)}>
-          <div className="bg-white rounded-xl shadow-xl w-[420px] max-w-[92vw] max-h-[90svh] overflow-y-auto p-5 sm:p-6" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl shadow-xl w-[420px] max-w-[92vw] max-h-[90svh] overflow-y-auto p-5 sm:p-6" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-3 mb-4">
               {viewInf.profileImageUrl
                 ? <img src={viewInf.profileImageUrl} alt="" className="w-12 h-12 rounded-full object-cover" />
@@ -158,7 +158,7 @@ export default function AdminInfluencersPage() {
               <div><dt className="text-gray-400 text-xs uppercase">Campaigns</dt><dd className="text-gray-800">{viewInf.campaignCount}</dd></div>
               <div><dt className="text-gray-400 text-xs uppercase">Added</dt><dd className="text-gray-800">{new Date(viewInf.createdAt).toLocaleDateString()}</dd></div>
             </dl>
-            <button onClick={() => setViewInf(null)} className="mt-5 w-full text-sm font-medium py-2 rounded-lg border border-gray-200 hover:bg-gray-50">Close</button>
+            <button onClick={() => setViewInf(null)} className="mt-5 w-full text-sm font-medium py-2 rounded-xl border border-gray-200 hover:bg-gray-50">Close</button>
           </div>
         </div>
       )}
