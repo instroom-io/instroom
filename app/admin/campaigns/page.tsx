@@ -98,11 +98,11 @@ export default function AdminCampaignsPage() {
         <input
           value={q} onChange={(e) => setQ(e.target.value)}
           placeholder="Search campaigns…"
-          className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-[#1FAE5B]/40 focus:border-[#1FAE5B]"
+          className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#1FAE5B]/40 focus:border-[#1FAE5B]"
         />
       </div>
 
-      <div className="bg-white border border-[#0F6B3E]/10 rounded-xl shadow-sm overflow-x-auto">
+      <div className="bg-white border border-[#0F6B3E]/10 rounded-2xl shadow-sm overflow-x-auto">
         <table className="w-full min-w-[860px] text-sm">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
@@ -129,12 +129,12 @@ export default function AdminCampaignsPage() {
                 <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">{new Date(c.createdAt).toLocaleDateString()}</td>
                 <td className="px-4 py-2.5">
                   <div className="flex items-center gap-2 justify-end">
-                    <button onClick={() => openEdit(c)} className="text-xs font-medium px-2.5 py-1 rounded-lg border border-gray-200 hover:bg-gray-50">Edit</button>
+                    <button onClick={() => openEdit(c)} className="text-xs font-medium px-2.5 py-1 rounded-xl border border-gray-200 hover:bg-gray-50">Edit</button>
                     {c.status !== "closed" && c.status !== "archived" && (
-                      <button disabled={busyId === c.id} onClick={() => applyStatus(c.id, "close")} className="text-xs font-medium px-2.5 py-1 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-50">Close</button>
+                      <button disabled={busyId === c.id} onClick={() => applyStatus(c.id, "close")} className="text-xs font-medium px-2.5 py-1 rounded-xl border border-gray-200 hover:bg-gray-50 disabled:opacity-50">Close</button>
                     )}
                     {c.status !== "archived" && (
-                      <button disabled={busyId === c.id} onClick={() => applyStatus(c.id, "archive")} className="text-xs font-medium px-2.5 py-1 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-50">Archive</button>
+                      <button disabled={busyId === c.id} onClick={() => applyStatus(c.id, "archive")} className="text-xs font-medium px-2.5 py-1 rounded-xl border border-gray-200 hover:bg-gray-50 disabled:opacity-50">Archive</button>
                     )}
                   </div>
                 </td>
@@ -146,15 +146,15 @@ export default function AdminCampaignsPage() {
 
       {editing && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setEditing(null)}>
-          <div className="bg-white rounded-xl shadow-xl w-[420px] max-w-[92vw] max-h-[90svh] overflow-y-auto p-5 sm:p-6" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl shadow-xl w-[420px] max-w-[92vw] max-h-[90svh] overflow-y-auto p-5 sm:p-6" onClick={(e) => e.stopPropagation()}>
             <h3 className="font-semibold text-gray-900 mb-4">Edit Campaign</h3>
             <label className="text-xs font-medium text-gray-500">Campaign Name</label>
-            <input value={editName} onChange={(e) => setEditName(e.target.value)} className="w-full mt-1 mb-3 px-3 py-2 text-sm border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-[#1FAE5B]/40 focus:border-[#1FAE5B]" />
+            <input value={editName} onChange={(e) => setEditName(e.target.value)} className="w-full mt-1 mb-3 px-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#1FAE5B]/40 focus:border-[#1FAE5B]" />
             <label className="text-xs font-medium text-gray-500">Budget</label>
-            <input type="number" value={editBudget} onChange={(e) => setEditBudget(e.target.value)} className="w-full mt-1 mb-4 px-3 py-2 text-sm border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-[#1FAE5B]/40 focus:border-[#1FAE5B]" />
+            <input type="number" value={editBudget} onChange={(e) => setEditBudget(e.target.value)} className="w-full mt-1 mb-4 px-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#1FAE5B]/40 focus:border-[#1FAE5B]" />
             <div className="flex gap-2">
-              <button onClick={() => setEditing(null)} className="flex-1 text-sm font-medium py-2 rounded-lg border border-gray-200 hover:bg-gray-50">Cancel</button>
-              <button disabled={busyId === editing.id} onClick={saveEdit} className="flex-1 text-sm font-medium py-2 rounded-lg bg-[#1FAE5B] text-white hover:bg-[#178a48] disabled:opacity-50">Save</button>
+              <button onClick={() => setEditing(null)} className="flex-1 text-sm font-medium py-2 rounded-xl border border-gray-200 hover:bg-gray-50">Cancel</button>
+              <button disabled={busyId === editing.id} onClick={saveEdit} className="flex-1 text-sm font-medium py-2 rounded-xl bg-[#1FAE5B] text-white hover:bg-[#178a48] disabled:opacity-50">Save</button>
             </div>
           </div>
         </div>

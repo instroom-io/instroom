@@ -8,7 +8,7 @@ import { createPasswordSetToken } from "@/lib/auth-tokens"
 import bcrypt from "bcryptjs"
 import crypto from "crypto"
 
-const APP_URL = process.env.NEXTAUTH_URL ?? "https://instroom.io"
+// Resolved per request so a preview deployment links to itself, not to prod.
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const gate = await requireAdmin()

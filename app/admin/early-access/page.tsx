@@ -111,15 +111,15 @@ export default function AdminEarlyAccessPage() {
           <input
             value={q} onChange={(e) => setQ(e.target.value)}
             placeholder="Search by name or email…"
-            className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-[#1FAE5B]/40 focus:border-[#1FAE5B]"
+            className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#1FAE5B]/40 focus:border-[#1FAE5B]"
           />
         </div>
-        <button onClick={exportCsv} className="flex items-center gap-1.5 text-sm font-medium px-3 py-2 rounded-lg border border-gray-200 hover:bg-gray-50">
+        <button onClick={exportCsv} className="flex items-center gap-1.5 text-sm font-medium px-3 py-2 rounded-xl border border-gray-200 hover:bg-gray-50">
           <IconDownload size={14} /> Export CSV
         </button>
       </div>
 
-      <div className="bg-white border border-[#0F6B3E]/10 rounded-xl shadow-sm overflow-x-auto">
+      <div className="bg-white border border-[#0F6B3E]/10 rounded-2xl shadow-sm overflow-x-auto">
         <table className="w-full min-w-[860px] text-sm">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
@@ -148,7 +148,7 @@ export default function AdminEarlyAccessPage() {
                     <button
                       disabled={busyId === u.id}
                       onClick={() => approve(u.id)}
-                      className="text-xs font-medium px-2.5 py-1 rounded-lg bg-[#1FAE5B] text-white hover:bg-[#178a48] disabled:opacity-50"
+                      className="text-xs font-medium px-2.5 py-1 rounded-xl bg-[#1FAE5B] text-white hover:bg-[#178a48] disabled:opacity-50"
                     >
                       {busyId === u.id ? "Approving…" : "Approve"}
                     </button>
@@ -166,7 +166,7 @@ export default function AdminEarlyAccessPage() {
                       <button
                         disabled={busyId === u.id}
                         onClick={() => retryGhlSync(u.id)}
-                        className="text-xs font-medium px-2 py-1 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-50"
+                        className="text-xs font-medium px-2 py-1 rounded-xl border border-gray-200 hover:bg-gray-50 disabled:opacity-50"
                       >
                         {busyId === u.id ? "Syncing…" : "Retry"}
                       </button>
@@ -176,11 +176,11 @@ export default function AdminEarlyAccessPage() {
                 <td className="px-4 py-2.5 whitespace-nowrap">
                   {confirmDeleteId === u.id ? (
                     <div className="flex items-center gap-2">
-                      <button disabled={busyId === u.id} onClick={() => deleteSignup(u.id)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:opacity-50">Confirm</button>
-                      <button onClick={() => setConfirmDeleteId(null)} className="text-xs font-medium px-2.5 py-1 rounded-lg border border-gray-200 hover:bg-gray-50">Cancel</button>
+                      <button disabled={busyId === u.id} onClick={() => deleteSignup(u.id)} className="text-xs font-medium px-2.5 py-1 rounded-xl bg-red-600 text-white hover:bg-red-700 disabled:opacity-50">Confirm</button>
+                      <button onClick={() => setConfirmDeleteId(null)} className="text-xs font-medium px-2.5 py-1 rounded-xl border border-gray-200 hover:bg-gray-50">Cancel</button>
                     </div>
                   ) : (
-                    <button onClick={() => setConfirmDeleteId(u.id)} className="text-xs font-medium px-2.5 py-1 rounded-lg border border-red-200 text-red-600 hover:bg-red-50">Delete</button>
+                    <button onClick={() => setConfirmDeleteId(u.id)} className="text-xs font-medium px-2.5 py-1 rounded-xl border border-red-200 text-red-600 hover:bg-red-50">Delete</button>
                   )}
                 </td>
               </tr>

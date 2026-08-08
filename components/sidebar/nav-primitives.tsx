@@ -14,8 +14,8 @@
 // --sb-line-height, --sb-label-size, --sb-transition.
 
 import * as React from "react"
+import { Logo } from "@/components/brand/logo"
 import Link from "next/link"
-import Image from "next/image"
 import { LogOut } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -36,16 +36,11 @@ export function SidebarBrand({
 }) {
   const inner = (
     <>
-      {/* Explicit intrinsic size = rendered size. Deriving the width from a
-          height class + aspect ratio rendered unreliably here. */}
-      <Image
-        src="/INSTROOM WHITE.png"
-        alt={alt}
-        width={140}
-        height={30}
-        className="shrink-0 object-contain"
-        priority
-      />
+      {/* size="brand" = 40px tall, up from 32px (+25%). Height token only —
+          width stays auto off the asset's real 1.834 ratio, so the wordmark
+          cannot stretch or compress. The token also raises the `sizes` hint to
+          128px, so Next serves a large enough file to stay crisp at 2x DPR. */}
+      <Logo variant="fullWhite" size="lg" alt={alt} priority />
       {badge && (
         <span className="mt-1 shrink-0 whitespace-nowrap rounded bg-white/10 px-1.5 py-0.5 text-[9px] font-bold uppercase leading-none tracking-[0.14em] text-white/70">
           {badge}
@@ -181,7 +176,11 @@ export const SIDEBAR_ROOT_CLASS =
   "border-none bg-[var(--sb-bg)] font-[family-name:var(--font-inter)] text-white " +
   "[&>[data-sidebar=sidebar]]:overflow-hidden [&>[data-sidebar=sidebar]]:bg-[var(--sb-bg)]"
 
-export const SIDEBAR_HEADER_CLASS = "shrink-0 bg-[var(--sb-bg)] px-4 pt-4 pb-3"
+// px-5/py-5 = 20px all round: enough for the 40px logo to breathe without
+// making the rail header tall. pb-5 is what sets the gap between the logo and
+// the divider; mb-3 sets the gap between the divider and the first nav item.
+export const SIDEBAR_HEADER_CLASS =
+  "shrink-0 border-b border-white/10 bg-[var(--sb-bg)] px-5 py-5 mb-3"
 
 /** The one scrollable region in the rail. */
 export const SIDEBAR_CONTENT_CLASS =

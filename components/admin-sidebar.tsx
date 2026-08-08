@@ -1,7 +1,8 @@
 "use client"
 
 import { usePathname } from "next/navigation"
-import { signOut, useSession } from "next-auth/react"
+import { useSession } from "next-auth/react"
+import { signOutEverywhere } from "@/lib/sign-out"
 import type { Sidebar } from "@/components/ui/sidebar"
 import { ADMIN_NAV } from "@/components/sidebar/nav-config"
 import { PortalSidebar, resolvePageTitle } from "@/components/sidebar/portal-sidebar"
@@ -25,7 +26,7 @@ export function AdminSidebar({ ...props }: React.ComponentProps<typeof Sidebar>)
         name: session?.user?.name || "Administrator",
         email: session?.user?.email || undefined,
         image: session?.user?.image,
-        onSignOut: () => signOut({ callbackUrl: "/login" }),
+        onSignOut: () => signOutEverywhere(),
       }}
       {...props}
     />

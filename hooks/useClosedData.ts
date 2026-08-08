@@ -96,11 +96,29 @@ export interface CollabDeliverable {
   contentRevs: { num: number; date: string; notes: string }[]
 }
 
+/**
+ * Result of a stage move. An object rather than a bare boolean so the caller
+ * can distinguish "the write failed" from "Posted is terminal, and a reset
+ * would be needed" — the two need different UI.
+ */
+export interface UpdateColumnResult {
+  ok: boolean
+  /** True when the server refused because the row is already Posted. */
+  terminal?: boolean
+  /** True when a reset was attempted without permission. */
+  forbidden?: boolean
+  error?: string
+}
+
 interface UseClosedDataReturn {
   data: ClosedInfluencer[]
   isLoading: boolean
   error: string | null
-  updateColumn: (id: string, newColumn: ClosedColumn) => Promise<boolean>
+  updateColumn: (
+    id: string,
+    newColumn: ClosedColumn,
+    options?: { resetWorkflow?: boolean }
+  ) => Promise<UpdateColumnResult>
   updatePaidCollab: (id: string, paidCollabData: PaidCollabData) => Promise<boolean>
   updateCampaignType: (id: string, campaignType: string) => Promise<boolean>
   updatePostUrl: (id: string, postUrl: string) => Promise<boolean>
@@ -215,18 +233,48 @@ function applyColumnChange(
   }
 }
 
+const VALID_COLUMNS: ClosedColumn[] = [
+  "For Order Creation",
+  "In-Transit",
+  "Delivered",
+  "Posted",
+  "No post",
+]
+
 // ─── Map raw API item to ClosedInfluencer ─────────────────────────────────────
+// The API's closedStatus is authoritative and is used verbatim. There is no
+// client-side derivation and no default.
+//
+// This is where the "Posted reverts to For Order Creation after refresh" bug
+// lived. The previous version re-derived the column on every load:
+//
+//     inf.closedStatus === "For Order Creation" ||
+//     inf.contactStatus === "for_order_creation"   ← the bug
+//       ? "For Order Creation"
+//       : inf.closedStatus || "For Order Creation"
+//
+// Every non-exit stage maps to contact_status "for_order_creation" in the DB
+// (see mapClosedToPipelineFields) — that column tracks the PIPELINE phase, not
+// the Post Tracker stage. So a correctly saved "Posted" row came back from the
+// API as "Posted" and was then rewritten to "For Order Creation" client-side.
+// The database was never wrong; the client discarded the answer.
 function mapItem(inf: any): ClosedInfluencer {
-  const base: ClosedInfluencer = {
-    ...inf,
-    closedStatus:
-      inf.closedStatus === "For Order Creation" ||
-      inf.contactStatus === "for_order_creation"
-        ? "For Order Creation"
-        : (inf.closedStatus as ClosedColumn) || "For Order Creation",
-    ...inferContentStatuses(inf),
+  const fromApi = inf.closedStatus as ClosedColumn | undefined
+
+  if (!fromApi || !VALID_COLUMNS.includes(fromApi)) {
+    // Loud, because it means the API contract broke. Silently substituting a
+    // default here is exactly what hid the original bug.
+    console.error(
+      `[useClosedData] API returned an invalid closedStatus (${JSON.stringify(fromApi)}) ` +
+        `for brandInfluencer ${inf?.id}. Rendering it as-is rather than guessing a stage.`
+    )
   }
-  return base
+
+  return {
+    ...inf,
+    closedStatus: fromApi,
+    ...inferContentStatuses(inf),
+  } as ClosedInfluencer
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
@@ -280,8 +328,12 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
 
   // ── Update Column (optimistic, no spinner) ────────────────────────────────
   const updateColumn = useCallback(
-    async (id: string, newColumn: ClosedColumn): Promise<boolean> => {
-      if (!brandId) return false
+    async (
+      id: string,
+      newColumn: ClosedColumn,
+      options?: { resetWorkflow?: boolean }
+    ): Promise<UpdateColumnResult> => {
+      if (!brandId) return { ok: false, error: "No brand selected" }
 
       let snapshot: ClosedInfluencer[] = []
 
@@ -298,19 +350,30 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
           method:  "PATCH",
           headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify({ closedStatus: newColumn }),
+          body:    JSON.stringify({
+            closedStatus: newColumn,
+            ...(options?.resetWorkflow ? { resetWorkflow: true } : {}),
+          }),
         })
 
         if (!res.ok) {
+          // Roll the optimistic change back — the persisted stage is the truth.
           setData(snapshot)
-          return false
+          const body = await res.json().catch(() => ({}))
+          return {
+            ok: false,
+            // 409 = the row is Posted and Posted is terminal.
+            terminal: res.status === 409 || Boolean(body.terminalState),
+            forbidden: res.status === 403,
+            error: body.error || "Failed to move",
+          }
         }
 
         // ✅ State already correct — no refetch, no spinner
-        return true
+        return { ok: true }
       } catch {
         setData(snapshot)
-        return false
+        return { ok: false, error: "Network error" }
       } finally {
         pendingRef.current -= 1
       }
