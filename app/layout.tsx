@@ -38,6 +38,7 @@ export default function RootLayout({
           </SessionGuard>
         </AuthProvider>
         <Toaster />
+        <SpeedInsights />
       </body>
     </html>
   );
