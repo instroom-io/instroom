@@ -10,8 +10,10 @@ import "server-only"
 //   • A post is never imported twice (unique index + pre-check).
 //   • A failure for one influencer never aborts the others.
 //
-// Called by app/api/cron/post-detection/route.ts. Safe to call concurrently:
-// the caller holds the MonitoringLock.
+// Callers: app/api/post-tracker/detection/run/route.ts (the "Check now" button)
+// and app/api/cron/post-detection/route.ts (kept, but currently unscheduled —
+// see that file). Safe to call concurrently: the caller holds the
+// MonitoringLock.
 
 import { prisma } from "@/lib/prisma"
 import {

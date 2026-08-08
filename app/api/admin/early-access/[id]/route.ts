@@ -5,6 +5,7 @@ import { logAdminAction } from "@/lib/admin-audit-log"
 import { sendEarlyAccessApprovedEmail } from "@/lib/email"
 import { upsertGhlContact } from "@/lib/ghl"
 import { createPasswordSetToken } from "@/lib/auth-tokens"
+import { appBaseUrl } from "@/lib/app-url"
 import bcrypt from "bcryptjs"
 import crypto from "crypto"
 
@@ -15,6 +16,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (gate) return gate
   const session = await getAdminSession()
   const { id } = await params
+  // Absolute origin for the invite links in the approval email. Request-derived
+  // so preview deployments email a working host; env still takes precedence.
+  const APP_URL = appBaseUrl(req)
 
   const { action } = (await req.json()) as { action?: "approve" | "retry_ghl_sync" }
 

@@ -212,9 +212,10 @@ export default function AutoPostDetectionCard({
   }, [loading, canClaim, claimAddon])
 
   /**
-   * Trigger a detection pass now. The scheduled poller is a Vercel Cron, which
-   * doesn't fire in local development — without this there is no way to tell an
-   * idle poller from a provider returning nothing.
+   * Trigger a detection pass now. This is currently the ONLY way a pass runs:
+   * the scheduled Vercel Cron was withdrawn (Hobby plan permits one run per
+   * day, so a five-minute schedule is rejected at deploy time). It was already
+   * the only path in local development, where a cron never fires at all.
    */
   const runNow = useCallback(async () => {
     setChecking(true)
@@ -297,8 +298,8 @@ export default function AutoPostDetectionCard({
           </div>
           <p className="text-xs font-medium text-gray-700">Add-on required</p>
           <p className="text-[11px] text-gray-400 max-w-[240px]">
-            Automatic Post Detection is a Post Tracker add-on. Unlock it to monitor hashtags and mentions and import
-            matching posts automatically.
+            Automatic Post Detection is a Post Tracker add-on. Unlock it to monitor hashtags and mentions and pull
+            matching posts into the tracker.
           </p>
           {unlockError && <p className="text-[11px] text-red-600 max-w-[240px]">{unlockError}</p>}
           <Button
@@ -330,8 +331,12 @@ export default function AutoPostDetectionCard({
             <>
               <div className="flex items-center gap-2 text-[11px] font-medium">
                 <span className={`h-1.5 w-1.5 rounded-full ${enabled ? "bg-[#1FAE5B]" : "bg-gray-300"}`} />
+                {/* Deliberately does NOT say "active"/"running": there is no
+                    scheduled job behind this today (see
+                    app/api/cron/post-detection/route.ts). "Enabled" describes
+                    the saved config; detection only happens on "Check now". */}
                 <span className={enabled ? "text-[#0F6B3E]" : "text-gray-400"}>
-                  {enabled ? "Monitoring active" : "Monitoring paused"}
+                  {enabled ? "Monitoring enabled" : "Monitoring off"}
                 </span>
                 {enabled && (
                   <button
@@ -346,6 +351,16 @@ export default function AutoPostDetectionCard({
                 )}
               </div>
 
+              {/* Scheduled background checks are switched off for now, so say
+                  so plainly rather than letting an enabled toggle imply the
+                  system is watching on its own. */}
+              {enabled && (
+                <div className="text-[10px] text-gray-400">
+                  Scheduled background checks are paused. Your hashtags and mentions are saved — use
+                  &ldquo;Check now&rdquo; to run a detection pass.
+                </div>
+              )}
+
               {checkMsg && <div className="text-[10px] text-gray-500">{checkMsg}</div>}
 
               {/* Testing quota. Replaced by real entitlements later; the shape
@@ -355,7 +370,7 @@ export default function AutoPostDetectionCard({
                   <div className="rounded-lg bg-[#fff8e1] border border-[#f5e2b0] px-3 py-2">
                     <p className="text-[11px] font-semibold text-[#854F0B]">Daily testing limit reached.</p>
                     <p className="text-[10px] text-[#8a6520]">
-                      Monitoring will resume after the quota resets
+                      You can run another check after the quota resets
                       {quota.resetsAt ? ` at ${new Date(quota.resetsAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}` : ""}.
                     </p>
                   </div>

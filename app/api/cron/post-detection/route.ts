@@ -8,9 +8,27 @@ import {
 
 // Background monitoring job for Automatic Post Detection.
 //
-// Scheduled by vercel.json (every 5 minutes). Stateless by design: each
-// invocation picks up whatever is due, so it resumes correctly after a deploy,
-// a restart, or a missed run — there is no in-process timer to lose.
+// ─── CURRENTLY UNSCHEDULED ───────────────────────────────────────────────────
+// Nothing calls this on a timer today. The Vercel Cron entry was removed from
+// vercel.json because the Hobby plan only permits one cron invocation per day,
+// at daily-or-coarser granularity — a */5 schedule is rejected at deploy time.
+// The handler is kept intact and working; only the schedule was withdrawn.
+//
+// Until then, detection runs on demand via the "Check now" button, which hits
+// POST /api/post-tracker/detection/run (session-authenticated, single brand).
+//
+// To re-enable on Vercel Pro:
+//   1. Restore the crons block in vercel.json:
+//        "crons": [{ "path": "/api/cron/post-detection", "schedule": "*/5 * * * *" }]
+//   2. Set CRON_SECRET in the Vercel project environment (see .env.example).
+//      Without it this handler fails closed with 401 — by design.
+//   3. Re-enable the list refresh in DetectedPostsList.tsx (POLL_ENABLED).
+// No code change is needed here.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Stateless by design: each invocation picks up whatever is due, so it resumes
+// correctly after a deploy, a restart, or a missed run — there is no in-process
+// timer to lose.
 //
 // Concurrency is guarded by a DB lock (MonitoringLock), so an overlapping cron
 // tick or a manual trigger cannot double-poll and double-spend quota.
