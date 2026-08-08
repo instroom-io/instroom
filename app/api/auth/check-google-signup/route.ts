@@ -1,10 +1,6 @@
 import { prisma } from "@/lib/prisma"
 import { NextRequest, NextResponse } from "next/server"
 
-/**
- * Check if an email already exists before allowing Google signup
- * This prevents "Account already exists" surprise redirects
- */
 export async function POST(request: NextRequest) {
   try {
     const { email } = await request.json()

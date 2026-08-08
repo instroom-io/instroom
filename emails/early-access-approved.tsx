@@ -4,12 +4,14 @@ import { EmailLayout, colors, btn, bodyText, sectionLabel } from "./layout"
 
 interface EarlyAccessApprovedEmailProps {
   name: string
-  signupUrl: string
+  actionUrl: string
+  hasExistingAccount?: boolean
 }
 
 export default function EarlyAccessApprovedEmail({
   name = "there",
-  signupUrl = "#",
+  actionUrl = "#",
+  hasExistingAccount = false,
 }: EarlyAccessApprovedEmailProps) {
   return (
     <EmailLayout preview="You're approved for Instroom early access — here's how to get started.">
@@ -19,31 +21,40 @@ export default function EarlyAccessApprovedEmail({
 
       <Heading style={heading}>You're in, {name}.</Heading>
 
-      <Text style={bodyText}>
-        Good news — your Instroom workspace is ready. You're one of the first
-        to get access during our private beta, and we'd love for you to start
-        running your first campaign.
-      </Text>
+      {hasExistingAccount ? (
+        <Text style={bodyText}>
+          Good news — your Instroom workspace is ready. Log in with your
+          existing Instroom account to get started.
+        </Text>
+      ) : (
+        <>
+          <Text style={bodyText}>
+            Good news — your Instroom workspace is ready. You're one of the
+            first to get access during our private beta, and we'd love for
+            you to start running your first campaign.
+          </Text>
 
-      <Section style={stepsBox}>
-        <Text style={sectionLabel}>Getting started</Text>
-        <Text style={stepItem}>
-          <strong>1.</strong> Click the button below to create your account
-          with this email address.
-        </Text>
-        <Text style={stepItem}>
-          <strong>2.</strong> You'll get 3 months of full platform access — no
-          credit card required.
-        </Text>
-        <Text style={stepItem}>
-          <strong>3.</strong> Set up your first workspace and start tracking
-          creators, campaigns, and outreach in one place.
-        </Text>
-      </Section>
+          <Section style={stepsBox}>
+            <Text style={sectionLabel}>Getting started</Text>
+            <Text style={stepItem}>
+              <strong>1.</strong> Click the button below to set your password
+              and activate your account.
+            </Text>
+            <Text style={stepItem}>
+              <strong>2.</strong> You'll get 3 months of full platform access
+              — no credit card required.
+            </Text>
+            <Text style={stepItem}>
+              <strong>3.</strong> Set up your first workspace and start
+              tracking creators, campaigns, and outreach in one place.
+            </Text>
+          </Section>
+        </>
+      )}
 
       <Section style={{ textAlign: "center", margin: "28px 0 8px" }}>
-        <Button href={signupUrl} style={btn}>
-          Create your account →
+        <Button href={actionUrl} style={btn}>
+          {hasExistingAccount ? "Log in to Instroom →" : "Set your password →"}
         </Button>
       </Section>
 

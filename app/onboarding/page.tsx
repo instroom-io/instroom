@@ -66,6 +66,23 @@ export default function OnboardingPage() {
     }
   }
 
+  // Users who already have an active/trialing subscription (e.g. auto-granted
+  // on early-access activation) skip the pricing detour entirely.
+  const redirectAfterOnboarding = async () => {
+    try {
+      const userId = (session?.user as any)?.id
+      const res = await fetch('/api/subscription/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId }),
+      })
+      const data = await res.json()
+      router.push(data.active ? '/dashboard/influencer-discovery' : '/pricing')
+    } catch {
+      router.push('/pricing')
+    }
+  }
+
   const handleSkip = async () => {
     setIsLoading(true);
     setError(null);
@@ -93,7 +110,7 @@ export default function OnboardingPage() {
         const data = await response.json();
         throw new Error(data.error || 'Failed to save onboarding data');
       }
-      router.push('/pricing');
+      await redirectAfterOnboarding();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
@@ -173,7 +190,7 @@ export default function OnboardingPage() {
         throw new Error(data.error || 'Failed to save onboarding data')
       }
 
-      router.push('/pricing')
+      await redirectAfterOnboarding()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred')
     } finally {

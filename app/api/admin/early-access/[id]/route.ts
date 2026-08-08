@@ -4,7 +4,9 @@ import { requireAdmin, getAdminSession, ADMIN_EMAIL } from "@/lib/admin-auth"
 import { logAdminAction } from "@/lib/admin-audit-log"
 import { sendEarlyAccessApprovedEmail } from "@/lib/email"
 import { upsertGhlContact } from "@/lib/ghl"
-import { appUrl } from "@/lib/app-url"
+import { createPasswordSetToken } from "@/lib/auth-tokens"
+import bcrypt from "bcryptjs"
+import crypto from "crypto"
 
 // Resolved per request so a preview deployment links to itself, not to prod.
 
@@ -62,8 +64,63 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     data: { invited_at: new Date() },
   })
 
-  const signupUrl = appUrl(`/signup?email=${encodeURIComponent(updated.email)}`, req)
-  await sendEarlyAccessApprovedEmail(updated.email, updated.name || "there", signupUrl)
+  // Auto-provision the account so the user has working access immediately —
+  // unless one already exists (e.g. they signed up via Google while waiting
+  // on approval), in which case we never touch their existing credentials.
+  const existingUser = await prisma.user.findUnique({ where: { email: updated.email } })
+
+  let actionUrl: string
+  const hasExistingAccount = !!existingUser
+
+  if (!existingUser) {
+    const throwawayPassword = crypto.randomBytes(32).toString("hex")
+    const passwordHash = await bcrypt.hash(throwawayPassword, 12)
+
+    const newUser = await prisma.user.create({
+      data: {
+        email: updated.email,
+        name: updated.name,
+        password_hash: passwordHash,
+        platform_role: "user",
+        is_active: true,
+      },
+    })
+
+    await prisma.earlyAccessSignup.update({
+      where: { id },
+      data: { user_id: newUser.id },
+    })
+
+    // Grant the 3-month Solo trial promised in the approval email up front —
+    // otherwise the user would still need to visit pricing and click "start
+    // trial" themselves, same as api/subscription/start-trial does manually.
+    const soloPlan = await prisma.subscriptionPlan.findUnique({ where: { name: "solo" } })
+    if (soloPlan) {
+      const trialEndDate = new Date()
+      trialEndDate.setMonth(trialEndDate.getMonth() + 3)
+
+      await prisma.userSubscription.create({
+        data: {
+          user_id: newUser.id,
+          plan_id: soloPlan.id,
+          billing_cycle: "monthly",
+          status: "trialing",
+          started_at: new Date(),
+          current_period_start: new Date(),
+          current_period_end: trialEndDate,
+        },
+      })
+    }
+
+    // 7-day expiry — an invite link should survive sitting in an inbox
+    // longer than a security-sensitive password-reset link would.
+    const rawToken = await createPasswordSetToken(updated.email, 7 * 24 * 60 * 60 * 1000)
+    actionUrl = `${APP_URL}/auth/reset-password?token=${rawToken}&welcome=1`
+  } else {
+    actionUrl = `${APP_URL}/login`
+  }
+
+  await sendEarlyAccessApprovedEmail(updated.email, updated.name || "there", actionUrl, hasExistingAccount)
 
   await logAdminAction({
     adminEmail: session?.user.email || ADMIN_EMAIL,

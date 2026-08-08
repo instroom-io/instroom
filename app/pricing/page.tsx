@@ -322,24 +322,30 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
           </a>
         </div>
 
-        <div className="mt-8 inline-flex flex-wrap items-center justify-center gap-3 rounded-xl border border-[#F4B740]/40 bg-[#F4B740]/8 px-5 py-3 text-sm text-[#8a5a00]">
-          {session?.user?.id ? (
-            <>
-              <span>We&apos;re in private beta, so new subscriptions aren&apos;t open yet — but you&apos;re approved.</span>
-              <GetEarlyAccessButton cycle={cycle} />
-            </>
-          ) : (
-            <>
-              <span>We&apos;re in private beta, so new subscriptions aren&apos;t open yet.</span>
-              <Link
-                href="/early-access"
-                className="font-semibold text-[#0F6B3E] underline underline-offset-2 hover:text-[#1FAE5B] whitespace-nowrap"
-              >
-                Request Early Access →
-              </Link>
-            </>
-          )}
-        </div>
+        {/* Approved users now get their trial subscription automatically on
+            account activation, so this only needs to show for logged-out
+            visitors (who haven't requested access yet) or the rare logged-in
+            user who still has no subscription. */}
+        {!(session?.user?.id && userSubscription) && (
+          <div className="mt-8 inline-flex flex-wrap items-center justify-center gap-3 rounded-xl border border-[#F4B740]/40 bg-[#F4B740]/8 px-5 py-3 text-sm text-[#8a5a00]">
+            {session?.user?.id ? (
+              <>
+                <span>We&apos;re in private beta, so new subscriptions aren&apos;t open yet — but you&apos;re approved.</span>
+                <GetEarlyAccessButton cycle={cycle} />
+              </>
+            ) : (
+              <>
+                <span>We&apos;re in private beta, so new subscriptions aren&apos;t open yet.</span>
+                <Link
+                  href="/early-access"
+                  className="font-semibold text-[#0F6B3E] underline underline-offset-2 hover:text-[#1FAE5B] whitespace-nowrap"
+                >
+                  Request Early Access →
+                </Link>
+              </>
+            )}
+          </div>
+        )}
       </section>
 
       {/* PLANS */}
