@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { sendSubscriptionExpiringEmail } from "@/lib/email"
+import { appBaseUrl } from "@/lib/app-url"
 
-const APP_URL = process.env.NEXTAUTH_URL ?? "https://instroom.io"
+// No request context in a cron run, so this resolves purely from env.
+const APP_URL = appBaseUrl()
 const REMINDER_WINDOW_DAYS = 7
 
 export async function GET(req: NextRequest) {

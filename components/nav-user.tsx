@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import { signOutEverywhere } from "@/lib/sign-out"
 
 import {
   IconCreditCard,
@@ -32,7 +33,6 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
-import { signOut } from "next-auth/react"
 
 export function NavUser({
   user,
@@ -143,7 +143,7 @@ export function NavUser({
 
             <DropdownMenuSeparator />
 
-            <DropdownMenuItem onClick={() => signOut({ callbackUrl: "/login" })}>
+            <DropdownMenuItem onClick={() => signOutEverywhere()}>
               <IconLogout />
               Log out
             </DropdownMenuItem>

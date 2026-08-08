@@ -5,6 +5,7 @@
 // wiring up /admin protection, since both rely on the same mechanism.
 
 import { NextResponse } from "next/server"
+import type { NextRequest } from "next/server"
 import { getToken } from "next-auth/jwt"
 import { prisma } from "@/lib/prisma"
 
@@ -81,6 +82,21 @@ async function checkSubscriptionAccess(userId: string, brandId: string | null): 
   return !!ownerSub;
 }
 
+/**
+ * Send an unauthenticated visitor to the login page, remembering where they
+ * were going so they can be returned there after signing in.
+ *
+ * Only the path-and-query is carried, never an absolute URL: echoing a
+ * caller-supplied absolute URL back into a redirect is how a login page becomes
+ * an open redirect onto someone else's domain.
+ */
+function redirectToLogin(req: NextRequest) {
+  const login = new URL("/login", req.url);
+  const intended = req.nextUrl.pathname + req.nextUrl.search;
+  if (intended && intended !== "/") login.searchParams.set("callbackUrl", intended);
+  return NextResponse.redirect(login);
+}
+
 export async function middleware(req: any) {
   const { pathname, searchParams } = req.nextUrl;
 
@@ -92,15 +108,26 @@ export async function middleware(req: any) {
     const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
     const isAdmin = !!token && (token.platform_role === "admin" || token.email === ADMIN_EMAIL);
     if (!isAdmin) {
-      return NextResponse.redirect(new URL(token ? "/dashboard" : "/login", req.url));
+      // Signed in but not an admin is a permissions answer, not a login
+      // prompt — sending them to /login would loop them straight back here.
+      return token ? NextResponse.redirect(new URL("/dashboard", req.url)) : redirectToLogin(req);
     }
     return NextResponse.next();
   }
 
-  if (pathname.startsWith("/onboarding") || pathname.startsWith("/dashboard")) {
+  if (
+    pathname.startsWith("/onboarding") ||
+    pathname.startsWith("/dashboard") ||
+    // /settings/account renders account and billing data and reads the session
+    // client-side, but sat outside the matcher entirely — so it was served to
+    // anyone who typed the URL, and only failed once its client fetches 401'd.
+    pathname.startsWith("/settings")
+  ) {
+    // getToken verifies the JWT signature AND its exp claim, so a session past
+    // the 7-day deadline fails here with no extra check needed.
     const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
     if (!token || !token.sub) {
-      return NextResponse.redirect(new URL("/login", req.url));
+      return redirectToLogin(req);
     }
 
     const brandId = searchParams.get("brandId");
@@ -128,6 +155,6 @@ export async function middleware(req: any) {
 }
 
 export const config = {
-  matcher: ["/onboarding/:path*", "/dashboard/:path*", "/admin/:path*"],
+  matcher: ["/onboarding/:path*", "/dashboard/:path*", "/admin/:path*", "/settings/:path*"],
   runtime: "nodejs",
 };

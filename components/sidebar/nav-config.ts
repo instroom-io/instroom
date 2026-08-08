@@ -31,8 +31,8 @@ export type NavSection = {
 }
 
 /* ── User dashboard ────────────────────────────────────────────────────────
-   Same eight destinations and same exact-match behaviour as before; grouped
-   for scanability. Tabler icons swapped for their Lucide equivalents so both
+   Same eight destinations; grouped for scanability. Items own their sub-routes
+   (see resolveActiveHref) so a detail or search page keeps its parent lit. Tabler icons swapped for their Lucide equivalents so both
    portals draw from one icon set.
    ------------------------------------------------------------------------ */
 // One flat list, no section heading — the original order is preserved exactly.
@@ -41,14 +41,14 @@ export type NavSection = {
 export const DASHBOARD_NAV: NavSection[] = [
   {
     items: [
-      { href: "/dashboard/influencer-discovery", label: "Discovery", icon: Search, exact: true },
-      { href: "/dashboard/inbox", label: "Inbox", icon: Mail, exact: true },
-      { href: "/dashboard/manage-influencers", label: "Influencers List", icon: Users, exact: true },
-      { href: "/dashboard/pipeline", label: "Pipeline", icon: GitBranch, exact: true },
-      { href: "/dashboard/post-tracker", label: "Post Tracker", icon: CircleCheck, exact: true },
-      { href: "/dashboard/brand-partners", label: "Brand Partners", icon: Store, exact: true },
-      { href: "/dashboard/community", label: "Community", icon: MessageCircle, exact: true },
-      { href: "/dashboard/analytics", label: "Analytics", icon: BarChart3, exact: true },
+      { href: "/dashboard/influencer-discovery", label: "Discovery", icon: Search },
+      { href: "/dashboard/inbox", label: "Inbox", icon: Mail },
+      { href: "/dashboard/manage-influencers", label: "Influencers List", icon: Users },
+      { href: "/dashboard/pipeline", label: "Pipeline", icon: GitBranch },
+      { href: "/dashboard/post-tracker", label: "Post Tracker", icon: CircleCheck },
+      { href: "/dashboard/brand-partners", label: "Brand Partners", icon: Store },
+      { href: "/dashboard/community", label: "Community", icon: MessageCircle },
+      { href: "/dashboard/analytics", label: "Analytics", icon: BarChart3 },
     ],
   },
 ]
@@ -58,7 +58,7 @@ export const ADMIN_NAV: NavSection[] = [
   {
     label: "General",
     items: [
-      { href: "/admin", label: "Dashboard", icon: LayoutDashboard, exact: true },
+      { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
       { href: "/admin/analytics", label: "Analytics", icon: BarChart3 },
     ],
   },

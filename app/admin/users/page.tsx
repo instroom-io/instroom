@@ -76,11 +76,11 @@ export default function AdminUsersPage() {
         <input
           value={q} onChange={(e) => setQ(e.target.value)}
           placeholder="Search by name or email…"
-          className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-[#1FAE5B]/40 focus:border-[#1FAE5B]"
+          className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#1FAE5B]/40 focus:border-[#1FAE5B]"
         />
       </div>
 
-      <div className="bg-white border border-[#0F6B3E]/10 rounded-xl shadow-sm overflow-x-auto">
+      <div className="bg-white border border-[#0F6B3E]/10 rounded-2xl shadow-sm overflow-x-auto">
         <table className="w-full min-w-[860px] text-sm">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
@@ -116,23 +116,23 @@ export default function AdminUsersPage() {
                 <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">{new Date(u.created_at).toLocaleDateString()}</td>
                 <td className="px-4 py-2.5">
                   <div className="flex items-center gap-2 justify-end">
-                    <button onClick={() => setViewUser(u)} className="text-xs font-medium px-2.5 py-1 rounded-lg border border-gray-200 hover:bg-gray-50">View</button>
+                    <button onClick={() => setViewUser(u)} className="text-xs font-medium px-2.5 py-1 rounded-xl border border-gray-200 hover:bg-gray-50">View</button>
                   {u.platform_role !== "admin" && (
                     <>
                       <button
                         disabled={busyId === u.id}
                         onClick={() => toggleSuspend(u)}
-                        className="text-xs font-medium px-2.5 py-1 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-50"
+                        className="text-xs font-medium px-2.5 py-1 rounded-xl border border-gray-200 hover:bg-gray-50 disabled:opacity-50"
                       >
                         {u.is_active ? "Suspend" : "Reactivate"}
                       </button>
                       {confirmDeleteId === u.id ? (
                         <>
-                          <button disabled={busyId === u.id} onClick={() => deleteUser(u.id)} className="text-xs font-medium px-2.5 py-1 rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:opacity-50">Confirm</button>
-                          <button onClick={() => setConfirmDeleteId(null)} className="text-xs font-medium px-2.5 py-1 rounded-lg border border-gray-200 hover:bg-gray-50">Cancel</button>
+                          <button disabled={busyId === u.id} onClick={() => deleteUser(u.id)} className="text-xs font-medium px-2.5 py-1 rounded-xl bg-red-600 text-white hover:bg-red-700 disabled:opacity-50">Confirm</button>
+                          <button onClick={() => setConfirmDeleteId(null)} className="text-xs font-medium px-2.5 py-1 rounded-xl border border-gray-200 hover:bg-gray-50">Cancel</button>
                         </>
                       ) : (
-                        <button onClick={() => setConfirmDeleteId(u.id)} className="text-xs font-medium px-2.5 py-1 rounded-lg border border-red-200 text-red-600 hover:bg-red-50">Delete</button>
+                        <button onClick={() => setConfirmDeleteId(u.id)} className="text-xs font-medium px-2.5 py-1 rounded-xl border border-red-200 text-red-600 hover:bg-red-50">Delete</button>
                       )}
                     </>
                   )}
@@ -146,7 +146,7 @@ export default function AdminUsersPage() {
 
       {viewUser && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setViewUser(null)}>
-          <div className="bg-white rounded-xl shadow-xl w-[420px] max-w-[92vw] max-h-[90svh] overflow-y-auto p-5 sm:p-6" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl shadow-xl w-[420px] max-w-[92vw] max-h-[90svh] overflow-y-auto p-5 sm:p-6" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-3 mb-4">
               {viewUser.image
                 ? <img src={viewUser.image} alt="" className="w-12 h-12 rounded-full object-cover" />
@@ -162,7 +162,7 @@ export default function AdminUsersPage() {
               <div><dt className="text-gray-400 text-xs uppercase">Join Date</dt><dd className="text-gray-800">{new Date(viewUser.created_at).toLocaleDateString()}</dd></div>
               <div><dt className="text-gray-400 text-xs uppercase">User ID</dt><dd className="text-gray-800 truncate" title={viewUser.id}>{viewUser.id}</dd></div>
             </dl>
-            <button onClick={() => setViewUser(null)} className="mt-5 w-full text-sm font-medium py-2 rounded-lg border border-gray-200 hover:bg-gray-50">Close</button>
+            <button onClick={() => setViewUser(null)} className="mt-5 w-full text-sm font-medium py-2 rounded-xl border border-gray-200 hover:bg-gray-50">Close</button>
           </div>
         </div>
       )}

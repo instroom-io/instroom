@@ -159,6 +159,62 @@ function getAvatarColor(name: string) {
   return colors[name.charCodeAt(0) % colors.length]
 }
 // ─── Missing Post URL warning ─────────────────────────────────────────────────
+// ─── Posted is terminal ──────────────────────────────────────────────────────
+// Shown when the server refuses a move away from Posted (HTTP 409). Confirming
+// re-issues the same move with resetWorkflow, which the API only honours for
+// brand owners and managers.
+function ResetWorkflowDialog({ influencerName, target, onConfirm, onCancel }: {
+  influencerName: string
+  target: ClosedColumn
+  onConfirm: () => void
+  onCancel: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-[500] flex items-center justify-center bg-black/50 p-4" onClick={onCancel}>
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="reset-workflow-title"
+        className="bg-white rounded-2xl shadow-2xl w-[440px] max-w-full overflow-hidden"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-start gap-3 px-6 pt-6 pb-4">
+          <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0">
+            <IconAlertTriangle size={20} className="text-amber-600"/>
+          </div>
+          <div className="flex-1">
+            <h2 id="reset-workflow-title" className="text-base font-semibold text-gray-900">Reset Workflow?</h2>
+            <p className="text-sm text-gray-600 mt-2 leading-relaxed">
+              <span className="font-medium text-gray-900">{influencerName}</span> has already reached{" "}
+              <span className="font-medium text-gray-900">Posted</span>, which is the final stage of the Post Tracker
+              workflow.
+            </p>
+            <p className="text-sm text-gray-600 mt-2 leading-relaxed">
+              Moving back to <span className="font-medium text-gray-900">{target}</span> resets the workflow and clears
+              the posted state. Only owners and managers can do this.
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-2 px-6 py-4 bg-gray-50 border-t border-gray-100">
+          <button
+            onClick={onCancel}
+            className="px-4 py-1.5 text-sm font-medium text-gray-600 rounded-lg border border-gray-200 hover:bg-gray-100 transition focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-1"
+          >
+            Cancel
+          </button>
+          <button
+            autoFocus
+            onClick={onConfirm}
+            className="px-4 py-1.5 text-sm font-medium bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition focus:outline-none focus:ring-2 focus:ring-amber-600 focus:ring-offset-1"
+          >
+            Reset Workflow
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function PostUrlRequiredDialog({ count, onGoToPostDetails, onCancel }: {
   /** How many influencers were blocked — >1 when a bulk move is rejected */
   count: number
@@ -844,13 +900,16 @@ function PostTrackerContent() {
 
   // Influencer(s) blocked from moving to Posted for want of a Post URL
   const [postUrlBlocked, setPostUrlBlocked] = useState<ClosedInfluencer[]>([])
+  // Move refused because the row is already Posted (terminal). Holds the
+  // intended target so the reset can be confirmed and then re-applied.
+  const [resetBlocked, setResetBlocked] = useState<{ inf: ClosedInfluencer; target: ClosedColumn } | null>(null)
   // Set when the drawer is opened from the warning's "Go to Post Details"
   const [drawerFocusPostUrl, setDrawerFocusPostUrl] = useState(false)
 
   const showToast = (msg: string) => { setToastMsg(msg); setTimeout(()=>setToastMsg(null),3000) }
   const sensors   = useSensors(useSensor(PointerSensor,{activationConstraint:{distance:5}}))
 
-  const handleMove = useCallback(async (id: string, col: ClosedColumn) => {
+  const handleMove = useCallback(async (id: string, col: ClosedColumn, opts?: { resetWorkflow?: boolean }) => {
     if (!canApprove) {
       showToast("Only Owners and Managers can update post status")
       return false
@@ -862,14 +921,17 @@ function PostTrackerContent() {
       setPostUrlBlocked([inf])
       return false
     }
-    const ok  = await updateColumn(id, col)
-    if (ok) {
+    const res = await updateColumn(id, col, opts)
+    if (res.ok) {
       showToast(`${inf?.influencer} moved to ${col}`)
       setSelectedInf(p => p?.id===id ? {...p, closedStatus: col} : p)
+    } else if (res.terminal && inf) {
+      // Posted is final. Offer the explicit reset rather than failing silently.
+      setResetBlocked({ inf, target: col })
     } else {
-      showToast("Failed to move")
+      showToast(res.error || "Failed to move")
     }
-    return ok
+    return res.ok
   }, [data, updateColumn, canApprove])
 
   const filteredData = useMemo(() => {
@@ -965,12 +1027,16 @@ function PostTrackerContent() {
     setBulkBusy(true)
     const failedIds: string[] = []
     let moved = 0
+    let terminalSkipped = 0
     for (const target of targets) {
-      const ok = await updateColumn(target.id, col)
-      if (ok) {
+      const res = await updateColumn(target.id, col)
+      if (res.ok) {
         moved += 1
         setSelectedInf(p => (p?.id === target.id ? { ...p, closedStatus: col } : p))
       } else {
+        // Already Posted — counted separately so the toast can say why, rather
+        // than reporting a generic failure the user can't act on.
+        if (res.terminal) terminalSkipped += 1
         failedIds.push(target.id)
       }
     }
@@ -980,9 +1046,12 @@ function PostTrackerContent() {
     setSelectedIds(new Set(failedIds))
 
     const skippedNote = skipped > 0 ? ` · ${skipped} skipped` : ""
+    const terminalNote = terminalSkipped > 0
+      ? ` · ${terminalSkipped} already Posted (reset the workflow to move ${terminalSkipped === 1 ? "it" : "them"})`
+      : ""
     showToast(failedIds.length === 0
       ? `${moved} influencer${moved === 1 ? "" : "s"} moved to ${col} ✓${skippedNote}`
-      : `${moved} moved to ${col}, ${failedIds.length} failed${skippedNote} — the failed ones are still selected`)
+      : `${moved} moved to ${col}, ${failedIds.length} failed${skippedNote}${terminalNote} — the failed ones are still selected`)
   }
 
   const handleBulkStageSelect = (col: ClosedColumn) => {
@@ -1090,6 +1159,20 @@ function PostTrackerContent() {
             setSelectedInf(target)
           } : null}
           onCancel={()=>setPostUrlBlocked([])}
+        />
+      )}
+
+      {resetBlocked&&(
+        <ResetWorkflowDialog
+          influencerName={resetBlocked.inf.influencer}
+          target={resetBlocked.target}
+          onConfirm={async()=>{
+            const { inf, target } = resetBlocked
+            setResetBlocked(null)
+            // Same handler, now with the explicit administrator override.
+            await handleMove(inf.id, target, { resetWorkflow: true })
+          }}
+          onCancel={()=>setResetBlocked(null)}
         />
       )}
 
