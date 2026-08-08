@@ -6,16 +6,31 @@
 
 "use client"
 
-import { useSearchParams } from "next/navigation"
-import { Suspense } from "react"
-import CommunityPage from "./CommunityPage"
-import { ListSkeleton } from "@/components/shared/skeletons"
+import { useRouter, useSearchParams } from "next/navigation"
+import { Suspense, useEffect } from "react"
+import { DiscordClient } from "./DiscordClient"
+import { CommunitySkeleton } from "./_discord/CommunitySkeleton"
+import { useLastBrand } from "./_discord/ServerSwitcher"
 
 function CommunityContent() {
   const searchParams = useSearchParams()
+  const router = useRouter()
   const brandId = searchParams.get("brandId")
 
+  // Arriving with no brand: reopen whichever server was last used here rather
+  // than making the user pick one again every time. `replace`, not `push`, so
+  // Back doesn't bounce off the brandless URL straight back into the redirect.
+  const lastBrand = useLastBrand()
+  useEffect(() => {
+    if (!brandId && lastBrand) {
+      router.replace(`/dashboard/community?brandId=${encodeURIComponent(lastBrand)}`)
+    }
+  }, [brandId, lastBrand, router])
+
   if (!brandId) {
+    // A redirect is already in flight — show the shell rather than flashing an
+    // empty state the user is about to be navigated away from.
+    if (lastBrand) return <CommunitySkeleton />
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-50">
         <div className="flex flex-col items-center gap-5 max-w-sm w-full px-6 text-center">
@@ -45,12 +60,23 @@ function CommunityContent() {
     )
   }
 
-  return <CommunityPage brandId={brandId} />
+  // The brand's Discord server IS the community. Instroom renders it through
+  // the bot; there is no second messaging system.
+  //
+  // Keyed on brandId: switching server remounts the client instead of mutating
+  // it in place. That is what guarantees no channel, message, member or unread
+  // state from the previous brand can be visible under the new one, and it is
+  // also what makes the switch show the skeleton rather than the old server's
+  // content while the new one loads.
+  return <DiscordClient key={brandId} brandId={brandId} />
 }
 
 export default function Page() {
   return (
-    <Suspense fallback={<ListSkeleton rows={6} label="Fetching data..." />}>
+    // Same skeleton the client itself uses while checking status, so reading the
+    // search params and then checking the connection is ONE loading state to the
+    // user rather than a fallback that gets replaced by a different one.
+    <Suspense fallback={<CommunitySkeleton />}>
       <CommunityContent />
     </Suspense>
   )

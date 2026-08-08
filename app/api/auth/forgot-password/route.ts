@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { sendPasswordResetEmail } from "@/lib/email"
-import crypto from "crypto"
+import { createPasswordSetToken } from "@/lib/auth-tokens"
 
 export async function POST(request: NextRequest) {
   try {
@@ -37,29 +37,8 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Generate reset token
-    const resetToken = crypto.randomBytes(32).toString("hex")
-    const hashedToken = crypto
-      .createHash("sha256")
-      .update(resetToken)
-      .digest("hex")
-
-    // Set expiration time to 1 hour from now
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000)
-
-    // Delete any existing tokens for this email
-    await prisma.verificationToken.deleteMany({
-      where: { identifier: email },
-    })
-
-    // Create new verification token
-    await prisma.verificationToken.create({
-      data: {
-        identifier: email,
-        token: hashedToken,
-        expires: expiresAt,
-      },
-    })
+    // Generate reset token (1-hour expiry)
+    const resetToken = await createPasswordSetToken(email)
 
     // Send password reset email
     const resetUrl = `${process.env.NEXTAUTH_URL}/auth/reset-password?token=${resetToken}`

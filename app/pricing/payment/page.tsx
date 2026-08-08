@@ -1,8 +1,8 @@
 "use client";
 import { useSearchParams, useRouter } from "next/navigation";
+import { Logo } from "@/components/brand/logo"
 import { useState, Suspense } from "react";
 import { useSession } from "next-auth/react";
-import Image from "next/image";
 
 const planSummaries: Record<string, string> = {
   basic: "1 workspace",
@@ -157,15 +157,7 @@ function PaymentPageInner() {
       <div className="pointer-events-none hidden sm:block fixed top-1/3 right-1/4 w-64 h-64 rounded-full bg-[#2C8EC4]/5 blur-3xl" />
 
       <div className="fixed top-4 sm:top-6 left-4 sm:left-12 z-50">
-        <Image
-          src="/images/INSTROOM LOGO 1.png"
-          alt="Instroom Logo"
-          width={180}
-          height={180}
-          priority
-          quality={95}
-          className="drop-shadow-sm w-32 sm:w-44 h-auto"
-        />
+        <Logo size="page" alt="Instroom" priority className="drop-shadow-sm" />
       </div>
 
       <div className="relative min-h-screen flex items-center justify-center px-4 py-8 sm:py-12">

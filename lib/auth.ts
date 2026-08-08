@@ -1,14 +1,31 @@
 import NextAuth from "next-auth"
 import CredentialsProvider from "next-auth/providers/credentials"
 import GoogleProvider from "next-auth/providers/google"
-import { redirect } from "next/navigation"
 import { prisma } from "./prisma"
 import { sendWelcomeEmail } from "./email"
 import { syncBrandActivityWithSubscription } from "./subscription-limits"
 import { verifyTwoFactorCode, verifyAndConsumeBackupCode } from "./two-factor"
 import bcrypt from "bcryptjs"
 
-const INACTIVITY_TIMEOUT = 30 * 60 // 30 minutes in seconds
+/**
+ * Absolute session lifetime: 7 days from the moment of sign-in.
+ *
+ * ABSOLUTE, not rolling. NextAuth's own `maxAge` re-stamps `exp` every time the
+ * session is refreshed, which would let an active user stay signed in forever.
+ * The jwt callback below pins `exp` to `loginAt + SEVEN_DAYS` on every pass, so
+ * the deadline is fixed at login and activity cannot push it out.
+ *
+ * Pinning `exp` is also what makes expiry enforceable rather than advisory: it
+ * is the JWT's own expiry claim, so `getToken()` and `getServerSession()` reject
+ * the cookie themselves once the deadline passes. An expired session is
+ * unusable server-side even if the client ignores it.
+ *
+ * This replaced a 30-minute inactivity timeout. That timer contradicted the
+ * requirement that a session survive closing and reopening the browser, so it
+ * is gone — deliberately, and at the cost of an unattended machine staying
+ * signed in for up to a week.
+ */
+const SEVEN_DAYS_SECONDS = 7 * 24 * 60 * 60
 
 declare module "next-auth" {
   interface Session {
@@ -21,7 +38,8 @@ declare module "next-auth" {
     }
     accessToken?: string
     error?: string
-    expiresAt?: number // ms timestamp — client uses this to auto-logout
+    /** Absolute expiry as an ms timestamp, for the client-side countdown. */
+    expiresAt?: number
   }
 }
 
@@ -39,6 +57,16 @@ const nextAuthConfig = {
           // This keeps the login/signup flow clean and non-scary for users.
           scope: "openid email profile",
           access_type: "offline",
+          // Always show Google's account chooser.
+          //
+          // Without this, Google silently reuses whichever account the browser
+          // currently has active. Someone already signed in as A who switches
+          // their browser to B and clicks "Sign in with Google" would be
+          // re-authenticated as B with no visible confirmation — or bounced
+          // straight back in as A, with no way to reach B at all. Making the
+          // choice explicit is what turns account switching into a deliberate
+          // act, and it pairs with the token reset in the jwt callback.
+          prompt: "select_account",
         },
       },
     }),
@@ -133,9 +161,35 @@ const nextAuthConfig = {
       },
     }),
   ],
-  pages: { 
+  pages: {
     signIn: "/login",
     error: "/auth/error",
+  },
+  secret: process.env.NEXTAUTH_SECRET,
+  // Both must agree. `session.maxAge` sets the cookie lifetime, `jwt.maxAge`
+  // the token's default lifetime; leaving either at the 30-day default would
+  // mean a cookie that outlives its token or the reverse.
+  session: { strategy: "jwt" as const, maxAge: SEVEN_DAYS_SECONDS },
+  jwt: { maxAge: SEVEN_DAYS_SECONDS },
+  cookies: {
+    sessionToken: {
+      // Names match NextAuth's own defaults so existing sessions keep working.
+      name:
+        process.env.NODE_ENV === "production"
+          ? "__Secure-next-auth.session-token"
+          : "next-auth.session-token",
+      options: {
+        // Not readable from JavaScript — the session token is never exposed to
+        // XSS, and nothing about the session is mirrored into localStorage.
+        httpOnly: true,
+        // "lax" rather than "strict": the OAuth callback is a cross-site
+        // top-level navigation back from accounts.google.com, and "strict"
+        // would withhold the cookie on that hop and break the login round trip.
+        sameSite: "lax" as const,
+        path: "/",
+        secure: process.env.NODE_ENV === "production",
+      },
+    },
   },
   callbacks: {
     async signIn({ user, account, profile }: any) {
@@ -152,9 +206,15 @@ const nextAuthConfig = {
           // Check if user exists with email/password signup
           // If user has password_hash, they signed up with email/password only
           if (dbUser && dbUser.password_hash) {
-            // User registered with email/password, cannot login with Google
-            // Redirect directly to login with message, bypassing error page
-            redirect('/login?authError=use-email-password')
+            // Registered with email/password — Google sign-in is not allowed.
+            //
+            // This used to call next/navigation's redirect(), which works by
+            // THROWING a NEXT_REDIRECT error. Thrown inside this try block, it
+            // was caught by the catch below and turned into `return false`, so
+            // the user got a generic "access denied" and never saw the reason.
+            // Returning the URL is NextAuth's own signalling for this and
+            // leaves the try block cleanly.
+            return "/login?authError=use-email-password"
           }
           
           if (!dbUser) {
@@ -165,7 +225,8 @@ const nextAuthConfig = {
               where: { email: profile.email },
             })
             if (!earlyAccess?.invited_at) {
-              redirect('/early-access?notApproved=1')
+              // Same fix as above — this redirect was also being swallowed.
+              return "/early-access?notApproved=1"
             }
 
             dbUser = await prisma.user.create({
@@ -250,29 +311,67 @@ const nextAuthConfig = {
             }
           }
         } catch (error) {
+          console.error("[auth] Google signIn callback failed:", error)
           return false
         }
       }
+
+      // Brand-activity sync, moved off the session callback.
+      //
+      // Sign-in is the point where entitlement can actually have changed since
+      // last time; a session read is not. Best-effort and never fatal — a
+      // failure here must not be the reason someone can't log in.
+      if (user?.id) {
+        try {
+          await syncBrandActivityWithSubscription(user.id)
+        } catch (syncError) {
+          console.error("[auth] brand activity sync failed:", syncError)
+        }
+      }
+
       return true
     },
     
     jwt({ token, user, account }: any) {
-      // On first sign-in, populate token and set initial activity timestamp
+      const now = Math.floor(Date.now() / 1000)
+
+      // ── A sign-in just happened ───────────────────────────────────────────
+      // Build a NEW token instead of merging into the old one.
+      //
+      // This is what makes account switching correct. Signing in as B while a
+      // token for A exists used to merge B's id and email over A's, leaving
+      // A's platform_role, isNewUser and Google accessToken behind — a session
+      // that was partly A and partly B, with A's privileges. Discarding the old
+      // token guarantees exactly one identity per browser session and that
+      // every field belongs to the account that just authenticated.
       if (user) {
-        token.id = user.id
-        token.email = user.email
-        if (user.isNewUser !== undefined) {
-          token.isNewUser = user.isNewUser
+        const fresh: Record<string, unknown> = {
+          sub: user.id,
+          id: user.id,
+          email: user.email,
+          name: user.name ?? token.name,
+          picture: user.image ?? token.picture,
+          // The absolute deadline is anchored here and nowhere else.
+          loginAt: now,
+          exp: now + SEVEN_DAYS_SECONDS,
         }
-        if (user.platform_role !== undefined) {
-          token.platform_role = user.platform_role
+        if (user.isNewUser !== undefined) fresh.isNewUser = user.isNewUser
+        if (user.platform_role !== undefined) fresh.platform_role = user.platform_role
+
+        if (account?.provider === "google") {
+          fresh.accessToken = account.access_token
+          fresh.refreshToken = account.refresh_token
+          fresh.accessTokenExpires = account.expires_at
+            ? account.expires_at * 1000
+            : Date.now() + 3600 * 1000
         }
-        token.lastActivity = Math.floor(Date.now() / 1000)
-        token.exp = Math.floor(Date.now() / 1000) + INACTIVITY_TIMEOUT
+        return fresh
       }
 
-      // Store Google tokens whenever they come in — covers both initial login
-      // and the Gmail re-consent flow triggered from the Inbox.
+      // ── Re-consent without a new sign-in ──────────────────────────────────
+      // The Gmail flow returns here with an account but no user. Same identity,
+      // broader scopes — update the Google tokens only, and do not re-anchor
+      // loginAt, or re-consenting would silently extend the 7 days.
       if (account?.provider === "google") {
         token.accessToken = account.access_token
         token.refreshToken = account.refresh_token
@@ -281,29 +380,34 @@ const nextAuthConfig = {
           : Date.now() + 3600 * 1000
       }
 
-      // ── Inactivity check ──────────────────────────────────────────────────
-      // On every session check, compare now vs lastActivity.
-      // If idle > 30 min → invalidate. Otherwise → slide the window forward.
-      const now = Math.floor(Date.now() / 1000)
-      const lastActivity = (token.lastActivity as number) || now
-      const idleSeconds = now - lastActivity
-
-      if (idleSeconds > INACTIVITY_TIMEOUT) {
-        // Mark token as expired due to inactivity — client will sign out
-        return { ...token, error: "InactivityTimeout" }
+      // ── Absolute expiry, re-pinned on every pass ──────────────────────────
+      // NextAuth would otherwise re-stamp exp to now + maxAge each refresh,
+      // turning the 7 days into a rolling window that an active user never
+      // reaches. Tokens minted before loginAt existed get it backfilled from
+      // their current exp so they age out on their original schedule rather
+      // than being force-expired the moment this ships.
+      if (typeof token.loginAt !== "number") {
+        token.loginAt = typeof token.exp === "number" ? token.exp - SEVEN_DAYS_SECONDS : now
       }
+      token.exp = (token.loginAt as number) + SEVEN_DAYS_SECONDS
 
-      // Still active — slide expiry window forward (true inactivity timer)
-      token.lastActivity = now
-      token.exp = now + INACTIVITY_TIMEOUT
+      // Past the deadline the JWT layer rejects the cookie on its own, so
+      // getToken()/getServerSession() return null and the middleware redirects.
+      // The flag is only so the UI can say *why* rather than bouncing silently.
+      if (now >= (token.exp as number)) {
+        return { ...token, error: "SessionExpired" }
+      }
 
       return token
     },
     
-    async session({ session, token }: any) {
-      // If token was invalidated due to inactivity, signal the client to log out
-      if (token.error === "InactivityTimeout") {
-        session.error = "InactivityTimeout"
+    session({ session, token }: any) {
+      // Expired: hand back an identity-free session carrying only the reason,
+      // so nothing downstream can mistake it for a usable one.
+      if (token.error === "SessionExpired") {
+        session.error = "SessionExpired"
+        session.user = undefined
+        session.expiresAt = (token.exp as number) * 1000
         return session
       }
 
@@ -316,13 +420,17 @@ const nextAuthConfig = {
         if (token.platform_role !== undefined) {
           session.user.platform_role = token.platform_role as string
         }
-        await syncBrandActivityWithSubscription(session.user.id)
       }
 
-      // Expose expiry time to client (ms) so InactivityProvider can countdown
+      // This callback runs on EVERY session read — every useSession mount,
+      // every getServerSession in every API route, every middleware-adjacent
+      // check. It used to `await syncBrandActivityWithSubscription(...)` here,
+      // putting a write-capable database round trip on all of them and making
+      // the callback async for no other reason. That sync now runs once per
+      // sign-in, in the signIn callback, which is when its inputs actually
+      // change.
       session.expiresAt = (token.exp as number) * 1000
 
-      // Expose Gmail access token to server-side API routes
       if (token.accessToken) {
         session.accessToken = token.accessToken
       }

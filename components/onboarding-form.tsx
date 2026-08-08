@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button"
+import { LogoLockup } from "@/components/brand/logo"
 import Image from "next/image"
 import {
   Card,
@@ -153,7 +154,7 @@ export function OnboardingForm({
               disabled={isLoading}
               className="h-10 sm:h-12 px-8 sm:px-12 text-sm sm:text-base bg-[#1FAE5B] text-white font-semibold hover:bg-[#17a04e] rounded-full"
             >
-              {isLoading ? 'Taking you to pricing...' : 'View pricing plans →'}
+              {isLoading ? 'Taking you in...' : 'Continue →'}
             </Button>
           </div>
         </div>
@@ -168,16 +169,11 @@ export function OnboardingForm({
       {/* Left Content Area */}
       <div className="flex-1 px-6 sm:px-10 py-4 sm:py-6 flex flex-col overflow-y-auto">
         {/* Logo */}
-        <div className="flex items-center gap-2 mb-4 sm:mb-6">
-          <Image 
-            src="/images/instroomLogo.png" 
-            alt="Instroom Logo" 
-            width={24}
-            height={24}
-            className="rounded-lg w-6 h-6"
-          />
-          <span className="font-bold text-sm sm:text-base text-gray-900">Instroom</span>
-        </div>
+        <LogoLockup
+          size="sm"
+          className="mb-4 sm:mb-6"
+          textClassName="text-sm sm:text-base"
+        />
 
         {/* Step Indicator */}
         <div className="text-xs font-semibold text-gray-500 mb-1.5 tracking-wider">

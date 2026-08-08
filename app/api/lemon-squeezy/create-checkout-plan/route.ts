@@ -1,6 +1,7 @@
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { NextResponse } from "next/server"
+import { appBaseUrl } from "@/lib/app-url"
 
 export async function POST(req: Request) {
   try {
@@ -28,7 +29,9 @@ export async function POST(req: Request) {
     }
 
     // Create checkout on Lemon Squeezy
-    const baseUrl = process.env.NEXTAUTH_URL || "https://localhost:3000"
+    // Was hardcoded to "https://localhost:3000" — https on localhost, which
+    // no dev server serves. Resolved centrally instead.
+    const baseUrl = appBaseUrl(req)
     const successUrl = `${baseUrl}/subscription-success`
     
     const checkoutData = {

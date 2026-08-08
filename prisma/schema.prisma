@@ -19,15 +19,21 @@ model User {
   created_at    DateTime @default(now())
   updated_at    DateTime @updatedAt
 
-  two_factor_enabled        Boolean  @default(false)
-  two_factor_secret         String?  @db.Text
-  two_factor_secret_pending String?  @db.Text
+  two_factor_enabled        Boolean @default(false)
+  two_factor_secret         String? @db.Text
+  two_factor_secret_pending String? @db.Text
   two_factor_backup_codes   Json?
 
   onboarding   Onboarding?
   subscription UserSubscription?
   brandMembers BrandMember[]
   activityLogs ActivityLog[]
+
+  // Discord account linkage. Populated by the OAuth link flow; read on every
+  // Discord request to compute which channels this user may see.
+  discord_user_id   String?   @db.VarChar(30)
+  discord_username  String?   @db.VarChar(64)
+  discord_linked_at DateTime?
 
   @@index([email])
   @@index([platform_role])
@@ -232,31 +238,31 @@ model BrandInvitation {
 }
 
 model Influencer {
-  id                String   @id @default(cuid()) @db.VarChar(30)
-  handle            String
-  platform          String   @db.VarChar(50)
-  full_name         String?
-  email             String?
-  gender            String?  @db.VarChar(20)
-  social_link       String?
-  bio               String?  @db.Text
-  profile_image_url String?
-  follower_count    Int      @default(0)
-  engagement_rate   Decimal  @default(0.000000000000000000000000000000)
-  avg_likes         Int      @default(0)
-  avg_comments      Int      @default(0)
-  avg_views         Int      @default(0)
-  niche             String?  @db.VarChar(100)
-  location          String?  @db.VarChar(255)
+  id                  String   @id @default(cuid()) @db.VarChar(30)
+  handle              String
+  platform            String   @db.VarChar(50)
+  full_name           String?
+  email               String?
+  gender              String?  @db.VarChar(20)
+  social_link         String?
+  bio                 String?  @db.Text
+  profile_image_url   String?
+  follower_count      Int      @default(0)
+  engagement_rate     Decimal  @default(0.000000000000000000000000000000)
+  avg_likes           Int      @default(0)
+  avg_comments        Int      @default(0)
+  avg_views           Int      @default(0)
+  niche               String?  @db.VarChar(100)
+  location            String?  @db.VarChar(255)
   // Platform-level moderation state, managed only from the Admin Dashboard —
   // distinct from the per-brand BrandInfluencer.approval_status workflow.
-  verification_status String @default("pending") @db.VarChar(20)
-  is_suspended        Boolean @default(false)
-  created_at        DateTime @default(now())
-  updated_at        DateTime @updatedAt
+  verification_status String   @default("pending") @db.VarChar(20)
+  is_suspended        Boolean  @default(false)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
 
   brandInfluencers BrandInfluencer[]
-  brandPartners    BrandPartner[]    // new
+  brandPartners    BrandPartner[] // new
 
   @@unique([handle, platform])
   @@index([handle])
@@ -271,11 +277,11 @@ model Campaign {
   brand_id    String    @db.VarChar(30)
   name        String
   description String?   @db.Text
-  type        String?   @db.VarChar(30)   
+  type        String?   @db.VarChar(30)
   status      String    @default("draft") @db.VarChar(20)
-  budget      Decimal?                     
-  start_date  DateTime?                    
-  end_date    DateTime?                    
+  budget      Decimal?
+  start_date  DateTime?
+  end_date    DateTime?
   created_at  DateTime  @default(now())
   updated_at  DateTime  @updatedAt
 
@@ -316,10 +322,10 @@ model BrandInfluencer {
   created_at       DateTime  @default(now())
   updated_at       DateTime  @updatedAt
 
-  brand      Brand      @relation(fields: [brand_id], references: [id], onDelete: Cascade)
-  influencer Influencer @relation(fields: [influencer_id], references: [id], onDelete: Cascade)
-  campaign   Campaign?  @relation(fields: [campaign_id], references: [id], onDelete: SetNull)
-  partner    BrandPartner? // new (1:1 back-relation)
+  brand          Brand           @relation(fields: [brand_id], references: [id], onDelete: Cascade)
+  influencer     Influencer      @relation(fields: [influencer_id], references: [id], onDelete: Cascade)
+  campaign       Campaign?       @relation(fields: [campaign_id], references: [id], onDelete: SetNull)
+  partner        BrandPartner? // new (1:1 back-relation)
   goaffproOrders GoAffProOrder[]
   attribution    Attribution?
 
@@ -361,17 +367,17 @@ model Attribution {
 model GoAffProOrder {
   id                  String    @id @default(cuid()) @db.VarChar(30)
   brand_id            String    @db.VarChar(30)
-  goaffpro_order_id    String    @db.VarChar(100)
-  affiliate_id         String    @db.VarChar(100)
-  brand_influencer_id  String?   @db.VarChar(30)
-  total                Decimal   @default(0)
-  subtotal             Decimal   @default(0)
-  commission           Decimal   @default(0)
-  status               String    @db.VarChar(20)
-  goaffpro_created_at  DateTime?
-  raw                  Json
-  created_at           DateTime  @default(now())
-  updated_at           DateTime  @updatedAt
+  goaffpro_order_id   String    @db.VarChar(100)
+  affiliate_id        String    @db.VarChar(100)
+  brand_influencer_id String?   @db.VarChar(30)
+  total               Decimal   @default(0)
+  subtotal            Decimal   @default(0)
+  commission          Decimal   @default(0)
+  status              String    @db.VarChar(20)
+  goaffpro_created_at DateTime?
+  raw                 Json
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @updatedAt
 
   brandInfluencer BrandInfluencer? @relation(fields: [brand_influencer_id], references: [id], onDelete: SetNull)
 
@@ -530,34 +536,129 @@ model CommunityMessage {
 // stored per brand_influencer since different influencers can be tagged to
 // different campaign hashtags/handles.
 model PostDetectionSetting {
-  id                  String   @id @default(cuid()) @db.VarChar(30)
-  brand_influencer_id String   @unique @db.VarChar(30)
-  brand_id            String   @db.VarChar(30)
-  enabled             Boolean  @default(false)
-  hashtags            String?  @db.VarChar(255)
-  mentions            String?  @db.VarChar(255)
-  created_at          DateTime @default(now())
-  updated_at          DateTime @updatedAt
+  id                  String    @id @default(cuid()) @db.VarChar(30)
+  brand_influencer_id String    @unique @db.VarChar(30)
+  brand_id            String    @db.VarChar(30)
+  enabled             Boolean   @default(false)
+  hashtags            String?   @db.VarChar(255)
+  mentions            String?   @db.VarChar(255)
+  // Comma-separated platform keys the monitor should query for this
+  // influencer. Null falls back to MONITORED_PLATFORMS in lib/post-tracker.
+  platforms           String?   @db.VarChar(100)
+  // Set by the background monitor so the UI can show freshness and the job
+  // can skip influencers polled recently.
+  last_synced_at      DateTime?
+  last_error          String?   @db.Text
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @updatedAt
 
+  @@index([brand_id])
+  @@index([enabled, last_synced_at])
+}
+
+// Posts the detection job matched against an influencer's monitored hashtags
+// and mentions. Rows are written by lib/post-tracker/monitor.ts from
+// EnsembleData results.
+model DetectedPost {
+  id                  String    @id @default(cuid()) @db.VarChar(30)
+  brand_influencer_id String    @db.VarChar(30)
+  brand_id            String    @db.VarChar(30)
+  platform            String    @db.VarChar(50)
+  post_url            String    @db.VarChar(500)
+  matched_hashtag     String?   @db.VarChar(100)
+  matched_mention     String?   @db.VarChar(100)
+  // Provider-side post id. Combined with platform it is the strongest dedupe
+  // key; post_url is the fallback when a provider omits an id.
+  external_id         String?   @db.VarChar(191)
+  author              String?   @db.VarChar(191)
+  caption             String?   @db.Text
+  published_at        DateTime?
+  // Comma-separated, extracted from the caption at import time.
+  hashtags            String?   @db.Text
+  mentions            String?   @db.Text
+  like_count          Int?
+  comment_count       Int?
+  view_count          Int?
+  share_count         Int?
+  detected_at         DateTime  @default(now())
+
+  // Dedupe guard. Two monitor runs finding the same post must not create two
+  // rows, and a unique index enforces that even if two jobs race.
+  @@unique([brand_influencer_id, post_url])
+  @@index([brand_influencer_id])
+  @@index([brand_id])
+  @@index([brand_id, detected_at])
+}
+
+// ─── Post Tracker Add-on ─────────────────────────────────────────────────────
+// Paid add-on that unlocks Automatic Post Detection for a workspace (brand).
+// Deliberately separate from UserSubscription: this is a per-brand capability
+// bought on top of any plan, so it must survive plan changes and must not be
+// inferred from subscription status.
+model PostTrackerAddon {
+  id                   String    @id @default(cuid()) @db.VarChar(30)
+  brand_id             String    @unique @db.VarChar(30)
+  // active | inactive | cancelled
+  status               String    @default("inactive") @db.VarChar(20)
+  activated_at         DateTime?
+  // Null = does not expire. Checked by isAddonActive() on every gate.
+  expires_at           DateTime?
+  payment_provider     String?   @db.VarChar(20)
+  payment_reference    String?   @db.VarChar(191)
+  amount               Decimal?
+  currency             String    @default("USD") @db.VarChar(10)
+  activated_by_user_id String?   @db.VarChar(30)
+  created_at           DateTime  @default(now())
+  updated_at           DateTime  @updatedAt
+
+  @@index([status])
+}
+
+// Per-brand, per-day counters backing the temporary testing quota. Replacing
+// the testing limits with real subscription entitlements means changing the
+// constants in lib/post-tracker/quota.ts — not this table.
+model PostTrackerUsage {
+  id             String   @id @default(cuid()) @db.VarChar(30)
+  brand_id       String   @db.VarChar(30)
+  // UTC midnight of the day being counted.
+  usage_date     DateTime @db.Date
+  api_requests   Int      @default(0)
+  posts_imported Int      @default(0)
+  created_at     DateTime @default(now())
+  updated_at     DateTime @updatedAt
+
+  @@unique([brand_id, usage_date])
   @@index([brand_id])
 }
 
-// Posts the (future) detection job matches against an influencer's monitored
-// hashtags/mentions. Empty today since there is no live social API wired up
-// yet — the UI/data shape is ready for a background job to start inserting
-// rows here without any further schema changes.
-model DetectedPost {
+// One row per monitoring pass, for debugging what the background job did.
+model MonitoringRun {
   id                  String    @id @default(cuid()) @db.VarChar(30)
-  brand_influencer_id String   @db.VarChar(30)
-  brand_id            String   @db.VarChar(30)
-  platform            String   @db.VarChar(50)
-  post_url            String   @db.VarChar(500)
-  matched_hashtag     String?  @db.VarChar(100)
-  matched_mention     String?  @db.VarChar(100)
-  detected_at         DateTime @default(now())
+  brand_id            String    @db.VarChar(30)
+  brand_influencer_id String?   @db.VarChar(30)
+  // running | success | partial | failed | skipped
+  status              String    @default("running") @db.VarChar(20)
+  api_calls           Int       @default(0)
+  posts_found         Int       @default(0)
+  posts_imported      Int       @default(0)
+  error               String?   @db.Text
+  started_at          DateTime  @default(now())
+  finished_at         DateTime?
 
-  @@index([brand_influencer_id])
-  @@index([brand_id])
+  @@index([brand_id, started_at])
+  @@index([status])
+}
+
+// Advisory lock so overlapping invocations (a slow cron run, a manual trigger,
+// two serverless instances) cannot poll the same work concurrently. Expiry is
+// what makes it survive a crash: a dead holder's lock is reclaimed rather than
+// wedging the job forever.
+model MonitoringLock {
+  // Always the literal "post-detection" — one row, taken or not.
+  key        String   @id @db.VarChar(50)
+  locked_at  DateTime @default(now())
+  expires_at DateTime
+  holder     String?  @db.VarChar(100)
 }
 
 model BrandCustomField {
@@ -620,14 +721,14 @@ model BrandNiche {
 }
 
 model BrandPartner {
-  id                  String   @id @default(cuid()) @db.VarChar(30)
-  brand_id            String   @db.VarChar(30)
-  influencer_id       String   @db.VarChar(30)
-  brand_influencer_id String   @unique @db.VarChar(30)
+  id                  String @id @default(cuid()) @db.VarChar(30)
+  brand_id            String @db.VarChar(30)
+  influencer_id       String @db.VarChar(30)
+  brand_influencer_id String @unique @db.VarChar(30)
 
-  on_retainer        Boolean  @default(false)
-  retainer_fee       Decimal  @default(0)
-  default_commission Decimal  @default(0)
+  on_retainer        Boolean @default(false)
+  retainer_fee       Decimal @default(0)
+  default_commission Decimal @default(0)
 
   tier_override String? @db.VarChar(20)
 
@@ -684,3 +785,39 @@ model EarlyAccessSignup {
   @@index([ghl_sync_status])
 }
 
+// ─── Per-brand Discord connection ────────────────────────────────────────────
+// Multi-tenant: every brand connects its OWN Discord server. There is no global
+// guild — the guild ID always comes from this table, keyed by the brand in the
+// current request. A single shared bot token (DISCORD_BOT_TOKEN) serves every
+// guild; only the guild ID is per-tenant.
+//
+// The guild ID is the permanent identifier. The invite code is stored only for
+// re-resolution and for the "Open Discord" link — invites expire and get
+// revoked, so nothing may key off them.
+model BrandDiscordConnection {
+  id       String @id @default(cuid()) @db.VarChar(30)
+  brand_id String @unique @db.VarChar(30)
+
+  guild_id    String  @db.VarChar(30)
+  guild_name  String  @db.VarChar(120)
+  guild_icon  String? @db.VarChar(255)
+  invite_code String? @db.VarChar(50)
+
+  // connected | bot_missing | invalid_invite | revoked | error
+  // `bot_missing` is a first-class state: the invite resolved and we know the
+  // guild, but the bot hasn't been added yet, so Discord features stay off
+  // until it is.
+  status       String    @default("connected") @db.VarChar(20)
+  status_error String?   @db.Text
+  connected_at DateTime?
+  last_checked DateTime?
+
+  connected_by_user_id String?  @db.VarChar(30)
+  created_at           DateTime @default(now())
+  updated_at           DateTime @updatedAt
+
+  // A guild can only be claimed by one brand — prevents a second tenant
+  // attaching to a server someone else already connected.
+  @@unique([guild_id])
+  @@index([status])
+}

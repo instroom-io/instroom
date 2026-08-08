@@ -1,87 +1,61 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
-import Link from "next/link"
+import { useState, useEffect, useCallback, useRef } from "react"
 import {
   IconHash,
   IconAt,
   IconLoader2,
-  IconExternalLink,
   IconSparkles,
   IconLock,
   IconRadar2,
+  IconRefresh,
 } from "@tabler/icons-react"
 import { Switch } from "@/components/ui/switch"
 import { Button } from "@/components/ui/button"
+import { DetectedPostsList, type DetectedPost } from "./DetectedPostsList"
 
-type DetectedPost = {
-  id: string
-  platform: string
-  postUrl: string
-  matchedHashtag: string | null
-  matchedMention: string | null
-  detectedAt: string
+type Quota = {
+  apiRequests: number
+  apiLimit: number
+  postsImported: number
+  postLimit: number
+  exhausted: boolean
+  resetsAt: string
 }
 
-function formatDetectedAt(iso: string) {
-  const d = new Date(iso)
-  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
-}
-
-// ─── Premium gate ────────────────────────────────────────────────────────────
-// Reuses the brand's real subscription status (the same endpoint every other
-// premium page in the dashboard already calls) rather than inventing a fake
-// flag. "free" = locked, anything else (active/trialing) = unlocked. Swap the
-// threshold here once a dedicated plan capability exists for this feature.
-function usePlanAccess(brandId: string, preloadedStatus?: string) {
-  const [access, setAccess] = useState<"loading" | "locked" | "unlocked">(
-    preloadedStatus !== undefined ? (preloadedStatus === "free" ? "locked" : "unlocked") : "loading"
-  )
-
-  useEffect(() => {
-    // Parent already fetched the same brand's subscription status moments
-    // earlier (PostTrackerContent) — reuse it instead of firing a redundant
-    // round-trip every time this card mounts (e.g. every influencer opened).
-    if (preloadedStatus !== undefined) {
-      setAccess(preloadedStatus === "free" ? "locked" : "unlocked")
-      return
-    }
-    let cancelled = false
-    fetch(`/api/subscription/status?brandId=${encodeURIComponent(brandId)}`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (cancelled) return
-        setAccess(data.status === "free" || data.error ? "locked" : "unlocked")
-      })
-      .catch(() => {
-        if (!cancelled) setAccess("locked")
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [brandId, preloadedStatus])
-
-  return access
-}
+/** Display-only. Entitlement is decided server-side from the user's existing
+ *  subscription — this card never handles payment. */
+const ADDON_PRICE = 19
 
 export default function AutoPostDetectionCard({
   brandId,
   biId,
-  subscriptionStatus,
 }: {
   brandId: string
   biId: string
+  /** Accepted for call-site compatibility; the gate is now the add-on, not the plan. */
   subscriptionStatus?: string
 }) {
-  const access = usePlanAccess(brandId, subscriptionStatus)
-
   const [loading, setLoading] = useState(true)
+  const [addonActive, setAddonActive] = useState<boolean | null>(null)
+  /** Server-derived: subscription is paid but the entitlement isn't claimed yet. */
+  const [canClaim, setCanClaim] = useState(false)
+  const [quota, setQuota] = useState<Quota | null>(null)
   const [enabled, setEnabled] = useState(false)
   const [hashtags, setHashtags] = useState("")
   const [mentions, setMentions] = useState("")
   const [posts, setPosts] = useState<DetectedPost[]>([])
+  const [postsHasMore, setPostsHasMore] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState("")
+
+  // Add-on unlock (no local checkout — the app's Pricing page owns payment)
+  const [unlocking, setUnlocking] = useState(false)
+  const [unlockError, setUnlockError] = useState("")
+
+  // Manual "check now" run
+  const [checking, setChecking] = useState(false)
+  const [checkMsg, setCheckMsg] = useState("")
 
   const load = useCallback(() => {
     setLoading(true)
@@ -92,38 +66,196 @@ export default function AutoPostDetectionCard({
         setHashtags(data.hashtags ?? "")
         setMentions(data.mentions ?? "")
         setPosts(data.posts ?? [])
+        setPostsHasMore(Boolean(data.postsHasMore))
+        setAddonActive(Boolean(data.addonActive))
+        setCanClaim(Boolean(data.canClaimAddon))
+        setQuota(data.quota ?? null)
       })
-      .catch(() => {})
+      .catch(() => setAddonActive(false))
       .finally(() => setLoading(false))
   }, [brandId, biId])
 
   useEffect(() => {
-    if (access === "unlocked") load()
-    else setLoading(false)
-  }, [access, load])
+    load()
+  }, [load])
 
-  async function patch(body: Record<string, unknown>) {
-    setSaving(true)
-    setSaveMsg("")
+  /**
+   * Leave for the app's existing Pricing page. `returnTo` carries the exact
+   * Post tab URL so the user lands back where they started, and `ptAddon=1`
+   * tells this card to claim the add-on on arrival.
+   *
+   * Declared before `patch` on purpose: `patch` lists it as a dependency, and a
+   * dependency array is evaluated during render — referencing a `const`
+   * declared further down would throw.
+   */
+  const goToPricing = useCallback(() => {
+    const here = new URL(window.location.href)
+    here.searchParams.set("ptAddon", "1")
+    const returnTo = `${here.pathname}${here.search}`
+    // NAVIGATION ONLY — no entitlement decision depends on this. It exists so
+    // the success page can send the user back to the tab they started on. If it
+    // is missing or storage is blocked, the add-on still unlocks itself from
+    // server state (canClaimAddon) whenever the user reaches this card.
     try {
-      const res = await fetch("/api/post-tracker/detection", {
-        method: "PATCH",
+      window.sessionStorage.setItem("ptAddonReturnTo", returnTo)
+    } catch {
+      /* private mode — the query param still covers the direct path */
+    }
+    window.location.href = `/pricing?returnTo=${encodeURIComponent(returnTo)}`
+  }, [])
+
+  const patch = useCallback(
+    async (body: Record<string, unknown>) => {
+      setSaving(true)
+      setSaveMsg("")
+      try {
+        const res = await fetch("/api/post-tracker/detection", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ brandId, biId, ...body }),
+        })
+        const data = await res.json()
+        if (!res.ok) {
+          // 402 = the server rejected the enable because the add-on isn't
+          // active. Send the user to the app's Pricing page rather than
+          // surfacing a bare error.
+          if (res.status === 402 || data.addonRequired) {
+            setAddonActive(false)
+            goToPricing()
+            return
+          }
+          throw new Error(data.error || "Failed to save")
+        }
+        setEnabled(data.enabled)
+        setHashtags(data.hashtags ?? "")
+        setMentions(data.mentions ?? "")
+        setSaveMsg("Saved")
+        setTimeout(() => setSaveMsg(""), 2000)
+      } catch {
+        setSaveMsg("Failed to save")
+      } finally {
+        setSaving(false)
+      }
+    },
+    [brandId, biId, goToPricing]
+  )
+
+  /**
+   * Claim the add-on against the user's existing subscription, then switch
+   * monitoring on. Used both after returning from checkout and when someone
+   * already subscribed clicks unlock.
+   */
+  const claimAddon = useCallback(async (): Promise<boolean> => {
+    setUnlocking(true)
+    setUnlockError("")
+    try {
+      const res = await fetch("/api/post-tracker/addon", {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ brandId, biId, ...body }),
+        body: JSON.stringify({ brandId }),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || "Failed to save")
-      setEnabled(data.enabled)
-      setHashtags(data.hashtags ?? "")
-      setMentions(data.mentions ?? "")
-      setSaveMsg("Saved")
-      setTimeout(() => setSaveMsg(""), 2000)
-    } catch {
-      setSaveMsg("Failed to save")
+      if (!res.ok || !data.activated) {
+        // Not subscribed yet — this is the signal to go pay, not an error.
+        if (res.status === 402 || data.subscriptionRequired) return false
+        throw new Error(data.error || "Failed to unlock the add-on")
+      }
+      setAddonActive(true)
+      setCanClaim(false)
+      await patch({ enabled: true })
+      load()
+      return true
+    } catch (err) {
+      setUnlockError(err instanceof Error ? err.message : "Failed to unlock the add-on")
+      return true // handled — don't also redirect
     } finally {
-      setSaving(false)
+      setUnlocking(false)
     }
+  }, [brandId, patch, load])
+
+  /** Unlock button / toggle-on: claim if already subscribed, else go pay. */
+  const handleUnlock = useCallback(async () => {
+    if (await claimAddon()) return
+    goToPricing()
+  }, [claimAddon, goToPricing])
+
+  function handleToggle(next: boolean) {
+    if (next && !addonActive) {
+      void handleUnlock()
+      return
+    }
+    patch({ enabled: next })
   }
+
+  // Self-unlock, driven entirely by server state.
+  //
+  // `canClaimAddon` comes from the API: the subscription is paid but the
+  // entitlement row isn't active yet. That is exactly the post-checkout
+  // condition, so no query param, cookie or sessionStorage breadcrumb is needed
+  // to detect "just paid" — and it also repairs any workspace whose entitlement
+  // was never claimed, however the user got there.
+  //
+  // Guarded by a ref so it runs once per mount rather than on every poll.
+  const claimedRef = useRef(false)
+  useEffect(() => {
+    if (claimedRef.current || loading || !canClaim) return
+    claimedRef.current = true
+    void claimAddon().finally(() => {
+      // Tidy the return marker out of the URL if checkout left one behind.
+      const params = new URLSearchParams(window.location.search)
+      if (params.has("ptAddon")) {
+        params.delete("ptAddon")
+        const qs = params.toString()
+        window.history.replaceState({}, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`)
+      }
+    })
+  }, [loading, canClaim, claimAddon])
+
+  /**
+   * Trigger a detection pass now. This is currently the ONLY way a pass runs:
+   * the scheduled Vercel Cron was withdrawn (Hobby plan permits one run per
+   * day, so a five-minute schedule is rejected at deploy time). It was already
+   * the only path in local development, where a cron never fires at all.
+   */
+  const runNow = useCallback(async () => {
+    setChecking(true)
+    setCheckMsg("")
+    try {
+      const res = await fetch("/api/post-tracker/detection/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ brandId }),
+      })
+      const data = await res.json()
+
+      if (!res.ok) {
+        setCheckMsg(data.error || "Detection failed")
+        return
+      }
+      if (data.skipped) {
+        setCheckMsg(data.reason || "A pass is already running")
+        return
+      }
+
+      const s = data.summary ?? {}
+      setCheckMsg(
+        s.postsImported > 0
+          ? `Imported ${s.postsImported} new post${s.postsImported === 1 ? "" : "s"}.`
+          : s.apiCalls > 0
+            ? `Checked ${s.apiCalls} source${s.apiCalls === 1 ? "" : "s"} — no new posts found.`
+            : // Never leave the user with a silent success.
+              `No requests were made. ${(s.skipped ?? []).concat(s.errors ?? []).join(" ") || "Nothing was due for polling."}`
+      )
+      if (data.quota) setQuota(data.quota)
+      load()
+    } catch {
+      setCheckMsg("Detection failed — see server logs")
+    } finally {
+      setChecking(false)
+    }
+  }, [brandId, load])
+
+  const quotaReached = Boolean(quota?.exhausted)
 
   return (
     <div className="rounded-xl border border-gray-100 bg-white">
@@ -134,47 +266,61 @@ export default function AutoPostDetectionCard({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <span className="text-[13px] font-semibold text-gray-900">Automatic Post Detection</span>
+            {/* Same badge geometry and colours as before — label only. */}
             <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wide bg-[#fff8e1] text-[#854F0B] rounded-full px-1.5 py-0.5">
               <IconSparkles size={9} />
-              Premium
+              Add-on
             </span>
           </div>
           <div className="text-[11px] text-gray-400">Detects posts via hashtag &amp; mention monitoring</div>
         </div>
-        {access === "unlocked" && (
-          <Switch
-            checked={enabled}
-            disabled={loading || saving}
-            onCheckedChange={(v) => patch({ enabled: v })}
-          />
-        )}
+        {/* Always rendered: flipping it on without the add-on sends the user to
+            the Pricing page rather than hiding the control. */}
+        <Switch
+          checked={enabled}
+          disabled={loading || saving || unlocking}
+          onCheckedChange={handleToggle}
+          aria-label="Enable automatic post detection"
+        />
       </div>
 
-      {access === "loading" && (
+      {loading && addonActive === null && (
         <div className="flex items-center justify-center gap-2 py-8 text-xs text-gray-400">
           <IconLoader2 size={14} className="animate-spin" />
           Checking access…
         </div>
       )}
 
-      {access === "locked" && (
+      {!loading && addonActive === false && (
         <div className="flex flex-col items-center text-center gap-2 px-4 py-7">
           <div className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center">
             <IconLock size={16} className="text-gray-400" />
           </div>
-          <p className="text-xs font-medium text-gray-700">Upgrade required</p>
+          <p className="text-xs font-medium text-gray-700">Add-on required</p>
           <p className="text-[11px] text-gray-400 max-w-[240px]">
-            Automatic Post Detection is available on paid plans. Upgrade to monitor hashtags and mentions for this influencer.
+            Automatic Post Detection is a Post Tracker add-on. Unlock it to monitor hashtags and mentions and pull
+            matching posts into the tracker.
           </p>
-          <Link href="/dashboard/settings/billing">
-            <Button size="sm" className="mt-1 bg-[#0F6B3E] hover:bg-[#0a5a2f] text-xs h-8">
-              Upgrade plan
-            </Button>
-          </Link>
+          {unlockError && <p className="text-[11px] text-red-600 max-w-[240px]">{unlockError}</p>}
+          <Button
+            size="sm"
+            onClick={() => void handleUnlock()}
+            disabled={unlocking}
+            className="mt-1 bg-[#0F6B3E] hover:bg-[#0a5a2f] text-xs h-8"
+          >
+            {unlocking ? (
+              <>
+                <IconLoader2 size={13} className="animate-spin mr-1" />
+                Unlocking…
+              </>
+            ) : (
+              <>Unlock add-on — ${ADDON_PRICE}</>
+            )}
+          </Button>
         </div>
       )}
 
-      {access === "unlocked" && (
+      {addonActive === true && (
         <div className="p-4 flex flex-col gap-3.5">
           {loading ? (
             <div className="flex items-center justify-center gap-2 py-6 text-xs text-gray-400">
@@ -183,12 +329,68 @@ export default function AutoPostDetectionCard({
             </div>
           ) : (
             <>
-              <div className="flex items-center gap-1.5 text-[11px] font-medium">
+              <div className="flex items-center gap-2 text-[11px] font-medium">
                 <span className={`h-1.5 w-1.5 rounded-full ${enabled ? "bg-[#1FAE5B]" : "bg-gray-300"}`} />
+                {/* Deliberately does NOT say "active"/"running": there is no
+                    scheduled job behind this today (see
+                    app/api/cron/post-detection/route.ts). "Enabled" describes
+                    the saved config; detection only happens on "Check now". */}
                 <span className={enabled ? "text-[#0F6B3E]" : "text-gray-400"}>
-                  {enabled ? "Monitoring active" : "Monitoring paused"}
+                  {enabled ? "Monitoring enabled" : "Monitoring off"}
                 </span>
+                {enabled && (
+                  <button
+                    type="button"
+                    onClick={() => void runNow()}
+                    disabled={checking || quotaReached}
+                    className="ml-auto inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-[10px] font-medium text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    {checking ? <IconLoader2 size={11} className="animate-spin" /> : <IconRefresh size={11} />}
+                    {checking ? "Checking…" : "Check now"}
+                  </button>
+                )}
               </div>
+
+              {/* Scheduled background checks are switched off for now, so say
+                  so plainly rather than letting an enabled toggle imply the
+                  system is watching on its own. */}
+              {enabled && (
+                <div className="text-[10px] text-gray-400">
+                  Scheduled background checks are paused. Your hashtags and mentions are saved — use
+                  &ldquo;Check now&rdquo; to run a detection pass.
+                </div>
+              )}
+
+              {checkMsg && <div className="text-[10px] text-gray-500">{checkMsg}</div>}
+
+              {/* Testing quota. Replaced by real entitlements later; the shape
+                  comes straight from the API so this needs no change then. */}
+              {quota && (
+                quotaReached ? (
+                  <div className="rounded-lg bg-[#fff8e1] border border-[#f5e2b0] px-3 py-2">
+                    <p className="text-[11px] font-semibold text-[#854F0B]">Daily testing limit reached.</p>
+                    <p className="text-[10px] text-[#8a6520]">
+                      You can run another check after the quota resets
+                      {quota.resetsAt ? ` at ${new Date(quota.resetsAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}` : ""}.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-gray-400">
+                    <span>
+                      API usage:{" "}
+                      <strong className="font-semibold text-gray-600 tabular-nums">
+                        {quota.apiRequests} / {quota.apiLimit}
+                      </strong>
+                    </span>
+                    <span>
+                      Posts imported:{" "}
+                      <strong className="font-semibold text-gray-600 tabular-nums">
+                        {quota.postsImported} / {quota.postLimit}
+                      </strong>
+                    </span>
+                  </div>
+                )
+              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="flex flex-col gap-1">
@@ -224,47 +426,22 @@ export default function AutoPostDetectionCard({
 
               <div className="flex flex-col gap-1.5 pt-1">
                 <div className="text-[11px] font-semibold text-gray-500">Recently detected posts</div>
-                {posts.length === 0 ? (
-                  <div className="text-[11px] text-gray-400 rounded-lg border border-dashed border-gray-200 px-3 py-4 text-center">
-                    {enabled
-                      ? "No posts detected yet. We'll list them here as soon as a matching post is found."
-                      : "Enable monitoring to start detecting posts automatically."}
-                  </div>
-                ) : (
-                  posts.map((p) => (
-                    <div key={p.id} className="flex items-center gap-2.5 rounded-lg border border-gray-100 px-3 py-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="text-[11px] font-medium text-gray-800">{p.platform}</span>
-                          {p.matchedHashtag && (
-                            <span className="text-[10px] text-[#0F6B3E] bg-[#0F6B3E]/10 rounded-full px-1.5 py-0.5">
-                              #{p.matchedHashtag.replace(/^#/, "")}
-                            </span>
-                          )}
-                          {p.matchedMention && (
-                            <span className="text-[10px] text-[#2C8EC4] bg-[#2C8EC4]/10 rounded-full px-1.5 py-0.5">
-                              @{p.matchedMention.replace(/^@/, "")}
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[10px] text-gray-400">{formatDetectedAt(p.detectedAt)}</div>
-                      </div>
-                      <a
-                        href={p.postUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex-shrink-0 flex items-center gap-1 text-[11px] font-medium text-[#0F6B3E] hover:underline"
-                      >
-                        View <IconExternalLink size={11} />
-                      </a>
-                    </div>
-                  ))
-                )}
+                {/* Own component so its 45s poll re-renders the list alone —
+                    the inputs above keep focus and the page keeps its scroll. */}
+                <DetectedPostsList
+                  brandId={brandId}
+                  biId={biId}
+                  enabled={enabled}
+                  initialPosts={posts}
+                  initialHasMore={postsHasMore}
+                  loading={loading}
+                />
               </div>
             </>
           )}
         </div>
       )}
+
     </div>
   )
 }

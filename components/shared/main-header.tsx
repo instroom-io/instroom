@@ -1,6 +1,6 @@
 "use client"
 
-import Image from "next/image"
+import { LogoLockup } from "@/components/brand/logo"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { usePathname } from "next/navigation"
@@ -625,9 +625,12 @@ export function MainHeader() {
             gap: 24,
           }}
         >
-        <Link href="/" style={{ display: "flex", alignItems: "center", gap: 8, textDecoration: "none", flexShrink: 0, marginRight: 16 }}>
-          <Image src="/images/instroomLogo.png" alt="Instroom logo" width={36} height={36} />
-          <span style={{ fontSize: "1.375rem", fontWeight: 800, letterSpacing: "-0.02em", color: "var(--charcoal)" }}>Instroom</span>
+        <Link href="/" aria-label="Instroom home" className="mr-4 flex shrink-0 items-center no-underline">
+          <LogoLockup
+            size="lg"
+            priority
+            textClassName="text-[1.375rem] font-extrabold tracking-[-0.02em] text-[var(--charcoal)]"
+          />
         </Link>
 
         <ul

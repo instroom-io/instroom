@@ -81,7 +81,17 @@
      property can't carry a media query. */
   --sb-width: 256px;
 
-  --radius: 0.625rem;
+  /* Base corner radius for the whole component library.
+     Everything derives from this one value (--radius-sm/md/lg/xl above), so
+     cards, buttons, inputs, dropdowns, dialogs, sheets and the floating
+     dashboard container round together and cannot drift apart.
+       sm 8px  chips, badges
+       md 10px buttons, inputs
+       lg 12px cards, dropdowns
+       xl 16px dialogs, the main content container
+     Raised from 0.625rem (10px), which read as square at card and container
+     size. 12px sits in the same range Linear, Stripe and Vercel use. */
+  --radius: 0.75rem;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);

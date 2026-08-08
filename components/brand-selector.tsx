@@ -1,10 +1,10 @@
 "use client"
 
 import { useEffect, useState, useRef, useCallback } from "react"
+import { signOutEverywhere } from "@/lib/sign-out"
 import { createPortal } from "react-dom"
 import { useRouter, usePathname } from "next/navigation"
 import { useSession } from "next-auth/react"
-import { signOut } from "next-auth/react"
 import Script from "next/script"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -414,7 +414,7 @@ export function BrandSelector() {
           </div>
         </button>
         <button
-          onClick={() => signOut({ callbackUrl: "/login" })}
+          onClick={() => signOutEverywhere()}
           className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-red-50 transition-colors mt-0.5"
         >
           <LogOut className="h-4 w-4 text-red-500" />

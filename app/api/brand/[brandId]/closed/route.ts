@@ -28,7 +28,13 @@ function deriveClosedStatus(
     "No post",
   ]
 
-  // 1. Stored override from product_details.closedStatus (set by PATCH)
+  // 1. The saved stage ALWAYS wins.
+  //
+  // Everything below this point is inference for rows that have never been
+  // moved through the Post Tracker (legacy rows, or influencers that arrived
+  // via the pipeline). Once PATCH has written product_details.closedStatus,
+  // that value is the single source of truth and nothing here may override it
+  // — not order_status, not content_posted, and not post detection.
   if (storedClosedStatus && valid.includes(storedClosedStatus as ClosedColumn)) {
     return storedClosedStatus as ClosedColumn
   }

@@ -1,10 +1,10 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { Logo } from "@/components/brand/logo"
 import { useRouter } from 'next/navigation'
 import { useSession } from 'next-auth/react'
 import { OnboardingForm } from '@/components/onboarding-form'
-import Image from 'next/image'
 
 export default function OnboardingPage() {
   const router = useRouter()
@@ -66,6 +66,23 @@ export default function OnboardingPage() {
     }
   }
 
+  // Users who already have an active/trialing subscription (e.g. auto-granted
+  // on early-access activation) skip the pricing detour entirely.
+  const redirectAfterOnboarding = async () => {
+    try {
+      const userId = (session?.user as any)?.id
+      const res = await fetch('/api/subscription/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId }),
+      })
+      const data = await res.json()
+      router.push(data.active ? '/dashboard/influencer-discovery' : '/pricing')
+    } catch {
+      router.push('/pricing')
+    }
+  }
+
   const handleSkip = async () => {
     setIsLoading(true);
     setError(null);
@@ -93,7 +110,7 @@ export default function OnboardingPage() {
         const data = await response.json();
         throw new Error(data.error || 'Failed to save onboarding data');
       }
-      router.push('/pricing');
+      await redirectAfterOnboarding();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
@@ -173,7 +190,7 @@ export default function OnboardingPage() {
         throw new Error(data.error || 'Failed to save onboarding data')
       }
 
-      router.push('/pricing')
+      await redirectAfterOnboarding()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred')
     } finally {
@@ -188,15 +205,7 @@ export default function OnboardingPage() {
   return (
     <div className="relative min-h-svh overflow-hidden bg-[#F7F9F8] text-[#1E1E1E]">
       <div className="fixed top-4 sm:top-6 left-4 sm:left-12 z-50">
-        <Image
-          src="/images/INSTROOM LOGO 1.png"
-          alt="Instroom Logo"
-          width={140}
-          height={140}
-          priority
-          quality={95}
-          className="drop-shadow-sm w-32 sm:w-44 h-auto"
-        />
+        <Logo size="page" alt="Instroom" priority className="drop-shadow-sm" />
       </div>
 
       <div className="pointer-events-none fixed top-0 left-0 w-64 sm:w-96 h-64 sm:h-96 rounded-full bg-[#1FAE5B]/8 blur-3xl -translate-x-1/2 -translate-y-1/2" />
