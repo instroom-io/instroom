@@ -5,6 +5,7 @@ import "./globals.css";
 import { AuthProvider } from "./providers";
 import { Toaster } from "sonner";
 import SessionGuard from "@/components/SessionGuard";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 
 const inter = Inter({
   variable: "--font-inter",

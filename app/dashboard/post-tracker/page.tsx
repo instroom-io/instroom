@@ -240,7 +240,7 @@ function PostUrlRequiredDialog({ count, onGoToPostDetails, onCancel }: {
               A Post URL is required before manually moving {count > 1 ? `these ${count} influencers` : "this influencer"} to the Posted stage.
             </p>
             <p className="text-sm text-gray-600 mt-2 leading-relaxed">
-              Please add the post link first, or enable Automatic Post Detection to let the system update the stage automatically.
+              Please add the post link first, or use Automatic Post Detection and run a check to have the stage updated for you.
             </p>
           </div>
         </div>

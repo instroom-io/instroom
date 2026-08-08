@@ -2,9 +2,9 @@
 // Post Tracker → Automatic Post Detection → "Recently detected posts".
 //
 // Newest-first, 5 at a time, with background polling that prepends new arrivals
-// in place. Split out of AutoPostDetection.tsx so a poll re-renders this list
-// only — the settings inputs above keep their focus and the page keeps its
-// scroll position.
+// in place (currently disabled — see POLL_ENABLED). Split out of
+// AutoPostDetection.tsx so a poll re-renders this list only — the settings
+// inputs above keep their focus and the page keeps its scroll position.
 
 import { useState, useEffect, useCallback, useRef } from "react"
 import { IconExternalLink, IconLoader2, IconBrandTiktok, IconBrandInstagram, IconWorld } from "@tabler/icons-react"
@@ -20,6 +20,17 @@ export type DetectedPost = {
 }
 
 export const PAGE_SIZE = 5
+/**
+ * Off while there is no scheduled detection job (the Vercel Cron entry was
+ * removed — see app/api/cron/post-detection/route.ts). With nothing writing
+ * new rows in the background, this interval could only ever fetch an empty
+ * result, and a list that quietly refreshes itself implies detection is
+ * running when it isn't. Flip back to true alongside the cron.
+ *
+ * The list still updates after "Check now": the parent reloads and pushes
+ * fresh rows down through `initialPosts`.
+ */
+const POLL_ENABLED: boolean = false
 /** Matches the monitoring cadence without hammering the API. */
 const POLL_INTERVAL_MS = 45_000
 /** A detection is "New" for this long. */
@@ -128,7 +139,7 @@ export function DetectedPostsList({
   // Background poll: asks only for rows newer than the newest one held, so the
   // usual response is an empty array and nothing re-renders.
   useEffect(() => {
-    if (!enabled) return
+    if (!enabled || !POLL_ENABLED) return
     let cancelled = false
 
     const poll = async () => {
