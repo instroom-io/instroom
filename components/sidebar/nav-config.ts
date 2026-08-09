@@ -42,8 +42,8 @@ export const DASHBOARD_NAV: NavSection[] = [
   {
     items: [
       { href: "/dashboard/influencer-discovery", label: "Discovery", icon: Search },
-      { href: "/dashboard/inbox", label: "Inbox", icon: Mail },
       { href: "/dashboard/manage-influencers", label: "Influencers List", icon: Users },
+      { href: "/dashboard/inbox", label: "Inbox", icon: Mail },
       { href: "/dashboard/pipeline", label: "Pipeline", icon: GitBranch },
       { href: "/dashboard/post-tracker", label: "Post Tracker", icon: CircleCheck },
       { href: "/dashboard/brand-partners", label: "Brand Partners", icon: Store },

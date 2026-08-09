@@ -40,6 +40,10 @@ export async function POST(req: Request) {
         attributes: {
           product_options: {
             redirect_url: successUrl,
+            // Without this, Lemon Squeezy shows every enabled variant on the
+            // product as a switchable option and only pre-selects this one —
+            // this is what actually locks the checkout to just this plan.
+            enabled_variants: [Number(variantId)],
           },
           checkout_data: {
             custom: {

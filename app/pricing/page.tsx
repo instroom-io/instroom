@@ -1,30 +1,14 @@
 import { Logo } from "@/components/brand/logo"
-import Link from "next/link";
+import type { ReactNode } from "react";
 import { getActivePlans } from "@/prisma/plans";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from  "@/lib/prisma";
 import { PricingPlanButton } from "@/components/pricing-plan-button";
-import { GetEarlyAccessButton } from "@/components/get-early-access-button";
+import { PLAN_TAGLINES, getPlanFeatures, formatPrice, formatPriceSub, Check } from "@/lib/pricing-plans";
 
 // Reads plans from the DB — render at request time, not at build.
 export const dynamic = "force-dynamic";
-
-function getPlanSummary(plan: any) {
-  if (plan.name === "basic") {
-    return "1 workspace (30-day free trial)";
-  }
-  if (plan.name === "solo") {
-    return "1 workspace (cannot add more)";
-  }
-  if (plan.name === "team") {
-    return "3 workspaces included (can buy more)";
-  }
-  if (plan.name === "agency") {
-    return "10 workspaces included (can buy more)";
-  }
-  return "";
-}
 
 const planHierarchy: { [key: string]: number } = {
   basic: 0,
@@ -32,17 +16,6 @@ const planHierarchy: { [key: string]: number } = {
   team: 2,
   agency: 3,
 };
-
-const additionalFeatures = [
-  {
-    name: "Instroom Post Tracker",
-    tooltip: "Track influencer posts and performance across all your campaigns.",
-  },
-  {
-    name: "Instroom Chrome Extension",
-    tooltip: "Discover and save influencer profiles directly from your browser.",
-  },
-];
 
 export default async function PricingPage({ searchParams }: { searchParams?: { cycle?: string } }) {
   const session = await getServerSession(authOptions);
@@ -99,10 +72,11 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
 
         .plans-grid {
           display: grid;
-          grid-template-columns: repeat(3, minmax(0, 320px));
-          justify-content: center;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
           align-items: stretch;
-          gap: 24px;
+          gap: 20px;
+          max-width: 920px;
+          margin: 0 auto;
         }
 
         .plan-card {
@@ -142,10 +116,11 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
           white-space: nowrap;
           box-shadow: 0 4px 12px rgba(31,174,91,0.35);
           letter-spacing: 0.04em;
+          text-transform: uppercase;
         }
 
         .plan-inner {
-          padding: 32px;
+          padding: 28px 24px;
           display: flex;
           flex-direction: column;
           flex: 1;
@@ -153,7 +128,7 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
 
         .plan-name {
           font-family: 'Manrope', sans-serif;
-          font-size: 1.375rem;
+          font-size: 1.25rem;
           font-weight: 700;
           color: #1E1E1E;
           margin-bottom: 4px;
@@ -162,20 +137,20 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
         .plan-summary {
           font-size: 0.8125rem;
           color: #71717a;
-          margin-bottom: 24px;
+          margin-bottom: 20px;
           line-height: 1.5;
+          min-height: 38px;
         }
 
         .plan-price {
           display: flex;
           align-items: baseline;
           gap: 4px;
-          margin-bottom: 28px;
         }
 
         .plan-price-amount {
           font-family: 'Manrope', sans-serif;
-          font-size: 3rem;
+          font-size: 2.75rem;
           font-weight: 800;
           color: #1E1E1E;
           line-height: 1;
@@ -187,10 +162,21 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
           font-weight: 500;
         }
 
+        .plan-price-sub {
+          font-size: 0.8125rem;
+          color: #71717a;
+          margin-top: 6px;
+          min-height: 18px;
+        }
+
+        .plan-cta-wrap {
+          margin: 20px 0 22px;
+        }
+
         .plan-features {
           list-style: none;
           padding: 0;
-          margin: 0 0 28px;
+          margin: 0;
           flex: 1;
           display: flex;
           flex-direction: column;
@@ -201,84 +187,52 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
           display: flex;
           align-items: flex-start;
           gap: 10px;
-          font-size: 0.9375rem;
+          font-size: 0.875rem;
           color: #3f3f46;
           line-height: 1.5;
         }
 
         .plan-features li .check {
-          color: #1FAE5B;
-          font-weight: 700;
-          flex-shrink: 0;
+          flex: 0 0 18px;
+          width: 18px;
+          height: 18px;
+          border-radius: 9999px;
+          background: #EAF7F0;
+          display: grid;
+          place-items: center;
           margin-top: 1px;
         }
 
-        /* ── Additional Features (inside card) ── */
-        .card-additional-features {
-          margin-top: 20px;
-          padding-top: 16px;
-          border-top: 1px solid rgba(15,107,62,0.12);
+        .plan-features li .muted {
+          color: #7C7C7C;
         }
 
-        .card-additional-features-label {
-          font-size: 0.625rem;
-          font-weight: 700;
-          text-transform: uppercase;
-          letter-spacing: 0.12em;
-          color: #a1a1aa;
-          margin-bottom: 8px;
-          display: block;
+        .reassure {
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: center;
+          gap: 14px 32px;
+          margin-top: 40px;
         }
 
-        .card-additional-features-list {
-          list-style: none;
-          padding: 0;
-          margin: 0;
-        }
-
-        .card-additional-features-list li {
+        .reassure div {
           display: flex;
           align-items: center;
-          justify-content: space-between;
-          padding: 8px 0;
-          border-bottom: 1px solid rgba(15,107,62,0.08);
-          font-size: 0.8125rem;
-          color: #52525b;
+          gap: 8px;
+          color: #4B4B4B;
+          font-size: 0.90625rem;
+          font-weight: 500;
         }
 
-        .card-additional-features-list li:last-child {
-          border-bottom: none;
-          padding-bottom: 0;
+        @media (max-width: 1040px) {
+          .plans-grid { grid-template-columns: repeat(2, 1fr); }
         }
 
-        .card-additional-features-info {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          width: 16px;
-          height: 16px;
-          border-radius: 9999px;
-          border: 1.5px solid #d4d4d8;
-          color: #a1a1aa;
-          font-size: 0.5625rem;
-          font-weight: 700;
-          flex-shrink: 0;
-          cursor: default;
-          line-height: 1;
-          transition: border-color 0.15s, color 0.15s;
-        }
-
-        .card-additional-features-list li:hover .card-additional-features-info {
-          border-color: #1FAE5B;
-          color: #1FAE5B;
-        }
-
-        @media (max-width: 900px) {
-          .plans-grid { grid-template-columns: 1fr; justify-items: center; }
+        @media (max-width: 560px) {
+          .plans-grid { grid-template-columns: 1fr; }
         }
 
         @media (max-width: 640px) {
-          .plan-card { max-width: 360px; }
           .plan-inner { padding: 24px; }
           .container { padding: 0 16px; }
         }
@@ -322,30 +276,6 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
           </a>
         </div>
 
-        {/* Approved users now get their trial subscription automatically on
-            account activation, so this only needs to show for logged-out
-            visitors (who haven't requested access yet) or the rare logged-in
-            user who still has no subscription. */}
-        {!(session?.user?.id && userSubscription) && (
-          <div className="mt-8 inline-flex flex-wrap items-center justify-center gap-3 rounded-xl border border-[#F4B740]/40 bg-[#F4B740]/8 px-5 py-3 text-sm text-[#8a5a00]">
-            {session?.user?.id ? (
-              <>
-                <span>We&apos;re in private beta, so new subscriptions aren&apos;t open yet — but you&apos;re approved.</span>
-                <GetEarlyAccessButton cycle={cycle} />
-              </>
-            ) : (
-              <>
-                <span>We&apos;re in private beta, so new subscriptions aren&apos;t open yet.</span>
-                <Link
-                  href="/early-access"
-                  className="font-semibold text-[#0F6B3E] underline underline-offset-2 hover:text-[#1FAE5B] whitespace-nowrap"
-                >
-                  Request Early Access →
-                </Link>
-              </>
-            )}
-          </div>
-        )}
       </section>
 
       {/* PLANS */}
@@ -353,71 +283,54 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
         <div className="container">
           <div className="plans-grid">
             {plans.map((plan: any) => {
-              const price = cycle === "yearly" ? plan.price_yearly : plan.price_monthly;
-              const priceLabel = cycle === "yearly" ? "/yr" : "/mo";
-              const isPopular = plan.name === "solo";
-              const showAdditionalFeatures = plan.name === "solo" || plan.name === "team";
+              const isPopular = plan.name === "team";
+              const price = formatPrice(plan, cycle);
               return (
                 <div key={plan.id} className={`plan-card${isPopular ? " popular" : ""}`}>
-                  {isPopular && <div className="popular-badge">⭐ MOST POPULAR</div>}
+                  {isPopular && <div className="popular-badge">Most Popular</div>}
                   <div className="plan-inner">
                     <div className="plan-name">{plan.display_name}</div>
-                    <div className="plan-summary">{getPlanSummary(plan)}</div>
+                    <div className="plan-summary">{PLAN_TAGLINES[plan.name] ?? ""}</div>
                     <div className="plan-price">
-                      <span className="plan-price-amount">${Number(price).toLocaleString()}</span>
-                      <span className="plan-price-period">{priceLabel}</span>
+                      <span className="plan-price-amount">{price.amount}</span>
+                      {price.period && <span className="plan-price-period">{price.period}</span>}
                     </div>
+                    <div className="plan-price-sub">{formatPriceSub(plan, cycle)}</div>
+
+                    <div className="plan-cta-wrap">
+                      <PricingPlanButton
+                        planName={plan.name}
+                        cycle={cycle}
+                        isCurrentPlan={currentPlanName === plan.name}
+                        isPopular={isPopular}
+                        currentPlanName={currentPlanName}
+                        isPlanHigher={
+                          currentPlanName
+                            ? (planHierarchy[plan.name] || 0) > (planHierarchy[currentPlanName] || 0)
+                            : false
+                        }
+                      />
+                    </div>
+
                     <ul className="plan-features">
-                      <li><span className="check">✓</span><span><strong>Unlimited seats</strong></span></li>
-                      <li>
-                        <span className="check">✓</span>
-                        <span><strong>{plan.included_brands}</strong> workspace{plan.included_brands !== 1 ? "s" : ""}</span>
-                      </li>
-                      {plan.max_influencers && (
-                        <li>
-                          <span className="check">✓</span>
-                          <span><strong>{plan.name !== "basic" ? "Unlimited" : plan.max_influencers}</strong> influencers per brand</span>
+                      {getPlanFeatures(plan).map((feature: ReactNode, i: number) => (
+                        <li key={i}>
+                          <span className="check"><Check /></span>
+                          <span>{feature}</span>
                         </li>
-                      )}
-                      {plan.max_campaigns && (
-                        <li>
-                          <span className="check">✓</span>
-                          <span><strong>{plan.max_campaigns}</strong> active campaigns</span>
-                        </li>
-                      )}
+                      ))}
                     </ul>
-
-                    <PricingPlanButton
-                      planName={plan.name}
-                      cycle={cycle}
-                      isCurrentPlan={currentPlanName === plan.name}
-                      isPopular={isPopular}
-                      currentPlanName={currentPlanName}
-                      isPlanHigher={
-                        currentPlanName
-                          ? (planHierarchy[plan.name] || 0) > (planHierarchy[currentPlanName] || 0)
-                          : false
-                      }
-                    />
-
-                    <div
-                      className="card-additional-features"
-                      style={showAdditionalFeatures ? undefined : { visibility: "hidden" }}
-                    >
-                      <span className="card-additional-features-label">Additional Features</span>
-                      <ul className="card-additional-features-list">
-                        {additionalFeatures.map((feature) => (
-                          <li key={feature.name}>
-                            <span>{feature.name}</span>
-                            <span className="card-additional-features-info" title={feature.tooltip}>i</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
                   </div>
                 </div>
               );
             })}
+          </div>
+
+          <div className="reassure">
+            <div><Check /> Free forever plan</div>
+            <div><Check /> Unlimited seats</div>
+            <div><Check /> Cancel anytime</div>
+            <div><Check /> 7-day money-back for new subscribers</div>
           </div>
         </div>
       </section>

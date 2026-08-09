@@ -2,8 +2,8 @@
 
 import Link from "next/link"
 
-// Flip to `false` once real subscriptions open back up after the beta.
-const BETA_CHECKOUT_DISABLED = true
+// Flip to `true` if subscriptions need to be paused during a private beta again.
+const BETA_CHECKOUT_DISABLED = false
 
 interface PricingPlanButtonProps {
   planName: string
