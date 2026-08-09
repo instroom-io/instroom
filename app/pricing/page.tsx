@@ -5,15 +5,10 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from  "@/lib/prisma";
 import { PricingPlanButton } from "@/components/pricing-plan-button";
+import { PLAN_TAGLINES, getPlanFeatures, formatPrice, formatPriceSub, Check } from "@/lib/pricing-plans";
 
 // Reads plans from the DB — render at request time, not at build.
 export const dynamic = "force-dynamic";
-
-const PLAN_TAGLINES: Record<string, string> = {
-  basic: "Run one brand, free — for as long as you like.",
-  solo: "For one brand, running at full scale.",
-  team: "For scaling brands and multi-brand teams.",
-};
 
 const planHierarchy: { [key: string]: number } = {
   basic: 0,
@@ -21,55 +16,6 @@ const planHierarchy: { [key: string]: number } = {
   team: 2,
   agency: 3,
 };
-
-function getPlanFeatures(plan: any): ReactNode[] {
-  if (plan.name === "basic") {
-    return [
-      <><strong>Unlimited</strong> seats</>,
-      <><strong>{plan.included_brands}</strong> workspace{plan.included_brands !== 1 ? "s" : ""}</>,
-      <><strong>{plan.max_influencers}</strong> influencers <span className="muted">(one-time)</span></>,
-      "Auto-enriched profiles — engagement, followers, email & location",
-      "Pipeline, approvals & payment tracking",
-    ];
-  }
-  if (plan.name === "solo") {
-    return [
-      "Everything in Basic, plus:",
-      <><strong>{plan.max_influencers}</strong> new influencers / month</>,
-      "Inbox — Gmail & Outlook",
-      "Import & export",
-    ];
-  }
-  if (plan.name === "team") {
-    return [
-      "Everything in Solo, plus:",
-      <><strong>{plan.max_influencers}</strong> new influencers / month</>,
-      <><strong>{plan.included_brands}</strong> workspaces <span className="muted">(add more anytime)</span></>,
-      "Priority support",
-    ];
-  }
-  return [];
-}
-
-function formatPrice(plan: any, cycle: "monthly" | "yearly") {
-  const price = cycle === "yearly" ? plan.price_yearly : plan.price_monthly;
-  if (Number(price) === 0) return { amount: "Free", period: "" };
-  return { amount: `$${Number(price).toLocaleString()}`, period: "/mo" };
-}
-
-function formatPriceSub(plan: any, cycle: "monthly" | "yearly") {
-  if (Number(plan.price_monthly) === 0) return "Free forever · no credit card";
-  if (cycle === "monthly") return "Billed monthly";
-  return `$${(Number(plan.price_yearly) * 12).toLocaleString()} billed annually`;
-}
-
-function Check() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" strokeWidth="2.6" width="11" height="11">
-      <path d="M5 13l4 4L19 7" stroke="#1FAE5B" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
 
 export default async function PricingPage({ searchParams }: { searchParams?: { cycle?: string } }) {
   const session = await getServerSession(authOptions);

@@ -1,60 +1,17 @@
 "use client";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Logo } from "@/components/brand/logo"
-import { useState, Suspense } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useSession } from "next-auth/react";
+import Script from "next/script";
+import { PLAN_TAGLINES, getPlanFeatures, formatPrice, formatPriceSub, Check } from "@/lib/pricing-plans";
 
-const planSummaries: Record<string, string> = {
-  basic: "1 workspace",
-  solo: "1 workspace (cannot add more)",
-  team: "3 workspaces included (can buy more)",
-  agency: "10 workspaces included (can buy more)",
-};
-
-const plans = {
-  basic: {
-    display_name: "Basic",
-    price_monthly: 0,
-    price_yearly: 0,
-    included_seats: 0,
-    max_seats: null,
-    included_brands: 1,
-    max_brands: 1,
-    max_influencers: 100,
-    max_campaigns: null,
-    can_use_api: false,
-    custom_branding: true,
-    priority_support: false,
-  },
-  solo: {
-    display_name: "Solo",
-    price_monthly: 19,
-    price_yearly: 15,
-    included_seats: 0,
-    max_seats: 5,
-    included_brands: 1,
-    max_brands: 1,
-    max_influencers: 100,
-    max_campaigns: 3,
-    can_use_api: false,
-    custom_branding: true,
-    priority_support: false,
-  },
-  team: {
-    display_name: "Team",
-    price_monthly: 49,
-    price_yearly: 39,
-    included_seats: 10,
-    max_seats: 25,
-    included_brands: 3,
-    max_brands: 10,
-    max_influencers: 500,
-    max_campaigns: 10,
-    can_use_api: true,
-    custom_branding: true,
-    priority_support: true,
-  },
-};
+declare global {
+  interface Window {
+    createLemonSqueezy?: () => void
+    LemonSqueezy?: { Url: { Open: (url: string) => void } }
+  }
+}
 
 const lemonSqueezyVariants: Record<string, Record<string, string>> = {
   solo: {
@@ -70,17 +27,30 @@ const lemonSqueezyVariants: Record<string, Record<string, string>> = {
 function PaymentPageInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const planKey = (searchParams.get("plan") || "team") as keyof typeof plans;
-  const cycle = (searchParams.get("cycle") === "yearly") ? "yearly" : "monthly";
-  const plan = plans[planKey] || plans.team;
+  const planKey = searchParams.get("plan") || "team";
+  const cycle = (searchParams.get("cycle") === "monthly") ? "monthly" : "yearly";
+
+  const [plan, setPlan] = useState<any>(null);
+  const [planLoaded, setPlanLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const { data: session } = useSession();
   const userId = session?.user?.id;
 
-  const price = cycle === "yearly" ? plan.price_yearly : plan.price_monthly;
-  const isFree = planKey === "basic";
+  // Pull the same live plan data /pricing shows — no separate copy to fall
+  // out of sync with pricing, features, or the "free forever" wording.
+  useEffect(() => {
+    setPlanLoaded(false);
+    fetch(`/api/subscription/plans/${planKey}`)
+      .then((r) => r.json())
+      .then((data) => setPlan(data.plan ?? null))
+      .catch(() => setPlan(null))
+      .finally(() => setPlanLoaded(true));
+  }, [planKey]);
+
+  const isFree = plan ? Number(plan.price_monthly) === 0 : false;
+  const price = plan ? formatPrice(plan, cycle) : null;
 
   const handleCheckout = async () => {
     if (!userId) {
@@ -107,7 +77,7 @@ function PaymentPageInner() {
             router.push("/dashboard");
             return;
           }
-          setError(data.error || "Failed to start trial. Please try again.");
+          setError(data.error || "Failed to get started. Please try again.");
           return;
         }
 
@@ -141,7 +111,14 @@ function PaymentPageInner() {
       }
 
       if (data.url) {
-        window.location.href = data.url;
+        const overlayUrl = data.url.includes("?") ? `${data.url}&embed=1` : `${data.url}?embed=1`;
+        // Open as an in-page overlay when the SDK is ready; fall back to a
+        // full redirect if lemon.js hasn't loaded yet so checkout never stalls.
+        if (window.LemonSqueezy) {
+          window.LemonSqueezy.Url.Open(overlayUrl);
+        } else {
+          window.location.href = data.url;
+        }
       }
     } catch (err) {
       setError("Something went wrong. Please try again.");
@@ -150,8 +127,35 @@ function PaymentPageInner() {
     }
   };
 
+  if (!planLoaded) {
+    return (
+      <div className="min-h-screen bg-[#F7F9F8] flex items-center justify-center text-[#1E1E1E]">
+        Loading...
+      </div>
+    );
+  }
+
+  if (!plan) {
+    return (
+      <div className="min-h-screen bg-[#F7F9F8] flex flex-col items-center justify-center gap-4 text-[#1E1E1E]">
+        <p>We couldn't find that plan.</p>
+        <button
+          onClick={() => router.push("/pricing")}
+          className="rounded-lg py-2 px-5 text-sm font-semibold bg-[#1FAE5B] text-white"
+        >
+          Back to pricing
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="relative min-h-screen bg-[#F7F9F8] text-[#1E1E1E] overflow-hidden">
+      <Script
+        src="https://assets.lemonsqueezy.com/lemon.js"
+        strategy="afterInteractive"
+        onLoad={() => window.createLemonSqueezy?.()}
+      />
       <div className="pointer-events-none fixed top-0 left-0 w-64 sm:w-96 h-64 sm:h-96 rounded-full bg-[#1FAE5B]/8 blur-3xl -translate-x-1/2 -translate-y-1/2" />
       <div className="pointer-events-none fixed bottom-0 right-0 w-56 sm:w-80 h-56 sm:h-80 rounded-full bg-[#0F6B3E]/6 blur-3xl translate-x-1/3 translate-y-1/3" />
       <div className="pointer-events-none hidden sm:block fixed top-1/3 right-1/4 w-64 h-64 rounded-full bg-[#2C8EC4]/5 blur-3xl" />
@@ -166,30 +170,22 @@ function PaymentPageInner() {
             <h2 className="text-xl sm:text-2xl font-bold mb-1 text-center md:text-left text-[#1E1E1E]">Your Plan</h2>
             <h3 className="text-lg font-semibold mb-1 text-[#1E1E1E]">
               {plan.display_name}
-              {isFree && <span className="ml-2 text-xs font-normal text-[#0F6B3E]">(30-day free trial)</span>}
             </h3>
-            <div className="text-3xl font-bold mb-2 text-[#1E1E1E]">
-              {isFree ? "Free" : `$${price}/mo`}
+            <div className="text-3xl font-bold mb-1 text-[#1E1E1E]">
+              {price!.amount}
+              {price!.period && <span className="text-base font-medium text-[#71717a]">{price!.period}</span>}
             </div>
-            {!isFree && cycle === "yearly" && (
-              <p className="mb-2 text-xs text-[#71717a]">${price * 12} billed annually</p>
-            )}
-            <p className="mb-6 text-xs text-[#0F6B3E] font-semibold">{planSummaries[planKey]}</p>
+            <p className="mb-2 text-xs text-[#71717a]">{formatPriceSub(plan, cycle)}</p>
+            <p className="mb-6 text-xs text-[#0F6B3E] font-semibold">{PLAN_TAGLINES[planKey] ?? ""}</p>
             <ul className="space-y-3 text-sm text-[#1E1E1E] mb-6">
-              <li><b>Seats:</b> Unlimited</li>
-              <li>
-                <b>Workspaces:</b> {plan.included_brands}
-              </li>
-              {plan.max_influencers && (
-                <li>
-                  <b>Influencer List:</b> {isFree ? plan.max_influencers : "Unlimited"}
+              {getPlanFeatures(plan).map((feature, i) => (
+                <li key={i} className="flex items-start gap-2.5">
+                  <span className="mt-0.5 flex-shrink-0 w-[18px] h-[18px] rounded-full bg-[#EAF7F0] grid place-items-center">
+                    <Check />
+                  </span>
+                  <span>{feature}</span>
                 </li>
-              )}
-              {plan.max_campaigns && (
-                <li>
-                  <b>Active campaigns:</b> {plan.max_campaigns}
-                </li>
-              )}
+              ))}
             </ul>
             <button
               className="w-full text-sm text-[#0F6B3E] hover:underline mt-auto"
@@ -205,7 +201,7 @@ function PaymentPageInner() {
             </h2>
             <p className="text-sm sm:text-base text-[#666666] text-center md:text-left mb-6 sm:mb-8">
               {isFree
-                ? "No credit card required. Click below to start your 30-day free trial."
+                ? "Click below to get started — free forever."
                 : "Click the button below to securely complete your subscription."}
             </p>
             {error && (
@@ -218,7 +214,7 @@ function PaymentPageInner() {
               disabled={loading}
               className="w-full rounded-lg py-3 px-6 text-center text-base font-semibold transition-all duration-150 bg-gradient-to-r from-[#1FAE5B] to-[#0F6B3E] text-white shadow-lg shadow-[#1FAE5B]/25 hover:shadow-xl hover:shadow-[#1FAE5B]/35 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {loading ? "Processing..." : isFree ? "Start Free Trial" : "Subscribe Now"}
+              {loading ? "Processing..." : isFree ? "Get Started" : "Subscribe Now"}
             </button>
             <button
               onClick={() => router.push("/pricing")}
