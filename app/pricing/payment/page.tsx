@@ -169,12 +169,11 @@ function PaymentPageInner() {
               {isFree && <span className="ml-2 text-xs font-normal text-[#0F6B3E]">(30-day free trial)</span>}
             </h3>
             <div className="text-3xl font-bold mb-2 text-[#1E1E1E]">
-              {isFree
-                ? "Free"
-                : cycle === "yearly"
-                  ? `$${plan.price_yearly}/yr`
-                  : `$${plan.price_monthly}/mo`}
+              {isFree ? "Free" : `$${price}/mo`}
             </div>
+            {!isFree && cycle === "yearly" && (
+              <p className="mb-2 text-xs text-[#71717a]">${price * 12} billed annually</p>
+            )}
             <p className="mb-6 text-xs text-[#0F6B3E] font-semibold">{planSummaries[planKey]}</p>
             <ul className="space-y-3 text-sm text-[#1E1E1E] mb-6">
               <li><b>Seats:</b> Unlimited</li>
