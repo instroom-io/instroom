@@ -674,9 +674,9 @@ export function MainHeader() {
           <Link href="/login" style={{ fontSize: "0.8125rem", fontWeight: "500", textDecoration: "none", color: "var(--charcoal)" }}>
             Log in
           </Link>
-          <Link href="/early-access">
+          <Link href="/signup">
             <Button className="bg-gradient-to-r from-[#0F6B3E] to-[#1FAE5B] text-white font-semibold hover:from-[#0a5a2f] hover:to-[#158a48] shadow-lg shadow-emerald-500/25 text-[0.8125rem]">
-              Get Early Access
+              Sign Up for Free
             </Button>
           </Link>
         </div>
@@ -745,9 +745,9 @@ export function MainHeader() {
             <Link href="/login" onClick={() => setMobileMenuOpen(false)} style={{ fontSize: "0.9375rem", fontWeight: "500", textDecoration: "none", color: "var(--charcoal)" }}>
               Log in
             </Link>
-            <Link href="/early-access" onClick={() => setMobileMenuOpen(false)}>
+            <Link href="/signup" onClick={() => setMobileMenuOpen(false)}>
               <Button className="w-full bg-gradient-to-r from-[#0F6B3E] to-[#1FAE5B] text-white font-semibold hover:from-[#0a5a2f] hover:to-[#158a48] shadow-lg shadow-emerald-500/25">
-                Get Early Access
+                Sign Up for Free
               </Button>
             </Link>
           </div>
