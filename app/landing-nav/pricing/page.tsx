@@ -13,21 +13,14 @@ const PLAN_TAGLINES: Record<string, string> = {
   team: "For scaling brands and multi-brand teams.",
 };
 
-const AGENCY_PLAN = {
-  id: "agency-static",
-  name: "agency",
-  display_name: "Agency",
+const FEATURE_MATRIX: Record<string, { insights: boolean; inbox: boolean; importExport: boolean }> = {
+  basic: { insights: true, inbox: false, importExport: false },
+  solo: { insights: true, inbox: true, importExport: true },
+  team: { insights: true, inbox: true, importExport: true },
 };
 
-const FEATURE_MATRIX: Record<string, { insights: boolean; inbox: boolean; importExport: boolean; whiteLabel: boolean }> = {
-  basic: { insights: true, inbox: false, importExport: false, whiteLabel: false },
-  solo: { insights: true, inbox: true, importExport: true, whiteLabel: false },
-  team: { insights: true, inbox: true, importExport: true, whiteLabel: false },
-  agency: { insights: true, inbox: true, importExport: true, whiteLabel: true },
-};
-
-const SUPPORT_TEXT: Record<string, string> = { basic: "Email", solo: "Email", team: "Priority", agency: "Dedicated manager" };
-const ONBOARDING_TEXT: Record<string, string> = { basic: "—", solo: "Self-serve", team: "Guided", agency: "White-glove" };
+const SUPPORT_TEXT: Record<string, string> = { basic: "Email", solo: "Email", team: "Priority" };
+const ONBOARDING_TEXT: Record<string, string> = { basic: "—", solo: "Self-serve", team: "Guided" };
 
 function getPlanFeatures(plan: any): ReactNode[] {
   if (plan.name === "basic") {
@@ -57,13 +50,6 @@ function getPlanFeatures(plan: any): ReactNode[] {
   }
   return [];
 }
-
-const AGENCY_FEATURES: ReactNode[] = [
-  "Everything in Team, plus:",
-  <><b>Custom</b> influencer volume</>,
-  <><b>Unlimited</b> workspaces</>,
-  "White-label reports & dedicated manager",
-];
 
 function formatPrice(plan: any, cycle: "monthly" | "yearly") {
   const price = cycle === "yearly" ? plan.price_yearly : plan.price_monthly;
@@ -98,8 +84,6 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
 
   const params = await searchParams;
   const cycle = params?.cycle === "monthly" ? "monthly" : "yearly";
-
-  const tableColumns = [...plans, AGENCY_PLAN];
 
   return (
     <div className="features-page">
@@ -242,9 +226,11 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
 
         .plans-grid {
           display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
+          grid-template-columns: repeat(3, minmax(0, 1fr));
           align-items: stretch;
           gap: 20px;
+          max-width: 920px;
+          margin: 0 auto;
         }
 
         .plan-card {
@@ -450,6 +436,41 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
           font-weight: 500;
         }
 
+        /* ── Volume banner ── */
+        .volume-banner {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 22px;
+          flex-wrap: wrap;
+          max-width: 900px;
+          margin: 36px auto 0;
+          background: white;
+          border: 1px solid rgba(15,107,62,0.15);
+          border-radius: 16px;
+          box-shadow: 0 4px 24px rgba(0,0,0,0.06);
+          padding: 22px 28px;
+        }
+
+        .volume-banner-text {
+          min-width: 260px;
+          flex: 1;
+        }
+
+        .volume-banner-text h3 {
+          font-family: 'Manrope', sans-serif;
+          font-size: 1.125rem;
+          font-weight: 700;
+          color: #0F6B3E;
+          margin: 0 0 6px;
+        }
+
+        .volume-banner-text p {
+          color: #52525b;
+          font-size: 0.90625rem;
+          margin: 0;
+        }
+
         /* ── Compare table ── */
         .compare-section {
           padding: 64px 0 24px;
@@ -649,23 +670,8 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
         }
 
         .addon-price {
-          font-family: 'Manrope', sans-serif;
-          font-weight: 800;
-          color: #7C7C7C;
-          font-size: 1.25rem;
-        }
-
-        .addon-link {
-          display: inline-block;
-          margin-top: 10px;
-          color: #2C8EC4;
           font-size: 0.875rem;
-          font-weight: 600;
-          text-decoration: none;
-        }
-
-        .addon-link:hover {
-          text-decoration: underline;
+          color: #7C7C7C;
         }
 
         .soon-tag {
@@ -741,27 +747,6 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
                 </div>
               );
             })}
-
-            {/* AGENCY — custom plan, not tied to a subscription row */}
-            <div className="plan-card">
-              <div className="plan-inner">
-                <div className="plan-name">Agency</div>
-                <div className="plan-summary">For agencies managing clients at scale.</div>
-                <div className="plan-price">
-                  <span className="plan-price-amount">Custom</span>
-                </div>
-                <div className="plan-price-sub">Volume influencers &amp; workspaces</div>
-                <DemoCtaButton className="plan-cta plan-cta-blue">Contact sales</DemoCtaButton>
-                <ul className="plan-features">
-                  {AGENCY_FEATURES.map((feature, i) => (
-                    <li key={i}>
-                      <span className="check"><Check /></span>
-                      <span>{feature}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
           </div>
 
           <div className="reassure">
@@ -769,6 +754,17 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
             <div><Check /> Unlimited seats</div>
             <div><Check /> Cancel anytime</div>
             <div><Check /> 7-day money-back for new subscribers</div>
+          </div>
+
+          <div className="volume-banner">
+            <div className="volume-banner-text">
+              <h3>Running an agency, or need higher volume?</h3>
+              <p>
+                We build custom plans with volume influencer limits, unlimited workspaces, white-label reports,
+                and a dedicated manager — arranged directly and billed by agreement.
+              </p>
+            </div>
+            <DemoCtaButton className="compare-cta plan-cta-blue">Talk to us</DemoCtaButton>
           </div>
         </div>
       </section>
@@ -785,7 +781,7 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
               <thead>
                 <tr>
                   <th>&nbsp;</th>
-                  {tableColumns.map((plan: any) => (
+                  {plans.map((plan: any) => (
                     <th key={plan.id} className={`plan${plan.name === "team" ? " pop" : ""}`}>
                       {plan.display_name}
                     </th>
@@ -795,11 +791,8 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
               <tbody>
                 <tr>
                   <td>Price</td>
-                  {tableColumns.map((plan: any) => {
+                  {plans.map((plan: any) => {
                     const isTeam = plan.name === "team";
-                    if (plan.name === "agency") {
-                      return <td key={plan.id} className="big">Custom</td>;
-                    }
                     const price = formatPrice(plan, cycle);
                     return (
                       <td key={plan.id} className={`big${isTeam ? " col-pop" : ""}`}>
@@ -819,10 +812,9 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
                       </span>
                     </span>
                   </td>
-                  {tableColumns.map((plan: any) => {
+                  {plans.map((plan: any) => {
                     const isTeam = plan.name === "team";
                     const value =
-                      plan.name === "agency" ? "Unlimited" :
                       plan.name === "team" ? `${plan.included_brands} (add more)` :
                       `${plan.included_brands}`;
                     return <td key={plan.id} className={isTeam ? "col-pop" : ""}>{value}</td>;
@@ -840,19 +832,16 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
                       </span>
                     </span>
                   </td>
-                  {tableColumns.map((plan: any) => {
+                  {plans.map((plan: any) => {
                     const isTeam = plan.name === "team";
                     const count = Number(plan.max_influencers).toLocaleString();
-                    const value =
-                      plan.name === "agency" ? "Custom" :
-                      plan.name === "basic" ? `${count} one-time` :
-                      `${count}/mo`;
+                    const value = plan.name === "basic" ? `${count} one-time` : `${count}/mo`;
                     return <td key={plan.id} className={isTeam ? "col-pop" : ""}>{value}</td>;
                   })}
                 </tr>
                 <tr>
                   <td>Creator insights</td>
-                  {tableColumns.map((plan: any) => {
+                  {plans.map((plan: any) => {
                     const isTeam = plan.name === "team";
                     const has = FEATURE_MATRIX[plan.name]?.insights;
                     return (
@@ -873,7 +862,7 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
                       </span>
                     </span>
                   </td>
-                  {tableColumns.map((plan: any) => {
+                  {plans.map((plan: any) => {
                     const isTeam = plan.name === "team";
                     const has = FEATURE_MATRIX[plan.name]?.inbox;
                     return (
@@ -885,7 +874,7 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
                 </tr>
                 <tr>
                   <td>Import &amp; export</td>
-                  {tableColumns.map((plan: any) => {
+                  {plans.map((plan: any) => {
                     const isTeam = plan.name === "team";
                     const has = FEATURE_MATRIX[plan.name]?.importExport;
                     return (
@@ -896,20 +885,8 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
                   })}
                 </tr>
                 <tr>
-                  <td>White-label / custom client reports</td>
-                  {tableColumns.map((plan: any) => {
-                    const isTeam = plan.name === "team";
-                    const has = FEATURE_MATRIX[plan.name]?.whiteLabel;
-                    return (
-                      <td key={plan.id} className={isTeam ? "col-pop" : ""}>
-                        {has ? <span className="yes"><Check /></span> : <span className="no">–</span>}
-                      </td>
-                    );
-                  })}
-                </tr>
-                <tr>
                   <td>Support</td>
-                  {tableColumns.map((plan: any) => (
+                  {plans.map((plan: any) => (
                     <td key={plan.id} className={plan.name === "team" ? "col-pop" : ""}>
                       {SUPPORT_TEXT[plan.name]}
                     </td>
@@ -917,7 +894,7 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
                 </tr>
                 <tr>
                   <td>Onboarding</td>
-                  {tableColumns.map((plan: any) => (
+                  {plans.map((plan: any) => (
                     <td key={plan.id} className={plan.name === "team" ? "col-pop" : ""}>
                       {ONBOARDING_TEXT[plan.name]}
                     </td>
@@ -925,15 +902,8 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
                 </tr>
                 <tr>
                   <td></td>
-                  {tableColumns.map((plan: any) => {
+                  {plans.map((plan: any) => {
                     const isTeam = plan.name === "team";
-                    if (plan.name === "agency") {
-                      return (
-                        <td key={plan.id}>
-                          <DemoCtaButton className="compare-cta plan-cta-blue">Contact sales</DemoCtaButton>
-                        </td>
-                      );
-                    }
                     const cta = ctaFor(plan);
                     return (
                       <td key={plan.id} className={isTeam ? "col-pop" : ""}>
@@ -954,21 +924,18 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
       <section className="addons-section">
         <div className="container">
           <div className="section-head">
-            <h2>Optional power tools</h2>
-            <p>Add these when you&apos;re ready to go deeper. Both are on the way.</p>
+            <h2>On the roadmap</h2>
+            <p>A preview of what we&apos;re building next. Neither is available to purchase yet.</p>
           </div>
           <div className="addon-grid">
             <div className="addon">
               <h3>Post Tracker <span className="soon-tag">Coming soon</span></h3>
               <p>
                 Automatically detect every post from your campaign influencers by hashtag or mention, and save
-                the content to Google Drive when usage rights are granted. An opt-in add-on — not required to
-                run Instroom.
+                the content to Google Drive when usage rights are granted. Planned as an optional add-on — never
+                required to run Instroom.
               </p>
-              <div className="addon-price">Coming soon</div>
-              <a className="addon-link" href="https://posttracker.instroom.io" target="_blank" rel="noopener noreferrer">
-                Learn more about Post Tracker →
-              </a>
+              <div className="addon-price">Optional add-on · pricing to be announced</div>
             </div>
             <div className="addon">
               <h3>Discovery <span className="soon-tag">Coming soon</span></h3>
@@ -976,10 +943,7 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
                 Find and vet new creators to work with — search by platform, niche, audience, and engagement —
                 without ever leaving Instroom.
               </p>
-              <div className="addon-price">Coming soon</div>
-              <Link className="addon-link" href="/early-access">
-                Get early access →
-              </Link>
+              <div className="addon-price">Built into the platform · included when it launches</div>
             </div>
           </div>
         </div>
