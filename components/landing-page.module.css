@@ -34,6 +34,19 @@
 
 .section { padding: 96px 0; }
 
+.problemSection { padding-top: 112px; padding-bottom: 112px; }
+.problemHeaderGap { margin-bottom: 72px; }
+
+@media (max-width: 900px) {
+  .problemSection { padding-top: 72px; padding-bottom: 72px; }
+  .problemHeaderGap { margin-bottom: 48px; }
+}
+
+@media (max-width: 640px) {
+  .problemSection { padding-top: 56px; padding-bottom: 56px; }
+  .problemHeaderGap { margin-bottom: 36px; }
+}
+
 /* ── Alternating section backgrounds ── */
 .secOdd { background: #ffffff; }
 .secEven { background: #F4F7F5; }
@@ -224,6 +237,27 @@
   .heroFloatBadge { display: none; }
 }
 
+/* ── Before/Now sketch annotations (Problem → Outcomes) ── */
+.sketchAnnotation {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.sketchLabel {
+  font-size: 2.4rem;
+  color: #1FAE5B;
+  line-height: 1;
+}
+
+@media (max-width: 1300px) {
+  .sketchAnnotation { display: none; }
+}
+
 /* ── Stats ── */
 .stats {
   padding: 64px 0 48px;
@@ -400,23 +434,6 @@
   display: flex;
   flex-direction: column;
   box-shadow: 0 2px 8px rgba(0,0,0,0.03);
-}
-
-.outcomeLabel {
-  font-size: 0.6875rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: #71717a;
-  margin-bottom: 10px;
-}
-
-.outcomeProblem {
-  font-size: 0.9rem;
-  color: #a1a1aa;
-  text-decoration: line-through;
-  margin-bottom: 14px;
-  line-height: 1.4;
 }
 
 .outcomeDivider {
@@ -653,6 +670,7 @@
 }
 
 .founderImage {
+  position: relative;
   width: 100%;
   border-radius: 0;
   overflow: hidden;
@@ -667,6 +685,62 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.founderOverlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 22px 20px 12px;
+  background: linear-gradient(to top, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.5) 65%, transparent 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.founderOverlayRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.founderStat {
+  text-align: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.founderStatNum {
+  color: #4ADE80;
+  font-family: 'Manrope', sans-serif;
+  font-weight: 800;
+  font-size: clamp(0.85rem, 3.2vw, 1.15rem);
+  line-height: 1.1;
+}
+
+.founderStatLabel {
+  color: rgba(255,255,255,0.85);
+  font-size: clamp(0.4375rem, 1.6vw, 0.55rem);
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  margin-top: 3px;
+}
+
+.founderOverlayNote {
+  margin: 0;
+  color: rgba(255,255,255,0.55);
+  font-size: 0.5625rem;
+  font-style: italic;
+  text-align: center;
+  line-height: 1.3;
+}
+
+@media (max-width: 900px) {
+  .founderOverlay { padding: 20px 24px 14px; }
+  .founderStatNum { font-size: clamp(1rem, 4vw, 1.3rem); }
+  .founderStatLabel { font-size: clamp(0.5rem, 2vw, 0.625rem); }
 }
 
 .founderContent {
