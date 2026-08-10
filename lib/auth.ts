@@ -218,6 +218,17 @@ const nextAuthConfig = {
           }
           
           if (!dbUser) {
+            // New Google signup — only allow it if this email is an approved
+            // early-access signup. Existing accounts (handled in the `else`
+            // branch below) are never affected by this gate.
+            const earlyAccess = await prisma.earlyAccessSignup.findUnique({
+              where: { email: profile.email },
+            })
+            if (!earlyAccess?.invited_at) {
+              // Same fix as above — this redirect was also being swallowed.
+              return "/early-access?notApproved=1"
+            }
+
             dbUser = await prisma.user.create({
               data: {
                 email: profile.email,
