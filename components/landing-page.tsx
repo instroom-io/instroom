@@ -124,6 +124,29 @@ const HERO_PIPELINE_COLUMNS: {
   },
 ]
 
+// Hand-drawn-style curved arrow, built as a plain SVG (curve + two-stroke
+// arrowhead) rather than pulled from an icon pack, so it stays on-brand in
+// color/weight instead of mismatched sketch-pack ink/marker colors.
+function SketchArrow({ flip }: { flip?: boolean }) {
+  return (
+    <svg
+      width="84"
+      height="84"
+      viewBox="0 0 46 46"
+      fill="none"
+      style={{ transform: flip ? "scaleX(-1)" : undefined }}
+    >
+      <path
+        d="M40 6C40 26 22 36 6 36M6 36L16 30M6 36L14 44"
+        stroke="#1FAE5B"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
 export function LandingPage() {
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null)
   const [showBookDemo, setShowBookDemo] = useState(false)
@@ -165,9 +188,9 @@ export function LandingPage() {
   ]
 
   const outcomes = [
-    { label: "Problem 1", problem: "Every campaign starts from zero", solution: "Pre-built, ready on day one.", desc: "Campaign structure, creator fields, pipeline stages, all set up for you. You import your creators and start running, not building." },
-    { label: "Problem 2", problem: "Your campaign lives in five different places", solution: "One workspace. One source of truth.", desc: "Outreach, tracking, content, and reporting all live in the same place. Your whole team sees the same thing without chasing anyone." },
-    { label: "Problem 3", problem: "You're funding features you've never opened", solution: "Pay for the core. Add only what you use.", desc: "Start with the main platform. Add the Chrome Extension, Post Tracker, or other tools only when you need them. Or just use them standalone, no platform required." }
+    { solution: "Pre-built, ready on day one.", desc: "Campaign structure, creator fields, pipeline stages, all set up for you. You import your creators and start running, not building." },
+    { solution: "One workspace. One source of truth.", desc: "Outreach, tracking, content, and reporting all live in the same place. Your whole team sees the same thing without chasing anyone." },
+    { solution: "Pay for the core. Add only what you use.", desc: "Start with the main platform. Add the Chrome Extension, Post Tracker, or other tools only when you need them. Or just use them standalone, no platform required." }
   ]
 
   const comparisons = [
@@ -431,33 +454,16 @@ export function LandingPage() {
         </div>
       </section>
 
-      {/* STATS */}
-      <section className={`${styles.stats} ${styles.secOdd}`}>
-        <div className={styles.containerMd}>
-          <div className={styles.statsRow}>
-            <div className={styles.stat}>
-              <div className={styles.statNum}>200+</div>
-              <div className={styles.statLabel}>Campaigns managed</div>
-            </div>
-            <div className={styles.stat}>
-              <div className={styles.statNum}>100,000+</div>
-              <div className={styles.statLabel}>Creator relationships</div>
-            </div>
-            <div className={styles.stat}>
-              <div className={styles.statNum}>$10M+</div>
-              <div className={styles.statLabel}>In sales generated</div>
-            </div>
-          </div>
-          <p className="text-xs text-zinc-400 italic mt-4 text-center">Internal metrics from our own agency, Armful Media — not yet aggregated across Instroom's customer base.</p>
-        </div>
-      </section>
-
-
       {/* PROBLEM */}
-      <section className={`${styles.section} ${styles.secOdd}`} style={{ paddingTop: "48px" }}>
-        <div className={styles.containerMd}>
-          <div className={styles.sectionHeader}>
-            <h2>You didn't start your brand to live in a spreadsheet.</h2>
+      <section className={`${styles.section} ${styles.secOdd} ${styles.problemSection}`}>
+        <div className={styles.containerMd} style={{ position: "relative" }}>
+          <div className={styles.sketchAnnotation} style={{ top: 220, left: "100%", marginLeft: 28 }}>
+            <span className={`${styles.sketchLabel} ${styles.fontHand}`}>Before</span>
+            <SketchArrow />
+          </div>
+          <div className={`${styles.sectionHeader} ${styles.problemHeaderGap}`}>
+            <div className={styles.founderLabel}>« The Problem »</div>
+            <h2>You didn't start your brand to<br />live in a spreadsheet.</h2>
             <p>But here you are. Multiple tabs. Multiple tools. A nagging feeling that you're paying creators and hoping it's working.</p>
           </div>
           <div className={styles.problemCards}>
@@ -474,15 +480,14 @@ export function LandingPage() {
 
       {/* OUTCOMES */}
       <section className={`${styles.section} ${styles.secEven}`}>
-        <div className={styles.containerMd}>
-          <div className={styles.sectionHeader}>
-            <h2>Here's what changes with Instroom.</h2>
+        <div className={styles.containerMd} style={{ position: "relative" }}>
+          <div className={styles.sketchAnnotation} style={{ top: -12, right: "100%", marginRight: 28 }}>
+            <span className={`${styles.sketchLabel} ${styles.fontHand}`}>Now</span>
+            <SketchArrow flip />
           </div>
           <div className={styles.outcomesGrid}>
             {outcomes.map((outcome, index) => (
               <div key={index} className={styles.outcome}>
-                <div className={styles.outcomeLabel}>{outcome.label}</div>
-                <div className={styles.outcomeProblem}>{outcome.problem}</div>
                 <div className={styles.outcomeDivider} />
                 <h3>{outcome.solution}</h3>
                 <p>{outcome.desc}</p>
@@ -667,13 +672,32 @@ export function LandingPage() {
           </div>
           <div className={styles.founderInner}>
             <div className={styles.founderImage}>
-              <Image 
-                src="/images/CEO.jpg" 
-                alt="Armand Mañibo, Founder & CEO" 
-                width={400} 
+              <Image
+                src="/images/CEO.jpg"
+                alt="Armand Mañibo, Founder & CEO"
+                width={400}
                 height={500}
                 className="w-full h-full object-cover"
               />
+              <div className={styles.founderOverlay}>
+                <div className={styles.founderOverlayRow}>
+                  <div className={styles.founderStat}>
+                    <div className={styles.founderStatNum}>200+</div>
+                    <div className={styles.founderStatLabel}>Campaigns managed</div>
+                  </div>
+                  <div className={styles.founderStat}>
+                    <div className={styles.founderStatNum}>100K+</div>
+                    <div className={styles.founderStatLabel}>Creator relationships</div>
+                  </div>
+                  <div className={styles.founderStat}>
+                    <div className={styles.founderStatNum}>$10M+</div>
+                    <div className={styles.founderStatLabel}>Sales generated</div>
+                  </div>
+                </div>
+                <p className={styles.founderOverlayNote}>
+                  Internal metrics from our own agency, Armful Media — not yet aggregated across Instroom's customer base.
+                </p>
+              </div>
             </div>
             <div className={styles.founderContent}>
               <div className={`${styles.founderQuote} ${styles.fontHandQuote}`}>
