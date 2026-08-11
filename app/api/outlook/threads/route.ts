@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
+import {
+  MICROSOFT_TOKEN_URL,
+  logMissingMicrosoftConfig,
+  readMicrosoftOAuthConfig,
+} from "@/lib/microsoft-oauth"
 
 function stripHtml(html: string): string {
   return html
@@ -16,12 +21,21 @@ function stripHtml(html: string): string {
 
 async function refreshMicrosoftToken(refresh_token: string, userId: string): Promise<string | null> {
   try {
-    const res = await fetch("https://login.microsoftonline.com/common/oauth2/v2.0/token", {
+    // A refresh with client_id=undefined fails as "unauthorized_client", which
+    // looks like a revoked grant. Return null instead so the caller's existing
+    // "reconnect required" path runs, and say why in the log.
+    const configResult = readMicrosoftOAuthConfig()
+    if (!configResult.ok) {
+      logMissingMicrosoftConfig("threads token refresh", configResult.missing)
+      return null
+    }
+
+    const res = await fetch(MICROSOFT_TOKEN_URL, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
-        client_id: process.env.MICROSOFT_CLIENT_ID!,
-        client_secret: process.env.MICROSOFT_CLIENT_SECRET!,
+        client_id: configResult.config.clientId,
+        client_secret: configResult.config.clientSecret,
         grant_type: "refresh_token",
         refresh_token,
       }),

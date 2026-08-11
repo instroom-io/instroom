@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, Suspense } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { useSession } from "next-auth/react"
 import { ChevronDown, Search, Plus, Loader2, CheckCircle2, AlertCircle, X, Users, UserPlus, Check } from "lucide-react"
+import { INSTROOM_PROFILE_ENDPOINTS } from "@/components/table-sheet/constants"
 
 // ─── Skeleton preview config (static, non-functional) ───────────────────────
 const DISCOVERY_FILTER_LABELS = ["Platform", "Niche", "Location", "Audience size", "Engagement rate", "Sort"]
@@ -40,10 +41,10 @@ function DiscoveryCardSkeleton() {
 }
 
 // ─── API Config ─────────────────────────────────────────────────────────────
-const API_ENDPOINTS = {
-  instagram: (u: string) => `https://api.instroom.io/v2/${u}/instagram`,
-  tiktok: (u: string) => `https://api.instroom.io/${u}/tiktok`,
-}
+// Shared with the Influencer List so the host lives in one place. The paths are
+// unchanged — /v2/{u}/instagram and /{u}/tiktok — only the hardcoded
+// api.instroom.io host (which no longer resolves) is gone.
+const API_ENDPOINTS = INSTROOM_PROFILE_ENDPOINTS
 
 const recommendedSearches = [
   "#EcoFriendlyLiving",

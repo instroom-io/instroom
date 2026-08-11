@@ -7,7 +7,7 @@
 // inputs above keep their focus and the page keeps its scroll position.
 
 import { useState, useEffect, useCallback, useRef } from "react"
-import { IconExternalLink, IconLoader2, IconBrandTiktok, IconBrandInstagram, IconWorld } from "@tabler/icons-react"
+import { IconExternalLink, IconLoader2, IconBrandTiktok, IconBrandInstagram, IconWorld, IconGripVertical } from "@tabler/icons-react"
 
 export type DetectedPost = {
   id: string
@@ -35,6 +35,37 @@ const POLL_ENABLED: boolean = false
 const POLL_INTERVAL_MS = 45_000
 /** A detection is "New" for this long. */
 const NEW_WINDOW_MS = 10 * 60 * 1000
+
+/**
+ * Drag payload for dropping a detected post onto the Post URL field.
+ *
+ * `text/uri-list` is the standard type for a dragged link, and `text/plain` is
+ * the fallback every browser and OS understands — between them the URL can also
+ * be dropped into an external editor or address bar, not only into our field.
+ * The app-specific type lets our own drop target recognise its own drags and
+ * ignore unrelated ones (a dragged image, a file, arbitrary selected text).
+ */
+export const DETECTED_POST_URL_MIME = "application/x-instroom-detected-post-url"
+
+/**
+ * Pull a usable post URL out of a drop. Prefers our own type, then the standard
+ * link types. `text/uri-list` is line-based and may carry "#" comment lines
+ * (RFC 2483), so those are skipped. Returns null when the drop holds no http(s)
+ * URL — the field is then left exactly as it was.
+ */
+export function readDroppedPostUrl(dt: DataTransfer | null): string | null {
+  if (!dt) return null
+  for (const type of [DETECTED_POST_URL_MIME, "text/uri-list", "text/plain"]) {
+    const raw = dt.getData(type)
+    if (!raw) continue
+    const candidate = raw
+      .split(/[\r\n]+/)
+      .map((line) => line.trim())
+      .find((line) => /^https?:\/\/\S+$/i.test(line))
+    if (candidate) return candidate
+  }
+  return null
+}
 
 /** "Just now", "2 min ago", "3 h ago", then an absolute date past a week. */
 function relativeTime(iso: string, now: number): string {
@@ -216,10 +247,25 @@ export function DetectedPostsList({
         return (
           <div
             key={p.id}
-            className={`flex items-center gap-2.5 rounded-lg border px-3 py-2 transition-colors ${
+            // Drag source for the Post URL field. The row carries the URL that
+            // detection already found — nothing is generated here.
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.setData(DETECTED_POST_URL_MIME, p.postUrl)
+              e.dataTransfer.setData("text/uri-list", p.postUrl)
+              e.dataTransfer.setData("text/plain", p.postUrl)
+              e.dataTransfer.effectAllowed = "copy"
+            }}
+            title="Drag onto the Post URL field, or open with View"
+            className={`group flex cursor-grab items-center gap-2.5 rounded-lg border px-3 py-2 transition-colors active:cursor-grabbing ${
               isNew ? "border-[#1FAE5B]/30 bg-[#1FAE5B]/[0.04]" : "border-gray-100"
             }`}
           >
+            <IconGripVertical
+              size={12}
+              aria-hidden
+              className="flex-shrink-0 text-gray-300 transition-colors group-hover:text-gray-400"
+            />
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-1.5">
                 <PlatformBadge platform={p.platform} />
