@@ -144,7 +144,12 @@ export async function GET(req: NextRequest) {
   }
 
   // ── Done — redirect back to inbox ─────────────────────────────────────────
-  return NextResponse.redirect(
-    new URL(`${returnTo}?gmailConnected=1`, req.url)
-  )
+  // Built via URL/searchParams rather than string concatenation: returnTo
+  // already carries `?brandId=...` once a workspace is selected, and naively
+  // appending `?gmailConnected=1` produced a second `?` (…brandId=X?gmailConnected=1)
+  // instead of `&` — brandId then failed to parse, and the page fell back to
+  // "no workspace selected" until the user manually reselected one.
+  const successUrl = new URL(returnTo, req.url)
+  successUrl.searchParams.set("gmailConnected", "1")
+  return NextResponse.redirect(successUrl)
 }
