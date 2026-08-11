@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
+import {
+  MICROSOFT_TOKEN_URL,
+  OUTLOOK_NOT_CONFIGURED,
+  logMissingMicrosoftConfig,
+  outlookRedirectUri,
+  readMicrosoftOAuthConfig,
+} from "@/lib/microsoft-oauth"
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
@@ -41,6 +48,16 @@ export async function GET(req: NextRequest) {
     )
   }
 
+  // Same guard as /connect: without credentials the exchange would post
+  // client_id=undefined and fail with an unrelated-looking error.
+  const configResult = readMicrosoftOAuthConfig()
+  if (!configResult.ok) {
+    logMissingMicrosoftConfig("callback", configResult.missing)
+    return NextResponse.redirect(
+      new URL(`/dashboard/inbox?outlookError=${OUTLOOK_NOT_CONFIGURED}`, req.url)
+    )
+  }
+
   let accessToken: string
   let refreshToken: string | null
   let expiresAt: number | null
@@ -48,14 +65,16 @@ export async function GET(req: NextRequest) {
   let scope: string
 
   try {
-    const tokenRes = await fetch("https://login.microsoftonline.com/common/oauth2/v2.0/token", {
+    const tokenRes = await fetch(MICROSOFT_TOKEN_URL, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         code,
-        client_id: process.env.MICROSOFT_CLIENT_ID!,
-        client_secret: process.env.MICROSOFT_CLIENT_SECRET!,
-        redirect_uri: `${process.env.NEXTAUTH_URL}/api/outlook/callback`,
+        client_id: configResult.config.clientId,
+        client_secret: configResult.config.clientSecret,
+        // Built by the same helper /connect used, so the two strings are
+        // identical — Microsoft rejects the exchange if they differ at all.
+        redirect_uri: outlookRedirectUri(req),
         grant_type: "authorization_code",
       }),
     })

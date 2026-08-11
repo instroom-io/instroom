@@ -28,7 +28,11 @@ export default function DashboardLayout({
     >
       <AppSidebar variant="inset" />
 
-      <SidebarInset>
+      {/* shadow-none! only. The content sheet's own shadow-sm falls leftward
+          onto the rail's gutter and is the other half of the dark seam at the
+          sidebar's right edge; the sheet keeps its size, position and rounded
+          top. Important flag: the rule it overrides is a peer-data selector. */}
+      <SidebarInset className="md:shadow-none!">
         <SiteHeader />
 
         <SubscriptionStatusProvider>

@@ -254,64 +254,99 @@ function normaliseTikTok(raw: unknown): EnsemblePost | null {
 }
 
 /** Provider responses nest the list under `data`, `data.posts`, or similar. */
-function extractList(payload: unknown, context: string): unknown[] {
+/**
+ * Instagram hashtag payloads carry TWO lists plus a pagination cursor:
+ *
+ *   data.recent_posts  chronological, newest first  ← what monitoring wants
+ *   data.top_posts     provider's ranking, arbitrary chronology
+ *   data.nextCursor    continuation token
+ *
+ * Verified live for #armfulmedia: recent_posts held 27 items descending from
+ * 2025-02-19, while top_posts held 30 spanning 2021–2024 in no useful order.
+ *
+ * The old extractList() concatenated recent_posts + top_posts and the caller
+ * kept the first 10 of that. Pass one therefore took the newest 10, and every
+ * later pass — with those deduped away — walked DOWN into progressively older
+ * recent_posts and finally into 2021-era top_posts. That is the "keeps
+ * importing old posts" behaviour: nothing was sorting by real publish time, and
+ * a ranked all-time list was being treated as a recency feed.
+ */
+function extractHashtagPage(
+  payload: unknown,
+  context: string
+): { recent: unknown[]; top: unknown[]; nextCursor: string | null } {
   const root = obj(payload)
-  // Order matters: most specific first. Verified against live responses —
-  // Instagram hashtag search returns data.top_posts / data.recent_posts,
-  // TikTok hashtag search returns data.data, TikTok user posts returns data.
-  const igTop = obj(root.data).top_posts
-  const igRecent = obj(root.data).recent_posts
-  const candidates: [string, unknown][] = [
-    ["data.top_posts + data.recent_posts", Array.isArray(igTop) || Array.isArray(igRecent)
-      ? [...(Array.isArray(igRecent) ? igRecent : []), ...(Array.isArray(igTop) ? igTop : [])]
-      : undefined],
-    ["data.posts", obj(root.data).posts],
-    ["data.data", obj(root.data).data],
-    ["data", root.data],
-    ["posts", root.posts],
-    ["results", root.results],
-  ]
-  for (const [key, c] of candidates) {
-    if (Array.isArray(c)) {
-      console.log(`${LOG} ${context}: found ${c.length} raw item(s) under "${key}"`)
-      return c
-    }
+  const data = obj(root.data)
+
+  const asArray = (v: unknown): unknown[] => (Array.isArray(v) ? v : [])
+  const recent = asArray(data.recent_posts)
+  const top = asArray(data.top_posts)
+
+  // Shapes used by the other endpoints (TikTok hashtag: data.data,
+  // TikTok user posts: data). Treated as chronological feeds.
+  const generic =
+    asArray(data.posts).length ? asArray(data.posts)
+      : asArray(data.data).length ? asArray(data.data)
+        : asArray(root.data).length ? asArray(root.data)
+          : asArray(root.posts).length ? asArray(root.posts)
+            : asArray(root.results)
+
+  const cursorRaw =
+    data.nextCursor ?? data.next_cursor ?? data.cursor ?? root.nextCursor ?? root.next_cursor
+  const nextCursor =
+    typeof cursorRaw === "string" && cursorRaw.length > 0 ? cursorRaw
+      : typeof cursorRaw === "number" ? String(cursorRaw)
+        : null
+
+  const chronological = recent.length ? recent : generic
+
+  if (!chronological.length && !top.length) {
+    console.warn(
+      `${LOG} ${context}: NO ARRAY FOUND in response. Top-level keys: [${Object.keys(root).join(", ") || "none"}]. ` +
+        `If the provider nests results under a different key, add it to extractHashtagPage().`
+    )
+  } else {
+    console.log(
+      `${LOG} ${context}: ${chronological.length} chronological item(s)` +
+        `${top.length ? `, ${top.length} ranked item(s) held back` : ""}` +
+        `${nextCursor ? ", cursor available" : ", no further pages"}`
+    )
   }
-  // Distinguish "provider returned nothing" from "provider used a shape we
-  // don't parse" — these look identical downstream but need different fixes.
-  console.warn(
-    `${LOG} ${context}: NO ARRAY FOUND in response. Top-level keys: [${Object.keys(root).join(", ") || "none"}]. ` +
-      `If the provider nests results under a different key, add it to extractList().`
-  )
-  return []
+
+  return { recent: chronological, top, nextCursor }
 }
 
-/** Shared tail for both search functions: normalise, log, and explain empties. */
-function finishSearch(
-  payload: unknown,
+/**
+ * Normalise one page of provider items into posts, newest first.
+ *
+ * The sort is on the real provider timestamp (taken_at_timestamp / create_time),
+ * not on array position and not on any database column — a provider page can be
+ * chronological, near-chronological, or (for ranked lists) not chronological at
+ * all, and only the timestamp is authoritative.
+ */
+function normalisePage(
+  rawList: unknown[],
   platform: EnsemblePlatform,
-  context: string,
-  limit: number,
-  apiCalls: number
-): EnsembleResult<EnsemblePost[]> {
-  const rawList = extractList(payload, context)
+  context: string
+): EnsemblePost[] {
   const normalise = platform === "instagram" ? normaliseInstagram : normaliseTikTok
   const normalised = rawList.map(normalise)
-  const posts = normalised.filter((p): p is EnsemblePost => p !== null).slice(0, limit)
+  const posts = normalised.filter((p): p is EnsemblePost => p !== null)
 
-  const dropped = normalised.length - normalised.filter(Boolean).length
+  const dropped = normalised.length - posts.length
   if (dropped > 0) {
     console.warn(`${LOG} ${context}: dropped ${dropped} item(s) — missing the id/shortcode needed to build a post URL.`)
   }
   if (rawList.length > 0 && posts.length === 0) {
     console.warn(`${LOG} ${context}: provider returned ${rawList.length} item(s) but none normalised into posts.`)
   }
-  if (rawList.length === 0) {
-    console.warn(`${LOG} ${context}: provider returned ZERO results — the term likely has no recent posts, or the handle does not exist.`)
-  }
 
-  console.log(`${LOG} ${context}: ${posts.length} usable post(s) after normalisation`)
-  return { ok: true, data: posts, apiCalls }
+  // Undated posts sort last: they cannot be shown to be recent.
+  return posts.sort((a, b) => {
+    const at = a.publishedAt?.getTime() ?? -Infinity
+    const bt = b.publishedAt?.getTime() ?? -Infinity
+    return bt - at
+  })
 }
 
 /* ── Public API ───────────────────────────────────────────────────────────── */
@@ -320,7 +355,13 @@ function finishSearch(
 export async function searchPostsByHashtag(
   platform: EnsemblePlatform,
   tag: string,
-  limit = 10
+  limit = 10,
+  options?: {
+    /** Ignore posts published before this instant. */
+    notBefore?: Date | null
+    /** Hard ceiling on billed requests for this term. Each page is one call. */
+    maxPages?: number
+  }
 ): Promise<EnsembleResult<EnsemblePost[]>> {
   // EnsembleData expects the bare tag: no leading '#', lowercase, no spaces.
   const name = tag.replace(/^#/, "").trim().toLowerCase().replace(/\s+/g, "")
@@ -332,38 +373,175 @@ export async function searchPostsByHashtag(
   }
 
   const path = platform === "instagram" ? "/instagram/hashtag/posts" : "/tt/hashtag/posts"
-  const params: Record<string, string> =
-    platform === "instagram"
-      // Instagram rejects chunk_size <= 8 with HTTP 422, so the floor is 9
-      // regardless of how few results the caller wants.
-      ? { name, chunk_size: String(Math.max(9, limit)) }
-      : { name, cursor: "0", period: "1" }
+  const notBefore = options?.notBefore ?? null
+  const maxPages = Math.max(1, options?.maxPages ?? 1)
 
-  const res = await request<unknown>(path, params)
-  if (!res.ok) {
-    console.error(`${LOG} ${context}: request failed — ${res.error}`)
-    return res
+  const collected: EnsemblePost[] = []
+  const seen = new Set<string>()
+  let cursor: string | null = null
+  let apiCalls = 0
+  let rankedFallback: EnsemblePost[] = []
+  // "The payload had no chronological list at all" — NOT the same as "the
+  // chronological list held nothing recent enough", which is a normal result for
+  // a hashtag with no recent activity.
+  let sawChronologicalFeed = false
+
+  // Walk the provider's chronological feed page by page. Stops as soon as it
+  // has `limit` in-window posts, or the feed drops out of the window, or the
+  // page budget is spent — so the newest results are always processed first and
+  // pagination cannot silently burn quota.
+  for (let page = 0; page < maxPages; page++) {
+    const params: Record<string, string> =
+      platform === "instagram"
+        // Instagram rejects chunk_size <= 8 with HTTP 422, so the floor is 9
+        // regardless of how few results the caller wants.
+        ? { name, chunk_size: String(Math.max(9, limit)), ...(cursor ? { cursor } : {}) }
+        : { name, cursor: cursor ?? "0", period: "1" }
+
+    const res = await request<unknown>(path, params)
+    apiCalls += res.apiCalls
+    if (!res.ok) {
+      console.error(`${LOG} ${context}: request failed — ${res.error}`)
+      // Pages already collected are still usable; only report failure if the
+      // very first page failed.
+      if (page === 0) return { ...res, apiCalls }
+      break
+    }
+
+    const { recent, top, nextCursor } = extractHashtagPage(res.data, `${context} page ${page + 1}`)
+    if (page === 0) rankedFallback = normalisePage(top, platform, `${context} (ranked)`)
+
+    if (recent.length > 0) sawChronologicalFeed = true
+    const pagePosts = normalisePage(recent, platform, `${context} page ${page + 1}`)
+    let reachedWindowEdge = false
+
+    for (const post of pagePosts) {
+      const key = post.externalId || post.postUrl
+      if (key && seen.has(key)) continue
+      if (notBefore && post.publishedAt && post.publishedAt < notBefore) {
+        // The feed is newest-first, so everything after this is older still.
+        reachedWindowEdge = true
+        break
+      }
+      if (key) seen.add(key)
+      collected.push(post)
+    }
+
+    if (collected.length >= limit || reachedWindowEdge || !nextCursor) {
+      if (reachedWindowEdge) {
+        console.log(`${LOG} ${context}: reached the monitoring window edge — stopping pagination`)
+      }
+      break
+    }
+    cursor = nextCursor
   }
 
-  return finishSearch(res.data, platform, context, limit, res.apiCalls)
+  // Ranked ("top") posts are NOT part of the recency selection — mixing them in
+  // is what surfaced 2021 posts as if they were new. They are used only when the
+  // provider gave no chronological feed at all, and even then the window filter
+  // below still applies.
+  let out = collected
+  if (!sawChronologicalFeed && rankedFallback.length > 0) {
+    console.warn(`${LOG} ${context}: no chronological feed in the payload — falling back to ranked posts`)
+    out = rankedFallback
+  }
+
+  if (notBefore) {
+    const before = out.length
+    out = out.filter((p) => p.publishedAt && p.publishedAt >= notBefore)
+    if (before !== out.length) {
+      console.log(`${LOG} ${context}: dropped ${before - out.length} post(s) older than the monitoring window`)
+    }
+  }
+
+  if (sawChronologicalFeed && out.length === 0) {
+    console.log(
+      `${LOG} ${context}: the chronological feed held no post inside the monitoring window — ` +
+        `this hashtag has no recent activity (older posts are deliberately NOT imported)`
+    )
+  }
+
+  out = out.sort((a, b) => (b.publishedAt?.getTime() ?? -Infinity) - (a.publishedAt?.getTime() ?? -Infinity))
+  const selected = out.slice(0, limit)
+
+  if (selected.length) {
+    console.log(
+      `${LOG} ${context}: selected ${selected.length} newest post(s) — ` +
+        `${selected[0].publishedAt?.toISOString() ?? "undated"} … ` +
+        `${selected[selected.length - 1].publishedAt?.toISOString() ?? "undated"} ` +
+        `(${apiCalls} api call(s))`
+    )
+  }
+  return { ok: true, data: selected, apiCalls }
+}
+
+
+/**
+ * Newest-first selection for a user feed: sort on the provider timestamp, drop
+ * anything outside the monitoring window, then take the newest `limit`.
+ */
+function selectNewest(
+  rawPayload: unknown,
+  platform: EnsemblePlatform,
+  context: string,
+  limit: number,
+  apiCalls: number,
+  notBefore: Date | null
+): EnsembleResult<EnsemblePost[]> {
+  const { recent, top } = extractHashtagPage(rawPayload, context)
+  let posts = normalisePage(recent.length ? recent : top, platform, context)
+
+  if (notBefore) {
+    const before = posts.length
+    posts = posts.filter((p) => p.publishedAt && p.publishedAt >= notBefore)
+    if (before !== posts.length) {
+      console.log(`${LOG} ${context}: dropped ${before - posts.length} post(s) older than the monitoring window`)
+    }
+  }
+
+  const selected = posts.slice(0, limit)
+  if (selected.length) {
+    console.log(
+      `${LOG} ${context}: selected ${selected.length} newest post(s) — ` +
+        `${selected[0].publishedAt?.toISOString() ?? "undated"} … ` +
+        `${selected[selected.length - 1].publishedAt?.toISOString() ?? "undated"}`
+    )
+  }
+  return { ok: true, data: selected, apiCalls }
+}
+
+/** Bare comparable handle: no leading '@', lowercased, no spaces. */
+export function normaliseHandle(handle: string | null | undefined): string {
+  return (handle ?? "").replace(/^@/, "").trim().toLowerCase().replace(/\s+/g, "")
 }
 
 /**
- * Recent posts from a handle. Used for mention monitoring: the provider has no
- * cross-platform "posts mentioning @x" search, so the monitor pulls the
- * handle's own recent posts and filters captions for the mention locally.
+ * Recent posts published BY one account.
+ *
+ * This is the account-scoped endpoint pair: every post it returns belongs to
+ * `handle`, because the request is addressed to that account's feed (Instagram
+ * by resolved numeric user_id, TikTok by username). That property is what makes
+ * it safe for per-influencer monitoring — unlike a hashtag search, it cannot
+ * return a post by anybody else.
+ *
+ * Previously named searchPostsByMention, which described the caller's intent
+ * rather than the request: mention monitoring works by pulling the account's own
+ * posts and filtering their captions locally. The name now says what it fetches.
  */
-export async function searchPostsByMention(
+export async function fetchAccountPosts(
   platform: EnsemblePlatform,
   handle: string,
-  limit = 10
+  limit = 10,
+  options?: {
+    /** Ignore posts published before this instant. */
+    notBefore?: Date | null
+  }
 ): Promise<EnsembleResult<EnsemblePost[]>> {
-  // Bare handle: no leading '@', lowercase, no spaces.
-  const name = handle.replace(/^@/, "").trim().toLowerCase().replace(/\s+/g, "")
-  const context = `mention "@${name}" on ${platform}`
+  const name = normaliseHandle(handle)
+  const context = `account "@${name}" on ${platform}`
 
   if (!name) {
-    console.warn(`${LOG} skipped an empty mention term (input was ${JSON.stringify(handle)})`)
+    console.warn(`${LOG} skipped an empty account handle (input was ${JSON.stringify(handle)})`)
     return { ok: true, data: [], apiCalls: 0 }
   }
 
@@ -387,7 +565,7 @@ export async function searchPostsByMention(
       // data:null means the handle doesn't exist on Instagram — the single most
       // likely reason a mention silently yields nothing.
       const error = `Instagram handle "@${name}" was not found`
-      console.warn(`${LOG} ${context}: ${error}. Mention terms must be real account handles, not display names.`)
+      console.warn(`${LOG} ${context}: ${error}. The influencer's handle must be a real account handle, not a display name.`)
       return { ok: false, error, retryable: false, apiCalls }
     }
 
@@ -401,7 +579,7 @@ export async function searchPostsByMention(
       console.error(`${LOG} ${context}: request failed — ${res.error}`)
       return { ...res, apiCalls }
     }
-    return finishSearch(res.data, platform, context, limit, apiCalls)
+    return selectNewest(res.data, platform, context, limit, apiCalls, options?.notBefore ?? null)
   }
 
   const res = await request<unknown>("/tt/user/posts", { username: name, depth: "1" })
@@ -409,10 +587,10 @@ export async function searchPostsByMention(
   if (!res.ok) {
     console.error(
       `${LOG} ${context}: request failed — ${res.error}. ` +
-        `Mention terms must be real account handles, not display names.`
+        `The influencer's handle must be a real account handle, not a display name.`
     )
     return { ...res, apiCalls }
   }
 
-  return finishSearch(res.data, platform, context, limit, apiCalls)
+  return selectNewest(res.data, platform, context, limit, apiCalls, options?.notBefore ?? null)
 }

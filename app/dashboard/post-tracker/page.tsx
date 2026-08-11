@@ -30,6 +30,7 @@ import { PaidCollabTab } from "@/components/table-sheet/profile-sidebar"
 import { BoardSkeleton } from "@/components/shared/skeletons"
 import { StageDropdown, type StageOption } from "@/components/shared/stage-dropdown"
 import AutoPostDetectionCard from "./AutoPostDetection"
+import { readDroppedPostUrl } from "./DetectedPostsList"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const NICHES    = ["Beauty","Fitness","Lifestyle","Food","Tech","Fashion","Travel"]
@@ -121,10 +122,25 @@ const STAGE_RANK: Record<ClosedColumn, number> = {
 const canQuickMarkNoPost = (stage: ClosedColumn) => STAGE_RANK[stage] >= STAGE_RANK["Delivered"]
 
 // ─── "Posted" requires evidence of a published post ───────────────────────────
-// A manual move to Posted is only allowed when a Post URL exists. Automatic
-// post detection is unaffected: it updates the record server-side and never
-// goes through these user-initiated paths.
+// A manual move to Posted needs proof that a post exists. There are two forms
+// of proof, and either is sufficient:
+//
+//   1. A Post URL entered by hand on the Post tab.
+//   2. A post found by Automatic Post Detection — a real DetectedPost row,
+//      counted per influencer by the closed list route.
+//
+// Requiring (1) even when (2) exists was blocking a legitimately posted
+// influencer: detection had already confirmed the post, but the stage move was
+// refused because nobody had re-typed the link the system already had.
+//
+// Note this keys on detection RESULTS, not on the detection toggle. Having
+// Automatic Post Detection switched on is not itself evidence — with the
+// feature enabled but nothing found yet, the Post URL requirement still holds.
 const hasPostUrl = (inf: Pick<ClosedInfluencer, "postUrl">) => Boolean(inf.postUrl?.trim())
+const hasDetectedPost = (inf: Pick<ClosedInfluencer, "detectedPostCount">) =>
+  (inf.detectedPostCount ?? 0) > 0
+const hasPostEvidence = (inf: Pick<ClosedInfluencer, "postUrl" | "detectedPostCount">) =>
+  hasPostUrl(inf) || hasDetectedPost(inf)
 
 // Forward flow
 const NEXT_STAGE: Record<ClosedColumn, ClosedColumn | null> = {
@@ -237,10 +253,12 @@ function PostUrlRequiredDialog({ count, onGoToPostDetails, onCancel }: {
           <div className="flex-1">
             <h2 id="post-url-required-title" className="text-base font-semibold text-gray-900">Cannot Move to Posted</h2>
             <p className="text-sm text-gray-600 mt-2 leading-relaxed">
-              A Post URL is required before manually moving {count > 1 ? `these ${count} influencers` : "this influencer"} to the Posted stage.
+              The Posted stage needs proof of a published post, and {count > 1 ? `these ${count} influencers have` : "this influencer has"} neither
+              a Post URL nor a post found by Automatic Post Detection.
             </p>
             <p className="text-sm text-gray-600 mt-2 leading-relaxed">
-              Please add the post link first, or use Automatic Post Detection and run a check to have the stage updated for you.
+              Add the post link, or run a check in Automatic Post Detection — once it finds a matching
+              post, this influencer can move to Posted without a link.
             </p>
           </div>
         </div>
@@ -489,6 +507,13 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
   const [drawerToast, setDT]        = useState("")
   const [savingPost, setSavingPost] = useState(false)
   const postUrlRef = useRef<HTMLInputElement>(null)
+  // How the Post URL currently in the field got there. Only drives the hint
+  // under the input; the value itself is ordinary form state either way.
+  const [postUrlOrigin, setPostUrlOrigin] = useState<"stored" | "detected" | "dropped">("stored")
+  // True while a drag is over the field, for the drop affordance.
+  const [urlDropActive, setUrlDropActive] = useState(false)
+  // Mirrors the Post URL currently in the form — see handleDetectedPost.
+  const postUrlValueRef = useRef("")
   const showToast = (msg: string) => { setDT(msg); setTimeout(()=>setDT(""),2600) }
 
   // Land the user directly on the Post URL field when sent here from the
@@ -524,6 +549,7 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
     scriptStatus: inf.scriptStatus || "", contentStatus: inf.contentStatus || "",
     internalRating: inf.internalRating ? String(inf.internalRating) : "",
   })
+  postUrlValueRef.current = postData.postUrl
 
   // ── Shopify push flow (self-contained — doesn't depend on the manual
   // Order tab fields above, whose Save button has no handler wired up) ──────
@@ -617,7 +643,39 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
     setSavingPost(true)
     const ok = await onPostUrlChange(inf.id, postData.postUrl)
     setSavingPost(false)
+    if (ok) setPostUrlOrigin("stored")
     showToast(ok ? "Post details saved" : "Failed to save post details")
+  }
+
+  // ── Automatic Post Detection → Post URL ───────────────────────────────────
+  // When detection has found a post, offer that URL to the field. It fills an
+  // EMPTY field only: a URL already stored on the record, or one the user is in
+  // the middle of typing, is never overwritten. The value is put into the form,
+  // not written to the database — saving stays on the existing Save button, so
+  // the manual flow is untouched.
+  //
+  // The current value is read through a ref rather than from `postData`, so the
+  // callback identity stays stable — it is a dependency of the detection card's
+  // notify effect, and a new function every keystroke would re-run it.
+  const handleDetectedPost = useCallback((post: { postUrl: string }) => {
+    if (postUrlValueRef.current.trim()) return
+    setPostData(d => ({ ...d, postUrl: post.postUrl }))
+    setPostUrlOrigin("detected")
+  }, [])
+
+  // Drop a detected post (or any dragged link) onto the field. Reuses the
+  // reader that owns the drag payload format, so the two stay in step.
+  const handleUrlDrop = (e: React.DragEvent<HTMLElement>) => {
+    e.preventDefault()
+    setUrlDropActive(false)
+    const url = readDroppedPostUrl(e.dataTransfer)
+    if (!url) {
+      showToast("That drop contained no post link")
+      return
+    }
+    setPostData(d => ({ ...d, postUrl: url }))
+    setPostUrlOrigin("dropped")
+    postUrlRef.current?.focus()
   }
 
   return (
@@ -859,8 +917,49 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
           {/* ════ POST TAB ════ */}
           {profileTab === 2 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {brandId && <AutoPostDetectionCard brandId={brandId} biId={inf.id} subscriptionStatus={subscriptionStatus} />}
-              <div className="pfg"><div className="pfl">Post URL</div><input ref={postUrlRef} className="pfi" value={postData.postUrl} onChange={e => setPostData(d => ({ ...d, postUrl: e.target.value }))} placeholder="Post URL" /></div>
+              {brandId && (
+                <AutoPostDetectionCard
+                  brandId={brandId}
+                  biId={inf.id}
+                  subscriptionStatus={subscriptionStatus}
+                  onDetectedPost={handleDetectedPost}
+                />
+              )}
+              {/* Post URL — typed, auto-filled from detection, or dropped from
+                  the detected posts list above. All three end up as the same
+                  form value and are saved by the same Save button. */}
+              <div
+                className="pfg"
+                onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; setUrlDropActive(true) }}
+                onDragEnter={e => { e.preventDefault(); setUrlDropActive(true) }}
+                onDragLeave={e => {
+                  // Ignore the leave events fired while crossing child nodes.
+                  if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+                  setUrlDropActive(false)
+                }}
+                onDrop={handleUrlDrop}
+              >
+                <div className="pfl">Post URL</div>
+                <input
+                  ref={postUrlRef}
+                  className="pfi"
+                  style={urlDropActive ? { borderColor: "#1FAE5B", background: "#1FAE5B0D" } : undefined}
+                  value={postData.postUrl}
+                  onChange={e => { setPostData(d => ({ ...d, postUrl: e.target.value })); setPostUrlOrigin("stored") }}
+                  placeholder="Paste a link, or drag a detected post here"
+                />
+                {urlDropActive ? (
+                  <div className="text-[10px] text-[#0F6B3E] mt-1">Drop to use this post URL</div>
+                ) : postUrlOrigin === "detected" ? (
+                  <div className="text-[10px] text-gray-400 mt-1">
+                    Filled from Automatic Post Detection — Save to keep it.
+                  </div>
+                ) : postUrlOrigin === "dropped" ? (
+                  <div className="text-[10px] text-gray-400 mt-1">
+                    Dropped from a detected post — Save to keep it.
+                  </div>
+                ) : null}
+              </div>
               <div className="pfr">
                 <div className="pfg"><div className="pfl">Posted At</div><input type="date" className="pfi" value={postData.postedAt} onChange={e => setPostData(d => ({ ...d, postedAt: e.target.value }))} /></div>
                 <div className="pfg"><div className="pfl">Internal Rating</div>
@@ -893,7 +992,7 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
                   padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
                 }}
               >
-                <button className="btn-secondary" onClick={() => setPostData(d => ({ ...d, postUrl: inf.postUrl || "" }))}>Cancel</button>
+                <button className="btn-secondary" onClick={() => { setPostData(d => ({ ...d, postUrl: inf.postUrl || "" })); setPostUrlOrigin("stored") }}>Cancel</button>
                 <button className="btn-primary" onClick={handleSavePost} disabled={savingPost}>{savingPost ? "Saving…" : "Save"}</button>
               </div>
             </div>
@@ -1073,9 +1172,9 @@ function PostTrackerContent() {
       return false
     }
     const inf = data.find(d=>d.id===id)
-    // A manual move to Posted needs evidence of a published post. Automatic
-    // detection writes the record server-side and never runs through here.
-    if (col === "Posted" && inf && !hasPostUrl(inf)) {
+    // A manual move to Posted needs evidence of a published post — either a
+    // Post URL or a post already found by Automatic Post Detection.
+    if (col === "Posted" && inf && !hasPostEvidence(inf)) {
       setPostUrlBlocked([inf])
       return false
     }
@@ -1164,11 +1263,11 @@ function PostTrackerContent() {
   const runBulkStageMove = async (col: ClosedColumn) => {
     const candidates = selectedInfluencers.filter(d => d.closedStatus !== col)
 
-    // Same rule as the single-row paths: no Post URL, no manual move to Posted.
-    // If any selected row is missing one, block the whole batch and name them,
-    // rather than silently moving a subset.
+    // Same rule as the single-row paths: no post evidence, no manual move to
+    // Posted. If any selected row has neither a Post URL nor a detected post,
+    // block the whole batch and name them, rather than silently moving a subset.
     if (col === "Posted") {
-      const missing = candidates.filter(d => !hasPostUrl(d))
+      const missing = candidates.filter(d => !hasPostEvidence(d))
       if (missing.length > 0) {
         setPostUrlBlocked(missing)
         return

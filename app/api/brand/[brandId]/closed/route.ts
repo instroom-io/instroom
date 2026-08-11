@@ -175,7 +175,37 @@ export async function GET(
       take: 500,
     })
 
+    // ── Automatic Post Detection evidence ───────────────────────────────────
+    // The Post Tracker only allows a manual move to "Posted" when there is
+    // evidence of a published post. A manually entered post_url is one form of
+    // evidence; a post found by Automatic Post Detection is the other, and the
+    // rows already exist in DetectedPost — so surface a count per influencer
+    // instead of making the client fetch the detection endpoint per card.
+    //
+    // groupBy (not findMany) because only the count and the newest timestamp
+    // are needed, and this runs on every Post Tracker load. Scoped by brand_id
+    // as well as the id list so another workspace's rows can never be counted.
+    const detectionRows = rows.length
+      ? await prisma.detectedPost.groupBy({
+          by: ["brand_influencer_id"],
+          where: {
+            brand_id: brandId,
+            brand_influencer_id: { in: rows.map((r) => r.id) },
+          },
+          _count: { _all: true },
+          _max: { detected_at: true },
+        })
+      : []
+
+    const detectionByInfluencer = new Map(
+      detectionRows.map((d) => [
+        d.brand_influencer_id,
+        { count: d._count._all, latest: d._max.detected_at },
+      ])
+    )
+
     const data = rows.map((row) => {
+      const detection = detectionByInfluencer.get(row.id)
       const productDetails = safeJSONParse(row.product_details)
       const inf = row.influencer
 
@@ -235,6 +265,12 @@ export async function GET(
 
         postUrl:         row.post_url,
         postedAt:        row.posted_at?.toISOString()    || null,
+
+        // Automatic Post Detection results for this influencer. 0 means
+        // detection has found nothing yet (or was never enabled), in which case
+        // the manual Post URL requirement still applies.
+        detectedPostCount:  detection?.count ?? 0,
+        latestDetectedAt:   detection?.latest?.toISOString() ?? null,
 
         likesCount:      row.likes_count      || 0,
         commentsCount:   row.comments_count   || 0,
