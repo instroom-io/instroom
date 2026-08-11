@@ -103,12 +103,29 @@ export async function POST(req: Request) {
         where: { user_id: userId },
       })
 
+      // Webhook delivery order isn't guaranteed — Lemon Squeezy retries failed
+      // deliveries, so a delayed event for an OLDER purchase can arrive after
+      // a newer one already updated this row. Use the event resource's own
+      // created_at as a proxy for "when this event happened" and refuse to
+      // apply anything older than the last event we already applied, so a
+      // late retry can never clobber correct, newer data.
+      const eventTimestamp = jsonBody.data.attributes.created_at
+        ? new Date(jsonBody.data.attributes.created_at)
+        : new Date()
+
+      if (
+        existingSubscription?.last_webhook_event_at &&
+        eventTimestamp < existingSubscription.last_webhook_event_at
+      ) {
+        return NextResponse.json({ success: true, skipped: "stale_event" })
+      }
+
       // Calculate period dates
       const now = new Date()
-      const periodStart = jsonBody.data.attributes.renews_at 
+      const periodStart = jsonBody.data.attributes.renews_at
         ? new Date(jsonBody.data.attributes.renews_at)
         : now
-      
+
       const periodEnd = jsonBody.data.attributes.expires_at
         ? new Date(jsonBody.data.attributes.expires_at)
         : new Date(now.getTime() + (cycle === "yearly" ? 365 * 24 * 60 * 60 * 1000 : 30 * 24 * 60 * 60 * 1000))
@@ -124,6 +141,7 @@ export async function POST(req: Request) {
             payment_subscription_id: jsonBody.data.attributes.subscription_id?.toString(),
             current_period_start: periodStart,
             current_period_end: periodEnd,
+            last_webhook_event_at: eventTimestamp,
           },
         })
       } else {
@@ -137,6 +155,7 @@ export async function POST(req: Request) {
             payment_subscription_id: jsonBody.data.attributes.subscription_id?.toString(),
             current_period_start: periodStart,
             current_period_end: periodEnd,
+            last_webhook_event_at: eventTimestamp,
           },
         })
       }
