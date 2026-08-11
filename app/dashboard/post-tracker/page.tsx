@@ -525,6 +525,86 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
     internalRating: inf.internalRating ? String(inf.internalRating) : "",
   })
 
+  // ── Shopify push flow (self-contained — doesn't depend on the manual
+  // Order tab fields above, whose Save button has no handler wired up) ──────
+  const isGifting = campaignType === "gifting"
+  const savedShippingAddress = (() => {
+    try { return JSON.parse(inf.productDetails || "{}")?.shippingAddress || null } catch { return null }
+  })()
+  const [shopifyConnected, setShopifyConnected] = useState(false)
+  const [shopifyProducts, setShopifyProducts] = useState<any[]>([])
+  const [shopifyLoading, setShopifyLoading] = useState(false)
+  const [shopifyForm, setShopifyForm] = useState({
+    variantId: "", quantity: "1",
+    firstName: savedShippingAddress?.first_name || "", lastName: savedShippingAddress?.last_name || "",
+    address1: savedShippingAddress?.address1 || "", address2: savedShippingAddress?.address2 || "",
+    city: savedShippingAddress?.city || "", province: savedShippingAddress?.province || "",
+    zip: savedShippingAddress?.zip || "", country: savedShippingAddress?.country || "", phone: savedShippingAddress?.phone || "",
+  })
+  const [shopifySubmitting, setShopifySubmitting] = useState(false)
+  const [shopifyError, setShopifyError] = useState("")
+  const [shopifyOrderResult, setShopifyOrderResult] = useState<any>(null)
+
+  useEffect(() => {
+    if (!brandId) return
+    fetch(`/api/settings/integrations?brandId=${brandId}`)
+      .then(r => r.json())
+      .then(json => setShopifyConnected(!!json?.integrations?.shopify?.connected))
+      .catch(() => {})
+  }, [brandId])
+
+  useEffect(() => {
+    if (!shopifyConnected || !brandId) return
+    setShopifyLoading(true)
+    fetch(`/api/brand/${brandId}/integrations/shopify/products`)
+      .then(r => r.json())
+      .then(json => setShopifyProducts(json?.products || []))
+      .catch(() => {})
+      .finally(() => setShopifyLoading(false))
+  }, [shopifyConnected, brandId])
+
+  const shopifyVariants = shopifyProducts.flatMap((p: any) =>
+    (p.variants || []).map((v: any) => ({ ...v, productTitle: p.title as string }))
+  )
+  const selectedShopifyVariant = shopifyVariants.find((v: any) => String(v.id) === shopifyForm.variantId)
+  const shopifyQuantity = parseInt(shopifyForm.quantity, 10) || 1
+  const shopifyAddressComplete = !!(shopifyForm.address1 && shopifyForm.city && shopifyForm.zip && shopifyForm.country)
+
+  const handleCreateShopifyOrder = async () => {
+    if (!brandId || !shopifyForm.variantId || !shopifyAddressComplete) return
+    setShopifySubmitting(true)
+    setShopifyError("")
+    try {
+      const res = await fetch(`/api/brand/${brandId}/pipeline/${inf.id}/shopify-order`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          variantId: shopifyForm.variantId,
+          quantity: shopifyQuantity,
+          shippingAddress: {
+            first_name: shopifyForm.firstName || undefined,
+            last_name: shopifyForm.lastName || undefined,
+            address1: shopifyForm.address1,
+            address2: shopifyForm.address2 || undefined,
+            city: shopifyForm.city,
+            province: shopifyForm.province || undefined,
+            zip: shopifyForm.zip,
+            country: shopifyForm.country,
+            phone: shopifyForm.phone || undefined,
+          },
+        }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json?.error || "Failed to create order")
+      setShopifyOrderResult(json)
+      showToast("Shopify order created")
+    } catch (e: any) {
+      setShopifyError(e?.message || "Failed to create order")
+    } finally {
+      setShopifySubmitting(false)
+    }
+  }
+
   const handleStageChange = async (newStage: ClosedColumn) => {
     const ok = await onColumnChange(inf.id, newStage)
     if (ok) showToast(`Moved to ${newStage}`)
@@ -685,6 +765,84 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
                 <div className="pfg"><div className="pfl">Currency</div><input className="pfi" value={orderData.currency} onChange={e => setOrderData(d => ({ ...d, currency: e.target.value }))} /></div>
               </div>
               <div className="pfg"><div className="pfl">Deliverables</div><input className="pfi" value={orderData.deliverables} onChange={e => setOrderData(d => ({ ...d, deliverables: e.target.value }))} placeholder="Deliverables" /></div>
+
+              {/* ── Shopify order creation — self-contained, own submit path ── */}
+              <div style={{ borderTop: "1px solid #eee", marginTop: 4, paddingTop: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#111", marginBottom: 8 }}>🛍 Shopify</div>
+                {!shopifyConnected ? (
+                  <div style={{ fontSize: 12, color: "#667085", background: "#f9fafb", border: "1px solid #eee", borderRadius: 8, padding: "10px 12px" }}>
+                    Connect Shopify in <a href="/dashboard/settings/integrations" style={{ color: "#1fae5b", fontWeight: 600 }}>Settings → Integrations</a> to create real orders from here.
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    <div className="pfg">
+                      <div className="pfl">Product</div>
+                      <select className="pfi" value={shopifyForm.variantId} onChange={e => setShopifyForm(f => ({ ...f, variantId: e.target.value }))} disabled={shopifyLoading}>
+                        <option value="">{shopifyLoading ? "Loading products…" : "Select a product…"}</option>
+                        {shopifyVariants.map((v: any) => (
+                          <option key={v.id} value={v.id}>
+                            {v.productTitle}{v.title && v.title !== "Default Title" ? ` — ${v.title}` : ""} (${v.price})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="pfg"><div className="pfl">Quantity</div><input type="number" min={1} className="pfi" value={shopifyForm.quantity} onChange={e => setShopifyForm(f => ({ ...f, quantity: e.target.value }))} /></div>
+                    <div className="pfr">
+                      <div className="pfg"><div className="pfl">First Name</div><input className="pfi" value={shopifyForm.firstName} onChange={e => setShopifyForm(f => ({ ...f, firstName: e.target.value }))} /></div>
+                      <div className="pfg"><div className="pfl">Last Name</div><input className="pfi" value={shopifyForm.lastName} onChange={e => setShopifyForm(f => ({ ...f, lastName: e.target.value }))} /></div>
+                    </div>
+                    <div className="pfg"><div className="pfl">Address</div><input className="pfi" value={shopifyForm.address1} onChange={e => setShopifyForm(f => ({ ...f, address1: e.target.value }))} placeholder="Address line 1" /></div>
+                    <div className="pfg"><input className="pfi" value={shopifyForm.address2} onChange={e => setShopifyForm(f => ({ ...f, address2: e.target.value }))} placeholder="Address line 2 (optional)" /></div>
+                    <div className="pfr">
+                      <div className="pfg"><div className="pfl">City</div><input className="pfi" value={shopifyForm.city} onChange={e => setShopifyForm(f => ({ ...f, city: e.target.value }))} /></div>
+                      <div className="pfg"><div className="pfl">Province/State</div><input className="pfi" value={shopifyForm.province} onChange={e => setShopifyForm(f => ({ ...f, province: e.target.value }))} /></div>
+                    </div>
+                    <div className="pfr">
+                      <div className="pfg"><div className="pfl">ZIP/Postal</div><input className="pfi" value={shopifyForm.zip} onChange={e => setShopifyForm(f => ({ ...f, zip: e.target.value }))} /></div>
+                      <div className="pfg"><div className="pfl">Country</div><input className="pfi" value={shopifyForm.country} onChange={e => setShopifyForm(f => ({ ...f, country: e.target.value }))} placeholder="US" /></div>
+                    </div>
+                    <div className="pfg"><div className="pfl">Phone (optional)</div><input className="pfi" value={shopifyForm.phone} onChange={e => setShopifyForm(f => ({ ...f, phone: e.target.value }))} /></div>
+
+                    {selectedShopifyVariant && (
+                      <div style={{ background: "#f9fafb", border: "1px solid #eee", borderRadius: 8, padding: "10px 12px", fontSize: 12, display: "flex", flexDirection: "column", gap: 4 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between" }}>
+                          <span>Product price</span><span>${(parseFloat(selectedShopifyVariant.price) * shopifyQuantity).toFixed(2)}</span>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", color: "#667085" }}>
+                          <span>Discount</span>
+                          <span>{isGifting ? "Free — gifting" : "Applied automatically if a discount code is assigned"}</span>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, borderTop: "1px solid #eee", paddingTop: 4 }}>
+                          <span>Total</span><span>{isGifting ? "$0.00" : "Calculated by Shopify"}</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {shopifyError && <div style={{ fontSize: 12, color: "#dc2626" }}>{shopifyError}</div>}
+
+                    {shopifyOrderResult ? (
+                      <div style={{ background: "#f0faf5", border: "1px solid #bbf7d0", borderRadius: 8, padding: "10px 12px", fontSize: 12, display: "flex", flexDirection: "column", gap: 4 }}>
+                        <div style={{ fontWeight: 700, color: "#166534" }}>Order {shopifyOrderResult.orderNumber} created</div>
+                        <div>
+                          Total: {shopifyOrderResult.priceBreakdown?.total ? `$${shopifyOrderResult.priceBreakdown.total}` : "—"}
+                          {shopifyOrderResult.priceBreakdown?.discountCode ? ` (code: ${shopifyOrderResult.priceBreakdown.discountCode})` : ""}
+                        </div>
+                        <a href={shopifyOrderResult.adminUrl} target="_blank" rel="noreferrer" style={{ color: "#1fae5b", fontWeight: 600 }}>View in Shopify admin →</a>
+                      </div>
+                    ) : (
+                      <button
+                        className="btn-primary"
+                        disabled={!shopifyForm.variantId || !shopifyAddressComplete || shopifySubmitting}
+                        onClick={handleCreateShopifyOrder}
+                        style={{ alignSelf: "flex-end", opacity: shopifySubmitting ? 0.6 : 1 }}
+                      >
+                        {shopifySubmitting ? "Creating…" : "Create Order in Shopify"}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
               <div
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8,

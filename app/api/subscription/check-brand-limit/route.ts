@@ -17,24 +17,28 @@ export async function GET(req: Request) {
       include: { plan: true },
     })
 
-    if (!subscription) {
-      return NextResponse.json(
-        { error: "No subscription found" },
-        { status: 404 }
-      )
-    }
-
-    if (subscription.status !== "active") {
-      return NextResponse.json(
-        { error: "Subscription is not active" },
-        { status: 400 }
-      )
-    }
-
     // Count current brands owned by user
     const brandCount = await prisma.brand.count({
       where: { owner_id: session.user.id },
     })
+
+    // No subscription, or one that isn't active/trialing (e.g. cancelled,
+    // paused) — same freemium fallback canAddBrand() uses: 1 free workspace,
+    // no upsell path since there's no plan to buy extra brands against.
+    if (!subscription || (subscription.status !== "active" && subscription.status !== "trialing")) {
+      const allowed = brandCount < 1
+      return NextResponse.json({
+        allowed,
+        canBuyMore: false,
+        current: brandCount,
+        max: 1,
+        maxTotalBrands: 1,
+        maxBrandsAvailable: 0,
+        currentExtraBrands: 0,
+        pricePerBrand: 0,
+        message: allowed ? undefined : "Free plan allows 1 workspace only. Subscribe to add more workspaces.",
+      })
+    }
 
     // Handle unlimited (Agency plan) vs limited plans
     const isUnlimited = subscription.plan.max_brands === null
