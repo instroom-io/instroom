@@ -311,16 +311,21 @@ export default function TableSheet({
       // 429, 500 or 502 says nothing about whether the influencer exists, and
       // calling those "not found" told the user their valid username was wrong.
       if (!res.ok) {
-        const failure = describeLookupFailure(res.status, platform)
-        // Log the body for diagnosis without surfacing raw provider text in the UI.
+        // The body is read BEFORE classifying: the API wraps upstream 403/404/429
+        // in a 502 and names the real cause there, so the status alone cannot
+        // tell "username doesn't exist" from "profile is private" from "the API
+        // is down". Logged as a plain string so a handled failure isn't promoted
+        // to an uncaught error by the dev overlay.
         const detail = await res.text().catch(() => "")
-        console.error(
+        const failure = describeLookupFailure(res.status, platform, detail)
+        console.warn(
           `Influencer API ${res.status} ${res.statusText} for @${clean} on ${platform}` +
             ` (${requestUrl}): ${detail.slice(0, 300)}`
         )
 
-        // 404 keeps its existing behaviour: the caller shows the "not found"
-        // toast, which is correct — this username really doesn't exist.
+        // Genuine not-found — either a direct 404 or an upstream 404 wrapped in a
+        // 502 — keeps its existing behaviour: the caller shows the "not found"
+        // toast, which is correct, and the auto-fetch flow continues normally.
         if (failure.notFound) return null
 
         setApiErrorModal({ open: true, platform, handle: clean, reason: failure.reason })

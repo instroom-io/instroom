@@ -61,7 +61,33 @@ export type LookupFailure = {
   retryable: boolean
 }
 
-export function describeLookupFailure(status: number, platform: string): LookupFailure {
+/**
+ * The API wraps upstream (Instagram/TikTok) failures in a 502 and puts the real
+ * cause in the body, so a 502 alone is ambiguous. Observed against the live API:
+ *
+ *   {"message":"Request failed with status code 404"}   username does not exist
+ *   {"message":"Request failed with status code 403"}   profile exists but the
+ *                                                      provider was denied
+ *                                                      (private/restricted)
+ *   {"message":"Failed to fetch data from TikTok API."} genuine provider failure
+ *
+ * Reading the upstream status out of the body is what lets those three be told
+ * apart. Confirmed live: @dandanielle returns 403 on Instagram on every attempt
+ * yet 200 on TikTok, while cristiano/nasa/sarwarsetfree all return 200 on
+ * Instagram — so a blanket "the API is broken, retry" was wrong for all three.
+ */
+function upstreamStatusFrom(detail: string | undefined): number | null {
+  if (!detail) return null
+  const m = /status code (\d{3})/i.exec(detail)
+  return m ? Number(m[1]) : null
+}
+
+export function describeLookupFailure(
+  status: number,
+  platform: string,
+  /** Raw response body, used to recover the wrapped upstream status. */
+  detail?: string
+): LookupFailure {
   // 400 — the API rejected the username itself. Retrying sends the same value,
   // so the user has to correct it; not a provider fault.
   if (status === 400) {
@@ -85,9 +111,45 @@ export function describeLookupFailure(status: number, platform: string): LookupF
     }
   }
   if (status === 500 || status === 502) {
+    const upstream = upstreamStatusFrom(detail)
+
+    // Upstream 404 — the username genuinely does not exist on this platform.
+    // Treated exactly like a direct 404 so the existing not-found toast is used
+    // instead of an "API is broken" modal the user can do nothing about.
+    if (upstream === 404) {
+      return { notFound: true, reason: "", retryable: false }
+    }
+
+    // Upstream 401/403 — the account exists but the provider could not read it:
+    // private, restricted, or blocked for this profile. Retrying is futile, and
+    // this is NOT "not found" — the influencer may well be real.
+    if (upstream === 401 || upstream === 403) {
+      return {
+        notFound: false,
+        reason:
+          `${platform} did not allow this profile to be read (HTTP ${upstream}). ` +
+          `That usually means the account is private or restricted. Check the platform is ` +
+          `right for this handle, or add the influencer manually.`,
+        retryable: false,
+      }
+    }
+
+    // Upstream rate limit surfaced through the wrapper.
+    if (upstream === 429) {
+      return {
+        notFound: false,
+        reason:
+          `${platform} is rate limiting the API. This username is fine — wait a moment and retry.`,
+        retryable: true,
+      }
+    }
+
     return {
       notFound: false,
-      reason: `The influencer API failed (HTTP ${status}). This is a problem with the API or its upstream provider, not with this username.`,
+      reason:
+        `The influencer API could not reach ${platform} (HTTP ${status}` +
+        `${upstream ? `, upstream ${upstream}` : ""}). This is a problem with the API or the ` +
+        `platform, not with this username — retrying often works.`,
       retryable: true,
     }
   }
