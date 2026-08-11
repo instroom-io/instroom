@@ -37,7 +37,7 @@ function extractText(payload: any): string {
 const THREADS_CACHE_TTL_MS = 15_000
 const threadsCache = new Map<string, { expiresAt: number; body: any }>()
 
-async function refreshToken(refresh_token: string, userId: string): Promise<string | null> {
+async function refreshToken(refresh_token: string, accountId: string): Promise<string | null> {
   try {
     const res = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
@@ -52,8 +52,13 @@ async function refreshToken(refresh_token: string, userId: string): Promise<stri
     const data = await res.json()
     if (!res.ok || !data.access_token) return null
 
-    await prisma.account.updateMany({
-      where: { userId, provider: "google" },
+    // Target this specific Account row, not every Google account linked to
+    // the user — a user can have more than one (e.g. reconnected Gmail with
+    // a different Google account), and this refresh_token only belongs to
+    // one of them. Updating them all would overwrite unrelated accounts'
+    // tokens with a token that isn't actually theirs.
+    await prisma.account.update({
+      where: { id: accountId },
       data: {
         access_token: data.access_token,
         expires_at: data.expires_in
@@ -84,46 +89,55 @@ export async function GET(req: NextRequest) {
     )
   }
 
-  // Try session first (Google OAuth login), fall back to DB Account table
-  let accessToken = session.accessToken as string | undefined
+  // NEVER use session.accessToken here — the login-time Google OAuth (see
+  // lib/auth.ts) deliberately requests only "openid email profile", with no
+  // Gmail scopes at all. Gmail access always comes from a separate consent
+  // via /api/gmail/connect, stored in the Account table below. Using the
+  // session token first meant every Google-login user's request used a
+  // scope-less token and got permanently rejected by Gmail, no matter how
+  // many times they reconnected — the correctly-scoped token was never even
+  // looked at.
+  let accessToken: string
 
-  if (!accessToken) {
-    const userId = session.user?.id
-    if (!userId) {
+  const userId = session.user?.id
+  if (!userId) {
+    return NextResponse.json(
+      { error: "Gmail access not granted. Please sign in with Google.", reauth: true },
+      { status: 403 }
+    )
+  }
+
+  // A user can have more than one linked Google account (e.g. reconnected
+  // Gmail with a different account than before) — most recently connected
+  // wins, since that's the one they just told us to use.
+  const account = await prisma.account.findFirst({
+    where: { userId, provider: "google" },
+    select: { id: true, access_token: true, refresh_token: true, expires_at: true },
+    orderBy: { id: "desc" },
+  })
+
+  if (!account?.access_token) {
+    return NextResponse.json(
+      { error: "No Google account linked. Please connect your Gmail account.", reauth: true },
+      { status: 403 }
+    )
+  }
+
+  const isExpired = account.expires_at
+    ? Date.now() > account.expires_at * 1000
+    : false
+
+  if (isExpired && account.refresh_token) {
+    const refreshed = await refreshToken(account.refresh_token, account.id)
+    if (!refreshed) {
       return NextResponse.json(
-        { error: "Gmail access not granted. Please sign in with Google.", reauth: true },
+        { error: "Gmail session expired. Please reconnect your Gmail account.", reauth: true },
         { status: 403 }
       )
     }
-
-    const account = await prisma.account.findFirst({
-      where: { userId, provider: "google" },
-      select: { access_token: true, refresh_token: true, expires_at: true },
-    })
-
-    if (!account?.access_token) {
-      return NextResponse.json(
-        { error: "No Google account linked. Please connect your Gmail account.", reauth: true },
-        { status: 403 }
-      )
-    }
-
-    const isExpired = account.expires_at
-      ? Date.now() > account.expires_at * 1000
-      : false
-
-    if (isExpired && account.refresh_token) {
-      const refreshed = await refreshToken(account.refresh_token, userId)
-      if (!refreshed) {
-        return NextResponse.json(
-          { error: "Gmail session expired. Please reconnect your Gmail account.", reauth: true },
-          { status: 403 }
-        )
-      }
-      accessToken = refreshed
-    } else {
-      accessToken = account.access_token
-    }
+    accessToken = refreshed
+  } else {
+    accessToken = account.access_token
   }
 
   const cacheUserId = session.user?.id
