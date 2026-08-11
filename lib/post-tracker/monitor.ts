@@ -1,24 +1,40 @@
 import "server-only"
 
 // ─── Automatic post detection engine ─────────────────────────────────────────
-// Polls EnsembleData for each enabled influencer, matches results against the
-// configured hashtags/mentions, and imports new posts into the Post Tracker.
+// For each enabled influencer, polls THAT INFLUENCER'S OWN account feed, keeps
+// the posts carrying a configured hashtag/mention, and imports them.
 //
 // Invariants:
 //   • Nothing runs for a brand without an active add-on (checked per brand).
 //   • Nothing spends a provider request without quota (checked per request).
 //   • A post is never imported twice (unique index + pre-check).
 //   • A failure for one influencer never aborts the others.
+//   • A post is only ever attributed to the influencer who published it.
+//
+// ── Why this polls accounts, not hashtags ────────────────────────────────────
+// It used to call searchPostsByHashtag() for each configured term. That endpoint
+// is GLOBAL: /instagram/hashtag/posts returns whoever most recently used the
+// tag. The only acceptance test was matchPost(), which checks that the caption
+// contains a monitored term — it never checked WHO published the post. So any
+// stranger's post carrying #yourbrand was imported and attributed to whichever
+// influencer happened to have that tag configured, and every influencer sharing
+// a tag received the same borrowed posts.
+//
+// The account endpoints are addressed to one account (Instagram by resolved
+// numeric user_id, TikTok by username), so they cannot return another person's
+// post. The configured hashtags/mentions still decide which of that influencer's
+// posts count — they are now filters over their own feed rather than the search
+// target. Authorship is then re-verified locally before any import.
 //
 // Callers: app/api/post-tracker/detection/run/route.ts (the "Check now" button)
 // and app/api/cron/post-detection/route.ts (kept, but currently unscheduled —
 // see that file). Safe to call concurrently: the caller holds the
 // MonitoringLock.
 
-import { prisma } from "@/lib/prisma"
+import { prisma, withUtf8mb4 } from "@/lib/prisma"
 import {
-  searchPostsByHashtag,
-  searchPostsByMention,
+  fetchAccountPosts,
+  normaliseHandle,
   isEnsembleConfigured,
   type EnsemblePlatform,
   type EnsemblePost,
@@ -36,6 +52,18 @@ export const MIN_POLL_INTERVAL_MS = 5 * 60 * 1000
 
 /** Posts requested per provider call — small, to stretch the testing quota. */
 const RESULTS_PER_QUERY = 10
+
+/**
+ * Monitoring window: how far back a post may be published and still be imported.
+ *
+ * There is no per-setting window column, so this is the intended default in one
+ * place — same pattern as MIN_POLL_INTERVAL_MS above.
+ *
+ * Why it exists: a provider feed can reach years back, and without a window a
+ * pass that had already deduped the genuinely recent posts would keep importing
+ * old ones as if they were new. A post outside the window is never imported.
+ */
+const MAX_POST_AGE_MS = 30 * 24 * 60 * 60 * 1000
 
 export type MonitorSummary = {
   brandsConsidered: number
@@ -87,6 +115,67 @@ function matchPost(
 }
 
 /**
+ * Is this post actually published by the influencer being polled?
+ *
+ * The account endpoint already guarantees it, so this is defence in depth
+ * against a provider payload that mixes in anything else (a suggested post, a
+ * reshare, a changed response shape). A post whose author is present and does
+ * NOT match the influencer's handle is refused — it belongs to somebody else.
+ *
+ * When the payload carries no author at all the post is accepted: the request
+ * was addressed to this account's feed, and the missing field is the provider
+ * omitting data rather than evidence of different authorship. Every such case is
+ * logged so it stays visible.
+ */
+function isAuthoredBy(post: EnsemblePost, handle: string): boolean {
+  const author = normaliseHandle(post.author)
+  if (!author) {
+    console.log(
+      `${LOG} post ${post.postUrl} carries no author field — accepted on the strength of the ` +
+        `account-scoped request for @${handle}`
+    )
+    return true
+  }
+  return author === handle
+}
+
+/**
+ * The influencer's own social account, as recorded in the app.
+ *
+ * `Influencer.handle` + `Influencer.platform` is the only account data the app
+ * holds (they are unique together), and it is what the rest of the product shows
+ * as the influencer's account. Nothing here invents or defaults a handle: an
+ * influencer without one is reported, not searched.
+ */
+async function resolveInfluencerAccount(brandInfluencerId: string, brandId: string): Promise<
+  | { ok: true; handle: string; platform: EnsemblePlatform | null; rawPlatform: string }
+  | { ok: false; error: string }
+> {
+  // Scoped by brand as well as id — the same guard the API routes use, so a
+  // setting row pointing outside its brand can never pull another brand's data.
+  const row = await prisma.brandInfluencer.findFirst({
+    where: { id: brandInfluencerId, brand_id: brandId },
+    select: { influencer: { select: { handle: true, platform: true } } },
+  })
+
+  if (!row?.influencer) {
+    return { ok: false, error: "influencer record not found for this brand — nothing to monitor" }
+  }
+
+  const handle = normaliseHandle(row.influencer.handle)
+  if (!handle) {
+    return {
+      ok: false,
+      error: "no social account handle recorded for this influencer — add their handle to enable detection",
+    }
+  }
+
+  const rawPlatform = (row.influencer.platform ?? "").trim()
+  const platform = MONITORED_PLATFORMS.find((p) => p === rawPlatform.toLowerCase()) ?? null
+  return { ok: true, handle, platform, rawPlatform }
+}
+
+/**
  * Poll one influencer. Returns counters; never throws — a provider or DB error
  * is recorded against this influencer and the caller moves on.
  */
@@ -107,14 +196,46 @@ async function pollInfluencer(setting: {
       `mentions=[${mentions.join(", ") || "none"}] platforms=[${platforms.join(", ")}]`
   )
 
-  if (hashtags.length === 0 && mentions.length === 0) {
-    const msg = "no hashtags or mentions configured — nothing to search"
+  /** Record the reason and stop, without spending a provider request. */
+  const abort = async (msg: string) => {
     console.warn(`${LOG} influencer ${setting.brand_influencer_id}: ${msg}`)
     await prisma.postDetectionSetting
       .update({ where: { id: setting.id }, data: { last_synced_at: new Date(), last_error: msg } })
       .catch(() => {})
     return { apiCalls: 0, found: 0, imported: 0, error: msg }
   }
+
+  if (hashtags.length === 0 && mentions.length === 0) {
+    return abort("no hashtags or mentions configured — nothing to search")
+  }
+
+  // ── The search target: this influencer's own account ──────────────────────
+  const account = await resolveInfluencerAccount(setting.brand_influencer_id, setting.brand_id)
+  if (!account.ok) {
+    // Same shape as the missing-terms case above: recorded on the setting and
+    // surfaced to the UI, with no broad search as a consolation.
+    return abort(account.error)
+  }
+
+  if (!account.platform) {
+    return abort(
+      `influencer's platform "${account.rawPlatform || "unknown"}" is not supported for detection ` +
+        `(supported: ${MONITORED_PLATFORMS.join(", ")})`
+    )
+  }
+
+  // A platform allow-list on the setting can narrow this, never widen it: the
+  // influencer has exactly one recorded account, so that platform is the ceiling.
+  if (!platforms.includes(account.platform)) {
+    return abort(
+      `influencer's account is on ${account.platform}, which this setting's platform filter ` +
+        `[${platforms.join(", ")}] excludes — nothing to search`
+    )
+  }
+
+  console.log(
+    `${LOG} influencer ${setting.brand_influencer_id}: polling ONLY @${account.handle} on ${account.platform}`
+  )
 
   const run = await prisma.monitoringRun.create({
     data: {
@@ -130,15 +251,16 @@ async function pollInfluencer(setting: {
   const errors: string[] = []
 
   try {
-    // One query per (platform, term). Each is quota-checked immediately before
-    // it runs so a long list can't overshoot the daily cap mid-loop.
-    const queries: { platform: EnsemblePlatform; kind: "hashtag" | "mention"; term: string }[] = []
-    for (const platform of platforms) {
-      for (const term of hashtags) queries.push({ platform, kind: "hashtag", term })
-      for (const term of mentions) queries.push({ platform, kind: "mention", term })
-    }
+    // ONE query: this influencer's own account feed. The configured terms are
+    // applied to the result rather than issued as separate global searches, so
+    // the request count no longer scales with the number of terms — and no
+    // request can reach another account's posts.
+    const queries: { platform: EnsemblePlatform; handle: string }[] = [
+      { platform: account.platform, handle: account.handle },
+    ]
 
     for (const q of queries) {
+      const label = `@${q.handle} on ${q.platform}`
       const reserved = await consumeApiQuota(setting.brand_id, 1)
       if (!reserved) {
         const msg = "Daily API quota reached"
@@ -151,10 +273,12 @@ async function pollInfluencer(setting: {
           `posts ${reserved.postsImported}/${reserved.postLimit}`
       )
 
-      const res =
-        q.kind === "hashtag"
-          ? await searchPostsByHashtag(q.platform, q.term, RESULTS_PER_QUERY)
-          : await searchPostsByMention(q.platform, q.term, RESULTS_PER_QUERY)
+      // The window is passed INTO the provider request layer so pagination can
+      // stop as soon as the feed drops out of it, rather than fetching pages of
+      // old posts and discarding them here.
+      const notBefore = new Date(Date.now() - MAX_POST_AGE_MS)
+
+      const res = await fetchAccountPosts(q.platform, q.handle, RESULTS_PER_QUERY, { notBefore })
 
       // Reconcile: retries inside the client may have cost more than the one
       // request reserved above, so charge the difference.
@@ -162,15 +286,42 @@ async function pollInfluencer(setting: {
       if (res.apiCalls > 1) await consumeApiQuota(setting.brand_id, res.apiCalls - 1)
 
       if (!res.ok) {
-        errors.push(`${q.platform}/${q.kind}:${q.term} — ${res.error}`)
+        errors.push(`${label} — ${res.error}`)
         continue
       }
 
       let unmatched = 0
+      let outOfWindow = 0
+      let wrongAuthor = 0
+      // res.data arrives newest-first (sorted on the provider timestamp), so the
+      // newest eligible posts are considered before older ones and the import
+      // quota is spent on the freshest content.
       for (const post of res.data) {
+        // Attribution gate — FIRST, before matching, quota or import. A post is
+        // only ever recorded against the influencer who published it.
+        if (!isAuthoredBy(post, q.handle)) {
+          wrongAuthor++
+          console.warn(
+            `${LOG} REFUSED ${post.postUrl} — published by @${normaliseHandle(post.author)}, ` +
+              `not by @${q.handle}. Not attributed to influencer ${setting.brand_influencer_id}.`
+          )
+          continue
+        }
+
         const match = matchPost(post, hashtags, mentions)
         if (!match) {
           unmatched++
+          continue
+        }
+
+        // Second line of defence — the client already filters, but an undated or
+        // out-of-window post must never consume the import quota.
+        if (!post.publishedAt || post.publishedAt < notBefore) {
+          outOfWindow++
+          console.log(
+            `${LOG} SKIP (outside ${MAX_POST_AGE_MS / 86400000}d window) ${post.platform} ${post.postUrl} ` +
+              `published=${post.publishedAt?.toISOString() ?? "unknown"}`
+          )
           continue
         }
         found++
@@ -186,7 +337,11 @@ async function pollInfluencer(setting: {
           // The unique index on (brand_influencer_id, post_url) is the real
           // guard; `create` + P2002 catch means a concurrent pass inserting the
           // same post is a no-op rather than a duplicate.
-          await prisma.detectedPost.create({
+          // withUtf8mb4: this host's init_connect pins every new connection to
+          // utf8mb3, so a caption containing an emoji fails with MySQL 3988.
+          // The wrapper pins one connection with SET NAMES utf8mb4 and runs the
+          // insert on it — same create(), same data, nothing sanitised.
+          await withUtf8mb4((tx) => tx.detectedPost.create({
             data: {
               brand_influencer_id: setting.brand_influencer_id,
               brand_id: setting.brand_id,
@@ -205,10 +360,10 @@ async function pollInfluencer(setting: {
               view_count: post.viewCount,
               share_count: post.shareCount,
             },
-          })
+          }))
           imported++
           await consumePostQuota(setting.brand_id, 1)
-          console.log(`${LOG} IMPORTED ${post.platform} ${post.postUrl} (matched ${match.hashtag ? `#${match.hashtag}` : `@${match.mention}`})`)
+          console.log(`${LOG} IMPORTED published=${post.publishedAt?.toISOString()} ${post.platform} ${post.postUrl} (matched ${match.hashtag ? `#${match.hashtag}` : `@${match.mention}`})`)
         } catch (err) {
           const code = (err as { code?: string })?.code
           if (code === "P2002") {
@@ -222,10 +377,18 @@ async function pollInfluencer(setting: {
         }
       }
 
+      if (outOfWindow > 0) {
+        console.log(`${LOG} ${label} — ${outOfWindow} matching post(s) skipped as older than the monitoring window`)
+      }
+
+      if (wrongAuthor > 0) {
+        console.warn(`${LOG} ${label} — ${wrongAuthor} post(s) refused because another account published them`)
+      }
+
       if (unmatched > 0) {
-        console.warn(
-          `${LOG} ${q.platform}/${q.kind}:${q.term} — ${unmatched} post(s) returned but did not contain any ` +
-            `monitored term. Provider hashtag feeds are approximate; captions are re-checked locally.`
+        console.log(
+          `${LOG} ${label} — ${unmatched} of this influencer's own post(s) carried none of the monitored ` +
+            `terms [${[...hashtags.map((h) => `#${h}`), ...mentions.map((m) => `@${m}`)].join(", ")}], so they were not imported`
         )
       }
     }

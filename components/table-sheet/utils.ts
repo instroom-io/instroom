@@ -14,6 +14,97 @@ export function displayHandle(handle: string): string {
   return cleanHandle(handle)
 }
 
+// ── Influencer API helpers ────────────────────────────────────────────────────
+
+/**
+ * Normalise a typed handle into the username the influencer API accepts.
+ *
+ * The API takes the bare username as a path segment. Instagram and TikTok both
+ * allow letters, digits, '.' and '_' and nothing else, so anything outside that
+ * set is removed rather than percent-encoded: a pasted profile URL, a stray
+ * space, or an invisible character would otherwise be sent as %2F / %20 and come
+ * back as a spurious "not found".
+ *
+ * Strips any leading '@' (including a repeated one) and lowercases, since both
+ * platforms treat usernames case-insensitively.
+ *
+ * Returns "" when nothing usable remains — the caller must not send a request.
+ */
+export function normalizeApiUsername(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^@+/, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9._]/g, "")
+}
+
+/** Does this look like a username the API can be asked about at all? */
+export function isValidApiUsername(username: string): boolean {
+  return username.length >= 2 && /^[a-z0-9._]+$/.test(username)
+}
+
+/**
+ * What went wrong with an influencer lookup, and what to tell the user.
+ *
+ * Split out of the component so each documented response class is one testable
+ * branch. `notFound` is the ONLY outcome that may be reported as "this username
+ * doesn't exist" — a rate limit, a provider fault or a connection failure says
+ * nothing about whether the influencer exists, and reporting those as not-found
+ * is what sent people looking for a typo in a valid username.
+ */
+export type LookupFailure = {
+  /** True only for a genuine 404: the caller keeps its existing toast. */
+  notFound: boolean
+  /** Shown in the existing API error modal, which offers Retry + manual add. */
+  reason: string
+  /** True when retrying could plausibly succeed. */
+  retryable: boolean
+}
+
+export function describeLookupFailure(status: number, platform: string): LookupFailure {
+  // 400 — the API rejected the username itself. Retrying sends the same value,
+  // so the user has to correct it; not a provider fault.
+  if (status === 400) {
+    return {
+      notFound: false,
+      reason: `The API rejected this username as invalid for ${platform}. Check the spelling and try again.`,
+      retryable: false,
+    }
+  }
+  if (status === 404) {
+    return { notFound: true, reason: "", retryable: false }
+  }
+  // 429 — request or monthly plan limit. The username is fine.
+  if (status === 429) {
+    return {
+      notFound: false,
+      reason:
+        "The influencer API has hit its rate or monthly request limit. " +
+        "This username is fine — wait a moment and retry, or add the influencer manually.",
+      retryable: true,
+    }
+  }
+  if (status === 500 || status === 502) {
+    return {
+      notFound: false,
+      reason: `The influencer API failed (HTTP ${status}). This is a problem with the API or its upstream provider, not with this username.`,
+      retryable: true,
+    }
+  }
+  if (status === 401 || status === 403) {
+    return {
+      notFound: false,
+      reason: `The influencer API rejected our request (HTTP ${status}). This needs an API key or configuration fix.`,
+      retryable: false,
+    }
+  }
+  return {
+    notFound: false,
+    reason: `The influencer API returned an unexpected HTTP ${status}.`,
+    retryable: true,
+  }
+}
+
 export function getProfileUrl(platform: string, handle: string): string {
   if (!handle || handle === "@" || handle === "") return ""
   const fn = PLATFORM_URL_MAP[platform]
