@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
   const state = Buffer.from(
     JSON.stringify({
       userId: session.user.id,
-      returnTo: req.nextUrl.searchParams.get("returnTo") || "/inbox",
+      returnTo: req.nextUrl.searchParams.get("returnTo") || "/dashboard/inbox",
     })
   ).toString("base64url")
 
