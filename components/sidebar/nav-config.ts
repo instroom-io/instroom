@@ -41,7 +41,9 @@ export type NavSection = {
 export const DASHBOARD_NAV: NavSection[] = [
   {
     items: [
-      { href: "/dashboard/influencer-discovery", label: "Discovery", icon: Search },
+      // Temporarily hidden — page is still "Coming soon" with nothing to do
+      // yet. Restore this line to bring Discovery back into the sidebar.
+      // { href: "/dashboard/influencer-discovery", label: "Discovery", icon: Search },
       { href: "/dashboard/manage-influencers", label: "Influencers List", icon: Users },
       { href: "/dashboard/inbox", label: "Inbox", icon: Mail },
       { href: "/dashboard/pipeline", label: "Pipeline", icon: GitBranch },

@@ -77,7 +77,7 @@ export default function OnboardingPage() {
         body: JSON.stringify({ user_id: userId }),
       })
       const data = await res.json()
-      router.push(data.active ? '/dashboard/influencer-discovery' : '/pricing')
+      router.push(data.active ? '/dashboard/manage-influencers' : '/pricing')
     } catch {
       router.push('/pricing')
     }
