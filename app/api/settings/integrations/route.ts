@@ -4,12 +4,13 @@ import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 
 const GOAFFPRO_KEY = "goaffpro"
+const SHOPIFY_KEY = "shopify"
 
 function defaultIntegrations() {
   return {
     goaffpro: { connected: false } as { connected: boolean; connectedAs?: string },
     uppromote: { connected: false },
-    shopify: { connected: false },
+    shopify: { connected: false } as { connected: boolean; connectedAs?: string },
     woocommerce: { connected: false },
     gdrive: { connected: false },
   }
@@ -39,16 +40,34 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "Brand not found" }, { status: 404 })
     }
 
-    const setting = await prisma.integrationConnection.findUnique({
-      where: { brand_id_integration_key: { brand_id: brandId, integration_key: GOAFFPRO_KEY } },
-    })
+    const [goaffproSetting, shopifySetting] = await Promise.all([
+      prisma.integrationConnection.findUnique({
+        where: { brand_id_integration_key: { brand_id: brandId, integration_key: GOAFFPRO_KEY } },
+      }),
+      prisma.integrationConnection.findUnique({
+        where: { brand_id_integration_key: { brand_id: brandId, integration_key: SHOPIFY_KEY } },
+      }),
+    ])
 
     let goaffpro = defaultIntegrations().goaffpro
-
-    if (setting) {
+    if (goaffproSetting) {
       goaffpro = {
-        connected: setting.connected,
-        connectedAs: setting.connected_as ?? undefined,
+        connected: goaffproSetting.connected,
+        connectedAs: goaffproSetting.connected_as ?? undefined,
+      }
+    }
+
+    let shopify: { connected: boolean; connectedAs?: string; unmatchedOrders?: number } =
+      defaultIntegrations().shopify
+    if (shopifySetting) {
+      shopify = {
+        connected: shopifySetting.connected,
+        connectedAs: shopifySetting.connected_as ?? undefined,
+      }
+      if (shopifySetting.connected) {
+        shopify.unmatchedOrders = await prisma.shopifyOrder.count({
+          where: { brand_id: brandId, source: "synced", brand_influencer_id: null },
+        })
       }
     }
 
@@ -56,6 +75,7 @@ export async function GET(req: Request) {
       integrations: {
         ...defaultIntegrations(),
         goaffpro,
+        shopify,
       },
     })
   } catch (error) {

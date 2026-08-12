@@ -328,6 +328,7 @@ model BrandInfluencer {
   campaign       Campaign?       @relation(fields: [campaign_id], references: [id], onDelete: SetNull)
   partner        BrandPartner? // new (1:1 back-relation)
   goaffproOrders GoAffProOrder[]
+  shopifyOrders  ShopifyOrder[]
   attribution    Attribution?
 
   @@unique([brand_id, influencer_id])
@@ -386,6 +387,28 @@ model GoAffProOrder {
   @@index([brand_id, affiliate_id])
   @@index([brand_influencer_id])
   @@index([status])
+}
+
+model ShopifyOrder {
+  id                  String    @id @default(cuid()) @db.VarChar(30)
+  brand_id            String    @db.VarChar(30)
+  shopify_order_id    String    @db.VarChar(100)
+  brand_influencer_id String?   @db.VarChar(30)
+  discount_code       String?   @db.VarChar(100)
+  source              String    @default("synced") @db.VarChar(20) // "instroom" | "synced"
+  financial_status    String?   @db.VarChar(30)
+  fulfillment_status  String?   @db.VarChar(30)
+  shipment_status     String?   @db.VarChar(30)
+  raw                 Json
+  shopify_created_at  DateTime?
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @updatedAt
+
+  brandInfluencer BrandInfluencer? @relation(fields: [brand_influencer_id], references: [id], onDelete: SetNull)
+
+  @@unique([brand_id, shopify_order_id])
+  @@index([brand_id, discount_code])
+  @@index([brand_influencer_id])
 }
 
 model OutreachLog {
