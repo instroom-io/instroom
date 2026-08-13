@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import Link from 'next/link'
 import { Logo } from "@/components/brand/logo"
 import { useRouter } from 'next/navigation'
 import { useSession } from 'next-auth/react'
@@ -205,7 +206,9 @@ export default function OnboardingPage() {
   return (
     <div className="relative min-h-svh overflow-hidden bg-[#F7F9F8] text-[#1E1E1E]">
       <div className="fixed top-4 sm:top-6 left-4 sm:left-12 z-50">
-        <Logo size="page" alt="Instroom" priority className="drop-shadow-sm" />
+        <Link href="/">
+          <Logo size="page" alt="Instroom" priority className="drop-shadow-sm" />
+        </Link>
       </div>
 
       <div className="pointer-events-none fixed top-0 left-0 w-64 sm:w-96 h-64 sm:h-96 rounded-full bg-[#1FAE5B]/8 blur-3xl -translate-x-1/2 -translate-y-1/2" />
