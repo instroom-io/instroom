@@ -34,17 +34,22 @@
 
 .section { padding: 96px 0; }
 
-.problemSection { padding-top: 112px; padding-bottom: 112px; }
+.problemSection { padding-top: 80px; padding-bottom: 112px; }
 .problemHeaderGap { margin-bottom: 72px; }
+.sectionHeader.problemHeaderGap h2 { color: #0F6B3E; font-weight: 800; }
+.sectionHeader.problemHeaderGap p { font-size: 0.875rem; }
+.outcomesGap { margin-top: 72px; }
 
 @media (max-width: 900px) {
-  .problemSection { padding-top: 72px; padding-bottom: 72px; }
+  .problemSection { padding-top: 56px; padding-bottom: 72px; }
   .problemHeaderGap { margin-bottom: 48px; }
+  .outcomesGap { margin-top: 48px; }
 }
 
 @media (max-width: 640px) {
-  .problemSection { padding-top: 56px; padding-bottom: 56px; }
+  .problemSection { padding-top: 40px; padding-bottom: 56px; }
   .problemHeaderGap { margin-bottom: 36px; }
+  .outcomesGap { margin-top: 36px; }
 }
 
 /* ── Alternating section backgrounds ── */
@@ -299,23 +304,10 @@
 
 .trustLabel {
   text-align: center;
-  font-size: 0.75rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  font-size: 0.8125rem;
+  font-weight: 400;
   color: #52525b;
   margin-bottom: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 16px;
-}
-
-.trustLabel::before,
-.trustLabel::after {
-  content: '';
-  width: 60px;
-  height: 1px;
-  background-color: #d4d4d8;
 }
 
 .trustLogosWide {

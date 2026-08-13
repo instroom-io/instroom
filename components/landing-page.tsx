@@ -431,7 +431,7 @@ export function LandingPage() {
       </section>
 
             {/* TRUST BAR */}
-      <section className={`${styles.trust} ${styles.secEven}`}>
+      <section className={`${styles.trust} ${styles.secOdd}`}>
         <div className={styles.containerMd}>
           <p className={styles.trustLabel}>Built from 200+ brands, campaigns, and hard-won lessons</p>
         </div>
@@ -454,15 +454,14 @@ export function LandingPage() {
         </div>
       </section>
 
-      {/* PROBLEM */}
-      <section className={`${styles.section} ${styles.secOdd} ${styles.problemSection}`}>
+      {/* PROBLEM + OUTCOMES */}
+      <section className={`${styles.section} ${styles.secEven} ${styles.problemSection}`}>
         <div className={styles.containerMd} style={{ position: "relative" }}>
           <div className={styles.sketchAnnotation} style={{ top: 220, left: "100%", marginLeft: 28 }}>
             <span className={`${styles.sketchLabel} ${styles.fontHand}`}>Before</span>
             <SketchArrow />
           </div>
           <div className={`${styles.sectionHeader} ${styles.problemHeaderGap}`}>
-            <div className={styles.founderLabel}>« The Problem »</div>
             <h2>You didn't start your brand to<br />live in a spreadsheet.</h2>
             <p>But here you are. Multiple tabs. Multiple tools. A nagging feeling that you're paying creators and hoping it's working.</p>
           </div>
@@ -476,11 +475,7 @@ export function LandingPage() {
             ))}
           </div>
         </div>
-      </section>
-
-      {/* OUTCOMES */}
-      <section className={`${styles.section} ${styles.secEven}`}>
-        <div className={styles.containerMd} style={{ position: "relative" }}>
+        <div className={`${styles.containerMd} ${styles.outcomesGap}`} style={{ position: "relative" }}>
           <div className={styles.sketchAnnotation} style={{ top: -12, right: "100%", marginRight: 28 }}>
             <span className={`${styles.sketchLabel} ${styles.fontHand}`}>Now</span>
             <SketchArrow flip />
