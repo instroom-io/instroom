@@ -24,6 +24,11 @@ model User {
   two_factor_secret_pending String? @db.Text
   two_factor_backup_codes   Json?
 
+  // Array of tour scene keys the user has finished or skipped (e.g.
+  // ["onboarding","influencers","pipeline"]) — each page's contextual tour
+  // is tracked independently, so seeing one never marks the others seen.
+  product_tour_seen_scenes Json?
+
   onboarding   Onboarding?
   subscription UserSubscription?
   brandMembers BrandMember[]

@@ -80,17 +80,20 @@ export function SidebarNavItem({
   icon: Icon,
   active,
   onNavigate,
+  tourId,
 }: {
   href: string
   label: string
   icon: React.ComponentType<{ size?: number | string; strokeWidth?: number; className?: string }>
   active: boolean
   onNavigate?: () => void
+  tourId?: string
 }) {
   return (
     <Link
       href={href}
       onClick={onNavigate}
+      data-tour={tourId}
       aria-current={active ? "page" : undefined}
       className={cn(
         "group relative flex items-center rounded-[var(--sb-item-radius)]",

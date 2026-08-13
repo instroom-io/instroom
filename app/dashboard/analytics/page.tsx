@@ -1116,6 +1116,7 @@ function AnalyticsPageContent() {
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search..."
               aria-label="Search influencer"
+              data-tour="analytics-search"
               className="h-9 w-full rounded-lg border border-[#0F6B3E]/20 pl-9 pr-8 text-sm outline-none focus:ring-2 focus:ring-[#1FAE5B]"
             />
             {search && (
@@ -1135,6 +1136,7 @@ function AnalyticsPageContent() {
             <button
               onClick={() => setShowFilters(!showFilters)}
               aria-expanded={showFilters}
+              data-tour="analytics-filters"
               className={`${CONTROL} flex items-center gap-1.5 border px-3 font-medium transition-colors ${
                 hasActiveFilters
                   ? 'border-[#1FAE5B] bg-[#1FAE5B] text-white'
@@ -1180,7 +1182,7 @@ function AnalyticsPageContent() {
             {search && <span className="text-gray-400"> for “{search}”</span>}
           </p>
 
-          <button onClick={exportCSV} className={`${BTN_SECONDARY} ml-auto`}>
+          <button onClick={exportCSV} data-tour="analytics-export" className={`${BTN_SECONDARY} ml-auto`}>
             <IconDownload size={16} className="text-[#1FAE5B]" />
             Export CSV
           </button>
@@ -1191,6 +1193,7 @@ function AnalyticsPageContent() {
         <div
           role="tablist"
           aria-label="Analytics views"
+          data-tour="analytics-tabs"
           className="flex gap-1 overflow-x-auto border-t border-gray-100 px-4 sm:px-6 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         >
           <Tab label="Campaign Summary" isActive={activeTab === 0} onClick={() => setActiveTab(0)} />

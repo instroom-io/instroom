@@ -708,6 +708,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
         <div className="topbar-actions">
           <button
             className="btn-outline"
+            data-tour="brand-partners-tier-settings"
             onClick={() => setShowTierModal(true)}
             disabled={!isOwner}
             title={!isOwner ? "Only the workspace owner can manage tier settings" : undefined}
@@ -724,6 +725,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
           </button>
           <button
             className="btn-primary"
+            data-tour="brand-partners-add-partner"
             onClick={() => setShowAddPartnerModal(true)}
             disabled={!canManageCampaigns}
             title={!canManageCampaigns ? "Only Owners and Managers can add partners" : undefined}
@@ -748,13 +750,14 @@ export default function BrandPartnersPage({ brandId }: Props) {
               <IconSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
                 className="sb pl-9"
+                data-tour="brand-partners-search"
                 placeholder="Search creators…"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
             </div>
             <div className="fw">
-              <button onClick={() => setShowFilterPanel(!showFilterPanel)} className="px-3 py-1.5 rounded-lg text-sm flex items-center gap-1 border border-[#0F6B3E]/20">
+              <button onClick={() => setShowFilterPanel(!showFilterPanel)} data-tour="brand-partners-filters" className="px-3 py-1.5 rounded-lg text-sm flex items-center gap-1 border border-[#0F6B3E]/20">
                 <IconFilter size={16} /> Filters
               </button>
               {showFilterPanel && (

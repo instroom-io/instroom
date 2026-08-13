@@ -441,6 +441,7 @@ export function BrandSelector() {
       {/* Trigger — styled for white topbar */}
       <button
         ref={triggerRef}
+        data-tour="brand-selector"
         onClick={handleToggleDropdown}
         className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors"
       >

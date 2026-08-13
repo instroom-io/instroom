@@ -814,7 +814,9 @@ export function DiscordClient({ brandId }: { brandId: string }) {
         className="flex flex-col items-center justify-center gap-5 rounded-xl border border-gray-100 bg-white px-6 py-16 text-center"
       >
         {toastEl}
-        <StepProgress current={step} serverDone={status.connected} accountDone={status.discordLinked} />
+        <div data-tour="community-setup-progress">
+          <StepProgress current={step} serverDone={status.connected} accountDone={status.discordLinked} />
+        </div>
 
         <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#5865F2]">
           <IconBrandDiscord size={28} className="text-white" />
@@ -822,7 +824,7 @@ export function DiscordClient({ brandId }: { brandId: string }) {
 
         {step === 1 ? (
           <>
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-1.5" data-tour="community-setup-heading">
               <h2 className="text-[16px] font-semibold text-gray-900">
                 {botMissing ? "Finish connecting your Discord server" : "No Discord server connected."}
               </h2>
@@ -836,6 +838,7 @@ export function DiscordClient({ brandId }: { brandId: string }) {
               <DiscordCta
                 href={`/api/community/discord/install?brandId=${encodeURIComponent(brandId)}&returnTo=${RETURN_TO}`}
                 icon={<IconBrandDiscord size={17} />}
+                dataTour="community-connect-server"
               >
                 {botMissing ? "Authorize Instroom Bot" : "Connect Discord Server"}
               </DiscordCta>

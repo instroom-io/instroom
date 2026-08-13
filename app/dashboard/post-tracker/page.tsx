@@ -1452,12 +1452,14 @@ function PostTrackerContent() {
         <div className="relative flex-1 min-w-[200px] max-w-xs">
           <IconSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search influencer..."
+            data-tour="post-tracker-search"
             className="w-full pl-9 pr-3 h-9 border border-[#0F6B3E]/20 rounded-lg outline-none focus:ring-2 focus:ring-[#1FAE5B] text-sm"/>
         </div>
 
         {/* Filters */}
         <div className="relative">
           <button onClick={()=>setShowFilterPanel(!showFilterPanel)}
+            data-tour="post-tracker-filters"
             className={`h-9 px-3 rounded-lg text-sm flex items-center gap-1.5 border transition-colors ${hasActiveFilters?"bg-[#1FAE5B] text-white border-[#1FAE5B]":"border-[#0F6B3E]/20 hover:border-[#0F6B3E]/40"}`}>
             <IconFilter size={15}/> Filters
             {activeFilterCount > 0 && (
@@ -1516,7 +1518,7 @@ function PostTrackerContent() {
 
         {/* View toggle */}
 {/* View toggle */}
-<div className="inline-flex h-9 items-center rounded-lg border border-[#0F6B3E]/20 bg-white p-1">
+<div className="inline-flex h-9 items-center rounded-lg border border-[#0F6B3E]/20 bg-white p-1" data-tour="post-tracker-view-toggle">
   <button
     onClick={() => {
       setView("Board")
@@ -1556,13 +1558,16 @@ function PostTrackerContent() {
             <div className="flex gap-4 min-w-max">
 
               {/* Main columns */}
-              {COLUMNS.filter(c=>c.key!=="No post").map(col => {
+              {COLUMNS.filter(c=>c.key!=="No post").map((col, colIndex) => {
                 const items = getItemsByColumn(col.key)
                 return (
                   <div key={col.key} className="w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0" style={{ scrollSnapAlign: "start" }}>
                     <DroppableColumn id={col.key}>
                       {/* ── Column header — identical structure to pipeline ── */}
-                      <div className={`${col.color} text-white rounded-lg px-3 py-2 text-sm font-semibold flex items-center justify-between`}>
+                      <div
+                        className={`${col.color} text-white rounded-lg px-3 py-2 text-sm font-semibold flex items-center justify-between`}
+                        data-tour={colIndex===0?"post-tracker-stage-columns":undefined}
+                      >
                         <span
                           onClick={() => handleColumnClick(col)}
                           className="flex-1 cursor-pointer hover:opacity-90 transition-opacity truncate mr-2"
