@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import Link from "next/link";
 import { Logo } from "@/components/brand/logo"
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
@@ -86,7 +87,9 @@ export default function SubscriptionSuccessPage() {
       <div className="pointer-events-none fixed bottom-0 right-0 w-56 sm:w-80 h-56 sm:h-80 rounded-full bg-[#0F6B3E]/6 blur-3xl translate-x-1/3 translate-y-1/3" />
 
       <div className="fixed top-4 sm:top-6 left-4 sm:left-12 z-50">
-        <Logo size="page" alt="Instroom" priority className="drop-shadow-sm" />
+        <Link href="/">
+          <Logo size="page" alt="Instroom" priority className="drop-shadow-sm" />
+        </Link>
       </div>
 
       <div className="relative min-h-screen flex items-center justify-center px-4 py-12">
