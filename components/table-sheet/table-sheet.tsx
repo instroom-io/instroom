@@ -16,11 +16,13 @@ import type { InfluencerRow, CustomColumn, AnyColDef, CustomColDef, CellAddress,
 import {
   DEFAULT_NICHES, DEFAULT_LOCATIONS, DEFAULT_GENDERS, DEFAULT_CONTACT_STATUSES,
   OUTREACH_FIELDS, platforms, STATUS_STYLE, STATUS_LABEL, APPROVAL_STYLE,
+  INSTROOM_API_BASE_URL, INSTROOM_PROFILE_ENDPOINTS, isInstroomApiConfigured,
 } from "./constants"
 import {
   cleanHandle, getProfileUrl, sortRows, newEmptyRow, getStaticCols,
   handleApprovalChange, isValidUrl, normalizeUrl, formatFollowers,
   exportToCSV, downloadTemplate, importFromCSV,
+  normalizeApiUsername, isValidApiUsername, describeLookupFailure,
 } from "./utils"
 import { useToast } from "./hooks"
 import { ProfilePicture, PlatformIcon, StatusBadge, ApprovalBadge, MultiSelectDisplay } from "./ui-atoms"
@@ -203,6 +205,8 @@ export default function TableSheet({
     platform?: string
     handle?: string
     rowId?: string
+    /** The real failure, shown verbatim so a genuine API error isn't hidden. */
+    reason?: string
   }>({ open: false })
 
   const [selectedRowId, setSelectedRowId]   = useState<string | null>(null)
@@ -251,10 +255,8 @@ export default function TableSheet({
 
   const { toasts, addToast, dismissToast } = useToast()
 
-  const INSTROOM_API: Record<string, (u: string) => string> = {
-    instagram: (u) => `https://api.instroom.io/v2/${u}/instagram`,
-    tiktok:    (u) => `https://api.instroom.io/${u}/tiktok`,
-  }
+  // Documented profile-lookup endpoints, defined once in constants.ts.
+  const INSTROOM_API = INSTROOM_PROFILE_ENDPOINTS
 
   function parseFormattedNumber(val: string | number | undefined): string {
     if (!val || val === "Not Available") return ""
@@ -266,13 +268,70 @@ export default function TableSheet({
   }
 
   const fetchInfluencerFromAPI = useCallback(async (handle: string, platform: string): Promise<Partial<InfluencerRow> | null> => {
-    const clean = handle.trim().replace(/^@/, "").toLowerCase()
-    if (!clean || clean.length < 2) return null
+    // Leading '@' removed and the value reduced to the characters the API
+    // accepts, so a pasted URL or stray character can't become a bogus path.
+    const clean = normalizeApiUsername(handle)
+    if (!isValidApiUsername(clean)) return null
     const endpointFn = INSTROOM_API[platform]
     if (!endpointFn) return null
+
+    // Fail fast on missing configuration instead of firing a request that cannot
+    // succeed. Without this, an unset INSTROOM_API_BASE_URL produced a request to
+    // a non-resolvable host and a `TypeError: Failed to fetch` on every handle
+    // edit. Reported through the same modal — Retry and manual-add both still
+    // work — but it names configuration as the cause rather than implying a
+    // network fault or a bad username.
+    if (!isInstroomApiConfigured()) {
+      console.error(
+        "Influencer API is not configured: INSTROOM_API_BASE_URL is unset or blank, so no lookup " +
+          "request was made. Set it in .env to the deployed API's public URL and restart the dev " +
+          "server — it is inlined into the client bundle at build time via next.config.ts."
+      )
+      setApiErrorModal({
+        open: true,
+        platform,
+        handle: clean,
+        reason:
+          "The influencer API host is not configured, so no request was sent. " +
+          "Set INSTROOM_API_BASE_URL to the deployed API URL and restart the server. " +
+          "You can still add this influencer manually.",
+      })
+      return null
+    }
+
+    const requestUrl = endpointFn(clean)
     try {
-      const res = await fetch(endpointFn(clean))
-      if (!res.ok) return null
+      const res = await fetch(requestUrl, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+      })
+
+      // A non-2xx response used to `return null`, which the caller reports as
+      // "<handle> not found on <platform>". That is only true for 404: a 400,
+      // 429, 500 or 502 says nothing about whether the influencer exists, and
+      // calling those "not found" told the user their valid username was wrong.
+      if (!res.ok) {
+        // The body is read BEFORE classifying: the API wraps upstream 403/404/429
+        // in a 502 and names the real cause there, so the status alone cannot
+        // tell "username doesn't exist" from "profile is private" from "the API
+        // is down". Logged as a plain string so a handled failure isn't promoted
+        // to an uncaught error by the dev overlay.
+        const detail = await res.text().catch(() => "")
+        const failure = describeLookupFailure(res.status, platform, detail)
+        console.warn(
+          `Influencer API ${res.status} ${res.statusText} for @${clean} on ${platform}` +
+            ` (${requestUrl}): ${detail.slice(0, 300)}`
+        )
+
+        // Genuine not-found — either a direct 404 or an upstream 404 wrapped in a
+        // 502 — keeps its existing behaviour: the caller shows the "not found"
+        // toast, which is correct, and the auto-fetch flow continues normally.
+        if (failure.notFound) return null
+
+        setApiErrorModal({ open: true, platform, handle: clean, reason: failure.reason })
+        return null
+      }
+
       const json = await res.json()
       const d = json.data || json.user || json
       if (!d || typeof d !== "object") return null
@@ -294,8 +353,30 @@ export default function TableSheet({
         avg_views: parseFormattedNumber(d.avg_video_views || d.avg_views),
       }
     } catch (err) {
-      console.warn(`API fetch error for ${handle}:`, err)
-      setApiErrorModal({ open: true, platform, handle: clean })
+      // `TypeError: Failed to fetch`. The browser refuses to say which of DNS
+      // failure, TLS failure, refused connection, timeout or a blocked
+      // cross-origin response occurred, so the message names them rather than
+      // implying the username is at fault. The request URL is logged because it
+      // is the one piece that makes a host/base-URL mistake identifiable.
+      //
+      // Logged as a STRING, not as the Error object: this failure is handled (the
+      // modal below owns it), but passing the raw Error to console.error makes
+      // Next's dev overlay present a caught network error as an uncaught
+      // "Console TypeError" with a stack into this function. The cause is still
+      // reported in full — nothing is swallowed.
+      const cause = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+      console.error(
+        `Influencer API request failed for @${clean} on ${platform} — ${requestUrl} — ${cause}. ` +
+          `The request never completed, so the API was not reached (DNS, network, TLS or CORS).`
+      )
+      setApiErrorModal({
+        open: true,
+        platform,
+        handle: clean,
+        reason:
+          `The request to ${INSTROOM_API_BASE_URL} never completed, so the API was not reached ` +
+          `(DNS, network, TLS or CORS). This is not a problem with the username.`,
+      })
       return null
     }
   }, [])
@@ -1059,6 +1140,9 @@ export default function TableSheet({
                 <p className="mt-2 text-sm text-gray-600">
                   We couldn't fetch data for <strong>@{apiErrorModal.handle}</strong>. You may retry or continue adding the influencer manually.
                 </p>
+                {apiErrorModal.reason && (
+                  <p className="mt-2 text-xs text-gray-500">{apiErrorModal.reason}</p>
+                )}
               </div>
             </div>
             <div className="mt-6 flex justify-end gap-2">
@@ -1124,6 +1208,7 @@ export default function TableSheet({
             <input
               type="text" value={searchInput} onChange={e => { setSearchInput(e.target.value); setCurrentPage(1) }}
               placeholder="Search influencers…"
+              data-tour="table-search"
               className="w-full pl-8 pr-3 py-2 text-xs border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-200 bg-white"
             />
           </div>
@@ -1131,6 +1216,7 @@ export default function TableSheet({
           {/* Filters button */}
           <div className="relative">
             <button ref={filterBtnRef} onClick={() => setShowFilterPopover(v => !v)}
+              data-tour="table-filters"
               className={`flex items-center gap-1.5 px-3 py-2 text-xs border rounded-lg transition ${hasActiveFilters ? "bg-blue-600 text-white border-blue-600" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>
               <IconFilter size={13} /> Filters {hasActiveFilters && `(${[filters.platform !== "all", filters.niche !== "all", filters.location !== "all", filters.gender !== "all", filters.approval !== "all", !!filters.dateFrom, !!filters.dateTo].filter(Boolean).length})`}
             </button>
@@ -1147,12 +1233,13 @@ export default function TableSheet({
           {/* Right-side controls */}
           <div className="flex items-center gap-1.5 ml-auto">
             {!readOnly && (
-              <button onClick={addRow} className="flex items-center gap-1.5 px-2.5 py-2 text-xs font-medium border border-gray-200 rounded-lg text-gray-700 hover:bg-green-50 hover:text-green-700 hover:border-green-200 transition" title="Add a new influencer"><IconPlus size={18} /> Add Influencer</button>
+              <button onClick={addRow} data-tour="table-add-influencer" className="flex items-center gap-1.5 px-2.5 py-2 text-xs font-medium border border-gray-200 rounded-lg text-gray-700 hover:bg-green-50 hover:text-green-700 hover:border-green-200 transition" title="Add a new influencer"><IconPlus size={18} /> Add Influencer</button>
             )}
 
             <div className="relative">
               <button
                 ref={importExportBtnRef}
+                data-tour="table-import-export"
                 onClick={() => {
                   if (subscriptionStatus?.status === "trialing") { onShowTrialModal?.(); return }
                   setShowImportExportMenu(v => !v)

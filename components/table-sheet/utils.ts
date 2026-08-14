@@ -14,6 +14,159 @@ export function displayHandle(handle: string): string {
   return cleanHandle(handle)
 }
 
+// ── Influencer API helpers ────────────────────────────────────────────────────
+
+/**
+ * Normalise a typed handle into the username the influencer API accepts.
+ *
+ * The API takes the bare username as a path segment. Instagram and TikTok both
+ * allow letters, digits, '.' and '_' and nothing else, so anything outside that
+ * set is removed rather than percent-encoded: a pasted profile URL, a stray
+ * space, or an invisible character would otherwise be sent as %2F / %20 and come
+ * back as a spurious "not found".
+ *
+ * Strips any leading '@' (including a repeated one) and lowercases, since both
+ * platforms treat usernames case-insensitively.
+ *
+ * Returns "" when nothing usable remains — the caller must not send a request.
+ */
+export function normalizeApiUsername(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^@+/, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9._]/g, "")
+}
+
+/** Does this look like a username the API can be asked about at all? */
+export function isValidApiUsername(username: string): boolean {
+  return username.length >= 2 && /^[a-z0-9._]+$/.test(username)
+}
+
+/**
+ * What went wrong with an influencer lookup, and what to tell the user.
+ *
+ * Split out of the component so each documented response class is one testable
+ * branch. `notFound` is the ONLY outcome that may be reported as "this username
+ * doesn't exist" — a rate limit, a provider fault or a connection failure says
+ * nothing about whether the influencer exists, and reporting those as not-found
+ * is what sent people looking for a typo in a valid username.
+ */
+export type LookupFailure = {
+  /** True only for a genuine 404: the caller keeps its existing toast. */
+  notFound: boolean
+  /** Shown in the existing API error modal, which offers Retry + manual add. */
+  reason: string
+  /** True when retrying could plausibly succeed. */
+  retryable: boolean
+}
+
+/**
+ * The API wraps upstream (Instagram/TikTok) failures in a 502 and puts the real
+ * cause in the body, so a 502 alone is ambiguous. Observed against the live API:
+ *
+ *   {"message":"Request failed with status code 404"}   username does not exist
+ *   {"message":"Request failed with status code 403"}   profile exists but the
+ *                                                      provider was denied
+ *                                                      (private/restricted)
+ *   {"message":"Failed to fetch data from TikTok API."} genuine provider failure
+ *
+ * Reading the upstream status out of the body is what lets those three be told
+ * apart. Confirmed live: @dandanielle returns 403 on Instagram on every attempt
+ * yet 200 on TikTok, while cristiano/nasa/sarwarsetfree all return 200 on
+ * Instagram — so a blanket "the API is broken, retry" was wrong for all three.
+ */
+function upstreamStatusFrom(detail: string | undefined): number | null {
+  if (!detail) return null
+  const m = /status code (\d{3})/i.exec(detail)
+  return m ? Number(m[1]) : null
+}
+
+export function describeLookupFailure(
+  status: number,
+  platform: string,
+  /** Raw response body, used to recover the wrapped upstream status. */
+  detail?: string
+): LookupFailure {
+  // 400 — the API rejected the username itself. Retrying sends the same value,
+  // so the user has to correct it; not a provider fault.
+  if (status === 400) {
+    return {
+      notFound: false,
+      reason: `The API rejected this username as invalid for ${platform}. Check the spelling and try again.`,
+      retryable: false,
+    }
+  }
+  if (status === 404) {
+    return { notFound: true, reason: "", retryable: false }
+  }
+  // 429 — request or monthly plan limit. The username is fine.
+  if (status === 429) {
+    return {
+      notFound: false,
+      reason:
+        "The influencer API has hit its rate or monthly request limit. " +
+        "This username is fine — wait a moment and retry, or add the influencer manually.",
+      retryable: true,
+    }
+  }
+  if (status === 500 || status === 502) {
+    const upstream = upstreamStatusFrom(detail)
+
+    // Upstream 404 — the username genuinely does not exist on this platform.
+    // Treated exactly like a direct 404 so the existing not-found toast is used
+    // instead of an "API is broken" modal the user can do nothing about.
+    if (upstream === 404) {
+      return { notFound: true, reason: "", retryable: false }
+    }
+
+    // Upstream 401/403 — the account exists but the provider could not read it:
+    // private, restricted, or blocked for this profile. Retrying is futile, and
+    // this is NOT "not found" — the influencer may well be real.
+    if (upstream === 401 || upstream === 403) {
+      return {
+        notFound: false,
+        reason:
+          `${platform} did not allow this profile to be read (HTTP ${upstream}). ` +
+          `That usually means the account is private or restricted. Check the platform is ` +
+          `right for this handle, or add the influencer manually.`,
+        retryable: false,
+      }
+    }
+
+    // Upstream rate limit surfaced through the wrapper.
+    if (upstream === 429) {
+      return {
+        notFound: false,
+        reason:
+          `${platform} is rate limiting the API. This username is fine — wait a moment and retry.`,
+        retryable: true,
+      }
+    }
+
+    return {
+      notFound: false,
+      reason:
+        `The influencer API could not reach ${platform} (HTTP ${status}` +
+        `${upstream ? `, upstream ${upstream}` : ""}). This is a problem with the API or the ` +
+        `platform, not with this username — retrying often works.`,
+      retryable: true,
+    }
+  }
+  if (status === 401 || status === 403) {
+    return {
+      notFound: false,
+      reason: `The influencer API rejected our request (HTTP ${status}). This needs an API key or configuration fix.`,
+      retryable: false,
+    }
+  }
+  return {
+    notFound: false,
+    reason: `The influencer API returned an unexpected HTTP ${status}.`,
+    retryable: true,
+  }
+}
+
 export function getProfileUrl(platform: string, handle: string): string {
   if (!handle || handle === "@" || handle === "") return ""
   const fn = PLATFORM_URL_MAP[platform]

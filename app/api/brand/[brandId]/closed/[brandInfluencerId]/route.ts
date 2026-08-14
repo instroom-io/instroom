@@ -5,13 +5,7 @@ import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import { hasBrandCapability } from "@/lib/permissions"
-
-type ClosedColumn =
-  | "For Order Creation"
-  | "In-Transit"
-  | "Delivered"
-  | "Posted"
-  | "No post"
+import { mapClosedToPipelineFields, type ClosedColumn } from "@/lib/post-tracker-status"
 
 // ✅ Safe JSON parse
 function safeParse(value: string | null) {
@@ -20,94 +14,6 @@ function safeParse(value: string | null) {
     return JSON.parse(value)
   } catch {
     return {}
-  }
-}
-
-// ✅ Strict mapping (no stale data)
-function mapClosedToPipelineFields(
-  closedStatus: ClosedColumn,
-  currentRecord: any
-) {
-  switch (closedStatus) {
-    case "For Order Creation":
-      return {
-        contact_status: "for_order_creation",
-        stage: 5,
-        order_status: "pending",
-
-        shipped_at: null,
-        delivered_at: null,
-
-        content_posted: false,
-        posted_at: null,
-
-        approval_status: "Approved",
-        approval_notes: null,
-      }
-
-    case "In-Transit":
-      return {
-        contact_status: "for_order_creation",
-        stage: 6,
-        order_status: "shipped",
-
-        shipped_at: currentRecord.shipped_at || new Date(),
-        delivered_at: null,
-
-        content_posted: false,
-        posted_at: null,
-
-        approval_status: "Approved",
-      }
-
-    case "Delivered":
-      return {
-        contact_status: "for_order_creation",
-        stage: 7,
-        order_status: "delivered",
-
-        shipped_at: currentRecord.shipped_at || null,
-        delivered_at: currentRecord.delivered_at || new Date(),
-
-        content_posted: false,
-        posted_at: null,
-
-        approval_status: "Approved",
-      }
-
-    case "Posted":
-      return {
-        contact_status: "for_order_creation",
-        stage: 8,
-        order_status: "delivered",
-
-        shipped_at: currentRecord.shipped_at || null,
-        delivered_at: currentRecord.delivered_at || new Date(),
-
-        content_posted: true,
-        posted_at: currentRecord.posted_at || new Date(),
-
-        approval_status: "Approved",
-      }
-
-    case "No post":
-      return {
-        contact_status: "not_interested",
-        stage: 0,
-        order_status: null,
-
-        shipped_at: null,
-        delivered_at: null,
-
-        content_posted: false,
-        posted_at: null,
-
-        approval_status: "Declined",
-        approval_notes: "No content published - exited",
-      }
-
-    default:
-      throw new Error("Invalid closedStatus")
   }
 }
 

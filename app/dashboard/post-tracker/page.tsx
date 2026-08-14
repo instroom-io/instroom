@@ -30,6 +30,7 @@ import { PaidCollabTab } from "@/components/table-sheet/profile-sidebar"
 import { BoardSkeleton } from "@/components/shared/skeletons"
 import { StageDropdown, type StageOption } from "@/components/shared/stage-dropdown"
 import AutoPostDetectionCard from "./AutoPostDetection"
+import { readDroppedPostUrl } from "./DetectedPostsList"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const NICHES    = ["Beauty","Fitness","Lifestyle","Food","Tech","Fashion","Travel"]
@@ -121,10 +122,25 @@ const STAGE_RANK: Record<ClosedColumn, number> = {
 const canQuickMarkNoPost = (stage: ClosedColumn) => STAGE_RANK[stage] >= STAGE_RANK["Delivered"]
 
 // ─── "Posted" requires evidence of a published post ───────────────────────────
-// A manual move to Posted is only allowed when a Post URL exists. Automatic
-// post detection is unaffected: it updates the record server-side and never
-// goes through these user-initiated paths.
+// A manual move to Posted needs proof that a post exists. There are two forms
+// of proof, and either is sufficient:
+//
+//   1. A Post URL entered by hand on the Post tab.
+//   2. A post found by Automatic Post Detection — a real DetectedPost row,
+//      counted per influencer by the closed list route.
+//
+// Requiring (1) even when (2) exists was blocking a legitimately posted
+// influencer: detection had already confirmed the post, but the stage move was
+// refused because nobody had re-typed the link the system already had.
+//
+// Note this keys on detection RESULTS, not on the detection toggle. Having
+// Automatic Post Detection switched on is not itself evidence — with the
+// feature enabled but nothing found yet, the Post URL requirement still holds.
 const hasPostUrl = (inf: Pick<ClosedInfluencer, "postUrl">) => Boolean(inf.postUrl?.trim())
+const hasDetectedPost = (inf: Pick<ClosedInfluencer, "detectedPostCount">) =>
+  (inf.detectedPostCount ?? 0) > 0
+const hasPostEvidence = (inf: Pick<ClosedInfluencer, "postUrl" | "detectedPostCount">) =>
+  hasPostUrl(inf) || hasDetectedPost(inf)
 
 // Forward flow
 const NEXT_STAGE: Record<ClosedColumn, ClosedColumn | null> = {
@@ -237,10 +253,12 @@ function PostUrlRequiredDialog({ count, onGoToPostDetails, onCancel }: {
           <div className="flex-1">
             <h2 id="post-url-required-title" className="text-base font-semibold text-gray-900">Cannot Move to Posted</h2>
             <p className="text-sm text-gray-600 mt-2 leading-relaxed">
-              A Post URL is required before manually moving {count > 1 ? `these ${count} influencers` : "this influencer"} to the Posted stage.
+              The Posted stage needs proof of a published post, and {count > 1 ? `these ${count} influencers have` : "this influencer has"} neither
+              a Post URL nor a post found by Automatic Post Detection.
             </p>
             <p className="text-sm text-gray-600 mt-2 leading-relaxed">
-              Please add the post link first, or use Automatic Post Detection and run a check to have the stage updated for you.
+              Add the post link, or run a check in Automatic Post Detection — once it finds a matching
+              post, this influencer can move to Posted without a link.
             </p>
           </div>
         </div>
@@ -489,6 +507,13 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
   const [drawerToast, setDT]        = useState("")
   const [savingPost, setSavingPost] = useState(false)
   const postUrlRef = useRef<HTMLInputElement>(null)
+  // How the Post URL currently in the field got there. Only drives the hint
+  // under the input; the value itself is ordinary form state either way.
+  const [postUrlOrigin, setPostUrlOrigin] = useState<"stored" | "detected" | "dropped">("stored")
+  // True while a drag is over the field, for the drop affordance.
+  const [urlDropActive, setUrlDropActive] = useState(false)
+  // Mirrors the Post URL currently in the form — see handleDetectedPost.
+  const postUrlValueRef = useRef("")
   const showToast = (msg: string) => { setDT(msg); setTimeout(()=>setDT(""),2600) }
 
   // Land the user directly on the Post URL field when sent here from the
@@ -524,6 +549,87 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
     scriptStatus: inf.scriptStatus || "", contentStatus: inf.contentStatus || "",
     internalRating: inf.internalRating ? String(inf.internalRating) : "",
   })
+  postUrlValueRef.current = postData.postUrl
+
+  // ── Shopify push flow (self-contained — doesn't depend on the manual
+  // Order tab fields above, whose Save button has no handler wired up) ──────
+  const isGifting = campaignType === "gifting"
+  const savedShippingAddress = (() => {
+    try { return JSON.parse(inf.productDetails || "{}")?.shippingAddress || null } catch { return null }
+  })()
+  const [shopifyConnected, setShopifyConnected] = useState(false)
+  const [shopifyProducts, setShopifyProducts] = useState<any[]>([])
+  const [shopifyLoading, setShopifyLoading] = useState(false)
+  const [shopifyForm, setShopifyForm] = useState({
+    variantId: "", quantity: "1",
+    firstName: savedShippingAddress?.first_name || "", lastName: savedShippingAddress?.last_name || "",
+    address1: savedShippingAddress?.address1 || "", address2: savedShippingAddress?.address2 || "",
+    city: savedShippingAddress?.city || "", province: savedShippingAddress?.province || "",
+    zip: savedShippingAddress?.zip || "", country: savedShippingAddress?.country || "", phone: savedShippingAddress?.phone || "",
+  })
+  const [shopifySubmitting, setShopifySubmitting] = useState(false)
+  const [shopifyError, setShopifyError] = useState("")
+  const [shopifyOrderResult, setShopifyOrderResult] = useState<any>(null)
+
+  useEffect(() => {
+    if (!brandId) return
+    fetch(`/api/settings/integrations?brandId=${brandId}`)
+      .then(r => r.json())
+      .then(json => setShopifyConnected(!!json?.integrations?.shopify?.connected))
+      .catch(() => {})
+  }, [brandId])
+
+  useEffect(() => {
+    if (!shopifyConnected || !brandId) return
+    setShopifyLoading(true)
+    fetch(`/api/brand/${brandId}/integrations/shopify/products`)
+      .then(r => r.json())
+      .then(json => setShopifyProducts(json?.products || []))
+      .catch(() => {})
+      .finally(() => setShopifyLoading(false))
+  }, [shopifyConnected, brandId])
+
+  const shopifyVariants = shopifyProducts.flatMap((p: any) =>
+    (p.variants || []).map((v: any) => ({ ...v, productTitle: p.title as string }))
+  )
+  const selectedShopifyVariant = shopifyVariants.find((v: any) => String(v.id) === shopifyForm.variantId)
+  const shopifyQuantity = parseInt(shopifyForm.quantity, 10) || 1
+  const shopifyAddressComplete = !!(shopifyForm.address1 && shopifyForm.city && shopifyForm.zip && shopifyForm.country)
+
+  const handleCreateShopifyOrder = async () => {
+    if (!brandId || !shopifyForm.variantId || !shopifyAddressComplete) return
+    setShopifySubmitting(true)
+    setShopifyError("")
+    try {
+      const res = await fetch(`/api/brand/${brandId}/pipeline/${inf.id}/shopify-order`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          variantId: shopifyForm.variantId,
+          quantity: shopifyQuantity,
+          shippingAddress: {
+            first_name: shopifyForm.firstName || undefined,
+            last_name: shopifyForm.lastName || undefined,
+            address1: shopifyForm.address1,
+            address2: shopifyForm.address2 || undefined,
+            city: shopifyForm.city,
+            province: shopifyForm.province || undefined,
+            zip: shopifyForm.zip,
+            country: shopifyForm.country,
+            phone: shopifyForm.phone || undefined,
+          },
+        }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json?.error || "Failed to create order")
+      setShopifyOrderResult(json)
+      showToast("Shopify order created")
+    } catch (e: any) {
+      setShopifyError(e?.message || "Failed to create order")
+    } finally {
+      setShopifySubmitting(false)
+    }
+  }
 
   const handleStageChange = async (newStage: ClosedColumn) => {
     const ok = await onColumnChange(inf.id, newStage)
@@ -537,7 +643,39 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
     setSavingPost(true)
     const ok = await onPostUrlChange(inf.id, postData.postUrl)
     setSavingPost(false)
+    if (ok) setPostUrlOrigin("stored")
     showToast(ok ? "Post details saved" : "Failed to save post details")
+  }
+
+  // ── Automatic Post Detection → Post URL ───────────────────────────────────
+  // When detection has found a post, offer that URL to the field. It fills an
+  // EMPTY field only: a URL already stored on the record, or one the user is in
+  // the middle of typing, is never overwritten. The value is put into the form,
+  // not written to the database — saving stays on the existing Save button, so
+  // the manual flow is untouched.
+  //
+  // The current value is read through a ref rather than from `postData`, so the
+  // callback identity stays stable — it is a dependency of the detection card's
+  // notify effect, and a new function every keystroke would re-run it.
+  const handleDetectedPost = useCallback((post: { postUrl: string }) => {
+    if (postUrlValueRef.current.trim()) return
+    setPostData(d => ({ ...d, postUrl: post.postUrl }))
+    setPostUrlOrigin("detected")
+  }, [])
+
+  // Drop a detected post (or any dragged link) onto the field. Reuses the
+  // reader that owns the drag payload format, so the two stay in step.
+  const handleUrlDrop = (e: React.DragEvent<HTMLElement>) => {
+    e.preventDefault()
+    setUrlDropActive(false)
+    const url = readDroppedPostUrl(e.dataTransfer)
+    if (!url) {
+      showToast("That drop contained no post link")
+      return
+    }
+    setPostData(d => ({ ...d, postUrl: url }))
+    setPostUrlOrigin("dropped")
+    postUrlRef.current?.focus()
   }
 
   return (
@@ -685,6 +823,84 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
                 <div className="pfg"><div className="pfl">Currency</div><input className="pfi" value={orderData.currency} onChange={e => setOrderData(d => ({ ...d, currency: e.target.value }))} /></div>
               </div>
               <div className="pfg"><div className="pfl">Deliverables</div><input className="pfi" value={orderData.deliverables} onChange={e => setOrderData(d => ({ ...d, deliverables: e.target.value }))} placeholder="Deliverables" /></div>
+
+              {/* ── Shopify order creation — self-contained, own submit path ── */}
+              <div style={{ borderTop: "1px solid #eee", marginTop: 4, paddingTop: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#111", marginBottom: 8 }}>🛍 Shopify</div>
+                {!shopifyConnected ? (
+                  <div style={{ fontSize: 12, color: "#667085", background: "#f9fafb", border: "1px solid #eee", borderRadius: 8, padding: "10px 12px" }}>
+                    Connect Shopify in <a href="/dashboard/settings/integrations" style={{ color: "#1fae5b", fontWeight: 600 }}>Settings → Integrations</a> to create real orders from here.
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    <div className="pfg">
+                      <div className="pfl">Product</div>
+                      <select className="pfi" value={shopifyForm.variantId} onChange={e => setShopifyForm(f => ({ ...f, variantId: e.target.value }))} disabled={shopifyLoading}>
+                        <option value="">{shopifyLoading ? "Loading products…" : "Select a product…"}</option>
+                        {shopifyVariants.map((v: any) => (
+                          <option key={v.id} value={v.id}>
+                            {v.productTitle}{v.title && v.title !== "Default Title" ? ` — ${v.title}` : ""} (${v.price})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="pfg"><div className="pfl">Quantity</div><input type="number" min={1} className="pfi" value={shopifyForm.quantity} onChange={e => setShopifyForm(f => ({ ...f, quantity: e.target.value }))} /></div>
+                    <div className="pfr">
+                      <div className="pfg"><div className="pfl">First Name</div><input className="pfi" value={shopifyForm.firstName} onChange={e => setShopifyForm(f => ({ ...f, firstName: e.target.value }))} /></div>
+                      <div className="pfg"><div className="pfl">Last Name</div><input className="pfi" value={shopifyForm.lastName} onChange={e => setShopifyForm(f => ({ ...f, lastName: e.target.value }))} /></div>
+                    </div>
+                    <div className="pfg"><div className="pfl">Address</div><input className="pfi" value={shopifyForm.address1} onChange={e => setShopifyForm(f => ({ ...f, address1: e.target.value }))} placeholder="Address line 1" /></div>
+                    <div className="pfg"><input className="pfi" value={shopifyForm.address2} onChange={e => setShopifyForm(f => ({ ...f, address2: e.target.value }))} placeholder="Address line 2 (optional)" /></div>
+                    <div className="pfr">
+                      <div className="pfg"><div className="pfl">City</div><input className="pfi" value={shopifyForm.city} onChange={e => setShopifyForm(f => ({ ...f, city: e.target.value }))} /></div>
+                      <div className="pfg"><div className="pfl">Province/State</div><input className="pfi" value={shopifyForm.province} onChange={e => setShopifyForm(f => ({ ...f, province: e.target.value }))} /></div>
+                    </div>
+                    <div className="pfr">
+                      <div className="pfg"><div className="pfl">ZIP/Postal</div><input className="pfi" value={shopifyForm.zip} onChange={e => setShopifyForm(f => ({ ...f, zip: e.target.value }))} /></div>
+                      <div className="pfg"><div className="pfl">Country</div><input className="pfi" value={shopifyForm.country} onChange={e => setShopifyForm(f => ({ ...f, country: e.target.value }))} placeholder="US" /></div>
+                    </div>
+                    <div className="pfg"><div className="pfl">Phone (optional)</div><input className="pfi" value={shopifyForm.phone} onChange={e => setShopifyForm(f => ({ ...f, phone: e.target.value }))} /></div>
+
+                    {selectedShopifyVariant && (
+                      <div style={{ background: "#f9fafb", border: "1px solid #eee", borderRadius: 8, padding: "10px 12px", fontSize: 12, display: "flex", flexDirection: "column", gap: 4 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between" }}>
+                          <span>Product price</span><span>${(parseFloat(selectedShopifyVariant.price) * shopifyQuantity).toFixed(2)}</span>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", color: "#667085" }}>
+                          <span>Discount</span>
+                          <span>{isGifting ? "Free — gifting" : "Applied automatically if a discount code is assigned"}</span>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, borderTop: "1px solid #eee", paddingTop: 4 }}>
+                          <span>Total</span><span>{isGifting ? "$0.00" : "Calculated by Shopify"}</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {shopifyError && <div style={{ fontSize: 12, color: "#dc2626" }}>{shopifyError}</div>}
+
+                    {shopifyOrderResult ? (
+                      <div style={{ background: "#f0faf5", border: "1px solid #bbf7d0", borderRadius: 8, padding: "10px 12px", fontSize: 12, display: "flex", flexDirection: "column", gap: 4 }}>
+                        <div style={{ fontWeight: 700, color: "#166534" }}>Order {shopifyOrderResult.orderNumber} created</div>
+                        <div>
+                          Total: {shopifyOrderResult.priceBreakdown?.total ? `$${shopifyOrderResult.priceBreakdown.total}` : "—"}
+                          {shopifyOrderResult.priceBreakdown?.discountCode ? ` (code: ${shopifyOrderResult.priceBreakdown.discountCode})` : ""}
+                        </div>
+                        <a href={shopifyOrderResult.adminUrl} target="_blank" rel="noreferrer" style={{ color: "#1fae5b", fontWeight: 600 }}>View in Shopify admin →</a>
+                      </div>
+                    ) : (
+                      <button
+                        className="btn-primary"
+                        disabled={!shopifyForm.variantId || !shopifyAddressComplete || shopifySubmitting}
+                        onClick={handleCreateShopifyOrder}
+                        style={{ alignSelf: "flex-end", opacity: shopifySubmitting ? 0.6 : 1 }}
+                      >
+                        {shopifySubmitting ? "Creating…" : "Create Order in Shopify"}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
               <div
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8,
@@ -701,8 +917,49 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
           {/* ════ POST TAB ════ */}
           {profileTab === 2 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {brandId && <AutoPostDetectionCard brandId={brandId} biId={inf.id} subscriptionStatus={subscriptionStatus} />}
-              <div className="pfg"><div className="pfl">Post URL</div><input ref={postUrlRef} className="pfi" value={postData.postUrl} onChange={e => setPostData(d => ({ ...d, postUrl: e.target.value }))} placeholder="Post URL" /></div>
+              {brandId && (
+                <AutoPostDetectionCard
+                  brandId={brandId}
+                  biId={inf.id}
+                  subscriptionStatus={subscriptionStatus}
+                  onDetectedPost={handleDetectedPost}
+                />
+              )}
+              {/* Post URL — typed, auto-filled from detection, or dropped from
+                  the detected posts list above. All three end up as the same
+                  form value and are saved by the same Save button. */}
+              <div
+                className="pfg"
+                onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; setUrlDropActive(true) }}
+                onDragEnter={e => { e.preventDefault(); setUrlDropActive(true) }}
+                onDragLeave={e => {
+                  // Ignore the leave events fired while crossing child nodes.
+                  if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+                  setUrlDropActive(false)
+                }}
+                onDrop={handleUrlDrop}
+              >
+                <div className="pfl">Post URL</div>
+                <input
+                  ref={postUrlRef}
+                  className="pfi"
+                  style={urlDropActive ? { borderColor: "#1FAE5B", background: "#1FAE5B0D" } : undefined}
+                  value={postData.postUrl}
+                  onChange={e => { setPostData(d => ({ ...d, postUrl: e.target.value })); setPostUrlOrigin("stored") }}
+                  placeholder="Paste a link, or drag a detected post here"
+                />
+                {urlDropActive ? (
+                  <div className="text-[10px] text-[#0F6B3E] mt-1">Drop to use this post URL</div>
+                ) : postUrlOrigin === "detected" ? (
+                  <div className="text-[10px] text-gray-400 mt-1">
+                    Filled from Automatic Post Detection — Save to keep it.
+                  </div>
+                ) : postUrlOrigin === "dropped" ? (
+                  <div className="text-[10px] text-gray-400 mt-1">
+                    Dropped from a detected post — Save to keep it.
+                  </div>
+                ) : null}
+              </div>
               <div className="pfr">
                 <div className="pfg"><div className="pfl">Posted At</div><input type="date" className="pfi" value={postData.postedAt} onChange={e => setPostData(d => ({ ...d, postedAt: e.target.value }))} /></div>
                 <div className="pfg"><div className="pfl">Internal Rating</div>
@@ -735,7 +992,7 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
                   padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
                 }}
               >
-                <button className="btn-secondary" onClick={() => setPostData(d => ({ ...d, postUrl: inf.postUrl || "" }))}>Cancel</button>
+                <button className="btn-secondary" onClick={() => { setPostData(d => ({ ...d, postUrl: inf.postUrl || "" })); setPostUrlOrigin("stored") }}>Cancel</button>
                 <button className="btn-primary" onClick={handleSavePost} disabled={savingPost}>{savingPost ? "Saving…" : "Save"}</button>
               </div>
             </div>
@@ -915,9 +1172,9 @@ function PostTrackerContent() {
       return false
     }
     const inf = data.find(d=>d.id===id)
-    // A manual move to Posted needs evidence of a published post. Automatic
-    // detection writes the record server-side and never runs through here.
-    if (col === "Posted" && inf && !hasPostUrl(inf)) {
+    // A manual move to Posted needs evidence of a published post — either a
+    // Post URL or a post already found by Automatic Post Detection.
+    if (col === "Posted" && inf && !hasPostEvidence(inf)) {
       setPostUrlBlocked([inf])
       return false
     }
@@ -1006,11 +1263,11 @@ function PostTrackerContent() {
   const runBulkStageMove = async (col: ClosedColumn) => {
     const candidates = selectedInfluencers.filter(d => d.closedStatus !== col)
 
-    // Same rule as the single-row paths: no Post URL, no manual move to Posted.
-    // If any selected row is missing one, block the whole batch and name them,
-    // rather than silently moving a subset.
+    // Same rule as the single-row paths: no post evidence, no manual move to
+    // Posted. If any selected row has neither a Post URL nor a detected post,
+    // block the whole batch and name them, rather than silently moving a subset.
     if (col === "Posted") {
-      const missing = candidates.filter(d => !hasPostUrl(d))
+      const missing = candidates.filter(d => !hasPostEvidence(d))
       if (missing.length > 0) {
         setPostUrlBlocked(missing)
         return
@@ -1195,12 +1452,14 @@ function PostTrackerContent() {
         <div className="relative flex-1 min-w-[200px] max-w-xs">
           <IconSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search influencer..."
+            data-tour="post-tracker-search"
             className="w-full pl-9 pr-3 h-9 border border-[#0F6B3E]/20 rounded-lg outline-none focus:ring-2 focus:ring-[#1FAE5B] text-sm"/>
         </div>
 
         {/* Filters */}
         <div className="relative">
           <button onClick={()=>setShowFilterPanel(!showFilterPanel)}
+            data-tour="post-tracker-filters"
             className={`h-9 px-3 rounded-lg text-sm flex items-center gap-1.5 border transition-colors ${hasActiveFilters?"bg-[#1FAE5B] text-white border-[#1FAE5B]":"border-[#0F6B3E]/20 hover:border-[#0F6B3E]/40"}`}>
             <IconFilter size={15}/> Filters
             {activeFilterCount > 0 && (
@@ -1259,7 +1518,7 @@ function PostTrackerContent() {
 
         {/* View toggle */}
 {/* View toggle */}
-<div className="inline-flex h-9 items-center rounded-lg border border-[#0F6B3E]/20 bg-white p-1">
+<div className="inline-flex h-9 items-center rounded-lg border border-[#0F6B3E]/20 bg-white p-1" data-tour="post-tracker-view-toggle">
   <button
     onClick={() => {
       setView("Board")
@@ -1299,13 +1558,16 @@ function PostTrackerContent() {
             <div className="flex gap-4 min-w-max">
 
               {/* Main columns */}
-              {COLUMNS.filter(c=>c.key!=="No post").map(col => {
+              {COLUMNS.filter(c=>c.key!=="No post").map((col, colIndex) => {
                 const items = getItemsByColumn(col.key)
                 return (
                   <div key={col.key} className="w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0" style={{ scrollSnapAlign: "start" }}>
                     <DroppableColumn id={col.key}>
                       {/* ── Column header — identical structure to pipeline ── */}
-                      <div className={`${col.color} text-white rounded-lg px-3 py-2 text-sm font-semibold flex items-center justify-between`}>
+                      <div
+                        className={`${col.color} text-white rounded-lg px-3 py-2 text-sm font-semibold flex items-center justify-between`}
+                        data-tour={colIndex===0?"post-tracker-stage-columns":undefined}
+                      >
                         <span
                           onClick={() => handleColumnClick(col)}
                           className="flex-1 cursor-pointer hover:opacity-90 transition-opacity truncate mr-2"

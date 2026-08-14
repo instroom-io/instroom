@@ -97,6 +97,11 @@ export function BrandSelector() {
             const newParams = new URLSearchParams()
             newParams.set("brandId", data.brands[0].id)
             router.push(`${pathname}?${newParams.toString()}`)
+          } else if (pathname !== "/dashboard/brand/create") {
+            // No workspace yet — send them straight into setup instead of
+            // making them find the "Create Workspace" button themselves.
+            // Covers post-payment redirects and any other brandless landing.
+            router.push("/dashboard/brand/create")
           }
         }
       } catch (error) {
@@ -436,6 +441,7 @@ export function BrandSelector() {
       {/* Trigger — styled for white topbar */}
       <button
         ref={triggerRef}
+        data-tour="brand-selector"
         onClick={handleToggleDropdown}
         className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors"
       >

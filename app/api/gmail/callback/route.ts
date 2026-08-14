@@ -12,29 +12,29 @@ export async function GET(req: NextRequest) {
   // ── User denied access ────────────────────────────────────────────────────
   if (error) {
     return NextResponse.redirect(
-      new URL(`/inbox?gmailError=${encodeURIComponent(error)}`, req.url)
+      new URL(`/dashboard/inbox?gmailError=${encodeURIComponent(error)}`, req.url)
     )
   }
 
   if (!code || !stateParam) {
     return NextResponse.redirect(
-      new URL("/inbox?gmailError=missing_params", req.url)
+      new URL("/dashboard/inbox?gmailError=missing_params", req.url)
     )
   }
 
   // ── Decode state ──────────────────────────────────────────────────────────
   let userId: string
-  let returnTo: string = "/inbox"
+  let returnTo: string = "/dashboard/inbox"
 
   try {
     const decoded = JSON.parse(
       Buffer.from(stateParam, "base64url").toString("utf-8")
     )
     userId = decoded.userId
-    returnTo = decoded.returnTo || "/inbox"
+    returnTo = decoded.returnTo || "/dashboard/inbox"
   } catch {
     return NextResponse.redirect(
-      new URL("/inbox?gmailError=invalid_state", req.url)
+      new URL("/dashboard/inbox?gmailError=invalid_state", req.url)
     )
   }
 
@@ -74,7 +74,7 @@ export async function GET(req: NextRequest) {
       console.error("Gmail token exchange failed:", tokenData)
       return NextResponse.redirect(
         new URL(
-          `/inbox?gmailError=${encodeURIComponent(tokenData.error_description || "token_exchange_failed")}`,
+          `/dashboard/inbox?gmailError=${encodeURIComponent(tokenData.error_description || "token_exchange_failed")}`,
           req.url
         )
       )
@@ -97,7 +97,7 @@ export async function GET(req: NextRequest) {
   } catch (err) {
     console.error("Gmail OAuth callback error:", err)
     return NextResponse.redirect(
-      new URL("/inbox?gmailError=network_error", req.url)
+      new URL("/dashboard/inbox?gmailError=network_error", req.url)
     )
   }
 
@@ -139,12 +139,17 @@ export async function GET(req: NextRequest) {
   } catch (err) {
     console.error("Failed to save Gmail tokens:", err)
     return NextResponse.redirect(
-      new URL("/inbox?gmailError=db_error", req.url)
+      new URL("/dashboard/inbox?gmailError=db_error", req.url)
     )
   }
 
   // ── Done — redirect back to inbox ─────────────────────────────────────────
-  return NextResponse.redirect(
-    new URL(`${returnTo}?gmailConnected=1`, req.url)
-  )
+  // Built via URL/searchParams rather than string concatenation: returnTo
+  // already carries `?brandId=...` once a workspace is selected, and naively
+  // appending `?gmailConnected=1` produced a second `?` (…brandId=X?gmailConnected=1)
+  // instead of `&` — brandId then failed to parse, and the page fell back to
+  // "no workspace selected" until the user manually reselected one.
+  const successUrl = new URL(returnTo, req.url)
+  successUrl.searchParams.set("gmailConnected", "1")
+  return NextResponse.redirect(successUrl)
 }

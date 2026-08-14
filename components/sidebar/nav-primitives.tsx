@@ -80,17 +80,20 @@ export function SidebarNavItem({
   icon: Icon,
   active,
   onNavigate,
+  tourId,
 }: {
   href: string
   label: string
   icon: React.ComponentType<{ size?: number | string; strokeWidth?: number; className?: string }>
   active: boolean
   onNavigate?: () => void
+  tourId?: string
 }) {
   return (
     <Link
       href={href}
       onClick={onNavigate}
+      data-tour={tourId}
       aria-current={active ? "page" : undefined}
       className={cn(
         "group relative flex items-center rounded-[var(--sb-item-radius)]",
@@ -172,9 +175,19 @@ export function SidebarUserCard({
    Shared by both <Sidebar> instances so background, font and the
    single-scroll-region rule are defined once.
    ------------------------------------------------------------------------ */
+// One continuous green surface. The positioner and the panel it contains carry
+// the SAME background, so the `inset` variant's p-3 gutter is indistinguishable
+// from the panel and the rail reads as a single sheet.
+//
+// shadow-none! is what keeps it that way. The `inset` variant puts shadow-sm on
+// the panel, which casts onto the gutter and turns that 12px band into a
+// visibly darker strip — a seam that looks like a second container, most
+// obviously down the right edge. The important flag is required: the variant's
+// rule is a group-data selector that outranks a plain utility.
 export const SIDEBAR_ROOT_CLASS =
   "border-none bg-[var(--sb-bg)] font-[family-name:var(--font-inter)] text-white " +
-  "[&>[data-sidebar=sidebar]]:overflow-hidden [&>[data-sidebar=sidebar]]:bg-[var(--sb-bg)]"
+  "[&>[data-sidebar=sidebar]]:overflow-hidden [&>[data-sidebar=sidebar]]:bg-[var(--sb-bg)] " +
+  "[&>[data-sidebar=sidebar]]:shadow-none!"
 
 // px-5/py-5 = 20px all round: enough for the 40px logo to breathe without
 // making the rail header tall. pb-5 is what sets the gap between the logo and

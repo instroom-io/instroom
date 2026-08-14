@@ -141,6 +141,7 @@ export function PortalSidebar({
                   icon={item.icon}
                   active={normalisePath(item.href) === activeHref}
                   onNavigate={handleNavigate}
+                  tourId={item.tourId}
                 />
               ))}
             </nav>

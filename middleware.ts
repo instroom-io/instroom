@@ -130,6 +130,15 @@ export async function middleware(req: any) {
       return redirectToLogin(req);
     }
 
+    // Onboarding happens BEFORE a subscription necessarily exists — a
+    // brand-new signup has no plan yet, and onboarding's own page already
+    // checks subscription status itself once setup is done, branching to
+    // /pricing or /dashboard from there. Gating it here would intercept
+    // every new user before they ever reach onboarding at all.
+    if (pathname.startsWith("/onboarding")) {
+      return NextResponse.next();
+    }
+
     const brandId = searchParams.get("brandId");
     const cacheKey = brandId ? `${token.sub}:${brandId}` : token.sub;
 
@@ -142,9 +151,16 @@ export async function middleware(req: any) {
       return NextResponse.redirect(new URL("/pricing", req.url));
     }
 
-    // Cache miss - resolve and cache result
+    // Cache miss - resolve and cache result. Only cache a `true` result —
+    // caching `false` for the full TTL would trap someone who just
+    // subscribed (webhook delivery can take well over a minute) in a stale
+    // denial for up to 5 minutes after their subscription is actually
+    // active. A denied check is cheap and rare enough to just re-verify
+    // against the DB every time instead.
     const hasValidSubscription = await checkSubscriptionAccess(token.sub, brandId);
-    setCachedSubscription(cacheKey, hasValidSubscription);
+    if (hasValidSubscription) {
+      setCachedSubscription(cacheKey, true);
+    }
 
     if (!hasValidSubscription) {
       return NextResponse.redirect(new URL("/pricing", req.url));

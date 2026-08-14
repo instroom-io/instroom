@@ -61,6 +61,14 @@ export interface ClosedInfluencer {
 
   postUrl: string | null
   postedAt: string | null
+  /**
+   * Number of posts Automatic Post Detection has found for this influencer.
+   * Counted from DetectedPost by the closed list route. 0 when detection has
+   * found nothing yet or was never enabled.
+   */
+  detectedPostCount: number
+  /** When detection last found a post, or null if it never has. */
+  latestDetectedAt: string | null
   likesCount: number
   commentsCount: number
   engagementCount: number

@@ -147,12 +147,14 @@ export function DiscordCta({
   icon,
   children,
   className = "",
+  dataTour,
 }: {
   href: string
   size?: "lg" | "md"
   icon?: ReactNode
   children: ReactNode
   className?: string
+  dataTour?: string
 }) {
   const sizing =
     size === "lg" ? "h-11 rounded-xl px-5 text-[14px]" : "h-10 rounded-lg px-4 text-[13px]"
@@ -160,6 +162,7 @@ export function DiscordCta({
   return (
     <a
       href={href}
+      data-tour={dataTour}
       className={`inline-flex items-center gap-2 bg-[#5865F2] font-medium text-white transition-colors hover:bg-[#4752C4] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5865F2] ${sizing} ${className}`}
     >
       {icon}

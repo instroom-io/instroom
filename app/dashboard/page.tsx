@@ -19,8 +19,8 @@ function DashboardRedirect() {
 
     const brandId = searchParams.get("brandId")
     const target = brandId
-      ? `/dashboard/influencer-discovery?brandId=${brandId}`
-      : "/dashboard/influencer-discovery"
+      ? `/dashboard/manage-influencers?brandId=${brandId}`
+      : "/dashboard/manage-influencers"
 
     router.replace(target)
   }, [status, router, searchParams])

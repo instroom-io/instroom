@@ -30,11 +30,19 @@ const ADDON_PRICE = 19
 export default function AutoPostDetectionCard({
   brandId,
   biId,
+  onDetectedPost,
 }: {
   brandId: string
   biId: string
   /** Accepted for call-site compatibility; the gate is now the add-on, not the plan. */
   subscriptionStatus?: string
+  /**
+   * Called with the newest detected post whenever detection has one — on load
+   * and after "Check now". The Post tab uses it to offer that URL to the Post
+   * URL field. Purely a notification: this card performs no writes because of
+   * it, and the detection flow is unchanged when no handler is passed.
+   */
+  onDetectedPost?: (post: DetectedPost) => void
 }) {
   const [loading, setLoading] = useState(true)
   const [addonActive, setAddonActive] = useState<boolean | null>(null)
@@ -78,6 +86,19 @@ export default function AutoPostDetectionCard({
   useEffect(() => {
     load()
   }, [load])
+
+  // Hand the newest detected post up to the Post tab. `posts` is already
+  // newest-first from the API, so [0] is the latest detection — no extra
+  // request, no second source of truth. Keyed on the id so a poll that returns
+  // the same post doesn't re-notify.
+  const newest = posts[0]
+  const notifiedRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!newest || !onDetectedPost) return
+    if (notifiedRef.current === newest.id) return
+    notifiedRef.current = newest.id
+    onDetectedPost(newest)
+  }, [newest, onDetectedPost])
 
   /**
    * Leave for the app's existing Pricing page. `returnTo` carries the exact
@@ -351,13 +372,17 @@ export default function AutoPostDetectionCard({
                 )}
               </div>
 
-              {/* Scheduled background checks are switched off for now, so say
-                  so plainly rather than letting an enabled toggle imply the
-                  system is watching on its own. */}
+              {/* Background checks are live again — driven by server request
+                  traffic rather than a cron schedule (lib/post-tracker/scheduler.ts),
+                  so this no longer has to tell the user the system is asleep.
+                  The wording avoids promising a guaranteed clock tick, because
+                  the trigger is traffic-driven: "about every 5 minutes" is what
+                  it does on an app in use, which is when detection matters. */}
               {enabled && (
                 <div className="text-[10px] text-gray-400">
-                  Scheduled background checks are paused. Your hashtags and mentions are saved — use
-                  &ldquo;Check now&rdquo; to run a detection pass.
+                  Automatic background checks are active — your hashtags and mentions are polled
+                  about every 5 minutes, with no need to keep this page open. Use &ldquo;Check
+                  now&rdquo; to run a pass immediately.
                 </div>
               )}
 

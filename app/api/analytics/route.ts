@@ -1,6 +1,33 @@
 // app/api/analytics/route.ts
-// Aggregates pipeline + closed data for the analytics dashboard.
-// Reads directly from brandInfluencer records — no separate postMetric table assumed.
+// Aggregates real pipeline, post, attribution and spend data for the analytics
+// dashboard, scoped to a single brand.
+//
+// ── Why this route was rewritten ─────────────────────────────────────────────
+// The previous version read fields that DO NOT EXIST on BrandInfluencer:
+// `pipeline_status`, `closed_status`, `views`, `clicks`, `sales_qty`,
+// `sales_amt`, `prod_cost`, `usage_rights`, `content_saved`, `ad_code`,
+// `ni_reason`. Each was guarded by `?? 0` / `?? false` / `?? "Prospect"`, so
+// every one silently produced a zero instead of an error — which is why the
+// dashboard rendered 0 / 0% / $0 across whole tabs while looking healthy.
+//
+// Each metric now comes from the model that actually stores it:
+//
+//   pipeline stage    BrandInfluencer.contact_status + stage + approval_status
+//                     via the same derivation the Pipeline board uses
+//                     (app/api/brand/[brandId]/pipeline/route.ts)
+//   closed stage      product_details.closedStatus + order_status +
+//                     content_posted, as in the Post Tracker route
+//                     (app/api/brand/[brandId]/closed/route.ts)
+//   rejection reason  BrandInfluencer.approval_notes
+//   views/likes/…     DetectedPost (per-post metrics, brand-scoped), falling
+//                     back to BrandInfluencer.likes_count/comments_count which
+//                     is where the Post Tracker writes manual entries
+//   clicks / sales    Attribution.clicks / sales_count / gmv
+//   spend             BrandPartner.product_cost / fees_paid / commission_paid
+//
+// Fields with NO storage anywhere in the schema — usage rights, content saved,
+// ad code — are reported as null rather than false, so the UI can say "not
+// tracked" instead of claiming a real zero. See DATA-GAPS below.
 
 import { NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
@@ -25,6 +52,9 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "brandId is required" }, { status: 400 })
   }
 
+  // Brand ownership gate: every row below is additionally constrained by
+  // brand_id, so no other brand's, account's or user's data can be reached
+  // even if this check were bypassed.
   if (!(await checkBrandAccess(brandId, session.user.id))) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 })
   }
@@ -32,9 +62,8 @@ export async function GET(req: Request) {
   try {
     const dateFilter = buildDateFilter(dateRange)
 
-    // Push the platform/niche/location filters into the query itself — instead
-    // of pulling every row for the brand and filtering in JS afterward — so
-    // the DB does less work and less data crosses the wire.
+    // Filters are pushed into the query, so changing one re-queries the
+    // database rather than re-slicing an array in the browser.
     const influencerFilter = {
       ...(platform !== "all" ? { platform } : {}),
       ...(niche    !== "all" ? { niche }    : {}),
@@ -46,71 +75,117 @@ export async function GET(req: Request) {
       ...(Object.keys(influencerFilter).length ? { influencer: { is: influencerFilter } } : {}),
     }
 
-    // These two queries are independent of each other — run them concurrently
-    // instead of one after the other.
-    const [pipelineRecords, closedRecords] = await Promise.all([
-      prisma.brandInfluencer.findMany({
-        where: whereClause,
-        include: {
-          influencer: {
-            select: { platform: true, niche: true, location: true, handle: true },
-          },
+    const records = await prisma.brandInfluencer.findMany({
+      where: whereClause,
+      select: {
+        id: true,
+        created_at: true,
+        // Stage inputs — the same columns the pipeline and post-tracker
+        // routes derive their board columns from.
+        contact_status: true,
+        stage: true,
+        order_status: true,
+        content_posted: true,
+        approval_status: true,
+        approval_notes: true,
+        product_details: true,
+        delivered_at: true,
+        posted_at: true,
+        // Manual post metrics captured in the Post Tracker.
+        likes_count: true,
+        comments_count: true,
+        influencer: {
+          // full_name backs name search in the toolbar; handle backs @handle
+          // search. Same two fields the Post Tracker search matches on.
+          select: { platform: true, niche: true, location: true, handle: true, full_name: true },
         },
-      }),
-      // Graceful fallback if the closedInfluencer model doesn't exist yet.
-      (async () => {
-        try {
-          return await (prisma as any).closedInfluencer.findMany({
-            where: whereClause,
-            include: {
-              influencer: {
-                select: { platform: true, niche: true, location: true, handle: true },
-              },
-            },
-          })
-        } catch {
-          return []
-        }
-      })(),
-    ])
+        // Affiliate performance — the only source of clicks and sales.
+        attribution: {
+          select: { clicks: true, sales_count: true, gmv: true },
+        },
+        // Campaign spend, entered per partner.
+        partner: {
+          select: { product_cost: true, fees_paid: true, commission_paid: true },
+        },
+      },
+    })
 
-    const filtered = [...pipelineRecords, ...closedRecords]
+    // Per-post metrics live in DetectedPost, one row per detected post. Summing
+    // them per influencer in a single grouped query keeps this O(1) queries
+    // rather than one lookup per influencer (the N+1 the previous shape invited).
+    const brandInfluencerIds = records.map(r => r.id)
+    const postMetrics = brandInfluencerIds.length
+      ? await prisma.detectedPost.groupBy({
+          by: ["brand_influencer_id"],
+          where: { brand_id: brandId, brand_influencer_id: { in: brandInfluencerIds } },
+          _sum: { view_count: true, like_count: true, comment_count: true },
+          _count: { _all: true },
+        })
+      : []
 
-    // ── Shape rows ────────────────────────────────────────────────────────────
-    const rows = filtered.map((bi) => {
-      const b   = bi as any
-      const inf = b.influencer ?? {}
+    const metricsByInfluencer = new Map(
+      postMetrics.map(m => [m.brand_influencer_id, m])
+    )
+
+    const rows = records.map((r) => {
+      const productDetails = safeJSONParse(r.product_details)
+      const posts = metricsByInfluencer.get(r.id)
+
+      // Detected posts are the truth when they exist; the Post Tracker's manual
+      // likes_count/comments_count covers rows that were never auto-detected.
+      const detectedLikes    = posts?._sum.like_count    ?? null
+      const detectedComments = posts?._sum.comment_count ?? null
 
       return {
-        id:               b.id,
-        platform:         inf.platform     ?? b.platform   ?? "Instagram",
-        instagramHandle:  inf.handle       ?? b.handle     ?? null,
-        niche:            inf.niche        ?? b.niche      ?? "General",
-        location:         inf.location     ?? b.location   ?? "PH",
-        createdAt:        b.created_at?.toISOString() ?? new Date().toISOString(),
+        id:               r.id,
+        platform:         normalizePlatform(r.influencer?.platform),
+        name:             r.influencer?.full_name ?? null,
+        instagramHandle:  r.influencer?.handle ?? null,
+        niche:            r.influencer?.niche    ?? "General",
+        location:         r.influencer?.location ?? "PH",
+        createdAt:        r.created_at.toISOString(),
 
-        pipelineStatus:   resolveStatus(b),
-        rejectionReason:  b.approval_notes ?? b.ni_reason  ?? null,
-        rejectionBucket:  resolveRejectionBucket(b.approval_notes ?? b.ni_reason),
+        pipelineStatus:   resolveAnalyticsStatus(r, productDetails),
+        rejectionReason:  r.approval_notes ?? null,
+        rejectionBucket:  resolveRejectionBucket(r.approval_notes),
 
-        // Post metrics — try both snake_case and camelCase field names
-        views:        Number(b.views         ?? b.view_count      ?? 0),
-        likes:        Number(b.likes         ?? b.likes_count     ?? 0),
-        comments:     Number(b.comments      ?? b.comments_count  ?? 0),
-        clicks:       Number(b.clicks        ?? b.web_clicks      ?? 0),
-        salesQty:     Number(b.sales_qty     ?? b.salesQty        ?? b.sales_quantity ?? 0),
-        salesAmt:     Number(b.sales_amt     ?? b.salesAmt        ?? b.sales_amount   ?? 0),
-        prodCost:     Number(b.prod_cost     ?? b.prodCost        ?? b.product_cost   ?? 0),
+        // Views exist only as detected-post data — there is no manual views
+        // column anywhere in the schema.
+        views:    Number(posts?._sum.view_count ?? 0),
+        likes:    Number(detectedLikes    ?? r.likes_count    ?? 0),
+        comments: Number(detectedComments ?? r.comments_count ?? 0),
 
-        usageRights:  Boolean(b.usage_rights  ?? b.usageRights  ?? false),
-        contentSaved: Boolean(b.content_saved ?? b.contentSaved ?? false),
-        adCode:       Boolean(b.ad_code       ?? b.adCode       ?? false),
+        clicks:   Number(r.attribution?.clicks      ?? 0),
+        salesQty: Number(r.attribution?.sales_count ?? 0),
+        salesAmt: r.attribution?.gmv ? Number(r.attribution.gmv) : 0,
 
-        deliveredDaysAgo: resolveDeliveredDaysAgo(b),
+        prodCost:      r.partner?.product_cost    ? Number(r.partner.product_cost)    : 0,
+        feesPaid:      r.partner?.fees_paid       ? Number(r.partner.fees_paid)       : 0,
+        commissionPaid: r.partner?.commission_paid ? Number(r.partner.commission_paid) : 0,
+
+        // DATA-GAPS: no column exists for these three anywhere in the schema.
+        // null (not false) so the UI reports "not tracked" instead of zero.
+        usageRights:  null,
+        contentSaved: null,
+        adCode:       null,
+
+        deliveredDaysAgo: resolveDeliveredDaysAgo(r.delivered_at),
       }
     })
 
-    return NextResponse.json({ data: rows })
+    return NextResponse.json({
+      data: rows,
+      // Declared so the client never has to guess whether a zero is real.
+      meta: {
+        brandId,
+        filters: { platform, niche, location, dateRange },
+        /** The column `dateRange` filters on. */
+        dateField: "created_at",
+        recordCount: rows.length,
+        /** Metrics with no backing column in the schema. */
+        untracked: ["usageRights", "contentSaved", "adCode"],
+      },
+    })
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal server error"
     console.error("[analytics] GET error:", message)
@@ -119,6 +194,37 @@ export async function GET(req: Request) {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function safeJSONParse(value: string | null): Record<string, any> {
+  if (!value) return {}
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === "object" ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * Canonical platform casing.
+ *
+ * Influencer.platform is stored lower-case ("tiktok"), while the analytics UI
+ * buckets on "TikTok" / "YouTube" / "Instagram". Capitalising the first letter
+ * — as the post-tracker route does — yields "Tiktok" and "Youtube", which match
+ * NO bucket, so those platforms' posts, views and EMV were being dropped
+ * entirely. This maps to the exact keys the dashboard aggregates on.
+ */
+function normalizePlatform(raw: string | null | undefined): string {
+  const key = raw?.trim().toLowerCase()
+  switch (key) {
+    case "instagram": return "Instagram"
+    case "tiktok":    return "TikTok"
+    case "youtube":   return "YouTube"
+    // Anything else is passed through rather than defaulted to Instagram:
+    // inventing a platform would manufacture activity that never happened.
+    default:          return raw?.trim() || "Unknown"
+  }
+}
 
 function buildDateFilter(dateRange: string): Record<string, Date> | null {
   const now = new Date()
@@ -135,26 +241,101 @@ function buildDateFilter(dateRange: string): Record<string, Date> | null {
   }
 }
 
-function resolveStatus(bi: Record<string, unknown>): string {
-  const closed = (bi.closed_status ?? bi.closedStatus) as string | undefined
+/* ── Stage derivation ──────────────────────────────────────────────────────
+   Ported from the two routes that own these rules, so Analytics, the Pipeline
+   board and the Post Tracker can never disagree about what stage a row is in:
+     derivePipelineStatus  app/api/brand/[brandId]/pipeline/route.ts
+     deriveClosedStatus    app/api/brand/[brandId]/closed/route.ts
+   ------------------------------------------------------------------------ */
+
+const CLOSED_COLUMNS = ["For Order Creation", "In-Transit", "Delivered", "Posted", "No post"]
+
+function derivePipelineStatus(
+  contactStatus: string,
+  stage: number | null,
+  approvalStatus: string | null
+): string {
+  if (contactStatus === "not_interested" || approvalStatus === "Declined") return "Not Interested"
+  if (contactStatus === "for_order_creation" || (stage !== null && stage >= 5)) return "For Order Creation"
+
+  if (stage !== null) {
+    if (stage >= 4) return "Deal Agreed"
+    if (stage === 3) return "In Conversation"
+    if (stage === 2) return "Contacted"
+    if (stage === 1) return "For Outreach"
+  }
+
+  switch (contactStatus) {
+    case "agreed":           return "Deal Agreed"
+    case "negotiating":
+    case "paid_collab":      return "In Conversation"
+    case "responded":
+    case "replied":
+    case "contacted":
+    case "no_response":
+    case "email_error":      return "Contacted"
+    case "pending":
+    default:                 return "For Outreach"
+  }
+}
+
+function deriveClosedStatus(
+  contactStatus: string,
+  orderStatus: string | null,
+  contentPosted: boolean,
+  approvalStatus: string | null,
+  storedClosedStatus: string | null
+): string | null {
+  // The saved stage always wins, exactly as in the Post Tracker route.
+  if (storedClosedStatus && CLOSED_COLUMNS.includes(storedClosedStatus)) return storedClosedStatus
+  if (approvalStatus === "Declined" || contactStatus === "not_interested") return "No post"
+  if (contentPosted) return "Posted"
+  if (orderStatus === "delivered") return "Delivered"
+  if (orderStatus === "shipped")   return "In-Transit"
+  return null
+}
+
+/**
+ * Map the app's stage vocabulary onto the labels the analytics dashboard
+ * aggregates on. The mapping itself is unchanged from the previous version of
+ * this route — only its INPUTS are fixed (real columns instead of missing ones).
+ */
+function resolveAnalyticsStatus(
+  r: {
+    contact_status: string
+    stage: number | null
+    order_status: string | null
+    content_posted: boolean
+    approval_status: string | null
+  },
+  productDetails: Record<string, any>
+): string {
+  const closed = deriveClosedStatus(
+    r.contact_status,
+    r.order_status,
+    r.content_posted,
+    r.approval_status,
+    (productDetails.closedStatus as string) ?? null
+  )
+
   if (closed) {
     switch (closed) {
       case "For Order Creation": return "Onboarded"
       case "In-Transit":         return "In Transit"
       case "Delivered":          return "Content Pending"
       case "Posted":             return "Posted"
-      case "No post":            return "Content Pending"
+      case "No post":            return "Rejected"
     }
   }
-  const pipeline = (bi.pipeline_status ?? bi.pipelineStatus) as string | undefined
-  switch (pipeline) {
+
+  switch (derivePipelineStatus(r.contact_status, r.stage, r.approval_status)) {
     case "For Outreach":       return "Prospect"
     case "Contacted":          return "Reached Out"
     case "In Conversation":    return "In Conversation"
     case "Deal Agreed":        return "Onboarded"
     case "For Order Creation": return "Onboarded"
     case "Not Interested":     return "Rejected"
-    default:                   return pipeline ?? "Prospect"
+    default:                   return "Prospect"
   }
 }
 
@@ -171,9 +352,8 @@ function resolveRejectionBucket(notes: unknown): "hard" | "soft" | null {
   return SOFT_PASS_REASONS.has(notes) ? "soft" : "hard"
 }
 
-function resolveDeliveredDaysAgo(bi: Record<string, unknown>): number | null {
-  const raw = bi.delivered_at ?? bi.deliveredAt
+function resolveDeliveredDaysAgo(raw: Date | null): number | null {
   if (!raw) return null
-  const diffMs = Date.now() - new Date(raw as string).getTime()
+  const diffMs = Date.now() - new Date(raw).getTime()
   return Math.floor(diffMs / (1000 * 60 * 60 * 24))
 }

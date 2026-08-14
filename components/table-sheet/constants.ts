@@ -16,6 +16,61 @@ export const DEFAULT_CONTACT_STATUSES = [
 
 export const OUTREACH_FIELDS = new Set(["contact_status", "stage", "agreed_rate", "notes"])
 
+// ── Instroom influencer API ───────────────────────────────────────────────────
+// Single definition of the API host. It was previously hardcoded separately in
+// table-sheet.tsx and hooks.ts, which is how the two drifted, so both now import
+// this and there is one place to change.
+//
+// This code runs in the browser, where Next strips out env vars that lack the
+// NEXT_PUBLIC_ prefix. Both names are accepted so either convention works:
+//   NEXT_PUBLIC_INSTROOM_API_BASE_URL  reaches the browser on its own
+//   INSTROOM_API_BASE_URL              reaches it via the `env` block in
+//                                      next.config.ts, which inlines it
+// Whichever is set wins; NEXT_PUBLIC_ takes precedence when both are.
+//
+// There is deliberately no hardcoded fallback. The old default,
+// "https://api.instroom", does not resolve, so every lookup fired a doomed
+// request that the browser reported as a bare `TypeError: Failed to fetch`. An
+// unset variable is treated as "not configured" and no request is attempted —
+// see isInstroomApiConfigured() and its use in table-sheet.tsx.
+//
+// Trailing slashes are trimmed so a value like "https://host/" cannot produce a
+// double slash in the path.
+export const INSTROOM_API_BASE_URL = (
+  process.env.NEXT_PUBLIC_INSTROOM_API_BASE_URL ||
+  process.env.INSTROOM_API_BASE_URL ||
+  ""
+)
+  .trim()
+  .replace(/\/+$/, "")
+
+/**
+ * Is the influencer API pointed at anything? False when the environment variable
+ * is unset or blank, in which case callers must not issue a request — a fetch
+ * against a relative or empty base is exactly the "Failed to fetch" this avoids.
+ */
+export function isInstroomApiConfigured(): boolean {
+  return /^https?:\/\/.+/i.test(INSTROOM_API_BASE_URL)
+}
+
+/**
+ * Profile-lookup endpoints, per the API's documented paths. Note the asymmetry:
+ * Instagram is under /v2, TikTok is not.
+ *
+ *   Instagram  GET {base}/v2/{username}/instagram
+ *   TikTok     GET {base}/{username}/tiktok
+ *
+ * `/users/{query}` is deliberately NOT used here — that endpoint is discovery
+ * search, not profile data.
+ *
+ * `username` must already be normalised (see normalizeApiUsername in utils.ts):
+ * bare, lowercased, and restricted to the characters the API accepts.
+ */
+export const INSTROOM_PROFILE_ENDPOINTS: Record<string, (username: string) => string> = {
+  instagram: (u) => `${INSTROOM_API_BASE_URL}/v2/${u}/instagram`,
+  tiktok:    (u) => `${INSTROOM_API_BASE_URL}/${u}/tiktok`,
+}
+
 export const FIELD_TYPE_INFO: Record<string, { description: string; example: string }> = {
   text:          { description: "Free-form text input for any value",              example: 'e.g., "Prefers email contact"' },
   number:        { description: "Numeric values only — great for metrics",         example: "e.g., CPM rate, post count" },

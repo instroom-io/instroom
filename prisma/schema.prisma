@@ -24,6 +24,11 @@ model User {
   two_factor_secret_pending String? @db.Text
   two_factor_backup_codes   Json?
 
+  // Array of tour scene keys the user has finished or skipped (e.g.
+  // ["onboarding","influencers","pipeline"]) — each page's contextual tour
+  // is tracked independently, so seeing one never marks the others seen.
+  product_tour_seen_scenes Json?
+
   onboarding   Onboarding?
   subscription UserSubscription?
   brandMembers BrandMember[]
@@ -137,6 +142,7 @@ model UserSubscription {
   current_period_start    DateTime  @default(now())
   current_period_end      DateTime?
   reminder_sent_at        DateTime?
+  last_webhook_event_at   DateTime?
   created_at              DateTime  @default(now())
   updated_at              DateTime  @updatedAt
 
@@ -327,6 +333,7 @@ model BrandInfluencer {
   campaign       Campaign?       @relation(fields: [campaign_id], references: [id], onDelete: SetNull)
   partner        BrandPartner? // new (1:1 back-relation)
   goaffproOrders GoAffProOrder[]
+  shopifyOrders  ShopifyOrder[]
   attribution    Attribution?
 
   @@unique([brand_id, influencer_id])
@@ -385,6 +392,28 @@ model GoAffProOrder {
   @@index([brand_id, affiliate_id])
   @@index([brand_influencer_id])
   @@index([status])
+}
+
+model ShopifyOrder {
+  id                  String    @id @default(cuid()) @db.VarChar(30)
+  brand_id            String    @db.VarChar(30)
+  shopify_order_id    String    @db.VarChar(100)
+  brand_influencer_id String?   @db.VarChar(30)
+  discount_code       String?   @db.VarChar(100)
+  source              String    @default("synced") @db.VarChar(20) // "instroom" | "synced"
+  financial_status    String?   @db.VarChar(30)
+  fulfillment_status  String?   @db.VarChar(30)
+  shipment_status     String?   @db.VarChar(30)
+  raw                 Json
+  shopify_created_at  DateTime?
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @updatedAt
+
+  brandInfluencer BrandInfluencer? @relation(fields: [brand_influencer_id], references: [id], onDelete: SetNull)
+
+  @@unique([brand_id, shopify_order_id])
+  @@index([brand_id, discount_code])
+  @@index([brand_influencer_id])
 }
 
 model OutreachLog {

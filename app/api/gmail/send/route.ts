@@ -6,14 +6,20 @@ import { prisma } from "@/lib/prisma"
 // ─── Token helper ─────────────────────────────────────────────────────────────
 
 async function getAccessToken(session: any): Promise<string | null> {
-  if (session.accessToken) return session.accessToken
-
+  // NEVER use session.accessToken here — the login-time Google OAuth (see
+  // lib/auth.ts) deliberately requests only "openid email profile", with no
+  // Gmail scopes at all. Gmail access always comes from a separate consent
+  // via /api/gmail/connect, stored in the Account table below.
   const userId = session.user?.id
   if (!userId) return null
 
+  // A user can have more than one linked Google account (e.g. reconnected
+  // Gmail with a different account than before) — most recently connected
+  // wins, since that's the one they just told us to use.
   const account = await prisma.account.findFirst({
     where: { userId, provider: "google" },
-    select: { access_token: true, refresh_token: true, expires_at: true },
+    select: { id: true, access_token: true, refresh_token: true, expires_at: true },
+    orderBy: { id: "desc" },
   })
 
   if (!account?.access_token) return null
@@ -23,13 +29,13 @@ async function getAccessToken(session: any): Promise<string | null> {
     : false
 
   if (isExpired && account.refresh_token) {
-    return refreshToken(account.refresh_token, userId)
+    return refreshToken(account.refresh_token, account.id)
   }
 
   return account.access_token
 }
 
-async function refreshToken(refresh_token: string, userId: string): Promise<string | null> {
+async function refreshToken(refresh_token: string, accountId: string): Promise<string | null> {
   try {
     const res = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
@@ -44,8 +50,10 @@ async function refreshToken(refresh_token: string, userId: string): Promise<stri
     const data = await res.json()
     if (!res.ok || !data.access_token) return null
 
-    await prisma.account.updateMany({
-      where: { userId, provider: "google" },
+    // Target this specific Account row, not every Google account linked to
+    // the user — this refresh_token only belongs to one of them.
+    await prisma.account.update({
+      where: { id: accountId },
       data: {
         access_token: data.access_token,
         expires_at: data.expires_in
