@@ -1,6 +1,5 @@
 "use client";
 import { useSearchParams, useRouter } from "next/navigation";
-import Link from "next/link";
 import { Logo } from "@/components/brand/logo"
 import { useState, useEffect, Suspense } from "react";
 import { useSession } from "next-auth/react";
@@ -162,9 +161,7 @@ function PaymentPageInner() {
       <div className="pointer-events-none hidden sm:block fixed top-1/3 right-1/4 w-64 h-64 rounded-full bg-[#2C8EC4]/5 blur-3xl" />
 
       <div className="fixed top-4 sm:top-6 left-4 sm:left-12 z-50">
-        <Link href="/">
-          <Logo size="page" alt="Instroom" priority className="drop-shadow-sm" />
-        </Link>
+        <Logo size="page" alt="Instroom" priority className="drop-shadow-sm" />
       </div>
 
       <div className="relative min-h-screen flex items-center justify-center px-4 py-8 sm:py-12">

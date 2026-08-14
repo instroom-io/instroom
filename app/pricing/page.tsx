@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { Logo } from "@/components/brand/logo"
 import type { ReactNode } from "react";
 import { getActivePlans } from "@/prisma/plans";
@@ -240,9 +239,7 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
       `}</style>
 
       <div className="fixed top-4 left-4 z-50 sm:top-6 sm:left-12">
-        <Link href="/">
-          <Logo size="page" alt="Instroom" priority className="drop-shadow-sm" />
-        </Link>
+        <Logo size="page" alt="Instroom" priority className="drop-shadow-sm" />
       </div>
 
       <section className="mx-auto max-w-4xl px-4 pt-24 pb-6 text-center sm:px-6 sm:pt-20 lg:px-0">

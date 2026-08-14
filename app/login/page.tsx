@@ -1,4 +1,3 @@
-import Link from "next/link"
 import { LoginForm } from "@/components/login-form"
 import { Logo } from "@/components/brand/logo"
 import { Suspense } from "react"
@@ -7,9 +6,7 @@ export default function LoginPage() {
   return (
     <div className="min-h-svh w-full bg-[#F7F9F8] text-[#1E1E1E] relative overflow-hidden">
       <div className="fixed top-4 sm:top-6 left-4 sm:left-12 z-50">
-        <Link href="/">
-          <Logo size="page" alt="Instroom" priority className="drop-shadow-sm" />
-        </Link>
+        <Logo size="page" alt="Instroom" priority className="drop-shadow-sm" />
       </div>
 
       <div className="absolute top-0 left-0 w-64 sm:w-96 h-64 sm:h-96 rounded-full bg-[#1FAE5B]/8 blur-3xl -translate-x-1/2 -translate-y-1/2" />

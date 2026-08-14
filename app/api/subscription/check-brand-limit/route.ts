@@ -17,20 +17,6 @@ export async function GET(req: Request) {
       include: { plan: true },
     })
 
-    if (!subscription) {
-      return NextResponse.json(
-        { error: "No subscription found" },
-        { status: 404 }
-      )
-    }
-
-    if (subscription.status !== "active" && subscription.status !== "trialing") {
-      return NextResponse.json(
-        { error: "Subscription is not active" },
-        { status: 400 }
-      )
-    }
-
     // Count current brands owned by user
     const brandCount = await prisma.brand.count({
       where: { owner_id: session.user.id },
