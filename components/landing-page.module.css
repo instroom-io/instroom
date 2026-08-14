@@ -34,20 +34,21 @@
 
 .section { padding: 96px 0; }
 
-.problemSection { padding-top: 80px; padding-bottom: 112px; }
+.problemSection { padding-top: 60px; padding-bottom: 112px; }
 .problemHeaderGap { margin-bottom: 72px; }
-.sectionHeader.problemHeaderGap h2 { color: #0F6B3E; font-weight: 800; }
-.sectionHeader.problemHeaderGap p { font-size: 0.875rem; }
 .outcomesGap { margin-top: 72px; }
 
+.sectionHeader.accentHeader h2 { color: #0F6B3E; font-weight: 800; }
+.sectionHeader.accentHeader p { font-size: 0.875rem; }
+
 @media (max-width: 900px) {
-  .problemSection { padding-top: 56px; padding-bottom: 72px; }
+  .problemSection { padding-top: 42px; padding-bottom: 72px; }
   .problemHeaderGap { margin-bottom: 48px; }
   .outcomesGap { margin-top: 48px; }
 }
 
 @media (max-width: 640px) {
-  .problemSection { padding-top: 40px; padding-bottom: 56px; }
+  .problemSection { padding-top: 30px; padding-bottom: 56px; }
   .problemHeaderGap { margin-bottom: 36px; }
   .outcomesGap { margin-top: 36px; }
 }
@@ -307,7 +308,7 @@
   font-size: 0.8125rem;
   font-weight: 400;
   color: #52525b;
-  margin-bottom: 28px;
+  margin: 0 0 12px;
 }
 
 .trustLogosWide {
@@ -859,6 +860,67 @@
   margin-bottom: 20px;
   font-size: 0.9375rem;
   line-height: 1.65;
+}
+
+.solutionsGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+  max-width: 980px;
+  margin: 56px auto 0;
+}
+
+.solutionCard {
+  display: block;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 28px 24px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.03);
+  transition: box-shadow 0.2s, border-color 0.2s;
+  text-decoration: none;
+}
+
+.solutionCard:hover {
+  box-shadow: 0 8px 28px rgba(15,107,62,0.08);
+  border-color: rgba(31,174,91,0.3);
+}
+
+.solutionCardHead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.solutionIcon {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.solutionCard h3 {
+  font-family: 'Manrope', sans-serif;
+  font-weight: 700;
+  font-size: 1.0625rem;
+  color: var(--charcoal);
+  margin: 0;
+}
+
+.solutionCard p {
+  color: #52525b;
+  font-size: 0.90625rem;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.solutionsMore {
+  text-align: center;
+  margin-top: 32px;
 }
 
 .standaloneLink {
@@ -1451,6 +1513,7 @@
   .outcomesGrid,
   .howGrid,
   .standaloneGrid,
+  .solutionsGrid,
   .pricingGrid {
     grid-template-columns: 1fr;
   }
