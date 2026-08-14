@@ -1208,6 +1208,7 @@ export default function TableSheet({
             <input
               type="text" value={searchInput} onChange={e => { setSearchInput(e.target.value); setCurrentPage(1) }}
               placeholder="Search influencers…"
+              data-tour="table-search"
               className="w-full pl-8 pr-3 py-2 text-xs border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-200 bg-white"
             />
           </div>
@@ -1215,6 +1216,7 @@ export default function TableSheet({
           {/* Filters button */}
           <div className="relative">
             <button ref={filterBtnRef} onClick={() => setShowFilterPopover(v => !v)}
+              data-tour="table-filters"
               className={`flex items-center gap-1.5 px-3 py-2 text-xs border rounded-lg transition ${hasActiveFilters ? "bg-blue-600 text-white border-blue-600" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>
               <IconFilter size={13} /> Filters {hasActiveFilters && `(${[filters.platform !== "all", filters.niche !== "all", filters.location !== "all", filters.gender !== "all", filters.approval !== "all", !!filters.dateFrom, !!filters.dateTo].filter(Boolean).length})`}
             </button>
@@ -1231,12 +1233,13 @@ export default function TableSheet({
           {/* Right-side controls */}
           <div className="flex items-center gap-1.5 ml-auto">
             {!readOnly && (
-              <button onClick={addRow} className="flex items-center gap-1.5 px-2.5 py-2 text-xs font-medium border border-gray-200 rounded-lg text-gray-700 hover:bg-green-50 hover:text-green-700 hover:border-green-200 transition" title="Add a new influencer"><IconPlus size={18} /> Add Influencer</button>
+              <button onClick={addRow} data-tour="table-add-influencer" className="flex items-center gap-1.5 px-2.5 py-2 text-xs font-medium border border-gray-200 rounded-lg text-gray-700 hover:bg-green-50 hover:text-green-700 hover:border-green-200 transition" title="Add a new influencer"><IconPlus size={18} /> Add Influencer</button>
             )}
 
             <div className="relative">
               <button
                 ref={importExportBtnRef}
+                data-tour="table-import-export"
                 onClick={() => {
                   if (subscriptionStatus?.status === "trialing") { onShowTrialModal?.(); return }
                   setShowImportExportMenu(v => !v)

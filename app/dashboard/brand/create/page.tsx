@@ -342,6 +342,7 @@ export default function CreateBrandPage() {
                 </div>
                 <Input
                   name="name"
+                  data-tour="wizard-brand-name"
                   value={formData.name}
                   onChange={handleChange}
                   placeholder="e.g., My Fashion Brand"
@@ -360,6 +361,7 @@ export default function CreateBrandPage() {
                 <div className="text-xs font-semibold text-gray-700 mb-1.5">Description</div>
                 <Input
                   name="description"
+                  data-tour="wizard-brand-description"
                   value={formData.description}
                   onChange={handleChange}
                   placeholder="What does your brand do?"
@@ -373,6 +375,7 @@ export default function CreateBrandPage() {
                 <div className="text-xs font-semibold text-gray-700 mb-1.5">Website URL</div>
                 <Input
                   name="website_url"
+                  data-tour="wizard-brand-website"
                   value={formData.website_url}
                   onChange={handleChange}
                   placeholder="https://example.com"

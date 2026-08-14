@@ -1406,6 +1406,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
         <div className="relative flex-1 min-w-[200px] max-w-xs">
           <IconSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search influencer..."
+            data-tour="pipeline-search"
             className="w-full pl-9 pr-3 h-9 border border-[#0F6B3E]/20 rounded-lg outline-none focus:ring-2 focus:ring-[#1FAE5B] text-sm" />
         </div>
 
@@ -1413,6 +1414,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
         <div className="relative">
           <button
             onClick={() => setShowFilterPanel(!showFilterPanel)}
+            data-tour="pipeline-filters"
             className={`h-9 px-3 rounded-lg text-sm flex items-center gap-1.5 border transition-colors ${
               hasActiveFilters ? "bg-[#1FAE5B] text-white border-[#1FAE5B]" : "border-[#0F6B3E]/20 hover:border-[#0F6B3E]/40"
             }`}
@@ -1521,7 +1523,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
         <div className="flex-1" />
 
         {/* View toggle */}
-        <div className="inline-flex h-9 items-center rounded-lg border border-[#0F6B3E]/20 bg-white p-1">
+        <div className="inline-flex h-9 items-center rounded-lg border border-[#0F6B3E]/20 bg-white p-1" data-tour="pipeline-view-toggle">
           <button
             onClick={() => { setView("Board"); setSelectedColumnStatus(null) }}
             className={`h-7 px-3 rounded-md text-sm flex items-center gap-1.5 transition-all ${
@@ -1551,11 +1553,14 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
           <div className="rounded-xl border border-[#0F6B3E]/10 bg-white p-5 overflow-x-auto" style={{ scrollSnapType: "x proximity" }}>
             <div className="flex gap-4 min-w-max">
 
-              {visibleColumns.filter((c) => c.key !== "not-interested").map((col) => {
+              {visibleColumns.filter((c) => c.key !== "not-interested").map((col, colIndex) => {
                 const items = getItemsByColumn(col.key)
                 return (
                   <DroppableColumn key={col.key} id={col.key}>
-                    <div className={`${col.color} text-white rounded-lg px-3 py-2 text-sm font-semibold flex items-center justify-between`}>
+                    <div
+                      className={`${col.color} text-white rounded-lg px-3 py-2 text-sm font-semibold flex items-center justify-between`}
+                      data-tour={colIndex === 0 ? "pipeline-board" : undefined}
+                    >
                       <span
                         onClick={() => handleColumnClick(col)}
                         className="flex-1 cursor-pointer hover:opacity-90 transition-opacity truncate mr-2"

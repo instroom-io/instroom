@@ -916,6 +916,7 @@ function InboxContent() {
             <div className="flex items-center gap-3">
               <button
                 onClick={() => setShowPipelineBar(true)}
+                data-tour="inbox-pipeline-toggle"
                 className="flex items-center gap-2 text-xs text-gray-600 hover:text-gray-900 transition-colors"
               >
                 <IconLayoutSidebar size={14} />
@@ -1007,7 +1008,7 @@ function InboxContent() {
                   Connect Gmail or Outlook to start managing your influencer inbox.
                 </p>
               </div>
-              <div className="flex flex-col gap-2.5 w-full">
+              <div className="flex flex-col gap-2.5 w-full" data-tour="inbox-connect-email">
                 <button
                   onClick={handleConnectGmail}
                   className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-[#1FAE5B] text-white text-sm rounded-xl hover:bg-[#0F6B3E] transition font-semibold shadow-md"
