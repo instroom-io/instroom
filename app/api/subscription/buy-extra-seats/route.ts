@@ -33,7 +33,7 @@ export async function POST(req: Request) {
       )
     }
 
-    if (subscription.status !== "active" && subscription.status !== "trialing") {
+    if (subscription.status !== "active") {
       return NextResponse.json(
         { error: "Subscription is not active" },
         { status: 400 }

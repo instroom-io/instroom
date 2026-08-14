@@ -23,7 +23,7 @@ export async function canAddBrand(userId: string): Promise<{
     })
 
     // Freemium: allow 1 workspace without subscription
-    if (!subscription || (subscription.status !== "active" && subscription.status !== "trialing")) {
+    if (!subscription || subscription.status !== "active") {
       return {
         allowed: brandCount < 1,
         current: brandCount,
@@ -262,7 +262,7 @@ export async function canCreateCampaign(
       include: { plan: true },
     })
 
-    if (!subscription || (subscription.status !== "active" && subscription.status !== "trialing")) {
+    if (!subscription || subscription.status !== "active") {
       return {
         allowed: false,
         current: 0,
@@ -318,7 +318,7 @@ export async function hasAPIAccess(userId: string): Promise<{
       include: { plan: true },
     })
 
-    if (!subscription || (subscription.status !== "active" && subscription.status !== "trialing")) {
+    if (!subscription || subscription.status !== "active") {
       return {
         allowed: false,
         message: "No active subscription found",
