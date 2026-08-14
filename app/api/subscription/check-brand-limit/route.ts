@@ -24,7 +24,7 @@ export async function GET(req: Request) {
       )
     }
 
-    if (subscription.status !== "active") {
+    if (subscription.status !== "active" && subscription.status !== "trialing") {
       return NextResponse.json(
         { error: "Subscription is not active" },
         { status: 400 }
