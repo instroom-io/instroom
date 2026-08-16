@@ -49,7 +49,12 @@ export function SignupForm({ ...props }: React.ComponentProps<typeof Card>) {
   const router = useRouter()
   const searchParams = useSearchParams()
   const invitationToken = searchParams.get("invitationToken")
-  
+  const plan = searchParams.get("plan")
+  const cycle = searchParams.get("cycle")
+  const onboardingUrl = plan
+    ? `/onboarding?plan=${encodeURIComponent(plan)}${cycle ? `&cycle=${encodeURIComponent(cycle)}` : ""}`
+    : "/onboarding"
+
   const [step, setStep] = useState<'form' | 'otp'>('form')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -256,7 +261,7 @@ export function SignupForm({ ...props }: React.ComponentProps<typeof Card>) {
         }
       }
 
-      router.push("/onboarding")
+      router.push(onboardingUrl)
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred")
     } finally {
@@ -299,7 +304,7 @@ export function SignupForm({ ...props }: React.ComponentProps<typeof Card>) {
       // First, check if email already exists with email/password signup
       // We need to get the email from Google first or show an intermediate step
       // For now, proceed with Google signup and let the callback handle it
-      await signIn("google", { callbackUrl: "/onboarding" })
+      await signIn("google", { callbackUrl: onboardingUrl })
     } catch (err) {
       setError("Google signup failed. Please try again.")
     } finally {

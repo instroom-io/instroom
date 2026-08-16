@@ -63,9 +63,10 @@ function formatPriceSub(plan: any, cycle: "monthly" | "yearly") {
   return `$${(Number(plan.price_yearly) * 12).toLocaleString()} billed annually`;
 }
 
-function ctaFor(plan: any) {
-  if (plan.name === "basic") return { href: "/signup", label: "Get started free", cls: "plan-cta-quiet" };
-  return { href: `/signup?plan=${plan.name}`, label: "Get started", cls: "plan-cta-solid" };
+function ctaFor(plan: any, cycle: "monthly" | "yearly") {
+  const href = `/signup?plan=${plan.name}&cycle=${cycle}`;
+  if (plan.name === "basic") return { href, label: "Get started free", cls: "plan-cta-quiet" };
+  return { href, label: "Get started", cls: "plan-cta-solid" };
 }
 
 function Check() {
@@ -720,7 +721,7 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
             {plans.map((plan: any) => {
               const isPopular = plan.name === "team";
               const price = formatPrice(plan, cycle);
-              const cta = ctaFor(plan);
+              const cta = ctaFor(plan, cycle);
               return (
                 <div key={plan.id} className={`plan-card${isPopular ? " popular" : ""}`}>
                   {isPopular && <div className="popular-badge">Most Popular</div>}
@@ -904,7 +905,7 @@ export default async function PricingPage({ searchParams }: { searchParams?: { c
                   <td></td>
                   {plans.map((plan: any) => {
                     const isTeam = plan.name === "team";
-                    const cta = ctaFor(plan);
+                    const cta = ctaFor(plan, cycle);
                     return (
                       <td key={plan.id} className={isTeam ? "col-pop" : ""}>
                         <Link href={cta.href} className={`compare-cta ${isTeam ? "plan-cta-solid" : "plan-cta-quiet"}`}>

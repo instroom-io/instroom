@@ -1,13 +1,16 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import { Logo } from "@/components/brand/logo"
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useSession } from 'next-auth/react'
 import { OnboardingForm } from '@/components/onboarding-form'
 
-export default function OnboardingPage() {
+function OnboardingPageInner() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const preselectedPlan = searchParams.get('plan')
+  const preselectedCycle = searchParams.get('cycle')
   const { data: session, status } = useSession()
   const [step, setStep] = useState(1)
   const [showWelcome, setShowWelcome] = useState(false)
@@ -66,8 +69,30 @@ export default function OnboardingPage() {
     }
   }
 
+  // Basic has no payment step, so there's nothing for /pricing/payment to
+  // collect — start its free trial directly and go to the dashboard.
+  const startBasicTrialAndGoToDashboard = async () => {
+    try {
+      await fetch('/api/subscription/start-trial', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ planName: 'basic', cycle: 'monthly' }),
+      })
+    } catch {
+      // Ignore — /dashboard's own subscription check is the source of truth.
+    } finally {
+      router.push('/dashboard')
+    }
+  }
+
   // Users who already have an active/trialing subscription (e.g. auto-granted
   // on early-access activation) skip the pricing detour entirely.
+  // A paid plan carried through from the public pricing page skips the
+  // /pricing picker too, going straight to checkout for the plan they chose.
+  const checkoutUrl = preselectedPlan
+    ? `/pricing/payment?plan=${preselectedPlan}${preselectedCycle ? `&cycle=${preselectedCycle}` : ""}`
+    : '/pricing'
+
   const redirectAfterOnboarding = async () => {
     try {
       const userId = (session?.user as any)?.id
@@ -77,9 +102,21 @@ export default function OnboardingPage() {
         body: JSON.stringify({ user_id: userId }),
       })
       const data = await res.json()
-      router.push(data.active ? '/dashboard/manage-influencers' : '/pricing')
+      if (data.active) {
+        router.push('/dashboard/manage-influencers')
+        return
+      }
+      if (preselectedPlan === 'basic') {
+        await startBasicTrialAndGoToDashboard()
+        return
+      }
+      router.push(checkoutUrl)
     } catch {
-      router.push('/pricing')
+      if (preselectedPlan === 'basic') {
+        await startBasicTrialAndGoToDashboard()
+        return
+      }
+      router.push(checkoutUrl)
     }
   }
 
@@ -234,5 +271,13 @@ export default function OnboardingPage() {
         )}
       </div>
     </div>
+  )
+}
+
+export default function OnboardingPage() {
+  return (
+    <Suspense fallback={null}>
+      <OnboardingPageInner />
+    </Suspense>
   )
 }

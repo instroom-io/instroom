@@ -9,7 +9,10 @@ export type TourStep = {
   title: string
   body: string
   placement?: "right" | "bottom" | "top" | "left"
-  matchesRoute: (pathname: string) => boolean
+  // hasBrandId reflects whether the URL already carries ?brandId= — the same
+  // signal BrandSelector itself resolves before deciding whether to redirect
+  // a brand-new account to the wizard or reveal the real dashboard.
+  matchesRoute: (pathname: string, hasBrandId: boolean) => boolean
 }
 
 export type TourScene = {
@@ -26,17 +29,36 @@ const BRAND_PARTNERS_ROUTE_PREFIX = "/dashboard/brand-partners"
 const COMMUNITY_ROUTE_PREFIX = "/dashboard/community"
 const ANALYTICS_ROUTE_PREFIX = "/dashboard/analytics"
 
+// Every matcher below except isWizardRoute requires hasBrandId, not just a
+// path prefix match: a brand-new account briefly sits on /dashboard or
+// /dashboard/manage-influencers (no ?brandId= yet) while BrandSelector's own
+// async brand-list fetch decides whether to send them to the wizard instead.
+// Without this guard, whichever scene's step happens to match that transient
+// path (any of them, from the sidebar overview to a page's own content tour)
+// can win the race and flash in before the wizard ever gets a turn. Once
+// brandId is actually in the URL, BrandSelector has resolved and no wizard
+// redirect is still pending, so it's safe to match on path alone.
+const requiresResolvedBrand =
+  (matchesPath: (pathname: string) => boolean) => (pathname: string, hasBrandId: boolean) =>
+    matchesPath(pathname) && hasBrandId
+
 export const isWizardRoute = (pathname: string) => pathname.startsWith(WIZARD_ROUTE_PREFIX)
-export const isManageInfluencersRoute = (pathname: string) =>
+export const isManageInfluencersRoute = requiresResolvedBrand((pathname) =>
   pathname.startsWith(MANAGE_INFLUENCERS_ROUTE_PREFIX)
-export const isInboxRoute = (pathname: string) => pathname.startsWith(INBOX_ROUTE_PREFIX)
-export const isPipelineRoute = (pathname: string) => pathname.startsWith(PIPELINE_ROUTE_PREFIX)
-export const isPostTrackerRoute = (pathname: string) => pathname.startsWith(POST_TRACKER_ROUTE_PREFIX)
-export const isBrandPartnersRoute = (pathname: string) => pathname.startsWith(BRAND_PARTNERS_ROUTE_PREFIX)
-export const isCommunityRoute = (pathname: string) => pathname.startsWith(COMMUNITY_ROUTE_PREFIX)
-export const isAnalyticsRoute = (pathname: string) => pathname.startsWith(ANALYTICS_ROUTE_PREFIX)
-export const isDashboardRoute = (pathname: string) =>
-  pathname.startsWith("/dashboard") && !isWizardRoute(pathname)
+)
+export const isInboxRoute = requiresResolvedBrand((pathname) => pathname.startsWith(INBOX_ROUTE_PREFIX))
+export const isPipelineRoute = requiresResolvedBrand((pathname) => pathname.startsWith(PIPELINE_ROUTE_PREFIX))
+export const isPostTrackerRoute = requiresResolvedBrand((pathname) =>
+  pathname.startsWith(POST_TRACKER_ROUTE_PREFIX)
+)
+export const isBrandPartnersRoute = requiresResolvedBrand((pathname) =>
+  pathname.startsWith(BRAND_PARTNERS_ROUTE_PREFIX)
+)
+export const isCommunityRoute = requiresResolvedBrand((pathname) => pathname.startsWith(COMMUNITY_ROUTE_PREFIX))
+export const isAnalyticsRoute = requiresResolvedBrand((pathname) => pathname.startsWith(ANALYTICS_ROUTE_PREFIX))
+export const isDashboardRoute = requiresResolvedBrand(
+  (pathname) => pathname.startsWith("/dashboard") && !isWizardRoute(pathname)
+)
 
 export const SCENES: TourScene[] = [
   {
