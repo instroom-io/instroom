@@ -7,6 +7,7 @@ import {
   logMissingMicrosoftConfig,
   readMicrosoftOAuthConfig,
 } from "@/lib/microsoft-oauth"
+import { autoAdvanceRepliedToInConversation } from "@/lib/pipeline"
 
 function stripHtml(html: string): string {
   return html
@@ -191,6 +192,7 @@ export async function GET(req: NextRequest) {
         influencer: { email: { in: senderEmails } },
       },
       select: {
+        id: true,
         contact_status: true,
         content_posted: true,
         stage: true,
@@ -208,6 +210,17 @@ export async function GET(req: NextRequest) {
       senderEmail,
       brandInfluencer: biByEmail.get(senderEmail) ?? null,
     }))
+
+    // Auto-advance influencers who replied to "In Conversation" — fire-and-forget
+    // so it never adds latency to the response. Every thread here comes from the
+    // inbox folder only, so a matched brandInfluencer always means an inbound
+    // message (no per-message SENT-label check exists for Outlook, unlike Gmail).
+    const replyBrandInfluencerIds = threads
+      .filter((t) => t.brandInfluencer)
+      .map((t) => t.brandInfluencer!.id)
+    autoAdvanceRepliedToInConversation(brand_id, replyBrandInfluencerIds).catch((err) =>
+      console.error("Auto-advance to In Conversation failed:", err)
+    )
 
     return NextResponse.json({ threads })
   } catch (err: any) {

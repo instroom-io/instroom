@@ -3,75 +3,14 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import { sendNotification } from "@/lib/notifications"
-
-function getHeader(headers: { name: string; value: string }[], name: string): string {
-  return headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value || ""
-}
-
-function decodeBody(data?: string): string {
-  if (!data) return ""
-  try {
-    return Buffer.from(data.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf-8")
-  } catch {
-    return ""
-  }
-}
-
-function extractText(payload: any): string {
-  if (!payload) return ""
-  if (payload.mimeType === "text/plain" && payload.body?.data) {
-    return decodeBody(payload.body.data)
-  }
-  if (payload.parts) {
-    for (const part of payload.parts) {
-      const text = extractText(part)
-      if (text) return text
-    }
-  }
-  return ""
-}
+import { autoAdvanceRepliedToInConversation } from "@/lib/pipeline"
+import { getGmailAccessToken, shapeGmailThread, getHeader } from "@/lib/gmail"
 
 // Short-TTL in-memory cache so rapid refresh/mount cycles (e.g. React effects
 // firing twice, quick manual "Refresh" clicks) don't repeat the full N-thread
 // Gmail fan-out fetch. Keyed by user + the brandId the request was made with.
 const THREADS_CACHE_TTL_MS = 15_000
 const threadsCache = new Map<string, { expiresAt: number; body: any }>()
-
-async function refreshToken(refresh_token: string, accountId: string): Promise<string | null> {
-  try {
-    const res = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: process.env.GOOGLE_CLIENT_ID!,
-        client_secret: process.env.GOOGLE_CLIENT_SECRET!,
-        grant_type: "refresh_token",
-        refresh_token,
-      }),
-    })
-    const data = await res.json()
-    if (!res.ok || !data.access_token) return null
-
-    // Target this specific Account row, not every Google account linked to
-    // the user — a user can have more than one (e.g. reconnected Gmail with
-    // a different Google account), and this refresh_token only belongs to
-    // one of them. Updating them all would overwrite unrelated accounts'
-    // tokens with a token that isn't actually theirs.
-    await prisma.account.update({
-      where: { id: accountId },
-      data: {
-        access_token: data.access_token,
-        expires_at: data.expires_in
-          ? Math.floor(Date.now() / 1000) + data.expires_in
-          : null,
-      },
-    })
-
-    return data.access_token
-  } catch {
-    return null
-  }
-}
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions) as any
@@ -97,47 +36,14 @@ export async function GET(req: NextRequest) {
   // scope-less token and got permanently rejected by Gmail, no matter how
   // many times they reconnected — the correctly-scoped token was never even
   // looked at.
-  let accessToken: string
-
   const userId = session.user?.id
-  if (!userId) {
-    return NextResponse.json(
-      { error: "Gmail access not granted. Please sign in with Google.", reauth: true },
-      { status: 403 }
-    )
-  }
+  const accessToken = await getGmailAccessToken(userId)
 
-  // A user can have more than one linked Google account (e.g. reconnected
-  // Gmail with a different account than before) — most recently connected
-  // wins, since that's the one they just told us to use.
-  const account = await prisma.account.findFirst({
-    where: { userId, provider: "google" },
-    select: { id: true, access_token: true, refresh_token: true, expires_at: true },
-    orderBy: { id: "desc" },
-  })
-
-  if (!account?.access_token) {
+  if (!accessToken) {
     return NextResponse.json(
       { error: "No Google account linked. Please connect your Gmail account.", reauth: true },
       { status: 403 }
     )
-  }
-
-  const isExpired = account.expires_at
-    ? Date.now() > account.expires_at * 1000
-    : false
-
-  if (isExpired && account.refresh_token) {
-    const refreshed = await refreshToken(account.refresh_token, account.id)
-    if (!refreshed) {
-      return NextResponse.json(
-        { error: "Gmail session expired. Please reconnect your Gmail account.", reauth: true },
-        { status: 403 }
-      )
-    }
-    accessToken = refreshed
-  } else {
-    accessToken = account.access_token
   }
 
   const cacheUserId = session.user?.id
@@ -177,63 +83,25 @@ export async function GET(req: NextRequest) {
     const listData = await listRes.json()
     const threadIds: string[] = (listData.threads || []).map((t: any) => t.id)
 
-    if (threadIds.length === 0) {
-      const body = { threads: [] }
-      if (cacheKey) threadsCache.set(cacheKey, { expiresAt: Date.now() + THREADS_CACHE_TTL_MS, body })
-      return NextResponse.json(body)
-    }
-
-    // 2. Fetch full thread details in parallel
-    const threadDetails = await Promise.all(
-      threadIds.map((id) =>
-        fetch(
-          `https://gmail.googleapis.com/gmail/v1/users/me/threads/${id}?format=full`,
-          { headers: { Authorization: `Bearer ${accessToken}` } }
-        ).then((r) => r.json())
-      )
-    )
+    // 2. Fetch full thread details in parallel (skipped entirely when there
+    // are no INBOX threads — note this does NOT early-return the whole
+    // request, since a user with zero replied-to conversations can still
+    // have sent-but-unreplied threads worth surfacing below).
+    const threadDetails = threadIds.length
+      ? await Promise.all(
+          threadIds.map((id) =>
+            fetch(
+              `https://gmail.googleapis.com/gmail/v1/users/me/threads/${id}?format=full`,
+              { headers: { Authorization: `Bearer ${accessToken}` } }
+            ).then((r) => r.json())
+          )
+        )
+      : []
 
     // 3. Shape threads + extract sender emails
-    const shapedThreads = threadDetails.map((thread) => {
-      const messages = (thread.messages || []).map((msg: any) => {
-        const headers = msg.payload?.headers || []
-        return {
-          id: msg.id,
-          from: getHeader(headers, "From"),
-          to: getHeader(headers, "To"),
-          subject: getHeader(headers, "Subject"),
-          date: getHeader(headers, "Date"),
-          snippet: msg.snippet || "",
-          body: extractText(msg.payload),
-          labelIds: msg.labelIds || [],
-        }
-      })
-
-      const firstMsg = messages[0] || {}
-      const labelIds: string[] = thread.messages?.[0]?.labelIds || []
-
-      // messages[0] is the oldest message in the thread, which is often the outbound
-      // message the user sent (cold outreach) rather than something from the contact.
-      // Prefer the first message that isn't one the user sent.
-      const contactMsg = messages.find((m: any) => !(m.labelIds || []).includes("SENT"))
-
-      const fromHeader: string = contactMsg ? contactMsg.from || "" : firstMsg.to || firstMsg.from || ""
-      const emailMatch = fromHeader.match(/<([^>]+)>/)
-      const senderEmail = (emailMatch ? emailMatch[1] : fromHeader).toLowerCase().trim()
-
-      return {
-        id: thread.id,
-        subject: firstMsg.subject || "(No subject)",
-        snippet: thread.snippet || firstMsg.snippet || "",
-        unread: labelIds.includes("UNREAD"),
-        messages,
-        senderEmail,
-      }
-    })
+    const shapedThreads = threadDetails.map(shapeGmailThread)
 
     // 4. Try to resolve brand context — if none found, return threads without pipeline data
-    const userId = session.user?.id
-
     let brand_id = brandId
     if (!brand_id && userId) {
       const brandMember = await prisma.brandMember.findFirst({
@@ -247,18 +115,81 @@ export async function GET(req: NextRequest) {
     // No brand context — return threads without pipeline stage info.
     // Gmail is still connected; we just can't attach influencer data.
     if (!brand_id) {
-      const threads = shapedThreads.map(({ senderEmail, ...thread }) => ({
+      const threads = shapedThreads.map(({ senderEmail, hasReply, ...thread }) => ({
         ...thread,
         brandInfluencer: null,
       }))
-      const body = { threads }
+      const body = { threads, sentAwaitingReply: [] }
       if (cacheKey) threadsCache.set(cacheKey, { expiresAt: Date.now() + THREADS_CACHE_TTL_MS, body })
       return NextResponse.json(body)
     }
 
-    const senderEmails = [...new Set(shapedThreads.map((t) => t.senderEmail).filter(Boolean))]
+    // 4b. Also list SENT threads not already covered by the INBOX fetch above
+    // — a cold-outreach email with no reply yet has no INBOX label, so it was
+    // otherwise invisible here. Only headers are fetched (format=metadata,
+    // no body/attachment decoding) since these show as lightweight "awaiting
+    // reply" entries, not full conversations — see lib/gmail.ts for why this
+    // doesn't reuse the expensive format=full path used above.
+    const sentListRes = await fetch(
+      "https://gmail.googleapis.com/gmail/v1/users/me/threads?maxResults=200&labelIds=SENT",
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    )
+    const sentListData = sentListRes.ok ? await sentListRes.json() : { threads: [] }
+    const inboxThreadIdSet = new Set(threadIds)
+    const sentOnlyIds: string[] = (sentListData.threads || [])
+      .map((t: any) => t.id)
+      .filter((id: string) => !inboxThreadIdSet.has(id))
+
+    const sentOnlyDetails = await Promise.all(
+      sentOnlyIds.map((id) =>
+        fetch(
+          `https://gmail.googleapis.com/gmail/v1/users/me/threads/${id}?format=metadata&metadataHeaders=Subject&metadataHeaders=To&metadataHeaders=Date`,
+          { headers: { Authorization: `Bearer ${accessToken}` } }
+        ).then((r) => (r.ok ? r.json() : null))
+      )
+    )
+
+    const shapedSentOnly = sentOnlyDetails
+      .filter(Boolean)
+      .map((thread: any) => {
+        const firstMsg = thread.messages?.[0]
+        const headers = firstMsg?.payload?.headers || []
+        const toHeader = getHeader(headers, "To")
+        const nameMatch = toHeader.match(/^([^<]+)</)
+        const emailMatch = toHeader.match(/<([^>]+)>/)
+        const recipientEmail = (emailMatch ? emailMatch[1] : toHeader).toLowerCase().trim()
+        const recipientName = nameMatch ? nameMatch[1].trim() : recipientEmail.split("@")[0] || "Unknown"
+
+        // Instroom's own transactional emails (welcome, password reset,
+        // verification, etc. — see lib/email.ts) are sent from this same
+        // connected Gmail account via nodemailer, always as `Instroom <...>`.
+        // If the recipient also happens to be a registered influencer (e.g.
+        // they signed up for an Instroom account with the same address they
+        // use for collabs), those system emails would otherwise get counted
+        // as outreach — this excludes anything sent under that sender name.
+        const fromHeader = getHeader(headers, "From")
+        const fromName = (fromHeader.match(/^([^<]+)</)?.[1] || fromHeader).trim().toLowerCase()
+        const isSystemEmail = fromName === "instroom"
+
+        return {
+          id: thread.id,
+          subject: getHeader(headers, "Subject") || "(No subject)",
+          snippet: thread.snippet || firstMsg?.snippet || "",
+          date: getHeader(headers, "Date"),
+          recipientEmail,
+          recipientName,
+          isSystemEmail,
+        }
+      })
+      .filter((t) => t.recipientEmail && !t.isSystemEmail)
+
+    const senderEmails = [...new Set([
+      ...shapedThreads.map((t) => t.senderEmail),
+      ...shapedSentOnly.map((t) => t.recipientEmail),
+    ].filter(Boolean))]
 
     type BrandInfluencerRow = {
+      id: string
       contact_status: string
       content_posted: boolean
       stage: number
@@ -272,6 +203,7 @@ export async function GET(req: NextRequest) {
         influencer: { email: { in: senderEmails } },
       },
       select: {
+        id: true,
         contact_status: true,
         content_posted: true,
         stage: true,
@@ -285,11 +217,28 @@ export async function GET(req: NextRequest) {
     )
 
     // 5. Attach brandInfluencer to each thread (null for unknown senders)
-    const threads = shapedThreads.map(({ senderEmail, ...thread }) => ({
+    const threads = shapedThreads.map(({ senderEmail, hasReply, ...thread }) => ({
       ...thread,
       senderEmail,
       brandInfluencer: biByEmail.get(senderEmail) ?? null,
+      hasReply,
     }))
+
+    const sentAwaitingReply = shapedSentOnly.map(({ isSystemEmail, ...t }) => ({
+      ...t,
+      brandInfluencer: biByEmail.get(t.recipientEmail) ?? null,
+      isLightweight: true as const,
+    }))
+
+    // Auto-advance influencers who replied to "In Conversation" — fire-and-forget,
+    // same as the influencer_reply notifications below, so it never adds latency
+    // to this already-slow endpoint.
+    const replyBrandInfluencerIds = threads
+      .filter((t) => t.hasReply && t.brandInfluencer)
+      .map((t) => t.brandInfluencer!.id)
+    autoAdvanceRepliedToInConversation(brand_id, replyBrandInfluencerIds).catch((err) =>
+      console.error("Auto-advance to In Conversation failed:", err)
+    )
 
     // 6. Send notifications for new unread messages from influencers (non-blocking)
     if (brand_id && session.user?.id) {
@@ -353,7 +302,7 @@ export async function GET(req: NextRequest) {
       )
     }
 
-    const body = { threads }
+    const body = { threads: threads.map(({ hasReply, ...thread }) => thread), sentAwaitingReply }
     if (cacheKey) threadsCache.set(cacheKey, { expiresAt: Date.now() + THREADS_CACHE_TTL_MS, body })
     return NextResponse.json(body)
   } catch (err: any) {

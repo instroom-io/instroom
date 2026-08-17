@@ -55,7 +55,10 @@ import {
   IconBrandWindows,
   IconRefresh,
   IconAlertCircle,
+  IconTemplate,
 } from "@tabler/icons-react"
+import { EmailTemplatesModal } from "@/components/shared/email-templates-modal"
+import { UseTemplatePicker } from "@/components/shared/use-template-picker"
 
 function OutlookIcon({ size = 28 }: { size?: number }) {
   return (
@@ -100,7 +103,7 @@ type Email = {
   trackingNumber?: string
   postedLink?: string
   rejectionReason?: string
-  replies?: { sender: string; message: string; timestamp: string; isUser?: boolean }[]
+  replies?: { sender: string; message: string; timestamp: string; isUser?: boolean; isHtml?: boolean }[]
   // Gmail-specific
   gmailThreadId?: string
   from?: string
@@ -108,6 +111,10 @@ type Email = {
   // Source tracking for multi-provider support
   source?: "gmail" | "outlook"
   outlookMessageId?: string
+  // A "sent, awaiting reply" entry shown from headers/snippet only — no full
+  // message body loaded yet. Opening it triggers a lazy fetch (see
+  // loadFullGmailThread) that replaces the entry with real content.
+  isLightweight?: boolean
 }
 
 type StageConfig = {
@@ -185,11 +192,16 @@ function mapGmailThreadToEmail(thread: any, index: number): Email {
     const replyFrom = msg.from || msg.sender || ""
     const replyName = replyFrom.match(/^([^<]+)</)?.[1]?.trim() || replyFrom.split("@")[0] || "Unknown"
     const isUser = (msg.labelIds || []).includes("SENT")
+    // Only trust the isHtml flag when it's paired with an actual body —
+    // msg.body falls back to the plain-text msg.snippet/msg.text when the
+    // real body couldn't be extracted, and that fallback is never HTML.
+    const hasRealBody = Boolean(msg.body)
     return {
       sender: isUser ? "You" : replyName,
       message: msg.body || msg.snippet || msg.text || "",
       timestamp: msg.date || new Date().toISOString(),
       isUser,
+      isHtml: hasRealBody && Boolean(msg.isHtml),
     }
   })
 
@@ -214,6 +226,36 @@ function mapGmailThreadToEmail(thread: any, index: number): Email {
     fromEmail: senderEmail,
     replies,
     source: "gmail" as const,
+  }
+}
+
+// A cold-outreach thread with no reply yet — shown from headers/snippet only
+// (see app/api/gmail/threads/route.ts's sentAwaitingReply). Deliberately
+// separate from mapGmailThreadToEmail, which assumes a full messages[] array.
+function mapLightweightSentThread(thread: any, index: number): Email {
+  const status = getPipelineStatus(thread.brandInfluencer)
+  const timestamp = thread.date || new Date().toISOString()
+  const recipientName = thread.recipientName || thread.recipientEmail?.split("@")[0] || "Unknown"
+
+  return {
+    id: thread.id || `gmail-sent-${index}`,
+    gmailThreadId: thread.id,
+    name: recipientName,
+    handle: thread.recipientEmail || "",
+    avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(recipientName)}&background=1FAE5B&color=fff&bold=true`,
+    subject: thread.subject || "(No subject)",
+    preview: thread.snippet || "",
+    message: "",
+    date: formatRelativeDate(timestamp),
+    timestamp,
+    status,
+    read: true,
+    starred: false,
+    from: recipientName,
+    fromEmail: thread.recipientEmail || "",
+    replies: undefined,
+    source: "gmail" as const,
+    isLightweight: true,
   }
 }
 
@@ -275,6 +317,32 @@ function formatRelativeDate(timestamp: string): string {
   } catch {
     return "Recently"
   }
+}
+
+// Renders untrusted HTML email content (e.g. a Gmail message whose body is
+// text/html, including our own signature-bearing sends) inside a sandboxed
+// iframe rather than dangerouslySetInnerHTML — inbound mail can come from
+// anyone, and raw HTML from a third party is a script/XSS vector if rendered
+// directly into the page. `allow-same-origin` (without `allow-scripts`) lets
+// this component measure the rendered content's height to auto-size the
+// iframe; scripts still cannot execute either way.
+function HtmlMessageFrame({ html }: { html: string }) {
+  const [height, setHeight] = useState(80)
+  const doc = `<!doctype html><html><head><meta charset="utf-8">` +
+    `<style>body{margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;font-size:14px;overflow-wrap:anywhere;}</style>` +
+    `</head><body>${html}</body></html>`
+
+  return (
+    <iframe
+      srcDoc={doc}
+      sandbox="allow-same-origin"
+      style={{ width: "100%", border: 0, height }}
+      onLoad={(e) => {
+        const body = e.currentTarget.contentWindow?.document?.body
+        if (body) setHeight(body.scrollHeight + 8)
+      }}
+    />
+  )
 }
 
 // Splits a plain-text email body into the new reply text and the quoted
@@ -364,8 +432,10 @@ function InboxContent() {
 
   const [emails, setEmails] = useState<Email[]>([])
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null)
+  const [loadingThreadId, setLoadingThreadId] = useState<string | number | null>(null)
   const [selectedStage, setSelectedStage] = useState<PipelineStage | "ALL">("ALL")
   const [openCompose, setOpenCompose] = useState(false)
+  const [openTemplates, setOpenTemplates] = useState(false)
   const [reply, setReply] = useState("")
   const [isSending, setIsSending] = useState(false)
   const [sendError, setSendError] = useState<string | undefined>()
@@ -481,7 +551,8 @@ function InboxContent() {
 
       if (res.ok) {
         const mappedEmails = (data.threads || []).map((t: any, i: number) => mapGmailThreadToEmail(t, i))
-        setEmails(prev => [...prev.filter(e => e.source !== "gmail"), ...mappedEmails])
+        const mappedSentAwaitingReply = (data.sentAwaitingReply || []).map((t: any, i: number) => mapLightweightSentThread(t, i))
+        setEmails(prev => [...prev.filter(e => e.source !== "gmail"), ...mappedEmails, ...mappedSentAwaitingReply])
         setGmailConnected(true)
         setGmailSyncState("connected")
       } else if (data?.reauth) {
@@ -516,7 +587,8 @@ function InboxContent() {
 
       if (res.ok) {
         const mappedEmails = (data.threads || []).map((t: any, i: number) => mapGmailThreadToEmail(t, i))
-        setEmails(prev => [...prev.filter(e => e.source !== "gmail"), ...mappedEmails])
+        const mappedSentAwaitingReply = (data.sentAwaitingReply || []).map((t: any, i: number) => mapLightweightSentThread(t, i))
+        setEmails(prev => [...prev.filter(e => e.source !== "gmail"), ...mappedEmails, ...mappedSentAwaitingReply])
         setGmailConnected(true)
         setGmailSyncState("connected")
       } else if (data?.reauth) {
@@ -609,6 +681,7 @@ function InboxContent() {
           to: composeTo.trim(),
           subject: composeSubject.trim() || "(No subject)",
           body: composeBody.trim(),
+          brandId,
         }),
       })
       const data = await res.json()
@@ -647,9 +720,20 @@ function InboxContent() {
     })
   }, [emails, selectedStage, debouncedSearchQuery])
 
+  // Pipeline-stage tabs count distinct contacts, not threads — "In
+  // Conversation: 1" means one influencer at that stage, even if there are
+  // several separate email threads with them (repeated outreach, multiple
+  // "Welcome back" style follow-ups, etc.). `handle` is the contact's email
+  // address in every mapper (Gmail, Outlook, and the lightweight
+  // sent-awaiting-reply entries), so it's a reliable per-contact key. "All
+  // Messages" deliberately stays a raw thread count — that view is about
+  // message volume, not the pipeline.
   const getStageCount = (stage: PipelineStage | "ALL") => {
     if (stage === "ALL") return emails.length
-    return emails.filter((e) => e.status === stage).length
+    const handles = new Set(
+      emails.filter((e) => e.status === stage).map((e) => e.handle)
+    )
+    return handles.size
   }
 
   const toggleStar = (id: number | string, e: React.MouseEvent) => {
@@ -659,6 +743,30 @@ function InboxContent() {
 
   const markAsRead = (id: number | string) => {
     setEmails((prev) => prev.map((email) => (email.id === id ? { ...email, read: true } : email)))
+  }
+
+  // Lightweight "sent, awaiting reply" entries only carry headers/snippet —
+  // fetch full detail on open instead of upfront for every one of them.
+  const openEmail = async (email: Email) => {
+    setSelectedEmail(email)
+    markAsRead(email.id)
+    if (!email.isLightweight || !email.gmailThreadId) return
+
+    setLoadingThreadId(email.id)
+    try {
+      const res = await fetch(`/api/gmail/thread/${email.gmailThreadId}`)
+      const data = await res.json()
+      if (!res.ok || !data.thread) return
+
+      const fullEmail = mapGmailThreadToEmail({ ...data.thread, brandInfluencer: null }, 0)
+      const merged: Email = { ...fullEmail, id: email.id, status: email.status, isLightweight: false }
+      setEmails((prev) => prev.map((e) => (e.id === email.id ? merged : e)))
+      setSelectedEmail((prev) => (prev?.id === email.id ? merged : prev))
+    } catch {
+      // Leave the lightweight entry as-is — the snippet is still shown.
+    } finally {
+      setLoadingThreadId((prev) => (prev === email.id ? null : prev))
+    }
   }
 
   const updateEmailStage = async (emailId: number | string, newStage: PipelineStage) => {
@@ -749,6 +857,7 @@ function InboxContent() {
         to: selectedEmail.fromEmail || selectedEmail.handle,
         subject: selectedEmail.subject,
         body: messageText,
+        brandId,
       }
       if (selectedEmail.source === "gmail") replyPayload.threadId = selectedEmail.gmailThreadId
 
@@ -1086,6 +1195,13 @@ function InboxContent() {
                       </button>
                     )}
                     <button
+                      onClick={() => setOpenTemplates(true)}
+                      title="Email Templates"
+                      className="flex h-11 w-11 sm:h-9 sm:w-9 items-center justify-center rounded-xl hover:bg-gray-100 active:bg-gray-200 transition-colors text-gray-500"
+                    >
+                      <IconTemplate size={16} />
+                    </button>
+                    <button
                       onClick={() => { setComposeSource(gmailConnected ? "gmail" : outlookConnected ? "outlook" : "gmail"); setOpenCompose(true) }}
                       className="flex h-11 w-11 sm:h-9 sm:w-9 shrink-0 items-center justify-center rounded-xl bg-[#1FAE5B] text-white hover:bg-[#0F6B3E] active:bg-[#0F6B3E] transition-colors shadow-sm"
                       title="New Message"
@@ -1120,7 +1236,7 @@ function InboxContent() {
                   filteredEmails.map((email) => (
                     <DraggableEmailRow key={email.id} id={String(email.id)}>
                       <div
-                        onClick={() => { setSelectedEmail(email); markAsRead(email.id) }}
+                        onClick={() => openEmail(email)}
                         className={`flex items-start gap-3 px-4 py-3.5 sm:py-3 min-h-[68px] sm:min-h-0 cursor-pointer transition-colors duration-150 active:bg-gray-100 ${
                           selectedEmail?.id === email.id ? "bg-gray-100 shadow-[inset_3px_0_0_#1FAE5B]" : "hover:bg-gray-50"
                         } ${!email.read ? "bg-blue-50/40" : ""}`}
@@ -1258,7 +1374,15 @@ function InboxContent() {
               <div className="flex-1 overflow-y-auto p-4 md:p-6 bg-gray-50">
                 <div className="max-w-3xl">
                   <p className="text-xs text-gray-400 mb-3 font-medium">{selectedEmail.subject}</p>
-                  {(() => {
+                  {selectedEmail.isLightweight && loadingThreadId === selectedEmail.id ? (
+                    <div className="flex items-center gap-2 text-sm text-gray-400 py-6">
+                      <span className="relative inline-block w-3.5 h-3.5 flex-shrink-0">
+                        <span className="absolute inset-0 rounded-full border-2 border-gray-200" />
+                        <span className="absolute inset-0 rounded-full border-2 border-transparent border-t-[#1FAE5B] animate-spin" />
+                      </span>
+                      Loading message…
+                    </div>
+                  ) : (() => {
                     const allMessages = selectedEmail.replies?.length
                       ? selectedEmail.replies
                       : [{ sender: selectedEmail.name, message: selectedEmail.message || selectedEmail.preview, timestamp: selectedEmail.timestamp, isUser: false }]
@@ -1284,6 +1408,21 @@ function InboxContent() {
                           </div>
                           <div className={`flex flex-col gap-1 ${group.isUser ? "items-end" : "items-start"}`}>
                             {group.items.map((msg, mIdx) => {
+                              // HTML messages (e.g. a signature-bearing send) skip the
+                              // plain-text quote-splitting entirely — "On ... wrote:"/">"
+                              // heuristics don't apply to markup, and the quoted portion
+                              // of an HTML email is already part of its own rendered layout.
+                              if (msg.isHtml) {
+                                return (
+                                  <div
+                                    key={mIdx}
+                                    className={`rounded-2xl px-4 md:px-5 py-3 shadow-sm overflow-hidden ${group.isUser ? "bg-[#1FAE5B] rounded-tr-none" : "bg-white border border-gray-100 rounded-tl-none"}`}
+                                  >
+                                    <HtmlMessageFrame html={msg.message} />
+                                  </div>
+                                )
+                              }
+
                               const { main, quoted } = splitQuotedText(msg.message)
                               const quoteKey = `${gIdx}-${mIdx}`
                               const isExpanded = expandedQuotes.has(quoteKey)
@@ -1343,6 +1482,13 @@ function InboxContent() {
 
               {/* Reply Input */}
               <div className="flex-shrink-0 border-t border-gray-200 bg-white p-3 md:p-4 shadow-lg">
+                <div className="flex justify-end mb-1.5">
+                  <UseTemplatePicker
+                    brandId={brandId}
+                    recipientEmail={selectedEmail.fromEmail || selectedEmail.handle}
+                    onApply={(_subject, body) => setReply(body)}
+                  />
+                </div>
                 <div className="flex gap-3 items-end">
                   <div className="w-8 h-8 rounded-full bg-[#1FAE5B] flex items-center justify-center text-white text-xs font-medium shadow-sm flex-shrink-0">ME</div>
                   <div className="flex-1 relative">
@@ -1439,6 +1585,13 @@ function InboxContent() {
               </div>
             ) : (
               <>
+                <div className="flex justify-end mb-1">
+                  <UseTemplatePicker
+                    brandId={brandId}
+                    recipientEmail={composeTo}
+                    onApply={(subject, body) => { setComposeSubject(subject); setComposeBody(body) }}
+                  />
+                </div>
                 <div className="space-y-1">
                   {isGmailReady && isOutlookReady && (
                     <div className="flex items-center border-b border-gray-200 gap-2 py-2">
@@ -1522,6 +1675,8 @@ function InboxContent() {
           </div>
         </div>
       )}
+
+      <EmailTemplatesModal isOpen={openTemplates} onClose={() => setOpenTemplates(false)} brandId={brandId} />
 
       {/* ── STAGE NOTIFICATION ── */}
       {stageNotification.show && (

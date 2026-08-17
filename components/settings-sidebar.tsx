@@ -51,6 +51,17 @@ const settingsSections: SettingsSection[] = [
           </svg>
         ),
       },
+      {
+        key: "signature",
+        label: "Email Signature",
+        href: "/dashboard/settings/signature",
+        icon: (
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" width={14} height={14}>
+            <path d="M2 12.5c2-3 3.5-1 5-3s1-4 3-4 1 3 3 1" />
+            <path d="M11 12.5h3" />
+          </svg>
+        ),
+      },
     ],
   },
   {
