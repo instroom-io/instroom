@@ -7,8 +7,9 @@
 //   const { niches, locations, addNiche, removeNiche, addLocation, removeLocation, isLoading } =
 //     useBrandTaxonomy(brandId)
 
-import { useState, useEffect, useCallback } from "react"
+import { useEffect, useCallback } from "react"
 import { toast } from "sonner"
+import { useCachedFetch, invalidateCache, getCachedData, setCachedData } from "@/lib/data-cache"
 
 export interface BrandNiche {
   id: string
@@ -24,34 +25,56 @@ export interface BrandLocation {
   created_at: string
 }
 
+const EMPTY_NICHES: BrandNiche[] = []
+const EMPTY_LOCATIONS: BrandLocation[] = []
+
 export function useBrandTaxonomy(brandId: string | null) {
-  const [niches, setNiches] = useState<BrandNiche[]>([])
-  const [locations, setLocations] = useState<BrandLocation[]>([])
-  const [isLoading, setIsLoading] = useState(false)
+  const taxonomyKey = brandId ? `/api/brand/${brandId}/taxonomy` : null
 
-  // ── Fetch both on mount / brandId change ────────────────────────────────
-  useEffect(() => {
-    if (!brandId) {
-      setNiches([])
-      setLocations([])
-      return
-    }
-
-    setIsLoading(true)
-
-    Promise.all([
+  // ── Fetch both, once, shared across every modal that mounts this hook ────
+  const fetchTaxonomy = useCallback(async () => {
+    const [nichesData, locationsData] = await Promise.all([
       fetch(`/api/brand/${brandId}/niches`).then((r) => r.json()),
       fetch(`/api/brand/${brandId}/locations`).then((r) => r.json()),
     ])
-      .then(([nichesData, locationsData]) => {
-        setNiches(nichesData.niches ?? [])
-        setLocations(locationsData.locations ?? [])
-      })
-      .catch(() => {
-        toast.error("Failed to load niches / locations")
-      })
-      .finally(() => setIsLoading(false))
+    return {
+      niches: (nichesData.niches ?? []) as BrandNiche[],
+      locations: (locationsData.locations ?? []) as BrandLocation[],
+    }
   }, [brandId])
+
+  const { data, error, isLoading } = useCachedFetch(taxonomyKey, fetchTaxonomy)
+
+  // Rendered straight from the shared cache — optimistic edits below write back
+  // into it, so every modal using this hook sees the same list.
+  const niches = data?.niches ?? EMPTY_NICHES
+  const locations = data?.locations ?? EMPTY_LOCATIONS
+
+  const setNiches = useCallback(
+    (value: BrandNiche[] | ((prev: BrandNiche[]) => BrandNiche[])) => {
+      if (!taxonomyKey) return
+      const prev = getCachedData<{ niches: BrandNiche[]; locations: BrandLocation[] }>(taxonomyKey)
+        ?? { niches: [], locations: [] }
+      const next = typeof value === "function" ? value(prev.niches) : value
+      setCachedData(taxonomyKey, { ...prev, niches: next })
+    },
+    [taxonomyKey]
+  )
+
+  const setLocations = useCallback(
+    (value: BrandLocation[] | ((prev: BrandLocation[]) => BrandLocation[])) => {
+      if (!taxonomyKey) return
+      const prev = getCachedData<{ niches: BrandNiche[]; locations: BrandLocation[] }>(taxonomyKey)
+        ?? { niches: [], locations: [] }
+      const next = typeof value === "function" ? value(prev.locations) : value
+      setCachedData(taxonomyKey, { ...prev, locations: next })
+    },
+    [taxonomyKey]
+  )
+
+  useEffect(() => {
+    if (error) toast.error("Failed to load niches / locations")
+  }, [error])
 
   // ── Add niche ───────────────────────────────────────────────────────────
   const addNiche = useCallback(
@@ -82,13 +105,14 @@ export function useBrandTaxonomy(brandId: string | null) {
         setNiches((prev) =>
           [...prev, niche].sort((a, b) => a.name.localeCompare(b.name))
         )
+        if (taxonomyKey) invalidateCache(taxonomyKey)
         return niche
       } catch {
         toast.error("Network error — could not add niche")
         return null
       }
     },
-    [brandId]
+    [brandId, taxonomyKey, setNiches, setLocations]
   )
 
   // ── Remove niche ────────────────────────────────────────────────────────
@@ -113,13 +137,14 @@ export function useBrandTaxonomy(brandId: string | null) {
           return false
         }
 
+        if (taxonomyKey) invalidateCache(taxonomyKey)
         return true
       } catch {
         toast.error("Network error — could not remove niche")
         return false
       }
     },
-    [brandId]
+    [brandId, taxonomyKey, setNiches, setLocations]
   )
 
   // ── Add location ────────────────────────────────────────────────────────
@@ -151,13 +176,14 @@ export function useBrandTaxonomy(brandId: string | null) {
         setLocations((prev) =>
           [...prev, location].sort((a, b) => a.name.localeCompare(b.name))
         )
+        if (taxonomyKey) invalidateCache(taxonomyKey)
         return location
       } catch {
         toast.error("Network error — could not add location")
         return null
       }
     },
-    [brandId]
+    [brandId, taxonomyKey, setNiches, setLocations]
   )
 
   // ── Remove location ─────────────────────────────────────────────────────
@@ -182,13 +208,14 @@ export function useBrandTaxonomy(brandId: string | null) {
           return false
         }
 
+        if (taxonomyKey) invalidateCache(taxonomyKey)
         return true
       } catch {
         toast.error("Network error — could not remove location")
         return false
       }
     },
-    [brandId]
+    [brandId, taxonomyKey, setNiches, setLocations]
   )
 
   return {

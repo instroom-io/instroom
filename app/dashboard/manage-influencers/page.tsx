@@ -12,6 +12,8 @@ import TableSheet, {
 } from "@/components/table-sheet"
 import { useInfluencerData } from "@/hooks/useInfluencerData"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
+import { fetchCached } from "@/lib/data-cache"
+import { invalidateInfluencerDerivedCaches, influencersCacheKey } from "@/lib/cache-invalidation"
 import { LimitExceededDialog } from "@/components/limit-exceeded-dialog"
 import { WorkspaceUnavailableModal } from "@/components/workspace-unavailable-modal"
 import { TableSkeleton } from "@/components/shared/skeletons"
@@ -88,6 +90,8 @@ type QueueItem = {
   url: string
   payload: string
   onError?: (status: number) => void
+  /** Runs after the row was persisted — used to refresh the views derived from it. */
+  onSuccess?: () => void
 }
 
 function createPutQueue() {
@@ -105,7 +109,8 @@ function createPutQueue() {
           headers: { "Content-Type": "application/json" },
           body: item.payload,
         })
-        if (!res.ok) item.onError?.(res.status)
+        if (res.ok) item.onSuccess?.()
+        else item.onError?.(res.status)
       } catch {
         // Network error — silent
       }
@@ -140,9 +145,14 @@ function InfluencersContent() {
     if (brandId) return
     const autoSelectBrand = async () => {
       try {
-        const res = await fetch("/api/brand/list")
-        if (res.ok) {
-          const data = await res.json()
+        // Same shared cache entry the workspace switcher uses, so this does not
+        // duplicate a request that has usually already been made.
+        const data = await fetchCached<{ brands?: any[] }>("/api/brand/list", async () => {
+          const res = await fetch("/api/brand/list")
+          if (!res.ok) throw new Error(`Failed to load brands (${res.status})`)
+          return res.json()
+        })
+        {
           const brands = data.brands || []
           const ownedBrand = brands.find((b: any) => b.owner === true)
           if (ownedBrand) {
@@ -173,12 +183,16 @@ function InfluencersContent() {
     if (!brandId) return
     const fetchBrandName = async () => {
       try {
-        const res = await fetch(`/api/brands/me?brandId=${brandId}`)
-        if (res.ok) {
-          const data = await res.json()
-          const brand = data.brands?.find((b: any) => b.id === brandId)
-          if (brand) setSelectedBrandName(brand.name)
-        }
+        const data = await fetchCached<{ brands?: any[] }>(
+          `/api/brands/me?brandId=${brandId}`,
+          async () => {
+            const res = await fetch(`/api/brands/me?brandId=${brandId}`)
+            if (!res.ok) throw new Error(`Failed to load brand (${res.status})`)
+            return res.json()
+          }
+        )
+        const brand = data.brands?.find((b: any) => b.id === brandId)
+        if (brand) setSelectedBrandName(brand.name)
       } catch {
         // Silent fail
       }
@@ -226,8 +240,16 @@ function InfluencersContent() {
   // ── Fetch subscription status for trial limit detection ────────────────────
   useEffect(() => {
     if (!session?.user?.id) return
-    fetch("/api/subscription/status")
-      .then(res => res.json())
+    // Shares the entry useSubscriptionStatus fills, so the status is fetched
+    // once per user rather than again on every visit to this page.
+    fetchCached<{ status: string; isExpired: boolean }>(
+      `/api/subscription/status?user=${session.user.id}`,
+      async () => {
+        const res = await fetch("/api/subscription/status")
+        if (!res.ok) throw new Error(`Failed to load subscription status (${res.status})`)
+        return res.json()
+      }
+    )
       .then(data => setSubscriptionStatus(data))
       .catch(() => setSubscriptionStatus({ status: "inactive", isExpired: false }))
   }, [session?.user?.id])
@@ -250,6 +272,13 @@ function InfluencersContent() {
         putQueue.current.enqueue({
           url,
           payload,
+          // An approval or stage edit here changes what Pipeline, Post Tracker,
+          // Brand Partners and Analytics should show. Their cached entries are
+          // marked stale so those pages pick the change up on open — this
+          // page's own entry is already correct from the inline edit.
+          onSuccess() {
+            invalidateInfluencerDerivedCaches(brandId, [influencersCacheKey(brandId)])
+          },
           onError(status) {
             if (status === 404) {
               dbIds.current.delete(row.id)
@@ -300,6 +329,10 @@ function InfluencersContent() {
           tempToReal.current.set(row.id, realId)
           idSwapCallback.current?.(row.id, realId)
 
+          // A newly linked influencer appears in the pipeline and in analytics
+          // scope, so those views must not keep serving their old payload.
+          invalidateInfluencerDerivedCaches(brandId)
+
           if (!skipToast) toast.success(`@${handle} added`)
           return realId
 
@@ -312,6 +345,9 @@ function InfluencersContent() {
           tempToReal.current.set(row.id, existingId)
           if (existingId !== row.id) idSwapCallback.current?.(row.id, existingId)
 
+          // Linking an existing influencer to this brand widens what the other
+          // views cover, so refresh them too.
+          invalidateInfluencerDerivedCaches(brandId)
           return existingId
 
         } else if (res.status === 403) {
@@ -506,6 +542,7 @@ function InfluencersContent() {
         if (res.ok || res.status === 404) {
           dbIds.current.delete(rowId)
           tempToReal.current.delete(rowId)
+          invalidateInfluencerDerivedCaches(brandId)
           if (res.ok) toast.success("Influencer removed")
         } else {
           const body = await res.json().catch(() => ({}))

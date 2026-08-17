@@ -1,10 +1,10 @@
 "use client"
 
-import { useEffect, useState } from "react"
 import {
   IconUsers, IconUserStar, IconBuildingStore, IconSpeakerphone,
   IconUsersGroup, IconUserPlus, IconClockHour4,
 } from "@tabler/icons-react"
+import { useCachedFetch } from "@/lib/data-cache"
 
 interface Stats {
   totalUsers: number
@@ -32,19 +32,19 @@ const CARDS: { key: keyof Stats; label: string; icon: typeof IconUsers }[] = [
 ]
 
 export default function AdminDashboardPage() {
-  const [stats, setStats] = useState<Stats | null>(null)
-  const [activity, setActivity] = useState<ActivityItem[]>([])
-  const [loading, setLoading] = useState(true)
+  // Shared cache: returning to this page shows the last figures immediately and
+  // refreshes them in the background instead of re-running a full load.
+  const { data, isLoading: loading } = useCachedFetch<{
+    stats: Stats | null
+    recentActivity?: ActivityItem[]
+  }>("/api/admin/stats", async () => {
+    const res = await fetch("/api/admin/stats")
+    if (!res.ok) throw new Error(`Failed to load admin stats (${res.status})`)
+    return res.json()
+  })
 
-  useEffect(() => {
-    fetch("/api/admin/stats")
-      .then((r) => r.json())
-      .then((json) => {
-        setStats(json.stats)
-        setActivity(json.recentActivity || [])
-      })
-      .finally(() => setLoading(false))
-  }, [])
+  const stats = data?.stats ?? null
+  const activity = data?.recentActivity ?? []
 
   return (
     <div className="flex flex-col gap-6">

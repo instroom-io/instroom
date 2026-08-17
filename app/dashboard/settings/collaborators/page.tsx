@@ -19,6 +19,7 @@ import { AlertCircle, Trash2, Mail, Zap } from "lucide-react"
 import Script from "next/script"
 import { cn } from "@/lib/utils"
 import { SettingsSkeleton } from "@/components/shared/skeletons"
+import { setCachedData, hasCachedData, getCachedData, invalidateCache } from "@/lib/data-cache"
 
 interface Collaborator {
   id: string
@@ -58,9 +59,17 @@ function CollaboratorsContent() {
 
   const brandId = searchParams.get("brandId")
 
-  const [owner, setOwner] = useState<Collaborator | null>(null)
-  const [members, setMembers] = useState<Collaborator[]>([])
-  const [dataLoaded, setDataLoaded] = useState(false)
+  // Seeded from the shared cache so returning to this page shows the current
+  // collaborators immediately while the list refreshes behind them.
+  const cachedCollaborators = brandId
+    ? getCachedData<{ owner: Collaborator | null; members?: Collaborator[] }>(
+        `/api/brand/${brandId}/collaborators`
+      )
+    : undefined
+
+  const [owner, setOwner] = useState<Collaborator | null>(cachedCollaborators?.owner ?? null)
+  const [members, setMembers] = useState<Collaborator[]>(cachedCollaborators?.members ?? [])
+  const [dataLoaded, setDataLoaded] = useState(cachedCollaborators !== undefined)
   const [error, setError] = useState("")
   const [inviteEmail, setInviteEmail] = useState("")
   const [inviteRole, setInviteRole] = useState("manager")
@@ -155,13 +164,16 @@ function CollaboratorsContent() {
       return
     }
 
-    setDataLoaded(false)
+    // Keep whatever is cached on screen while this refreshes: only a first-ever
+    // load shows the loading state.
+    setDataLoaded(hasCachedData(`/api/brand/${brandId}/collaborators`))
 
     const fetchCollaborators = async () => {
       try {
         setError("")
         const res = await fetch(`/api/brand/${brandId}/collaborators`)
         const data = await res.json()
+        if (res.ok) setCachedData(`/api/brand/${brandId}/collaborators`, data)
         if (!res.ok) {
           if (res.status === 403) setError("You don't have permission to manage collaborators for this brand.")
           else if (res.status === 404) setError("Brand not found.")
@@ -217,6 +229,7 @@ function CollaboratorsContent() {
         setError(data.error || "Failed to invite collaborator")
         return
       }
+      invalidateCache(`/api/brand/${brandId}/collaborators`)
       const refetch = await fetch(`/api/brand/${brandId}/collaborators`)
       const refreshed = await refetch.json()
       setMembers(refreshed.members || [])

@@ -5,8 +5,15 @@
 
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useCallback } from "react"
 import type { InfluencerRow, CustomColumn } from "@/components/table-sheet"
+import { useCachedFetch, setCachedData, getCachedData } from "@/lib/data-cache"
+
+type InfluencerPayload = { rows: InfluencerRow[]; customColumns: CustomColumn[] }
+
+// Stable empty references so consumers' memos don't rerun before data arrives.
+const EMPTY_ROWS: InfluencerRow[] = []
+const EMPTY_COLUMNS: CustomColumn[] = []
 
 type UseInfluencerDataReturn = {
   rows: InfluencerRow[]
@@ -19,22 +26,11 @@ type UseInfluencerDataReturn = {
 }
 
 export function useInfluencerData(brandId: string | null): UseInfluencerDataReturn {
-  const [rows, setRows] = useState<InfluencerRow[]>([])
-  const [customColumns, setCustomColumns] = useState<CustomColumn[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  // Shared across pages: returning to the sheet renders the cached rows
+  // immediately and only refreshes in the background when they are stale.
+  const cacheKey = brandId ? `/api/brand/${brandId}/influencers` : null
 
-  const fetchData = useCallback(async () => {
-    if (!brandId) {
-      setIsLoading(false)
-      setError("No brand selected")
-      return
-    }
-
-    setIsLoading(true)
-    setError(null)
-
-    try {
+  const fetchPayload = useCallback(async (): Promise<InfluencerPayload> => {
       const res = await fetch(`/api/brand/${brandId}/influencers`)
 
       if (!res.ok) {
@@ -139,27 +135,55 @@ export function useInfluencerData(brandId: string | null): UseInfluencerDataRetu
         })
       )
 
-      setRows(apiRows)
-      setCustomColumns(apiCustomCols)
-    } catch (err: any) {
-      console.error("useInfluencerData fetch error:", err)
-      setError(err.message || "Failed to load influencers")
-    } finally {
-      setIsLoading(false)
-    }
+      return { rows: apiRows, customColumns: apiCustomCols }
   }, [brandId])
 
-  useEffect(() => {
-    fetchData()
-  }, [fetchData])
+  const { data, error, isLoading, refetch } = useCachedFetch<InfluencerPayload>(
+    cacheKey,
+    fetchPayload
+  )
+
+  // The cache IS the state: reading it during render (rather than copying it
+  // into local state in an effect) is what keeps every consumer of this brand's
+  // rows in sync without extra renders or extra requests.
+  const rows = data?.rows ?? EMPTY_ROWS
+  const customColumns = data?.customColumns ?? EMPTY_COLUMNS
+
+  // Local edits (inline cell edits, optimistic updates) write straight into the
+  // cache, so they show up everywhere and survive navigating away and back.
+  const updateRows = useCallback<React.Dispatch<React.SetStateAction<InfluencerRow[]>>>(
+    (value) => {
+      if (!cacheKey) return
+      const cached = getCachedData<InfluencerPayload>(cacheKey) ?? { rows: [], customColumns: [] }
+      const next = typeof value === "function"
+        ? (value as (p: InfluencerRow[]) => InfluencerRow[])(cached.rows)
+        : value
+      setCachedData(cacheKey, { ...cached, rows: next })
+    },
+    [cacheKey]
+  )
+
+  const updateCustomColumns = useCallback<React.Dispatch<React.SetStateAction<CustomColumn[]>>>(
+    (value) => {
+      if (!cacheKey) return
+      const cached = getCachedData<InfluencerPayload>(cacheKey) ?? { rows: [], customColumns: [] }
+      const next = typeof value === "function"
+        ? (value as (p: CustomColumn[]) => CustomColumn[])(cached.customColumns)
+        : value
+      setCachedData(cacheKey, { ...cached, customColumns: next })
+    },
+    [cacheKey]
+  )
 
   return {
     rows,
     customColumns,
     isLoading,
-    error,
-    refetch: fetchData,
-    setRows,
-    setCustomColumns,
+    error: brandId ? error : "No brand selected",
+    refetch: async () => {
+      await refetch()
+    },
+    setRows: updateRows,
+    setCustomColumns: updateCustomColumns,
   }
 }

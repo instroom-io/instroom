@@ -127,6 +127,29 @@ export async function GET(req: Request) {
       postMetrics.map(m => [m.brand_influencer_id, m])
     )
 
+    // Actual outreach activity. A row only counts as outreach when a real
+    // contact action exists — an OutreachLog entry, or a contact_status/stage
+    // the app only writes once the influencer has been contacted. Merely
+    // imported / approved / listed influencers (not_contacted + stage 1) are
+    // NOT outreach, which is why totals used to match the whole influencer list.
+    const outreachLogs = brandInfluencerIds.length
+      ? await prisma.outreachLog.groupBy({
+          by: ["brand_influencer_id"],
+          where: { brand_influencer_id: { in: brandInfluencerIds } },
+          _count: { _all: true },
+        })
+      : []
+    const respondedLogs = brandInfluencerIds.length
+      ? await prisma.outreachLog.groupBy({
+          by: ["brand_influencer_id"],
+          where: { brand_influencer_id: { in: brandInfluencerIds }, response_received: true },
+          _count: { _all: true },
+        })
+      : []
+
+    const outreachCountById = new Map(outreachLogs.map(l => [l.brand_influencer_id, l._count._all]))
+    const responseCountById = new Map(respondedLogs.map(l => [l.brand_influencer_id, l._count._all]))
+
     const rows = records.map((r) => {
       const productDetails = safeJSONParse(r.product_details)
       const posts = metricsByInfluencer.get(r.id)
@@ -146,6 +169,12 @@ export async function GET(req: Request) {
         createdAt:        r.created_at.toISOString(),
 
         pipelineStatus:   resolveAnalyticsStatus(r, productDetails),
+
+        // Outreach activity — the source of truth for Total Outreach.
+        outreachCount:    outreachCountById.get(r.id) ?? 0,
+        hasOutreach:      (outreachCountById.get(r.id) ?? 0) > 0 || wasContacted(r),
+        hasResponse:      (responseCountById.get(r.id) ?? 0) > 0,
+
         rejectionReason:  r.approval_notes ?? null,
         rejectionBucket:  resolveRejectionBucket(r.approval_notes),
 
@@ -249,6 +278,26 @@ function buildDateFilter(dateRange: string): Record<string, Date> | null {
    ------------------------------------------------------------------------ */
 
 const CLOSED_COLUMNS = ["For Order Creation", "In-Transit", "Delivered", "Posted", "No post"]
+
+/**
+ * Statuses the app only ever writes AFTER a real contact action. Rows created by
+ * import/approval start as "not_contacted"/"pending" at stage 1 and stay there
+ * until someone actually reaches out, so those are excluded.
+ */
+const NOT_CONTACTED_STATUSES = new Set(["not_contacted", "pending", ""])
+
+function wasContacted(r: {
+  contact_status: string
+  stage: number | null
+  order_status: string | null
+  content_posted: boolean
+}): boolean {
+  if (!NOT_CONTACTED_STATUSES.has(r.contact_status ?? "")) return true
+  if (r.stage !== null && r.stage >= 2) return true
+  // A shipped/delivered order or a posted collab cannot exist without outreach.
+  if (r.order_status || r.content_posted) return true
+  return false
+}
 
 function derivePipelineStatus(
   contactStatus: string,

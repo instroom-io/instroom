@@ -7,7 +7,12 @@
 //   4. On failure: silent rollback via snapshot
 //   5. updatePaidCollab / updateCampaignType: same pattern
 
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useCallback, useRef } from "react"
+import { useCachedFetch, getCachedData, setCachedData } from "@/lib/data-cache"
+import { invalidateInfluencerDerivedCaches, closedCacheKey } from "@/lib/cache-invalidation"
+
+/** Stable empty reference used before the first payload arrives. */
+const EMPTY_CLOSED: ClosedInfluencer[] = []
 
 export type ClosedColumn =
   | "For Order Creation"
@@ -287,52 +292,44 @@ function mapItem(inf: any): ClosedInfluencer {
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 export function useClosedData(brandId?: string): UseClosedDataReturn {
-  const [data,      setData]      = useState<ClosedInfluencer[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [error,     setError]     = useState<string | null>(null)
+  // Shared cache key — the tracker re-renders from cache on return visits and
+  // revalidates in the background. Keying by brandId also removes the
+  // stale-response race the manual ref-tracking used to guard against.
+  const cacheKey = brandId ? `/api/brand/${brandId}/closed` : null
+
   const pendingRef  = useRef(0)
-  // Tracks the brandId this hook is "currently" fetching for, so a response
-  // from a stale in-flight request (previous brandId) can't overwrite the
-  // newer brand's data if it resolves after a subsequent fetch has started.
-  const latestBrandIdRef = useRef(brandId)
 
   // ── Fetch ─────────────────────────────────────────────────────────────────
-  const fetchData = useCallback(async (showSpinner = true) => {
-    latestBrandIdRef.current = brandId
-
-    if (!brandId) {
-      setData([])
-      setIsLoading(false)
-      return
+  const fetchClosed = useCallback(async (): Promise<ClosedInfluencer[]> => {
+    const res = await fetch(`/api/brand/${brandId}/closed`)
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || "Fetch failed")
     }
-
-    const requestedBrandId = brandId
-
-    try {
-      if (showSpinner) setIsLoading(true)
-      setError(null)
-
-      const res = await fetch(`/api/brand/${brandId}/closed`)
-      if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.error || "Fetch failed")
-      }
-
-      const json = await res.json()
-      const mapped = (json.data || []).map(mapItem)
-
-      // Ignore this response if a newer brandId has since taken over.
-      if (latestBrandIdRef.current !== requestedBrandId) return
-      setData(mapped)
-    } catch (err: any) {
-      if (latestBrandIdRef.current !== requestedBrandId) return
-      setError(err.message || "Error loading data")
-    } finally {
-      if (latestBrandIdRef.current === requestedBrandId && showSpinner) setIsLoading(false)
-    }
+    const json = await res.json()
+    return (json.data || []).map(mapItem)
   }, [brandId])
 
-  useEffect(() => { fetchData(true) }, [fetchData])
+  const { data: cached, error, isLoading, refetch } = useCachedFetch<ClosedInfluencer[]>(
+    cacheKey,
+    fetchClosed
+  )
+
+  // The shared cache is the rendered state, so optimistic writers just write to
+  // it — local edits stay visible everywhere and survive navigation.
+  const data = cached ?? EMPTY_CLOSED
+
+  const setDataCached = useCallback(
+    (value: React.SetStateAction<ClosedInfluencer[]>) => {
+      if (!cacheKey) return
+      const prev = getCachedData<ClosedInfluencer[]>(cacheKey) ?? []
+      const next = typeof value === "function"
+        ? (value as (p: ClosedInfluencer[]) => ClosedInfluencer[])(prev)
+        : value
+      setCachedData(cacheKey, next)
+    },
+    [cacheKey]
+  )
 
   // ── Update Column (optimistic, no spinner) ────────────────────────────────
   const updateColumn = useCallback(
@@ -345,7 +342,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
 
       let snapshot: ClosedInfluencer[] = []
 
-      setData((prev) => {
+      setDataCached((prev) => {
         snapshot = prev
         return prev.map((item) =>
           item.id === id ? applyColumnChange(item, newColumn) : item
@@ -366,7 +363,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
 
         if (!res.ok) {
           // Roll the optimistic change back — the persisted stage is the truth.
-          setData(snapshot)
+          setDataCached(snapshot)
           const body = await res.json().catch(() => ({}))
           return {
             ok: false,
@@ -377,16 +374,19 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
           }
         }
 
-        // ✅ State already correct — no refetch, no spinner
+        // ✅ This tracker's own entry is already correct from the optimistic
+        // update; every other view of these rows (Pipeline, Influencer List,
+        // Brand Partners, Analytics) is now stale and refreshes on next open.
+        invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId!)])
         return { ok: true }
       } catch {
-        setData(snapshot)
+        setDataCached(snapshot)
         return { ok: false, error: "Network error" }
       } finally {
         pendingRef.current -= 1
       }
     },
-    [brandId]
+    [brandId, setDataCached]
   )
 
   // ── Update Paid Collab (optimistic) ───────────────────────────────────────
@@ -396,7 +396,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
 
       let snapshot: ClosedInfluencer[] = []
 
-      setData((prev) => {
+      setDataCached((prev) => {
         snapshot = prev
         return prev.map((item) =>
           item.id !== id ? item : {
@@ -415,17 +415,18 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         })
 
         if (!res.ok) {
-          setData(snapshot)
+          setDataCached(snapshot)
           return false
         }
 
+        invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId!)])
         return true
       } catch {
-        setData(snapshot)
+        setDataCached(snapshot)
         return false
       }
     },
-    [brandId]
+    [brandId, setDataCached]
   )
 
   // ── Update Campaign Type (optimistic) ─────────────────────────────────────
@@ -435,7 +436,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
 
       let snapshot: ClosedInfluencer[] = []
 
-      setData((prev) => {
+      setDataCached((prev) => {
         snapshot = prev
         return prev.map((item) =>
           item.id !== id ? item : { ...item, campaignType }
@@ -450,17 +451,18 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         })
 
         if (!res.ok) {
-          setData(snapshot)
+          setDataCached(snapshot)
           return false
         }
 
+        invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId!)])
         return true
       } catch {
-        setData(snapshot)
+        setDataCached(snapshot)
         return false
       }
     },
-    [brandId]
+    [brandId, setDataCached]
   )
 
   // ── Update Post URL (optimistic) ──────────────────────────────────────────
@@ -472,7 +474,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
       const trimmed = postUrl.trim()
       let snapshot: ClosedInfluencer[] = []
 
-      setData((prev) => {
+      setDataCached((prev) => {
         snapshot = prev
         return prev.map((item) =>
           item.id !== id ? item : { ...item, postUrl: trimmed || null }
@@ -487,27 +489,28 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         })
 
         if (!res.ok) {
-          setData(snapshot)
+          setDataCached(snapshot)
           return false
         }
 
+        invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId!)])
         return true
       } catch {
-        setData(snapshot)
+        setDataCached(snapshot)
         return false
       }
     },
-    [brandId]
+    [brandId, setDataCached]
   )
 
   return {
     data,
-    isLoading,
+    isLoading: Boolean(brandId) && isLoading,
     error,
     updateColumn,
     updatePaidCollab,
     updateCampaignType,
     updatePostUrl,
-    refetch: () => fetchData(false), // background sync, no spinner
+    refetch: () => { void refetch() }, // background sync, no spinner
   }
 }

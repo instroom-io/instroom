@@ -1,31 +1,20 @@
 "use client"
 
-import { useState, useEffect, Suspense } from "react"
+import { Suspense } from "react"
 import { useSearchParams } from "next/navigation"
 import KanbanBoard from "./kanban/kanban-board"
-import { useSession } from "next-auth/react"
 import { SubscriptionGate } from "@/components/ui/subscription-gate"
 import { BoardSkeleton } from "@/components/shared/skeletons"
+import { useSubscriptionGate } from "@/hooks/useSubscriptionGate"
 
 function PipelineContent() {
   const searchParams = useSearchParams()
   const brandId = searchParams.get("brandId")
-  const { data: session } = useSession()
-
   // ── Subscription gate ──────────────────────────────────────────────────────
-  // null = still loading (no flash), true/false = resolved
-  const [isSubscribed, setIsSubscribed] = useState<boolean | null>(null)
-
-  useEffect(() => {
-    if (!session?.user?.id) return
-    fetch(brandId ? `/api/subscription/status?brandId=${brandId}` : "/api/subscription/status")
-      .then(res => res.json())
-      .then(data => {
-        // Allow access if active OR trialing
-        setIsSubscribed((data.status === "active" || data.status === "trialing") && !data.isExpired)
-      })
-      .catch(() => setIsSubscribed(false))
-  }, [session?.user?.id, brandId])
+  // null = still loading (no flash), true/false = resolved. Served from the
+  // shared cache, so a revisit resolves immediately instead of re-gating the
+  // board behind a skeleton.
+  const { isSubscribed } = useSubscriptionGate(brandId)
   // ──────────────────────────────────────────────────────────────────────────
 
   // SubscriptionGate wraps everything so the lock modal always shows

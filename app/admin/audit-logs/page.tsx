@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCachedFetch } from "@/lib/data-cache"
 
 interface AuditLog {
   id: string
@@ -20,15 +20,16 @@ function actionLabel(action: string): string {
 }
 
 export default function AdminAuditLogsPage() {
-  const [logs, setLogs] = useState<AuditLog[]>([])
-  const [loading, setLoading] = useState(true)
+  const { data, isLoading: loading } = useCachedFetch<{ logs?: AuditLog[] }>(
+    "/api/admin/audit-logs",
+    async () => {
+      const res = await fetch("/api/admin/audit-logs")
+      if (!res.ok) throw new Error(`Failed to load audit logs (${res.status})`)
+      return res.json()
+    }
+  )
 
-  useEffect(() => {
-    fetch("/api/admin/audit-logs")
-      .then((r) => r.json())
-      .then((json) => setLogs(json.logs || []))
-      .finally(() => setLoading(false))
-  }, [])
+  const logs = data?.logs ?? []
 
   return (
     <div className="flex flex-col gap-5">

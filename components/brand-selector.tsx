@@ -13,6 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Plus, Zap, AlertCircle, Check, ChevronDown, LogOut, Users } from "lucide-react"
 import { WorkspaceUnavailableModal } from "@/components/workspace-unavailable-modal"
+import { fetchCached } from "@/lib/data-cache"
 
 interface Brand {
   id: string
@@ -86,9 +87,17 @@ export function BrandSelector() {
 
     const fetchBrands = async () => {
       try {
-        const response = await fetch("/api/brand/list")
-        if (response.ok) {
-          const data = await response.json()
+        // This effect re-runs on every route change. Going through the shared
+        // cache means the workspace list is fetched once and reused across
+        // navigations (and refreshed in the background once stale) instead of
+        // re-requested — and re-rendered behind a loading state — every time.
+        const data = await fetchCached<{ brands: Brand[] }>("/api/brand/list", async () => {
+          const response = await fetch("/api/brand/list")
+          if (!response.ok) throw new Error(`Failed to load brands (${response.status})`)
+          return response.json()
+        })
+
+        if (data?.brands) {
           setBrands(data.brands)
           if (brandId) {
             setSelectedBrandId(brandId)

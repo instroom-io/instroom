@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react"
 import { IconSearch } from "@tabler/icons-react"
+import { useCachedFetch } from "@/lib/data-cache"
 
 interface AdminUser {
   id: string
@@ -14,29 +15,39 @@ interface AdminUser {
 }
 
 export default function AdminUsersPage() {
-  const [users, setUsers] = useState<AdminUser[]>([])
   const [q, setQ] = useState("")
-  const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [viewUser, setViewUser] = useState<AdminUser | null>(null)
 
-  const load = useCallback(async (query: string) => {
-    setLoading(true)
-    try {
-      const res = await fetch(`/api/admin/users${query ? `?q=${encodeURIComponent(query)}` : ""}`)
-      const json = await res.json()
-      setUsers(json.users || [])
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => { load("") }, [load])
+  // The typed query is debounced, then becomes part of the cache key — so each
+  // search is cached in its own entry and revisiting one (or this page) renders
+  // from cache instead of loading again.
+  const [query, setQuery] = useState("")
   useEffect(() => {
-    const t = setTimeout(() => load(q), 300)
+    const t = setTimeout(() => setQuery(q), 300)
     return () => clearTimeout(t)
-  }, [q, load])
+  }, [q])
+
+  const url = `/api/admin/users${query ? `?q=${encodeURIComponent(query)}` : ""}`
+
+  const fetchUsers = useCallback(async () => {
+    const res = await fetch(url)
+    if (!res.ok) throw new Error(`Failed to load users (${res.status})`)
+    return (await res.json()) as { users?: AdminUser[] }
+  }, [url])
+
+  const { data, isLoading: loading, mutate } = useCachedFetch(url, fetchUsers)
+  const users = data?.users ?? []
+
+  // Optimistic writers go through the cache, so a suspend/delete stays applied
+  // when navigating away and back.
+  const setUsers = useCallback(
+    (updater: (prev: AdminUser[]) => AdminUser[]) => {
+      mutate({ users: updater(users) })
+    },
+    [mutate, users]
+  )
 
   const toggleSuspend = async (u: AdminUser) => {
     setBusyId(u.id)

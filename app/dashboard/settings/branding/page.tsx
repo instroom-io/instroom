@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label"
 import { AlertCircle, Palette, Lock, ArrowRight } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { SettingsSkeleton } from "@/components/shared/skeletons"
+import { fetchCached, getCachedData, hasCachedData } from "@/lib/data-cache"
 
 function LoadingScreen() {
   return <SettingsSkeleton sections={[{ fields: 2 }]} label="Loading branding…" />
@@ -36,7 +37,11 @@ function BrandingContent() {
   // Gate the form behind these two flags. Both must resolve (success or
   // failure) before anything renders, so the brand-identity form never
   // flashes with empty fields before the real name/logo/website arrive.
-  const [accessChecked, setAccessChecked] = useState(false)
+  // Both are pre-resolved when the shared cache already holds the answers, so
+  // returning to this page shows the form instead of the gate.
+  const cachedAccess = getCachedData<{ allowed?: boolean }>("/api/subscription/branding-access")
+
+  const [accessChecked, setAccessChecked] = useState(cachedAccess !== undefined)
   const [brandDataLoaded, setBrandDataLoaded] = useState(false)
 
   useEffect(() => {
@@ -47,8 +52,11 @@ function BrandingContent() {
 
   useEffect(() => {
     if (!session?.user?.id) return
-    fetch("/api/subscription/branding-access")
-      .then((r) => r.json())
+    fetchCached<any>("/api/subscription/branding-access", async () => {
+      const r = await fetch("/api/subscription/branding-access")
+      if (!r.ok) throw new Error(`Request failed (${r.status})`)
+      return r.json()
+    })
       .then((d) => setBrandingAllowed(d.allowed ?? false))
       .catch(() => setBrandingAllowed(false))
       .finally(() => setAccessChecked(true))
@@ -59,9 +67,13 @@ function BrandingContent() {
       setBrandDataLoaded(true)
       return
     }
-    setBrandDataLoaded(false)
-    fetch(`/api/brand/${brandId}/collaborators`)
-      .then((r) => r.json())
+    // Keep the current form on screen while a cached brand revalidates.
+    setBrandDataLoaded(hasCachedData(`/api/brand/${brandId}/collaborators`))
+    fetchCached<any>(`/api/brand/${brandId}/collaborators`, async () => {
+      const r = await fetch(`/api/brand/${brandId}/collaborators`)
+      if (!r.ok) throw new Error(`Request failed (${r.status})`)
+      return r.json()
+    })
       .then((data) => {
         if (data.brand) {
           setBrandName(data.brand.name || "")

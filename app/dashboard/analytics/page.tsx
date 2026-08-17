@@ -8,6 +8,7 @@ import { IconFilter, IconDownload, IconX, IconChevronDown, IconSearch } from "@t
 import { useSession } from "next-auth/react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { DashboardSkeleton } from "@/components/shared/skeletons"
+import { useCachedFetch } from "@/lib/data-cache"
 import { PlatformBadge } from "@/components/shared/platform-icon"
 
 // ============================================================
@@ -24,6 +25,11 @@ interface AnalyticsInfluencer {
   location: string
   createdAt: string
   pipelineStatus: string
+  /** True only when a real outreach/contact action exists for this influencer. */
+  hasOutreach: boolean
+  /** True when an outreach log recorded a reply. */
+  hasResponse: boolean
+  outreachCount: number
   rejectionReason: string | null
   rejectionBucket: "hard" | "soft" | null
   views: number
@@ -572,9 +578,6 @@ function AnalyticsPageContent() {
   const searchParams = useSearchParams()
   const brandId = searchParams.get("brandId")
 
-  const [influencers, setInfluencers] = useState<AnalyticsInfluencer[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState(0)
   const [filters, setFilters] = useState({
     platform: "all",
@@ -604,45 +607,42 @@ function AnalyticsPageContent() {
     }
   }, [status, router])
 
-  // Fetch analytics data
-  const fetchAnalytics = useCallback(async () => {
-    if (!session?.user?.id || !brandId) {
-      setIsLoading(false)
-      return
-    }
-
-    setIsLoading(true)
-    setError(null)
-
-    try {
-      const params = new URLSearchParams({
-        brandId,
+  // Fetch analytics data. Each filter combination is its own cache entry, so
+  // switching back to a combination already loaded (or returning to this page)
+  // renders instantly and only revalidates in the background.
+  const analyticsQuery = useMemo(
+    () =>
+      new URLSearchParams({
+        brandId: brandId ?? "",
         platform: filters.platform,
         niche: filters.niche,
         location: filters.location,
         dateRange: filters.dateRange,
-      })
+      }).toString(),
+    [brandId, filters.platform, filters.niche, filters.location, filters.dateRange]
+  )
 
-      const response = await fetch(`/api/analytics?${params.toString()}`)
-
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || `HTTP ${response.status}`)
-      }
-
-      const result = await response.json()
-      setInfluencers(result.data || [])
-    } catch (err) {
-      console.error("[Analytics] Error fetching data:", err)
-      setError(err instanceof Error ? err.message : "Failed to load analytics data")
-    } finally {
-      setIsLoading(false)
+  const fetchAnalytics = useCallback(async () => {
+    const response = await fetch(`/api/analytics?${analyticsQuery}`)
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      throw new Error(errorData.error || `HTTP ${response.status}`)
     }
-  }, [session?.user?.id, brandId, filters.platform, filters.niche, filters.location, filters.dateRange])
+    const result = await response.json()
+    return (result.data ?? []) as AnalyticsInfluencer[]
+  }, [analyticsQuery])
 
-  useEffect(() => {
-    fetchAnalytics()
-  }, [fetchAnalytics])
+  const {
+    data: influencerData,
+    error,
+    isLoading,
+    refetch,
+  } = useCachedFetch<AnalyticsInfluencer[]>(
+    session?.user?.id && brandId ? `/api/analytics?${analyticsQuery}` : null,
+    fetchAnalytics
+  )
+
+  const influencers = useMemo(() => influencerData ?? [], [influencerData])
 
   const handleFilterChange = (key: string, value: string) => {
     setFilters(prev => ({ ...prev, [key]: value }))
@@ -681,9 +681,21 @@ function AnalyticsPageContent() {
     )
   }, [influencers, search])
 
+  /**
+   * The analytics data source: only influencers with an actual outreach/contact
+   * record. Influencers that were merely imported, approved or listed are not
+   * campaign activity and would otherwise inflate Total Outreach to the size of
+   * the whole influencer list.
+   */
+  const outreachInfluencers = useMemo(
+    () => visibleInfluencers.filter(i => i.hasOutreach),
+    [visibleInfluencers]
+  )
+
   // Calculate metrics from real data
   const calculateMetrics = () => {
-    const dataToUse = visibleInfluencers
+    // Every analytics section below is computed from ACTUAL outreach activity.
+    const dataToUse = outreachInfluencers
 
     // ── Funnel stages are CUMULATIVE ────────────────────────────────────────
     // pipelineStatus is a mutually-exclusive CURRENT state, so an influencer who
@@ -700,7 +712,11 @@ function AnalyticsPageContent() {
     const CLOSED_OR_BEYOND    = ["Onboarded", "In Transit", "Content Pending", "Posted"]
 
     const totalOutreach = dataToUse.length
-    const responded = dataToUse.filter(i => RESPONDED_OR_BEYOND.includes(i.pipelineStatus)).length
+    // A reply logged against an outreach record counts as a response even if the
+    // pipeline stage has not been moved yet.
+    const responded = dataToUse.filter(
+      i => i.hasResponse || RESPONDED_OR_BEYOND.includes(i.pipelineStatus)
+    ).length
     const closed = dataToUse.filter(i => CLOSED_OR_BEYOND.includes(i.pipelineStatus)).length
     // "Rejected" is left out of `responded`: a decline can be recorded without
     // the creator ever replying (e.g. "Ghosted / no longer active"), so counting
@@ -995,7 +1011,7 @@ function AnalyticsPageContent() {
       'Revenue ($)', 'Product Cost ($)', 'Fees Paid ($)', 'Commission Paid ($)',
       'Usage Rights', 'Content Saved', 'Ad Code Given')
     const flag = (v: boolean | null) => v === null ? untracked : v ? 'Yes' : 'No'
-    visibleInfluencers.forEach(i => row(
+    outreachInfluencers.forEach(i => row(
       i.name || '', i.instagramHandle || '', i.platform || '', i.niche || '', i.location || '',
       i.createdAt?.split('T')[0] || '', i.pipelineStatus || '', i.rejectionReason || '',
       i.views || 0, i.likes || 0, i.comments || 0, i.clicks || 0, i.salesQty || 0, i.salesAmt || 0,
@@ -1087,7 +1103,7 @@ function AnalyticsPageContent() {
           <div className="mb-2 text-lg text-red-600">Error loading data</div>
           <p className="text-gray-600">{error}</p>
           <button
-            onClick={() => fetchAnalytics()}
+            onClick={() => { void refetch() }}
             className="mt-4 h-9 rounded-lg bg-[#1FAE5B] px-4 text-sm font-medium text-white transition-colors hover:bg-[#178a48] focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] focus:ring-offset-1"
           >
             Try Again

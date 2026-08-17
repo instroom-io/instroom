@@ -37,6 +37,7 @@ import { DiscordCta } from "./_discord/ui"
 import type { Channel, Message, Member } from "./_discord/types"
 import type { MentionResolver } from "./_discord/markdown"
 import { useUnread } from "./_discord/useUnread"
+import { getCachedData, setCachedData } from "@/lib/data-cache"
 
 const MESSAGE_POLL_MS = 5_000
 const CHANNEL_POLL_MS = 30_000
@@ -108,11 +109,20 @@ export function DiscordClient({ brandId }: { brandId: string }) {
   const base = `/api/brands/${encodeURIComponent(brandId)}/integrations/discord`
   const router = useRouter()
 
-  const [channels, setChannels] = useState<Channel[] | null>(null)
+  // Community data is seeded from the shared cache, so coming back to this page
+  // renders the last known channels / members / messages immediately while the
+  // existing polls refresh them in the background.
+  const [channels, setChannels] = useState<Channel[] | null>(
+    () => getCachedData<Channel[]>(`${base}/channels`) ?? null
+  )
   const [activeId, setActiveId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
-  const [members, setMembers] = useState<Member[]>([])
-  const [membersLoading, setMembersLoading] = useState(true)
+  const [members, setMembers] = useState<Member[]>(
+    () => getCachedData<Member[]>(`${base}/members`) ?? []
+  )
+  const [membersLoading, setMembersLoading] = useState(
+    () => getCachedData<Member[]>(`${base}/members`) === undefined
+  )
   const [membersError, setMembersError] = useState<string | null>(null)
   const [presenceById, setPresenceById] = useState<Record<string, Presence>>({})
   // Who is currently typing in the active channel.
@@ -148,7 +158,7 @@ export function DiscordClient({ brandId }: { brandId: string }) {
     /** Last status request failed — state below is the last known good. */
     unreachable?: boolean
     lastError?: string | null
-  } | null>(null)
+  } | null>(() => getCachedData(`${base}/status`) ?? null)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const lastTypingRef = useRef(0)
@@ -204,6 +214,15 @@ export function DiscordClient({ brandId }: { brandId: string }) {
 
       const data = await res.json()
       if (!aliveRef.current) return
+      setCachedData(`${base}/status`, {
+        connected: Boolean(data.connected),
+        connection: data.connection ?? null,
+        discordLinked: Boolean(data.discordLinked ?? data.accountLinked),
+        discordUsername: data.discordUsername ?? null,
+        botConfigured: data.botConfigured !== false,
+        unreachable: false,
+        lastError: null,
+      })
       setStatus({
         connected: Boolean(data.connected),
         connection: data.connection ?? null,
@@ -284,6 +303,7 @@ export function DiscordClient({ brandId }: { brandId: string }) {
       }
       setGate(null)
       const list: Channel[] = data.channels ?? []
+      setCachedData(`${base}/channels`, list)
       setChannels((prev) => {
         // Replace only on a real change, so the 30s channel poll doesn't
         // re-render the rail (and reset its collapse state) for nothing.
@@ -333,6 +353,7 @@ export function DiscordClient({ brandId }: { brandId: string }) {
           return
         }
         setMembersError(null)
+        setCachedData(`${base}/members`, data.members ?? [])
         setMembers(data.members ?? [])
         // Presence arrives only if a Gateway feed is supplying it. When the
         // route reports presenceAvailable:false the map stays empty and no
@@ -406,6 +427,7 @@ export function DiscordClient({ brandId }: { brandId: string }) {
         return merged
       })
       setHasMore(Boolean(data.hasMore))
+      setCachedData(`${base}/messages?channelId=${channelId}`, (data.messages ?? []) as Message[])
     } catch {
       /* transient — next tick retries */
     } finally {
@@ -415,16 +437,18 @@ export function DiscordClient({ brandId }: { brandId: string }) {
 
   useEffect(() => {
     if (!activeId) return
-    setMessages([])
+    const cachedMessages = getCachedData<Message[]>(`${base}/messages?channelId=${activeId}`)
+    setMessages(cachedMessages ?? [])
     setReplyTo(null)
     setSearch("")
     atBottomRef.current = true
-    loadMessages(activeId, true)
+    // Spinner only when this channel has nothing cached yet.
+    loadMessages(activeId, cachedMessages === undefined)
     const id = setInterval(() => {
       if (document.visibilityState === "visible") loadMessages(activeId, false)
     }, MESSAGE_POLL_MS)
     return () => clearInterval(id)
-  }, [activeId, loadMessages])
+  }, [activeId, loadMessages, base])
 
   // Auto-scroll only when already pinned to the bottom — otherwise reading
   // history would be yanked away every poll.
