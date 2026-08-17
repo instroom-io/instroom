@@ -47,6 +47,32 @@ export async function POST(req: Request) {
       )
     }
 
+    // "basic" is the free-forever plan — it's not a trial of anything, so it
+    // gets no expiration date. Every other plan through this route is a real
+    // time-limited trial.
+    if (planName === "basic") {
+      const subscription = await prisma.userSubscription.create({
+        data: {
+          user_id: session.user.id,
+          plan_id: plan.id,
+          billing_cycle: cycle as "monthly" | "yearly",
+          status: "active",
+          started_at: new Date(),
+          current_period_start: new Date(),
+          current_period_end: null,
+        },
+        include: {
+          plan: true,
+        },
+      })
+
+      return NextResponse.json({
+        success: true,
+        subscription,
+        message: "You're on the free Basic plan — free forever, no trial to expire.",
+      })
+    }
+
     // Early access beta gives Solo trials 3 months instead of the usual 30-day trial
     const trialEndDate = new Date()
     if (planName === "solo") {
@@ -70,8 +96,8 @@ export async function POST(req: Request) {
       },
     })
 
-    return NextResponse.json({ 
-      success: true, 
+    return NextResponse.json({
+      success: true,
       subscription,
       message: planName === "solo"
         ? "Trial started successfully. You have 3 months to try the plan."
