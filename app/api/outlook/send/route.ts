@@ -7,6 +7,8 @@ import {
   logMissingMicrosoftConfig,
   readMicrosoftOAuthConfig,
 } from "@/lib/microsoft-oauth"
+import { getUserSignatureHtml, plainTextBodyToHtml } from "@/lib/signature"
+import { autoMarkContactedOnSend } from "@/lib/pipeline"
 
 async function getMicrosoftToken(userId: string): Promise<string | null> {
   const account = await prisma.account.findFirst({
@@ -77,7 +79,7 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  const { to, subject, body } = await req.json()
+  const { to, subject, body, brandId } = await req.json()
 
   if (!to || !body) {
     return NextResponse.json({ error: "Missing required fields: to, body" }, { status: 400 })
@@ -86,6 +88,11 @@ export async function POST(req: NextRequest) {
   const replySubject = subject?.startsWith("Re:") ? subject : subject ? `Re: ${subject}` : "(No subject)"
 
   try {
+    const signatureHtml = await getUserSignatureHtml(userId)
+    const messageBody = signatureHtml
+      ? { contentType: "HTML", content: plainTextBodyToHtml(body) + signatureHtml }
+      : { contentType: "Text", content: body }
+
     const sendRes = await fetch("https://graph.microsoft.com/v1.0/me/sendMail", {
       method: "POST",
       headers: {
@@ -95,7 +102,7 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({
         message: {
           subject: replySubject,
-          body: { contentType: "Text", content: body },
+          body: messageBody,
           toRecipients: [{ emailAddress: { address: to } }],
         },
         saveToSentItems: true,
@@ -105,6 +112,12 @@ export async function POST(req: NextRequest) {
     if (!sendRes.ok) {
       const err = await sendRes.json()
       throw new Error(err?.error?.message || "Failed to send email")
+    }
+
+    try {
+      await autoMarkContactedOnSend(brandId, to)
+    } catch (err) {
+      console.error("Auto-advance to Contacted failed:", err)
     }
 
     return NextResponse.json({ success: true })

@@ -1,72 +1,9 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
-import { prisma } from "@/lib/prisma"
-
-// ─── Token helper ─────────────────────────────────────────────────────────────
-
-async function getAccessToken(session: any): Promise<string | null> {
-  // NEVER use session.accessToken here — the login-time Google OAuth (see
-  // lib/auth.ts) deliberately requests only "openid email profile", with no
-  // Gmail scopes at all. Gmail access always comes from a separate consent
-  // via /api/gmail/connect, stored in the Account table below.
-  const userId = session.user?.id
-  if (!userId) return null
-
-  // A user can have more than one linked Google account (e.g. reconnected
-  // Gmail with a different account than before) — most recently connected
-  // wins, since that's the one they just told us to use.
-  const account = await prisma.account.findFirst({
-    where: { userId, provider: "google" },
-    select: { id: true, access_token: true, refresh_token: true, expires_at: true },
-    orderBy: { id: "desc" },
-  })
-
-  if (!account?.access_token) return null
-
-  const isExpired = account.expires_at
-    ? Date.now() > account.expires_at * 1000
-    : false
-
-  if (isExpired && account.refresh_token) {
-    return refreshToken(account.refresh_token, account.id)
-  }
-
-  return account.access_token
-}
-
-async function refreshToken(refresh_token: string, accountId: string): Promise<string | null> {
-  try {
-    const res = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: process.env.GOOGLE_CLIENT_ID!,
-        client_secret: process.env.GOOGLE_CLIENT_SECRET!,
-        grant_type: "refresh_token",
-        refresh_token,
-      }),
-    })
-    const data = await res.json()
-    if (!res.ok || !data.access_token) return null
-
-    // Target this specific Account row, not every Google account linked to
-    // the user — this refresh_token only belongs to one of them.
-    await prisma.account.update({
-      where: { id: accountId },
-      data: {
-        access_token: data.access_token,
-        expires_at: data.expires_in
-          ? Math.floor(Date.now() / 1000) + data.expires_in
-          : null,
-      },
-    })
-
-    return data.access_token
-  } catch {
-    return null
-  }
-}
+import { getUserSignatureHtml, plainTextBodyToHtml } from "@/lib/signature"
+import { autoMarkContactedOnSend } from "@/lib/pipeline"
+import { getGmailAccessToken } from "@/lib/gmail"
 
 // ─── Build RFC 2822 email message ─────────────────────────────────────────────
 
@@ -77,6 +14,7 @@ function buildRawEmail({
   body,
   threadId,
   inReplyTo,
+  signatureHtml,
 }: {
   to: string
   from: string
@@ -84,19 +22,31 @@ function buildRawEmail({
   body: string
   threadId?: string
   inReplyTo?: string
+  signatureHtml?: string | null
 }): string {
   const replySubject = subject.startsWith("Re:") ? subject : `Re: ${subject}`
 
-  const lines = [
-    `From: ${from}`,
-    `To: ${to}`,
-    `Subject: ${replySubject}`,
-    `Content-Type: text/plain; charset="UTF-8"`,
-    `MIME-Version: 1.0`,
-    ...(inReplyTo ? [`In-Reply-To: ${inReplyTo}`] : []),
-    ``,
-    body,
-  ]
+  const lines = signatureHtml
+    ? [
+        `From: ${from}`,
+        `To: ${to}`,
+        `Subject: ${replySubject}`,
+        `Content-Type: text/html; charset="UTF-8"`,
+        `MIME-Version: 1.0`,
+        ...(inReplyTo ? [`In-Reply-To: ${inReplyTo}`] : []),
+        ``,
+        plainTextBodyToHtml(body) + signatureHtml,
+      ]
+    : [
+        `From: ${from}`,
+        `To: ${to}`,
+        `Subject: ${replySubject}`,
+        `Content-Type: text/plain; charset="UTF-8"`,
+        `MIME-Version: 1.0`,
+        ...(inReplyTo ? [`In-Reply-To: ${inReplyTo}`] : []),
+        ``,
+        body,
+      ]
 
   const raw = lines.join("\r\n")
   return Buffer.from(raw)
@@ -115,7 +65,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
 
-  const accessToken = await getAccessToken(session)
+  const accessToken = await getGmailAccessToken(session.user?.id)
 
   if (!accessToken) {
     return NextResponse.json(
@@ -124,14 +74,15 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  const { to, from, subject, body, threadId, inReplyTo } = await req.json()
+  const { to, from, subject, body, threadId, inReplyTo, brandId } = await req.json()
 
   if (!to || !body) {
     return NextResponse.json({ error: "Missing required fields: to, body" }, { status: 400 })
   }
 
   try {
-    const raw = buildRawEmail({ to, from, subject: subject || "", body, threadId, inReplyTo })
+    const signatureHtml = await getUserSignatureHtml(session.user.id)
+    const raw = buildRawEmail({ to, from, subject: subject || "", body, threadId, inReplyTo, signatureHtml })
 
     const payload: any = { raw }
     if (threadId) payload.threadId = threadId
@@ -151,6 +102,13 @@ export async function POST(req: NextRequest) {
     }
 
     const sent = await sendRes.json()
+
+    try {
+      await autoMarkContactedOnSend(brandId, to)
+    } catch (err) {
+      console.error("Auto-advance to Contacted failed:", err)
+    }
+
     return NextResponse.json({ success: true, messageId: sent.id })
   } catch (err: any) {
     console.error("Gmail send error:", err)

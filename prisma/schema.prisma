@@ -534,6 +534,23 @@ model IntegrationConnection {
   @@index([integration_key])
 }
 
+model Signature {
+  id           String   @id @default(cuid()) @db.VarChar(30)
+  user_id      String   @unique @db.VarChar(30)
+  is_enabled   Boolean  @default(true)
+  full_name    String?  @db.VarChar(150)
+  title        String?  @db.VarChar(150)
+  company      String?  @db.VarChar(150)
+  phone        String?  @db.VarChar(50)
+  email        String?  @db.VarChar(150)
+  website      String?  @db.VarChar(255)
+  social_links Json?
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  @@index([user_id])
+}
+
 model CommunityChannel {
   id          String   @id @default(cuid()) @db.VarChar(30)
   brand_id    String   @db.VarChar(30)
@@ -711,6 +728,19 @@ model BrandCustomField {
   @@index([brand_id])
   @@index([brand_id, sort_order])
   @@index([created_by], map: "BrandCustomField_created_by_fkey")
+}
+
+model EmailTemplate {
+  id         String   @id @default(cuid()) @db.VarChar(30)
+  brand_id   String   @db.VarChar(30)
+  name       String   @db.VarChar(100)
+  subject    String   @db.VarChar(255)
+  body       String   @db.Text
+  created_by String?  @db.VarChar(30)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([brand_id])
 }
 
 model BrandInfluencerCustomValue {
