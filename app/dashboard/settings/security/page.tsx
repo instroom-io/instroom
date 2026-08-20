@@ -12,6 +12,7 @@ import { KeyRound, ShieldCheck } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { TwoFactorSetup } from "@/components/two-factor-setup"
 import { SettingsSkeleton } from "@/components/shared/skeletons"
+import { fetchCached, getCachedData } from "@/lib/data-cache"
 
 type Toast = { message: string; type: "success" | "error" }
 
@@ -34,11 +35,15 @@ export default function SecurityPage() {
   const [confirmPassword, setConfirmPassword] = useState("")
   const [savingPassword, setSavingPassword] = useState(false)
 
-  const [totpEnabled, setTotpEnabled] = useState(false)
-  const [smsEnabled, setSmsEnabled] = useState(false)
+  // Seeded from the shared cache so a revisit renders the real toggles instead
+  // of the loading state; a cache miss still starts unloaded.
+  const cached2fa = getCachedData<{ totp?: boolean; sms?: boolean }>("/api/settings/security/2fa")
+
+  const [totpEnabled, setTotpEnabled] = useState(cached2fa?.totp ?? false)
+  const [smsEnabled, setSmsEnabled] = useState(cached2fa?.sms ?? false)
   const [togglingSms, setTogglingSms] = useState(false)
 
-  const [securityLoaded, setSecurityLoaded] = useState(false)
+  const [securityLoaded, setSecurityLoaded] = useState(cached2fa !== undefined)
 
   useEffect(() => {
     if (status === "unauthenticated") {
@@ -47,8 +52,11 @@ export default function SecurityPage() {
     }
     if (status !== "authenticated") return
 
-    fetch("/api/settings/security/2fa")
-      .then((r) => r.json())
+    fetchCached<any>("/api/settings/security/2fa", async () => {
+      const r = await fetch("/api/settings/security/2fa")
+      if (!r.ok) throw new Error(`Request failed (${r.status})`)
+      return r.json()
+    })
       .then((data) => {
         setTotpEnabled(data.totp ?? false)
         setSmsEnabled(data.sms ?? false)

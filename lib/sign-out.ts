@@ -12,6 +12,7 @@
 
 import { signOut } from "next-auth/react"
 import { broadcastLogout } from "@/components/SessionGuard"
+import { clearCache } from "@/lib/data-cache"
 
 /**
  * Keys this app is allowed to drop on logout.
@@ -51,6 +52,8 @@ function clearClientState() {
  */
 export async function signOutEverywhere(callbackUrl: string = "/login") {
   clearClientState()
+  // In-memory fetch cache — must not survive into the next sign-in on this tab.
+  clearCache()
   broadcastLogout()
   await signOut({ callbackUrl })
 }

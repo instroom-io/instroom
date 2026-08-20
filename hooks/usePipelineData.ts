@@ -4,7 +4,12 @@
 //   2. On successful PATCH, we update local state directly — no refetch needed
 //   3. Only refetch (silently) on failure to restore correct server state
 
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useCallback, useRef } from "react"
+import { useCachedFetch, getCachedData, setCachedData } from "@/lib/data-cache"
+import { invalidateInfluencerDerivedCaches, pipelineCacheKey } from "@/lib/cache-invalidation"
+
+/** Stable empty reference used before the first payload arrives. */
+const EMPTY_PIPELINE: PipelineInfluencer[] = []
 
 export interface PipelineInfluencer {
   id: string
@@ -152,54 +157,41 @@ function applyStatusChange(
 }
 
 export function usePipelineData(brandId?: string): UsePipelineDataReturn {
-  const [data,      setData]      = useState<PipelineInfluencer[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [error,     setError]     = useState<string | null>(null)
+  // Shared cache key — returning to the board renders the cached cards at once
+  // and only revalidates in the background.
+  const cacheKey = brandId ? `/api/brand/${brandId}/pipeline` : null
 
-  // Track in-flight PATCH requests so we don't refetch while one is pending
+  // Track in-flight PATCH requests, so a refetch is not fired while one is pending.
   const pendingRef = useRef(0)
 
-  // Tracks the AbortController for the most recent fetchData call — lets a
-  // newer request (e.g. after brandId changes) cancel a still-in-flight
-  // older one, so a slow stale response can't overwrite fresher state.
-  const abortRef = useRef<AbortController | null>(null)
+  // Optimistic writes go straight into the shared cache, which is also what the
+  // board renders from — so a change survives navigating away and back.
+  const setData = useCallback(
+    (value: PipelineInfluencer[] | ((prev: PipelineInfluencer[]) => PipelineInfluencer[])) => {
+      if (!cacheKey) return
+      const prev = getCachedData<PipelineInfluencer[]>(cacheKey) ?? []
+      const next = typeof value === "function" ? value(prev) : value
+      setCachedData(cacheKey, next)
+    },
+    [cacheKey]
+  )
 
-  // ── Initial fetch (shows spinner) ─────────────────────────────────────────
-  const fetchData = useCallback(async (showSpinner = true) => {
-    if (!brandId) { setIsLoading(false); return }
-
-    // Cancel any previous in-flight request for this hook instance before
-    // starting a new one.
-    abortRef.current?.abort()
-    const controller = new AbortController()
-    abortRef.current = controller
-
-    try {
-      if (showSpinner) setIsLoading(true)
-      setError(null)
-
-      const res = await fetch(`/api/brand/${brandId}/pipeline`, { signal: controller.signal })
-      if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.error || "Failed to fetch pipeline data")
-      }
-
-      const json = await res.json()
-      const mapped = (json.data || []).map(mapItem)
-      setData(mapped)
-    } catch (err: unknown) {
-      const e = err as { name?: string; message?: string }
-      if (e?.name === "AbortError") return
-      setError(e?.message || "Something went wrong")
-    } finally {
-      if (showSpinner && !controller.signal.aborted) setIsLoading(false)
+  const fetchPipeline = useCallback(async (): Promise<PipelineInfluencer[]> => {
+    const res = await fetch(`/api/brand/${brandId}/pipeline`)
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || "Failed to fetch pipeline data")
     }
+    const json = await res.json()
+    return (json.data || []).map(mapItem)
   }, [brandId])
 
-  useEffect(() => {
-    fetchData(true)
-    return () => { abortRef.current?.abort() }
-  }, [fetchData])
+  const { data: cached, error, isLoading, refetch } = useCachedFetch<PipelineInfluencer[]>(
+    cacheKey,
+    fetchPipeline
+  )
+
+  const data = cached ?? EMPTY_PIPELINE
 
   // ── Status update — optimistic, no loading flicker ────────────────────────
   const updateStatus = useCallback(
@@ -212,9 +204,12 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
       // 2. Apply optimistic update immediately (no spinner)
       setData((prev) => {
         snapshot = prev
-        return prev.map((item) =>
+        const next = prev.map((item) =>
           item.id === id ? applyStatusChange(item, newStatus, extra?.niReason, extra?.collaborationType) : item
         )
+        // Mirror into the shared cache so the change survives navigation.
+        if (cacheKey) setCachedData(cacheKey, next)
+        return next
       })
 
       pendingRef.current += 1
@@ -233,29 +228,36 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
         if (!res.ok) {
           // Server rejected — rollback silently
           setData(snapshot)
+          if (cacheKey) setCachedData(cacheKey, snapshot)
           return false
         }
 
-        // Success — state is already correct from optimistic update.
-        // No refetch needed, no spinner.
+        // Success — this board's own entry is already correct from the optimistic
+        // update, so it is excluded. Every OTHER view of these rows (Influencer
+        // List, Post Tracker, Brand Partners, Analytics) is now out of date and
+        // is marked stale so opening it shows the new stage without a refresh.
+        invalidateInfluencerDerivedCaches(brandId, [pipelineCacheKey(brandId)])
         return true
       } catch {
         setData(snapshot)
+        if (cacheKey) setCachedData(cacheKey, snapshot)
         return false
       } finally {
         pendingRef.current -= 1
       }
     },
-    [brandId]
+    [brandId, cacheKey, setData]
   )
 
   return {
     data,
-    isLoading,
+    // Only true before there is anything to show — a revalidation keeps the
+    // board on screen.
+    isLoading: Boolean(brandId) && isLoading,
     error,
     updateStatus,
     // Public refetch (e.g. retry button) — no spinner so board stays visible
-    refetch: () => fetchData(false),
+    refetch: () => { void refetch() },
   }
   
 }

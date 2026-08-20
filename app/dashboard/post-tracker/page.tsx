@@ -31,6 +31,8 @@ import { BoardSkeleton } from "@/components/shared/skeletons"
 import { StageDropdown, type StageOption } from "@/components/shared/stage-dropdown"
 import AutoPostDetectionCard from "./AutoPostDetection"
 import { readDroppedPostUrl } from "./DetectedPostsList"
+import { fetchCached } from "@/lib/data-cache"
+import { useSubscriptionGate } from "@/hooks/useSubscriptionGate"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const NICHES    = ["Beauty","Fitness","Lifestyle","Food","Tech","Fashion","Travel"]
@@ -573,8 +575,13 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
 
   useEffect(() => {
     if (!brandId) return
-    fetch(`/api/settings/integrations?brandId=${brandId}`)
-      .then(r => r.json())
+    // Shared cache: the integration state is unchanged between visits, so this
+    // no longer re-requests on every mount of the tracker.
+    fetchCached<any>(`/api/settings/integrations?brandId=${brandId}`, async () => {
+      const r = await fetch(`/api/settings/integrations?brandId=${brandId}`)
+      if (!r.ok) throw new Error(`Failed to load integrations (${r.status})`)
+      return r.json()
+    })
       .then(json => setShopifyConnected(!!json?.integrations?.shopify?.connected))
       .catch(() => {})
   }, [brandId])
@@ -582,8 +589,11 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
   useEffect(() => {
     if (!shopifyConnected || !brandId) return
     setShopifyLoading(true)
-    fetch(`/api/brand/${brandId}/integrations/shopify/products`)
-      .then(r => r.json())
+    fetchCached<any>(`/api/brand/${brandId}/integrations/shopify/products`, async () => {
+      const r = await fetch(`/api/brand/${brandId}/integrations/shopify/products`)
+      if (!r.ok) throw new Error(`Failed to load products (${r.status})`)
+      return r.json()
+    })
       .then(json => setShopifyProducts(json?.products || []))
       .catch(() => {})
       .finally(() => setShopifyLoading(false))
@@ -1103,33 +1113,11 @@ function PostTrackerContent() {
   const brandId = searchParams.get("brandId") ?? undefined
   const { canApproveInfluencers, loading: capabilitiesLoading } = useBrandCapabilities(brandId)
   const canApprove = !capabilitiesLoading && canApproveInfluencers
-  const [isSubscribed, setIsSubscribed] = useState<boolean | null>(null)
-  // Deliberately starts undefined (not "inactive") — AutoPostDetectionCard's
-  // usePlanAccess treats a defined prop as "already resolved, trust it";
-  // seeding a placeholder string here made it look resolved before the real
-  // /api/subscription/status check below ever ran, briefly unlocking a
-  // premium feature for free-tier users. undefined correctly signals "not
-  // loaded yet" until the fetch below sets the real value.
-  const [subscriptionStatus, setSubscriptionStatus] = useState<string | undefined>(undefined)
-
-  useEffect(() => {
-    const checkSubscription = async () => {
-      try {
-        const response = await fetch(brandId ? `/api/subscription/status?brandId=${brandId}` : "/api/subscription/status")
-        const data = await response.json()
-        setSubscriptionStatus(data.status || "inactive")
-        setIsSubscribed((data.status === "active" || data.status === "trialing") && !data.isExpired)
-      } catch (error) {
-        console.error("Failed to check subscription:", error)
-        setSubscriptionStatus("inactive")
-        setIsSubscribed(false)
-      }
-    }
-
-    if (session.status === "authenticated") {
-      checkSubscription()
-    }
-  }, [session.status, brandId])
+  // Shared, cached gate. `status` stays undefined until the check resolves —
+  // AutoPostDetectionCard's usePlanAccess treats a defined prop as "already
+  // resolved, trust it", so a placeholder here would briefly unlock a premium
+  // feature for free-tier users. A cached answer resolves on mount instead.
+  const { isSubscribed, status: subscriptionStatus } = useSubscriptionGate(brandId)
 
   const { data, isLoading, error, updateColumn, updateCampaignType, updatePostUrl, refetch } = useClosedData(brandId)
 

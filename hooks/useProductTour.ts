@@ -30,8 +30,20 @@ export function useProductTour() {
       try {
         const response = await fetch("/api/product-tour")
 
+        // 401 is an expected state, not a failure. useSession() can report
+        // "authenticated" from the client's cached session while the server
+        // rejects the request — an expired or not-yet-set cookie, or a signed
+        // out tab that hasn't refreshed. Treated as "no tour state available":
+        // consumers already keep every tour off while fetchFailed is true, so
+        // nothing fires on an empty seenScenes set, and it stays out of the
+        // console because there is nothing for anyone to fix.
+        if (response.status === 401) {
+          setFetchFailed(true)
+          return
+        }
+
         if (!response.ok) {
-          throw new Error("Failed to fetch product tour status")
+          throw new Error(`Failed to fetch product tour status (HTTP ${response.status})`)
         }
 
         const data = await response.json()

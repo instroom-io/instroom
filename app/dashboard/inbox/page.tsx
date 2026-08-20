@@ -17,6 +17,9 @@ import {
 } from "@dnd-kit/core"
 import { SubscriptionGate } from "@/components/ui/subscription-gate"
 import { ListSkeleton } from "@/components/shared/skeletons"
+import { fetchCached, getCachedData } from "@/lib/data-cache"
+import { useSubscriptionGate } from "@/hooks/useSubscriptionGate"
+import { invalidateInfluencerDerivedCaches } from "@/lib/cache-invalidation"
 import {
   IconMailPlus,
   IconSearch,
@@ -413,24 +416,27 @@ function InboxContent() {
   const brandId = searchParams.get("brandId")
 
   // ── Subscription gate ──────────────────────────────────────────────────────
-  const [isSubscribed, setIsSubscribed] = useState<boolean | null>(null)
-  const [subscriptionStatus, setSubscriptionStatus] = useState<{ status: string; isExpired: boolean } | null>(null)
+  // Served from the shared cache, so a return visit resolves on mount instead
+  // of gating the inbox behind a skeleton again.
+  const { isSubscribed, status: subscriptionStatus } = useSubscriptionGate(brandId)
 
-  useEffect(() => {
-    if (!session?.user?.id) return
-    fetch(brandId ? `/api/subscription/status?brandId=${brandId}` : "/api/subscription/status")
-      .then(res => res.json())
-      .then(data => {
-        setSubscriptionStatus(data)
-        setIsSubscribed((data.status === "active" || data.status === "trialing") && !data.isExpired)
-      })
-      .catch(() => {
-        setSubscriptionStatus({ status: "inactive", isExpired: false })
-        setIsSubscribed(false)
-      })
-  }, [session?.user?.id, brandId])
+  // Threads already fetched for this brand render immediately; the mount checks
+  // below still run and update these silently in the background.
+  const cachedEmails = () => {
+    const read = (provider: "gmail" | "outlook") => {
+      const url = new URL(`/api/${provider}/threads`, window.location.origin)
+      if (brandId) url.searchParams.append("brandId", brandId)
+      return getCachedData<any>(url.toString())
+    }
+    const gmail = read("gmail")
+    const outlook = read("outlook")
+    return [
+      ...((gmail?.threads ?? []) as any[]).map((t, i) => mapGmailThreadToEmail(t, i)),
+      ...((outlook?.threads ?? []) as any[]).map((t, i) => mapOutlookThreadToEmail(t, i)),
+    ]
+  }
 
-  const [emails, setEmails] = useState<Email[]>([])
+  const [emails, setEmails] = useState<Email[]>(cachedEmails)
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null)
   const [loadingThreadId, setLoadingThreadId] = useState<string | number | null>(null)
   const [selectedStage, setSelectedStage] = useState<PipelineStage | "ALL">("ALL")
@@ -448,13 +454,25 @@ function InboxContent() {
   const [showActions, setShowActions] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
 
-  const [gmailSyncState, setGmailSyncState] = useState<GmailSyncState>("checking")
-  const [gmailError, setGmailError] = useState<string | undefined>()
-  const [gmailConnected, setGmailConnected] = useState(false)
+  // "checking" only when this mailbox has nothing cached — a cached mailbox was
+  // connected last time, so it renders as connected while the check re-runs.
+  const hasCachedThreads = (provider: "gmail" | "outlook") => {
+    const url = new URL(`/api/${provider}/threads`, window.location.origin)
+    if (brandId) url.searchParams.append("brandId", brandId)
+    return getCachedData<any>(url.toString()) !== undefined
+  }
 
-  const [outlookSyncState, setOutlookSyncState] = useState<GmailSyncState>("checking")
+  const [gmailSyncState, setGmailSyncState] = useState<GmailSyncState>(
+    () => (hasCachedThreads("gmail") ? "connected" : "checking")
+  )
+  const [gmailError, setGmailError] = useState<string | undefined>()
+  const [gmailConnected, setGmailConnected] = useState(() => hasCachedThreads("gmail"))
+
+  const [outlookSyncState, setOutlookSyncState] = useState<GmailSyncState>(
+    () => (hasCachedThreads("outlook") ? "connected" : "checking")
+  )
   const [outlookError, setOutlookError] = useState<string | undefined>()
-  const [outlookConnected, setOutlookConnected] = useState(false)
+  const [outlookConnected, setOutlookConnected] = useState(() => hasCachedThreads("outlook"))
 
   const [composeSource, setComposeSource] = useState<"gmail" | "outlook">("gmail")
   const [expandedQuotes, setExpandedQuotes] = useState<Set<string>>(new Set())
@@ -540,30 +558,44 @@ function InboxContent() {
 
   // ── Gmail connection check ─────────────────────────────────────────────────
 
+  /**
+   * Thread fetch that goes through the shared cache.
+   *
+   * Mount checks read whatever is cached for this mailbox + brand, so returning
+   * to the inbox shows the threads already loaded instead of dropping back to
+   * "checking" and re-requesting. `force` is used by the explicit refresh
+   * buttons, which must always hit the provider.
+   */
+  const fetchThreads = (provider: "gmail" | "outlook", force: boolean) => {
+    const url = new URL(`/api/${provider}/threads`, window.location.origin)
+    if (brandId) url.searchParams.append("brandId", brandId)
+    const href = url.toString()
+    return fetchCached<any>(href, async () => {
+      const res = await fetch(href)
+      const json = await res.json()
+      // A non-OK response is not cached: it is thrown with its body attached so
+      // the reauth / error branches below behave exactly as before.
+      if (!res.ok) throw Object.assign(new Error(json?.error || ""), { body: json })
+      return json
+    }, { force })
+  }
+
   const checkGmailConnection = async () => {
     const requestId = ++gmailRequestIdRef.current
     try {
-      const url = new URL("/api/gmail/threads", window.location.origin)
-      if (brandId) url.searchParams.append("brandId", brandId)
-      const res = await fetch(url.toString())
-      const data = await res.json()
+      const data = await fetchThreads("gmail", false)
       if (requestId !== gmailRequestIdRef.current) return // superseded by a newer request
-
-      if (res.ok) {
-        const mappedEmails = (data.threads || []).map((t: any, i: number) => mapGmailThreadToEmail(t, i))
-        const mappedSentAwaitingReply = (data.sentAwaitingReply || []).map((t: any, i: number) => mapLightweightSentThread(t, i))
-        setEmails(prev => [...prev.filter(e => e.source !== "gmail"), ...mappedEmails, ...mappedSentAwaitingReply])
-        setGmailConnected(true)
-        setGmailSyncState("connected")
-      } else if (data?.reauth) {
-        setGmailSyncState("not_connected")
-      } else {
-        setGmailError(data?.error || "Failed to load inbox.")
-        setGmailSyncState("error")
-      }
-    } catch {
+      const mappedEmails = (data.threads || []).map((t: any, i: number) => mapGmailThreadToEmail(t, i))
+      setEmails(prev => [...prev.filter(e => e.source !== "gmail"), ...mappedEmails])
+      setGmailConnected(true)
+      setGmailSyncState("connected")
+    } catch (err: any) {
       if (requestId !== gmailRequestIdRef.current) return
-      setGmailError("Network error. Please check your connection.")
+      if (err?.body?.reauth) {
+        setGmailSyncState("not_connected")
+        return
+      }
+      setGmailError(err?.body?.error || "Network error. Please check your connection.")
       setGmailSyncState("error")
     }
   }
@@ -579,27 +611,19 @@ function InboxContent() {
     const requestId = ++gmailRequestIdRef.current
     setGmailSyncState("syncing")
     try {
-      const url = new URL("/api/gmail/threads", window.location.origin)
-      if (brandId) url.searchParams.append("brandId", brandId)
-      const res = await fetch(url.toString())
-      const data = await res.json()
+      const data = await fetchThreads("gmail", true)
       if (requestId !== gmailRequestIdRef.current) return // superseded by a newer request
-
-      if (res.ok) {
-        const mappedEmails = (data.threads || []).map((t: any, i: number) => mapGmailThreadToEmail(t, i))
-        const mappedSentAwaitingReply = (data.sentAwaitingReply || []).map((t: any, i: number) => mapLightweightSentThread(t, i))
-        setEmails(prev => [...prev.filter(e => e.source !== "gmail"), ...mappedEmails, ...mappedSentAwaitingReply])
-        setGmailConnected(true)
-        setGmailSyncState("connected")
-      } else if (data?.reauth) {
-        setGmailSyncState("not_connected")
-      } else {
-        setGmailError(data?.error || "Failed to load Gmail threads.")
-        setGmailSyncState("error")
-      }
+      const mappedEmails = (data.threads || []).map((t: any, i: number) => mapGmailThreadToEmail(t, i))
+      setEmails(prev => [...prev.filter(e => e.source !== "gmail"), ...mappedEmails])
+      setGmailConnected(true)
+      setGmailSyncState("connected")
     } catch (err: any) {
       if (requestId !== gmailRequestIdRef.current) return
-      setGmailError(err?.message || "Failed to load Gmail threads.")
+      if (err?.body?.reauth) {
+        setGmailSyncState("not_connected")
+        return
+      }
+      setGmailError(err?.body?.error || err?.message || "Failed to load Gmail threads.")
       setGmailSyncState("error")
     }
   }
@@ -609,26 +633,19 @@ function InboxContent() {
   const checkOutlookConnection = async () => {
     const requestId = ++outlookRequestIdRef.current
     try {
-      const url = new URL("/api/outlook/threads", window.location.origin)
-      if (brandId) url.searchParams.append("brandId", brandId)
-      const res = await fetch(url.toString())
-      const data = await res.json()
+      const data = await fetchThreads("outlook", false)
       if (requestId !== outlookRequestIdRef.current) return // superseded by a newer request
-
-      if (res.ok) {
-        const mappedEmails = (data.threads || []).map((t: any, i: number) => mapOutlookThreadToEmail(t, i))
-        setEmails(prev => [...prev.filter(e => e.source !== "outlook"), ...mappedEmails])
-        setOutlookConnected(true)
-        setOutlookSyncState("connected")
-      } else if (data?.reauth) {
-        setOutlookSyncState("not_connected")
-      } else {
-        setOutlookError(data?.error || "Failed to load Outlook inbox.")
-        setOutlookSyncState("error")
-      }
-    } catch {
+      const mappedEmails = (data.threads || []).map((t: any, i: number) => mapOutlookThreadToEmail(t, i))
+      setEmails(prev => [...prev.filter(e => e.source !== "outlook"), ...mappedEmails])
+      setOutlookConnected(true)
+      setOutlookSyncState("connected")
+    } catch (err: any) {
       if (requestId !== outlookRequestIdRef.current) return
-      setOutlookError("Network error. Please check your connection.")
+      if (err?.body?.reauth) {
+        setOutlookSyncState("not_connected")
+        return
+      }
+      setOutlookError(err?.body?.error || "Network error. Please check your connection.")
       setOutlookSyncState("error")
     }
   }
@@ -644,26 +661,19 @@ function InboxContent() {
     const requestId = ++outlookRequestIdRef.current
     setOutlookSyncState("syncing")
     try {
-      const url = new URL("/api/outlook/threads", window.location.origin)
-      if (brandId) url.searchParams.append("brandId", brandId)
-      const res = await fetch(url.toString())
-      const data = await res.json()
+      const data = await fetchThreads("outlook", true)
       if (requestId !== outlookRequestIdRef.current) return // superseded by a newer request
-
-      if (res.ok) {
-        const mappedEmails = (data.threads || []).map((t: any, i: number) => mapOutlookThreadToEmail(t, i))
-        setEmails(prev => [...prev.filter(e => e.source !== "outlook"), ...mappedEmails])
-        setOutlookConnected(true)
-        setOutlookSyncState("connected")
-      } else if (data?.reauth) {
-        setOutlookSyncState("not_connected")
-      } else {
-        setOutlookError(data?.error || "Failed to load Outlook threads.")
-        setOutlookSyncState("error")
-      }
+      const mappedEmails = (data.threads || []).map((t: any, i: number) => mapOutlookThreadToEmail(t, i))
+      setEmails(prev => [...prev.filter(e => e.source !== "outlook"), ...mappedEmails])
+      setOutlookConnected(true)
+      setOutlookSyncState("connected")
     } catch (err: any) {
       if (requestId !== outlookRequestIdRef.current) return
-      setOutlookError(err?.message || "Failed to load Outlook threads.")
+      if (err?.body?.reauth) {
+        setOutlookSyncState("not_connected")
+        return
+      }
+      setOutlookError(err?.body?.error || err?.message || "Failed to load Outlook threads.")
       setOutlookSyncState("error")
     }
   }
@@ -799,6 +809,9 @@ function InboxContent() {
         setStageNotification({ show: true, message: errorMsg, type: "error" })
         setTimeout(() => setStageNotification({ show: false, message: "", type: "error" }), 5000)
       } else {
+        // A stage set from the inbox is the same persisted change the Pipeline
+        // board makes, so the views derived from it are marked stale.
+        invalidateInfluencerDerivedCaches(brandId)
         setStageNotification({ show: true, message: "Stage updated successfully!", type: "success" })
         setTimeout(() => setStageNotification({ show: false, message: "", type: "success" }), 3000)
       }
@@ -932,7 +945,7 @@ function InboxContent() {
   return (
     <SubscriptionGate
       isSubscribed={isSubscribed}
-      status={subscriptionStatus?.status || "inactive"}
+      status={subscriptionStatus || "inactive"}
       featureName="the inbox"
       plans={["Solo", "Team"]}
     >

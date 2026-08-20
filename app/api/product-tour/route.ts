@@ -28,6 +28,7 @@ export async function GET(req: NextRequest) {
       { status: 200 }
     )
   } catch (error) {
+    console.error("[GET /api/product-tour]", error)
     return NextResponse.json(
       { error: "Failed to retrieve product tour status" },
       { status: 500 }
@@ -69,6 +70,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true }, { status: 200 })
   } catch (error) {
+    console.error("[POST /api/product-tour]", error)
     return NextResponse.json(
       { error: "Failed to save product tour status" },
       { status: 500 }

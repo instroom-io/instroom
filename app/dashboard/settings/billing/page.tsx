@@ -15,6 +15,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { SettingsSkeleton } from "@/components/shared/skeletons"
+import { fetchCached, getCachedData } from "@/lib/data-cache"
 
 type PaymentMethod = {
   cardBrand: string | null
@@ -36,32 +37,54 @@ export default function BillingPage() {
   const { data: session, status } = useSession()
   const router = useRouter()
 
-  const [subscription, setSubscription] = useState<any>(null)
-  const [subscriptionLoaded, setSubscriptionLoaded] = useState(false)
-  const [brandCount, setBrandCount] = useState<number>(0)
+  const cachedCheck = session?.user?.id
+    ? getCachedData<any>(`/api/subscription/check?user=${session.user.id}`)
+    : undefined
+
+  const [subscription, setSubscription] = useState<any>(cachedCheck?.subscription ?? null)
+  const [subscriptionLoaded, setSubscriptionLoaded] = useState(cachedCheck !== undefined)
+  // Seeded from the shared cache — a revisit renders the real figures rather
+  // than the "loading" placeholders while they revalidate.
+  const cachedUsage = getCachedData<{ brandCount?: number }>("/api/user/brand-usage")
+  const cachedMethod = getCachedData<{ paymentMethod: PaymentMethod | null }>("/api/subscription/payment-method")
+  const cachedHistory = getCachedData<{ payments?: PaymentRecord[] }>("/api/subscription/payment-history")
+
+  const [brandCount, setBrandCount] = useState<number>(cachedUsage?.brandCount ?? 0)
   const [cancelling, setCancelling] = useState(false)
   const [confirmCancel, setConfirmCancel] = useState(false)
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null)
 
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(null)
-  const [paymentMethodLoaded, setPaymentMethodLoaded] = useState(false)
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(
+    cachedMethod?.paymentMethod ?? null
+  )
+  const [paymentMethodLoaded, setPaymentMethodLoaded] = useState(cachedMethod !== undefined)
 
-  const [payments, setPayments] = useState<PaymentRecord[]>([])
-  const [paymentsLoaded, setPaymentsLoaded] = useState(false)
+  const [payments, setPayments] = useState<PaymentRecord[]>(cachedHistory?.payments ?? [])
+  const [paymentsLoaded, setPaymentsLoaded] = useState(cachedHistory !== undefined)
 
   const showToast = (message: string, type: "success" | "error") => {
     setToast({ message, type })
     setTimeout(() => setToast(null), 3500)
   }
 
-  const fetchSubscription = () => {
-    if (!session?.user?.id) return
-    fetch("/api/subscription/check", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: session.user.id }),
-    })
-      .then((r) => r.json())
+  // The check is a read; caching it per user keeps the plan card populated
+  // across navigations. `force` is used after a cancellation, which must show
+  // the server's new answer rather than the cached one.
+  const subscriptionKey = session?.user?.id
+    ? `/api/subscription/check?user=${session.user.id}`
+    : null
+
+  const fetchSubscription = (force = false) => {
+    if (!session?.user?.id || !subscriptionKey) return
+    fetchCached<any>(subscriptionKey, async () => {
+      const r = await fetch("/api/subscription/check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: session.user.id }),
+      })
+      if (!r.ok) throw new Error(`Request failed (${r.status})`)
+      return r.json()
+    }, { force })
       .then((d) => setSubscription(d.subscription))
       .catch(() => {})
       .finally(() => setSubscriptionLoaded(true))
@@ -78,16 +101,22 @@ export default function BillingPage() {
 
   useEffect(() => {
     if (!session?.user?.id) return
-    fetch("/api/user/brand-usage")
-      .then((r) => r.json())
+    fetchCached<any>("/api/user/brand-usage", async () => {
+      const r = await fetch("/api/user/brand-usage")
+      if (!r.ok) throw new Error(`Request failed (${r.status})`)
+      return r.json()
+    })
       .then((d) => setBrandCount(d.brandCount || 0))
       .catch(() => {})
   }, [session?.user?.id])
 
   useEffect(() => {
     if (!session?.user?.id) return
-    fetch("/api/subscription/payment-method")
-      .then((r) => r.json())
+    fetchCached<any>("/api/subscription/payment-method", async () => {
+      const r = await fetch("/api/subscription/payment-method")
+      if (!r.ok) throw new Error(`Request failed (${r.status})`)
+      return r.json()
+    })
       .then((d) => setPaymentMethod(d.paymentMethod))
       .catch(() => setPaymentMethod(null))
       .finally(() => setPaymentMethodLoaded(true))
@@ -95,8 +124,11 @@ export default function BillingPage() {
 
   useEffect(() => {
     if (!session?.user?.id) return
-    fetch("/api/subscription/payment-history")
-      .then((r) => r.json())
+    fetchCached<any>("/api/subscription/payment-history", async () => {
+      const r = await fetch("/api/subscription/payment-history")
+      if (!r.ok) throw new Error(`Request failed (${r.status})`)
+      return r.json()
+    })
       .then((d) => setPayments(d.payments || []))
       .catch(() => setPayments([]))
       .finally(() => setPaymentsLoaded(true))
@@ -134,7 +166,7 @@ export default function BillingPage() {
       if (!res.ok) throw new Error(data.error || "Failed to cancel subscription")
       showToast("Subscription cancelled. You'll retain access until the period ends.", "success")
       setConfirmCancel(false)
-      fetchSubscription()
+      fetchSubscription(true)
     } catch (err: any) {
       showToast(err.message || "Something went wrong", "error")
       setConfirmCancel(false)

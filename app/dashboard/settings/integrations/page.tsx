@@ -19,6 +19,7 @@ import {
 import { Link2, ShoppingCart, FolderOpen } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { SettingsSkeleton } from "@/components/shared/skeletons"
+import { fetchCached, invalidateCache, getCachedData } from "@/lib/data-cache"
 
 function LoadingScreen() {
   return (
@@ -71,8 +72,16 @@ function IntegrationsContent() {
 
   const brandId = searchParams.get("brandId")
 
-  const [loading, setLoading] = useState(true)
-  const [integrations, setIntegrations] = useState<IntegrationsMap>(DEFAULT_STATE)
+  // Seeded from the shared cache (the same entry the Post Tracker reads), so a
+  // revisit renders the connected integrations immediately.
+  const cachedIntegrations = brandId
+    ? getCachedData<{ integrations?: IntegrationsMap }>(`/api/settings/integrations?brandId=${brandId}`)
+    : undefined
+
+  const [loading, setLoading] = useState(cachedIntegrations === undefined)
+  const [integrations, setIntegrations] = useState<IntegrationsMap>(
+    cachedIntegrations?.integrations ?? DEFAULT_STATE
+  )
   const [pendingId, setPendingId] = useState<IntegrationId | null>(null)
   const [goaffproSyncing, setGoaffproSyncing] = useState(false)
 
@@ -121,8 +130,13 @@ function IntegrationsContent() {
     }
     if (status !== "authenticated") return
 
-    fetch(`/api/settings/integrations?brandId=${encodeURIComponent(brandId)}`)
-      .then((r) => r.json())
+    // Shared cache entry — the same key the Post Tracker reads, so switching
+    // between them does not repeat the request.
+    fetchCached<any>(`/api/settings/integrations?brandId=${brandId}`, async () => {
+      const r = await fetch(`/api/settings/integrations?brandId=${encodeURIComponent(brandId)}`)
+      if (!r.ok) throw new Error(`Request failed (${r.status})`)
+      return r.json()
+    })
       .then((data) => {
         if (data.integrations) setIntegrations(data.integrations)
       })
@@ -152,6 +166,7 @@ function IntegrationsContent() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || `Failed to connect ${label}`)
+      invalidateCache(`/api/settings/integrations?brandId=${brandId}`)
 
       setIntegrations((prev) => ({
         ...prev,
@@ -185,6 +200,7 @@ function IntegrationsContent() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "Failed to connect GoAffPro")
+      invalidateCache(`/api/settings/integrations?brandId=${brandId}`)
 
       setIntegrations((prev) => ({
         ...prev,
@@ -227,6 +243,8 @@ function IntegrationsContent() {
       if (!res.ok) throw new Error(data.error || `Failed to disconnect ${label}`)
 
       setIntegrations((prev) => ({ ...prev, [id]: { connected: false } }))
+      // Other pages (Post Tracker) read the same cached entry.
+      invalidateCache(`/api/settings/integrations?brandId=${brandId}`)
       show(`${label} disconnected`, "success")
     } catch (err: any) {
       show(err.message || "Something went wrong", "error")

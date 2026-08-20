@@ -5,11 +5,14 @@ import TierSettingsModal from "./TierSettingsModal"
 import AddPartnerModal from "./AddPartnerModal"
 import NewCampaignModal from "./NewCampaignModal"
 import InfluencerProfileSidebar from "./InfluencerProfileSidebar"
-import { IconSearch, IconFilter } from "@tabler/icons-react"
+import { IconSearch, IconFilter, IconBuildingStore } from "@tabler/icons-react"
 import { ReactNode } from "react"
 import { useBrandTaxonomy } from "@/hooks/useBrandTaxonomy"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { TableSkeleton } from "@/components/shared/skeletons"
+
+import { getCachedData, setCachedData, hasCachedData } from "@/lib/data-cache"
+import { invalidateInfluencerDerivedCaches } from "@/lib/cache-invalidation"
 
 import {
   partnersApi,
@@ -157,11 +160,24 @@ interface Props {
   brandId: string
 }
 
+type PartnersCache = {
+  partners: Partner[]
+  campaigns: Campaign[]
+  tierThresholds: { bronzeMax: number; silverMax: number }
+}
+
 export default function BrandPartnersPage({ brandId }: Props) {
   const { canManageCampaigns, canApproveInfluencers, isOwner } = useBrandCapabilities(brandId)
-  const [partners, setPartners] = useState<Partner[]>([])
-  const [campaigns, setCampaigns] = useState<Campaign[]>([])
-  const [loading, setLoading] = useState(true)
+
+  // Shared cache entry for this brand's partners view. Seeding state from it
+  // means returning to the page shows the last loaded partners and campaigns
+  // straight away, with a background refresh instead of a full loading state.
+  const cacheKey = `brand-partners:${brandId}`
+  const cached = getCachedData<PartnersCache>(cacheKey)
+
+  const [partners, setPartners] = useState<Partner[]>(() => cached?.partners ?? [])
+  const [campaigns, setCampaigns] = useState<Campaign[]>(() => cached?.campaigns ?? [])
+  const [loading, setLoading] = useState(() => cached === undefined)
   const [error, setError] = useState<string | null>(null)
 
   const [activeTab, setActiveTab] = useState(0)
@@ -191,7 +207,9 @@ export default function BrandPartnersPage({ brandId }: Props) {
   const [addingToCampaign, setAddingToCampaign] = useState(false)
 
   // ── Tier thresholds ──────────────────────────────────────────────────────
-  const [tierThresholds, setTierThresholds] = useState({ bronzeMax: 2000, silverMax: 10000 })
+  const [tierThresholds, setTierThresholds] = useState(
+    () => cached?.tierThresholds ?? { bronzeMax: 2000, silverMax: 10000 }
+  )
 
   const autoTier = useCallback(
     (rev: number): string => {
@@ -335,7 +353,9 @@ export default function BrandPartnersPage({ brandId }: Props) {
 
     async function loadData() {
       try {
-        setLoading(true)
+        // Only a first-ever load blanks the page; a revalidation keeps the
+        // current rows visible.
+        if (!hasCachedData(cacheKey)) setLoading(true)
         setError(null)
 
         const [camps, partnerRecords, tierSettings] = await Promise.all([
@@ -364,6 +384,13 @@ export default function BrandPartnersPage({ brandId }: Props) {
     loadData()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId])
+
+  // Mirror the loaded/mutated view into the shared cache, so optimistic edits
+  // made here are what the next visit renders from.
+  useEffect(() => {
+    if (loading) return
+    setCachedData(cacheKey, { partners, campaigns, tierThresholds })
+  }, [cacheKey, loading, partners, campaigns, tierThresholds])
 
   // ── Tier helpers ─────────────────────────────────────────────────────────
   const getDisplayTier = useCallback((p: Partner) => p.tierOverride || autoTier(p.rev), [autoTier])
@@ -494,6 +521,10 @@ export default function BrandPartnersPage({ brandId }: Props) {
         if (added.length > 0) {
           setPartners((prev) => [...prev, ...added])
         }
+        // A new partner is a new BrandInfluencer row: Influencer List, Pipeline,
+        // Post Tracker and Analytics all cover it now. This page's own entry is
+        // excluded — the effect above already mirrors the new state into it.
+        invalidateInfluencerDerivedCaches(brandId, [cacheKey])
         if (firstFailure) throw firstFailure
         return
       }
@@ -528,6 +559,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
               notes: formData.notes || null,
             })
             setPartners((prev) => [...prev, dbToPartner(bi)])
+            invalidateInfluencerDerivedCaches(brandId, [cacheKey])
           } catch (linkErr: any) {
             if (linkErr.message?.includes("already added")) {
               alert("This influencer is already in your brand partner list.")
@@ -547,6 +579,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
       const justAdded = freshBIs.find((bi: BrandInfluencerRecord) => bi.influencer_id === json.id)
       if (justAdded) {
         setPartners((prev) => [...prev, dbToPartner(justAdded)])
+        invalidateInfluencerDerivedCaches(brandId, [cacheKey])
       }
     } catch (e: any) {
       alert("Failed to add partner: " + (e.message || "Unknown error"))
@@ -700,7 +733,8 @@ export default function BrandPartnersPage({ brandId }: Props) {
       {/* ── Top Bar ── */}
       <div className="topbar">
         <div>
-          <div style={{ fontWeight: 600 }}>Brand Partners</div>
+          {/* The page title lives in the app header — repeating it here showed
+              "Brand Partners" twice on the same screen. */}
           <div className="topbar-sub">
             {partners.length} total · {goldCount} Gold · {silverCount} Silver · {bronzeCount} Bronze
           </div>
@@ -803,7 +837,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
         <div className="content">
           {partners.length === 0 ? (
             <div style={{ textAlign: "center", padding: "60px 20px", color: "#888" }}>
-              <div style={{ fontSize: 32, marginBottom: 8 }}>🤝</div>
+              <IconBuildingStore size={32} stroke={1.5} style={{ margin: "0 auto 8px", display: "block", color: "#b9bcbb" }} />
               <div style={{ fontWeight: 600, marginBottom: 4 }}>No partners yet</div>
               <div style={{ fontSize: 12 }}>Click "+ Add Partner" to add your first influencer</div>
             </div>
@@ -1447,7 +1481,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
 
       <style jsx>{`
         .topbar { background: #fff; border-bottom: 0.5px solid rgba(0,0,0,0.08); padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
-        .topbar-sub { font-size: 11px; color: #888; margin-top: 2px; }
+        .topbar-sub { font-size: 11px; color: #888; }
         .topbar-actions { display: flex; gap: 8px; }
         .btn-primary { background: #1FAE5B; color: #fff; border: none; padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 11px; font-weight: 500; font-family: 'Inter', sans-serif; }
         .btn-primary:hover { background: #0F6B3E; }

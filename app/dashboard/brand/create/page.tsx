@@ -6,6 +6,7 @@ import { useSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { AlertCircle } from "lucide-react"
+import { invalidateCache } from "@/lib/data-cache"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -241,6 +242,9 @@ export default function CreateBrandPage() {
         setLoading(false)
         return
       }
+      // The workspace switcher reads this list from the shared cache.
+      invalidateCache("/api/brand/list")
+      invalidateCache("/api/brands/me")
       setStep(3)
     } catch {
       setError("An error occurred. Please try again.")
