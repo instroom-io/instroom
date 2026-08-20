@@ -83,6 +83,36 @@ async function checkSubscriptionAccess(userId: string, brandId: string | null): 
 }
 
 /**
+ * Same check, tolerant of a transient DB hiccup. Returns null (rather than
+ * throwing) when the database couldn't be reached even after one retry —
+ * callers should treat null as "couldn't verify" and fail open, since this
+ * gate guards an already-authenticated user's subscription status, not their
+ * identity. Blocking or redirecting a real, paying user to /login over an
+ * infrastructure blip they had no part in fixes nothing (their session is
+ * still valid — they'd just hit the same failing check again) and only
+ * trades an availability problem for a worse one.
+ */
+async function checkSubscriptionAccessSafe(
+  userId: string,
+  brandId: string | null
+): Promise<boolean | null> {
+  try {
+    return await checkSubscriptionAccess(userId, brandId);
+  } catch (err) {
+    console.error("Subscription check failed, retrying once:", err);
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 300));
+
+  try {
+    return await checkSubscriptionAccess(userId, brandId);
+  } catch (err) {
+    console.error("Subscription check failed again — failing open:", err);
+    return null;
+  }
+}
+
+/**
  * Send an unauthenticated visitor to the login page, remembering where they
  * were going so they can be returned there after signing in.
  *
@@ -157,7 +187,14 @@ export async function middleware(req: any) {
     // denial for up to 5 minutes after their subscription is actually
     // active. A denied check is cheap and rare enough to just re-verify
     // against the DB every time instead.
-    const hasValidSubscription = await checkSubscriptionAccess(token.sub, brandId);
+    const hasValidSubscription = await checkSubscriptionAccessSafe(token.sub, brandId);
+
+    // null = the DB was unreachable even after a retry — fail open rather
+    // than blocking access or crashing the request over an infra blip.
+    if (hasValidSubscription === null) {
+      return NextResponse.next();
+    }
+
     if (hasValidSubscription) {
       setCachedSubscription(cacheKey, true);
     }
