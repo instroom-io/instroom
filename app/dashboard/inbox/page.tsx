@@ -422,12 +422,15 @@ function InboxContent() {
 
   // Threads already fetched for this brand render immediately; the mount checks
   // below still run and update these silently in the background.
+  // Relative path, built without `window`: this runs during the initial render,
+  // which Next.js also performs on the server, where `window.location` does not
+  // exist. It doubles as the shared-cache key and as the fetch URL — `fetch`
+  // resolves a relative path against the current document in the browser.
+  const threadsKey = (provider: "gmail" | "outlook") =>
+    `/api/${provider}/threads${brandId ? `?brandId=${encodeURIComponent(brandId)}` : ""}`
+
   const cachedEmails = () => {
-    const read = (provider: "gmail" | "outlook") => {
-      const url = new URL(`/api/${provider}/threads`, window.location.origin)
-      if (brandId) url.searchParams.append("brandId", brandId)
-      return getCachedData<any>(url.toString())
-    }
+    const read = (provider: "gmail" | "outlook") => getCachedData<any>(threadsKey(provider))
     const gmail = read("gmail")
     const outlook = read("outlook")
     return [
@@ -456,11 +459,8 @@ function InboxContent() {
 
   // "checking" only when this mailbox has nothing cached — a cached mailbox was
   // connected last time, so it renders as connected while the check re-runs.
-  const hasCachedThreads = (provider: "gmail" | "outlook") => {
-    const url = new URL(`/api/${provider}/threads`, window.location.origin)
-    if (brandId) url.searchParams.append("brandId", brandId)
-    return getCachedData<any>(url.toString()) !== undefined
-  }
+  const hasCachedThreads = (provider: "gmail" | "outlook") =>
+    getCachedData<any>(threadsKey(provider)) !== undefined
 
   const [gmailSyncState, setGmailSyncState] = useState<GmailSyncState>(
     () => (hasCachedThreads("gmail") ? "connected" : "checking")
@@ -567,15 +567,13 @@ function InboxContent() {
    * buttons, which must always hit the provider.
    */
   const fetchThreads = (provider: "gmail" | "outlook", force: boolean) => {
-    const url = new URL(`/api/${provider}/threads`, window.location.origin)
-    if (brandId) url.searchParams.append("brandId", brandId)
-    const href = url.toString()
+    const href = threadsKey(provider)
     return fetchCached<any>(href, async () => {
       const res = await fetch(href)
       const json = await res.json()
       // A non-OK response is not cached: it is thrown with its body attached so
       // the reauth / error branches below behave exactly as before.
-      if (!res.ok) throw Object.assign(new Error(json?.error || ""), { body: json })
+      if (!res.ok) throw Object.assign(new Error(json?.error || ""), { body: json, status: res.status })
       return json
     }, { force })
   }
@@ -591,7 +589,11 @@ function InboxContent() {
       setGmailSyncState("connected")
     } catch (err: any) {
       if (requestId !== gmailRequestIdRef.current) return
-      if (err?.body?.reauth) {
+      // reauth = the provider says this account isn't linked (or its grant
+      // lapsed). A bare 401/403 means the OAuth flow was never completed, which
+      // is the same thing from the inbox's point of view: not connected, so the
+      // existing disconnected state is shown rather than an error.
+      if (err?.body?.reauth || err?.status === 401 || err?.status === 403) {
         setGmailSyncState("not_connected")
         return
       }
@@ -641,7 +643,11 @@ function InboxContent() {
       setOutlookSyncState("connected")
     } catch (err: any) {
       if (requestId !== outlookRequestIdRef.current) return
-      if (err?.body?.reauth) {
+      // reauth = the provider says this account isn't linked (or its grant
+      // lapsed). A bare 401/403 means the OAuth flow was never completed, which
+      // is the same thing from the inbox's point of view: not connected, so the
+      // existing disconnected state is shown rather than an error.
+      if (err?.body?.reauth || err?.status === 401 || err?.status === 403) {
         setOutlookSyncState("not_connected")
         return
       }
@@ -820,6 +826,9 @@ function InboxContent() {
       if (selectedEmail?.id === emailId) {
         setSelectedEmail((prev) => (prev ? { ...prev, status: previousStatus || null } : null))
       }
+      // The revert alone left no trace of why the stage snapped back.
+      setStageNotification({ show: true, message: "Network error — the stage was not saved", type: "error" })
+      setTimeout(() => setStageNotification({ show: false, message: "", type: "error" }), 5000)
     }
   }
 

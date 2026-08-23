@@ -9,14 +9,17 @@ import { toast } from "sonner"
 import TableSheet, {
   type InfluencerRow,
   type CustomColumn,
+  type BulkApprovalResult,
 } from "@/components/table-sheet"
 import { useInfluencerData } from "@/hooks/useInfluencerData"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { fetchCached } from "@/lib/data-cache"
-import { invalidateInfluencerDerivedCaches, influencersCacheKey } from "@/lib/cache-invalidation"
+import { invalidateInfluencerDerivedCaches } from "@/lib/cache-invalidation"
 import { LimitExceededDialog } from "@/components/limit-exceeded-dialog"
 import { WorkspaceUnavailableModal } from "@/components/workspace-unavailable-modal"
 import { TableSkeleton } from "@/components/shared/skeletons"
+import { STATUS_LABEL } from "@/components/table-sheet/constants"
+import { IconLoader2 } from "@tabler/icons-react"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -82,6 +85,15 @@ function buildUpdatePayload(row: InfluencerRow) {
   }
 }
 
+/** Where an approval decision lands the influencer on the Pipeline board. */
+const APPROVAL_DESTINATION: Record<string, string> = {
+  Approved: "For Outreach",
+  Declined: "Not Interested",
+}
+
+/** Discrete lifecycle fields — a change to one of these is saved immediately. */
+const LIFECYCLE_FIELDS = ["approval_status", "contact_status", "stage", "transferred_date"] as const
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Serial PUT queue
 // ─────────────────────────────────────────────────────────────────────────────
@@ -89,12 +101,18 @@ function buildUpdatePayload(row: InfluencerRow) {
 type QueueItem = {
   url: string
   payload: string
+  /** Confirmation shown when this save lands (e.g. "handle moved to Approved"). */
+  message?: string | null
   onError?: (status: number) => void
   /** Runs after the row was persisted — used to refresh the views derived from it. */
   onSuccess?: () => void
 }
 
-function createPutQueue() {
+/**
+ * `onRequest` brackets each real PUT, so the save indicator reflects the request
+ * actually in flight — not the debounce window before it, and not a timer.
+ */
+function createPutQueue(onRequest?: (phase: "start" | "ok" | "fail", message?: string | null) => void) {
   const queue: QueueItem[] = []
   let running = false
 
@@ -103,16 +121,18 @@ function createPutQueue() {
     running = true
     while (queue.length > 0) {
       const item = queue.shift()!
+      onRequest?.("start", item.message)
       try {
         const res = await fetch(item.url, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: item.payload,
         })
-        if (res.ok) item.onSuccess?.()
-        else item.onError?.(res.status)
+        if (res.ok) { item.onSuccess?.(); onRequest?.("ok") }
+        else { item.onError?.(res.status); onRequest?.("fail") }
       } catch {
         // Network error — silent
+        onRequest?.("fail")
       }
     }
     running = false
@@ -168,14 +188,28 @@ function InfluencersContent() {
 
   // ── dbIds: real DB IDs confirmed saved for this brand ─────────────────────
   const dbIds = useRef<Set<string>>(new Set())
-  const seededForBrand = useRef<string | null>(null)
 
+  // What was last persisted for each row, so an edit only re-sends the rows that
+  // actually changed. Seeded from every payload the server returns.
+  const lastSentPayloads = useRef<Map<string, string>>(new Map())
+
+  // Seeded from every payload, not just the first one: latching after the first
+  // non-loading render meant rows that arrived later (a background refresh, or
+  // rows created elsewhere) were never registered, so `scheduleUpdate` returned
+  // early and their edits — an approval included — were never sent to the DB at
+  // all, while the table went on showing the new value until the next reload.
   useEffect(() => {
-    if (!isLoading && brandId && seededForBrand.current !== brandId) {
-      seededForBrand.current = brandId
-      rows.forEach((r) => dbIds.current.add(r.id))
-    }
-  }, [isLoading, rows, brandId])
+    if (!brandId) return
+    rows.forEach((r) => {
+      if (r.id.startsWith("temp-")) return
+      dbIds.current.add(r.id)
+      // Server payload = the current database state for this row. Only set it
+      // when absent so a pending local edit is still detected as a change.
+      if (!lastSentPayloads.current.has(r.id)) {
+        lastSentPayloads.current.set(r.id, JSON.stringify(buildUpdatePayload(r)))
+      }
+    })
+  }, [rows, brandId])
 
   // ── Brand name for modal ───────────────────────────────────────────────────
   const [selectedBrandName, setSelectedBrandName] = useState<string>("")
@@ -209,8 +243,69 @@ function InfluencersContent() {
     }
   }, [isLoading])
 
+  // ── Save status (bottom indicator) ────────────────────────────────────────
+  // Same two-part pattern as the Pipeline board and the Post Tracker: a dark
+  // "Saving" pill while a request is in flight, replaced by the outcome
+  // notification once it settles (3s, as `showToast` uses there).
+  const [isSaving, setIsSaving] = useState(false)
+  const [notice, setNotice] = useState<{ message: string; type: "success" | "error" } | null>(null)
+  const savingCount = useRef(0)
+  const failedSinceIdle = useRef(false)
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const pendingMessage = useRef<string | null>(null)
+
+  const reportSave = useCallback((phase: "start" | "ok" | "fail", message?: string | null) => {
+    if (phase === "start") {
+      if (message) pendingMessage.current = message
+      savingCount.current += 1
+      failedSinceIdle.current = failedSinceIdle.current && savingCount.current > 1
+      if (noticeTimer.current) { clearTimeout(noticeTimer.current); noticeTimer.current = null }
+      setNotice(null)
+      setIsSaving(true)
+      return
+    }
+    if (phase === "fail") failedSinceIdle.current = true
+    savingCount.current = Math.max(0, savingCount.current - 1)
+    if (savingCount.current > 0) return
+
+    const failed = failedSinceIdle.current
+    failedSinceIdle.current = false
+    // The pill goes the moment the request is done — no lingering saving state.
+    setIsSaving(false)
+    // Same wording as the Pipeline board and Post Tracker: "<influencer> moved
+    // to <destination>" for a stage/approval move, and their plain failure line
+    // otherwise.
+    const confirmation = pendingMessage.current
+    pendingMessage.current = null
+    setNotice({
+      message: failed ? "Failed to save" : confirmation ?? "Changes saved",
+      type: failed ? "error" : "success",
+    })
+    noticeTimer.current = setTimeout(() => setNotice(null), 3000)
+  }, [])
+
+  // Wraps any save that doesn't go through the PUT queue (create, bulk approve,
+  // delete) so every path feeds the same indicator.
+  const trackSave = useCallback(
+    async <T,>(op: () => Promise<T>, succeeded: (result: T) => boolean): Promise<T> => {
+      reportSave("start")
+      try {
+        const result = await op()
+        reportSave(succeeded(result) ? "ok" : "fail")
+        return result
+      } catch (err) {
+        reportSave("fail")
+        throw err
+      }
+    },
+    [reportSave]
+  )
+
+  useEffect(() => () => { if (noticeTimer.current) clearTimeout(noticeTimer.current) }, [])
+
   // ── Queues and timers ─────────────────────────────────────────────────────
-  const putQueue = useRef(createPutQueue())
+  const putQueue = useRef(createPutQueue(reportSave))
   const updateTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
 
   // ── savedHandles: "handle@platform" keys already saved or in-flight ───────
@@ -255,16 +350,50 @@ function InfluencersContent() {
   }, [session?.user?.id])
 
   // ── scheduleUpdate: debounced PUT for already-saved rows ──────────────────
+  // `handleRowsChange` receives the WHOLE table on every edit and calls this for
+  // every row, so without the payload comparison below a single approval queued
+  // one full-payload PUT per row in the list (150 rows → 150 serialised
+  // requests, repeated on the next edit). Comparing against what was last sent
+  // reduces an edit to one request for the row that actually changed.
   const scheduleUpdate = useCallback(
     (row: InfluencerRow) => {
       if (!brandId || !dbIds.current.has(row.id)) return
 
+      const payload = JSON.stringify(buildUpdatePayload(row))
+      const lastSent = lastSentPayloads.current.get(row.id)
+      if (lastSent === payload) return // nothing changed on this row
+
       const existing = updateTimers.current.get(row.id)
       if (existing) clearTimeout(existing)
 
-      const payload = JSON.stringify(buildUpdatePayload(row))
       const url = `/api/brand/${brandId}/influencers/${row.id}`
       const handle = row.handle
+
+      // Typing needs the debounce; a discrete lifecycle action (approve/decline,
+      // status, stage, review date) does not — those go straight out so the save
+      // finishes while the user is still looking at the row.
+      const { discrete, moveMessage } = (() => {
+        if (!lastSent) return { discrete: false, moveMessage: null as string | null }
+        try {
+          const prev = JSON.parse(lastSent)
+          const next = JSON.parse(payload)
+          const changed = LIFECYCLE_FIELDS.filter((f) => prev[f] !== next[f])
+          if (!changed.length) return { discrete: false, moveMessage: null as string | null }
+          // Destination is the pipeline column the row actually lands in, not
+          // the approval verdict: approving puts an influencer in For Outreach
+          // (stage 1), declining puts it in Not Interested. Anything else reads
+          // the funnel stage label.
+          const approvalDestination = changed.includes("approval_status")
+            ? APPROVAL_DESTINATION[String(next.approval_status)] ?? null
+            : null
+          const destination = approvalDestination ?? STATUS_LABEL[String(next.contact_status)] ?? null
+          const who = row.handle?.trim() || row.full_name?.trim() || "Influencer"
+          return {
+            discrete: true,
+            moveMessage: destination ? `${who} moved to ${destination}` : null,
+          }
+        } catch { return { discrete: false, moveMessage: null as string | null } }
+      })()
 
       const timer = setTimeout(() => {
         updateTimers.current.delete(row.id)
@@ -272,12 +401,20 @@ function InfluencersContent() {
         putQueue.current.enqueue({
           url,
           payload,
+          message: moveMessage,
           // An approval or stage edit here changes what Pipeline, Post Tracker,
           // Brand Partners and Analytics should show. Their cached entries are
           // marked stale so those pages pick the change up on open — this
           // page's own entry is already correct from the inline edit.
           onSuccess() {
-            invalidateInfluencerDerivedCaches(brandId, [influencersCacheKey(brandId)])
+            // This payload is now what the database holds, so it becomes the
+            // baseline the next edit is compared against.
+            lastSentPayloads.current.set(row.id, payload)
+            // Every derived view is stale now — and so is this page's own entry,
+            // because the row it holds was written locally. Marking it stale too
+            // (data is kept, so nothing blanks out) means the next read comes
+            // from the database rather than from the optimistic edit.
+            invalidateInfluencerDerivedCaches(brandId)
           },
           onError(status) {
             if (status === 404) {
@@ -288,7 +425,7 @@ function InfluencersContent() {
             }
           },
         })
-      }, 1500)
+      }, discrete ? 0 : 1500)
 
       updateTimers.current.set(row.id, timer)
     },
@@ -315,11 +452,15 @@ function InfluencersContent() {
       }
 
       try {
+        reportSave("start")
         const res = await fetch("/api/influencers/create", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(buildCreatePayload(row, brandId)),
-        })
+        }).then(
+          (r) => { reportSave(r.ok || r.status === 409 ? "ok" : "fail"); return r },
+          (e) => { reportSave("fail"); throw e }
+        )
 
         if (res.ok) {
           const created = await res.json()
@@ -377,7 +518,7 @@ function InfluencersContent() {
         return null
       }
     },
-    [brandId]
+    [brandId, reportSave]
   )
 
   // ── handleFetchComplete ───────────────────────────────────────────────────
@@ -431,6 +572,41 @@ function InfluencersContent() {
       // user edit will trigger scheduleUpdate with the latest data.
     },
     [brandId, createRow]
+  )
+
+  // ── handleBulkApprove ─────────────────────────────────────────────────────
+  // One request for the whole selection instead of one debounced PUT per row.
+  // The route applies the writes in a transaction and returns the persisted
+  // rows, which TableSheet then renders; the derived caches are marked stale
+  // exactly once for the batch.
+  const handleBulkApprove = useCallback(
+    async (influencerIds: string[]): Promise<BulkApprovalResult | null> => {
+      if (!brandId || influencerIds.length === 0) return null
+      try {
+        const res = await trackSave(
+          () => fetch(`/api/brand/${brandId}/influencers/bulk-approval`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ influencerIds }),
+          }),
+          (r) => r.ok
+        )
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}))
+          toast.error(body.error === "Forbidden"
+            ? "Only Owners and Managers can approve influencers"
+            : `Bulk approval failed (${res.status})`)
+          return null
+        }
+        const result = (await res.json()) as BulkApprovalResult
+        invalidateInfluencerDerivedCaches(brandId)
+        return result
+      } catch {
+        toast.error("Bulk approval failed — check your connection and try again")
+        return null
+      }
+    },
+    [brandId, trackSave]
   )
 
   // ── handleRowsChange ──────────────────────────────────────────────────────
@@ -536,9 +712,10 @@ function InfluencersContent() {
       }
 
       try {
-        const res = await fetch(`/api/brand/${brandId}/influencers/${rowId}`, {
-          method: "DELETE",
-        })
+        const res = await trackSave(
+          () => fetch(`/api/brand/${brandId}/influencers/${rowId}`, { method: "DELETE" }),
+          (r) => r.ok || r.status === 404
+        )
         if (res.ok || res.status === 404) {
           dbIds.current.delete(rowId)
           tempToReal.current.delete(rowId)
@@ -552,7 +729,7 @@ function InfluencersContent() {
         toast.error("Network error — could not delete")
       }
     },
-    [brandId]
+    [brandId, trackSave]
   )
 
   // ── handleCustomColumnsChange ─────────────────────────────────────────────
@@ -562,7 +739,7 @@ function InfluencersContent() {
       if (!brandId) return
       for (const col of cols) {
         try {
-          await fetch(`/api/brand/${brandId}/custom-fields`, {
+          const res = await fetch(`/api/brand/${brandId}/custom-fields`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -574,8 +751,16 @@ function InfluencersContent() {
               description: col.description ?? "",
             }),
           })
+          // A rejected column was silently dropped before: the header stayed on
+          // screen while nothing was persisted.
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}))
+            console.error("[custom-fields] save failed:", res.status, body.error)
+            toast.error(body.error || `Could not save the "${col.field_name}" column`)
+          }
         } catch (err) {
           console.error("[custom-fields] error:", err)
+          toast.error(`Could not save the "${col.field_name}" column`)
         }
       }
     },
@@ -689,6 +874,7 @@ function InfluencersContent() {
           onFetchComplete={handleFetchComplete}
           onCustomColumnsChange={handleCustomColumnsChange}
           onImportRows={handleImportRows}
+          onBulkApprove={handleBulkApprove}
           onRegisterIdSwap={(fn) => {
             idSwapCallback.current = fn
           }}
@@ -699,6 +885,22 @@ function InfluencersContent() {
           canApproveInfluencers={canApproveInfluencers}
         />
       )}
+
+      {/* Save status — bottom-right, identical to the Pipeline board and Post
+          Tracker: the saving pill, then the outcome notification below it. */}
+      <div className="fixed bottom-4 right-4 z-50 flex flex-col items-end gap-2">
+        {isSaving && (
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-900/90 text-white text-xs font-medium shadow-lg animate-in fade-in">
+            <IconLoader2 size={12} className="animate-spin" />
+            Saving
+          </div>
+        )}
+        {notice && (
+          <div className={`px-4 py-2 rounded-lg shadow-lg text-white animate-in slide-in-from-bottom-2 ${notice.type === "error" ? "bg-red-600" : "bg-green-500"}`}>
+            {notice.message}
+          </div>
+        )}
+      </div>
 
       <LimitExceededDialog
         isOpen={showSubscriptionDialog}

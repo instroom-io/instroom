@@ -172,7 +172,7 @@ function mentionPill(label: string, key: string) {
   return (
     <span
       key={key}
-      className="rounded bg-[#5865F2]/12 px-1 font-medium text-[#4752C4] transition-colors hover:bg-[#5865F2]/20"
+      className="rounded bg-[#0F6B3E]/12 px-1 font-medium text-[#0F6B3E] transition-colors hover:bg-[#0F6B3E]/20"
     >
       {label}
     </span>

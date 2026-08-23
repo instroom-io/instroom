@@ -79,3 +79,14 @@ export type ToastNotification = {
   type: "success" | "error" | "warning" | "info";
   message: string;
 }
+/** What POST /api/brand/[brandId]/influencers/bulk-approval persisted. */
+export type BulkApprovalResult = {
+  updated: {
+    id: string
+    influencer_id: string
+    approval_status: string | null
+    transferred_date: string | Date | null
+    contact_status: string | null
+  }[]
+  failed: string[]
+}

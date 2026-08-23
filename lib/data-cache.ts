@@ -33,6 +33,35 @@ const cache = new Map<string, CacheEntry>()
 const inflight = new Map<string, Promise<unknown>>()
 const subscribers = new Map<string, Set<() => void>>()
 
+/**
+ * Per-key write generation.
+ *
+ * A background revalidation that was already in flight when a mutation ran
+ * carries PRE-mutation data. Left alone it resolves afterwards and overwrites
+ * the newer persisted state, so the change appears to snap back until the next
+ * fetch. Callers bracket a mutation with `markCacheWrite(key)` (once when it
+ * starts, once when it settles); `fetchCached` records the generation it started
+ * on and refuses to cache a payload whose generation has moved on.
+ *
+ * It is a counter, not a lock: there is nothing to release, so a failed or
+ * abandoned mutation can never leave an entry permanently blocked, and keys are
+ * independent of each other.
+ */
+const writeGenerations = new Map<string, number>()
+
+/**
+ * Mark that `key`'s underlying data is being written. Call once before the
+ * mutation and once after it settles (success OR failure), so any request whose
+ * lifetime overlaps the mutation window is discarded rather than cached.
+ */
+export function markCacheWrite(key: string): void {
+  writeGenerations.set(key, (writeGenerations.get(key) ?? 0) + 1)
+}
+
+function writeGeneration(key: string): number {
+  return writeGenerations.get(key) ?? 0
+}
+
 /** How long a cached entry is considered fresh before a background refresh. */
 export const DEFAULT_TTL = 30_000
 
@@ -113,8 +142,17 @@ export async function fetchCached<T>(
   const pending = inflight.get(key)
   if (pending) return pending as Promise<T>
 
+  // Generation at request start. If a mutation happens while this is in flight,
+  // the response describes state older than what is already cached, so it is
+  // returned to the caller but NOT written to the cache.
+  const startedAtGeneration = writeGeneration(key)
+
   const request = fetcher()
     .then((data) => {
+      if (writeGeneration(key) !== startedAtGeneration) {
+        const current = cache.get(key)
+        return (current ? current.data : data) as T
+      }
       setCachedData(key, data)
       return data
     })

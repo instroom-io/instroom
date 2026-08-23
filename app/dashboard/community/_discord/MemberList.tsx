@@ -94,7 +94,7 @@ function MemberPopover({
             )}
           </div>
           {member.bot && (
-            <span className="mb-1 rounded bg-[#5865F2] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">
+            <span className="mb-1 rounded bg-[#0F6B3E] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">
               Bot
             </span>
           )}
@@ -136,7 +136,7 @@ function MemberPopover({
             href={`https://discord.com/users/${member.id}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex h-7 flex-1 items-center justify-center gap-1.5 rounded-lg bg-[#5865F2] text-[11.5px] font-medium text-white transition-colors hover:bg-[#4752C4]"
+            className="flex h-7 flex-1 items-center justify-center gap-1.5 rounded-lg bg-[#0F6B3E] text-[11.5px] font-medium text-white transition-colors hover:bg-[#166534]"
           >
             <IconBrandDiscord size={12} aria-hidden />
             Profile
@@ -192,7 +192,7 @@ const MemberRow = memo(function MemberRow({
         {member.displayName}
       </span>
       {member.bot && (
-        <span className="flex-shrink-0 rounded bg-[#5865F2] px-1 text-[8.5px] font-bold uppercase text-white">
+        <span className="flex-shrink-0 rounded bg-[#0F6B3E] px-1 text-[8.5px] font-bold uppercase text-white">
           Bot
         </span>
       )}

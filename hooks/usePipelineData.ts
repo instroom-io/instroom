@@ -4,8 +4,8 @@
 //   2. On successful PATCH, we update local state directly — no refetch needed
 //   3. Only refetch (silently) on failure to restore correct server state
 
-import { useCallback, useRef } from "react"
-import { useCachedFetch, getCachedData, setCachedData } from "@/lib/data-cache"
+import { useCallback, useRef, useState } from "react"
+import { useCachedFetch, getCachedData, setCachedData, markCacheWrite } from "@/lib/data-cache"
 import { invalidateInfluencerDerivedCaches, pipelineCacheKey } from "@/lib/cache-invalidation"
 
 /** Stable empty reference used before the first payload arrives. */
@@ -63,6 +63,8 @@ interface UsePipelineDataReturn {
   isLoading: boolean
   error: string | null
   updateStatus: (id: string, newStatus: string, extra?: { niReason?: string; collaborationType?: string }) => Promise<boolean>
+  /** True while at least one status write is in flight — drives the saving indicator. */
+  isSaving: boolean
   refetch: () => void
 }
 
@@ -163,6 +165,25 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
 
   // Track in-flight PATCH requests, so a refetch is not fired while one is pending.
   const pendingRef = useRef(0)
+  // Mirrored into state so the board can show a saving indicator while a write
+  // is actually in flight (a ref alone never triggers a render).
+  const [pendingWrites, setPendingWrites] = useState(0)
+
+  // Bracketing the write bumps the cache's write generation, so a revalidation
+  // that started before this mutation cannot overwrite the newer state when it
+  // resolves. Called on both edges — a failed write matters just as much,
+  // because the rollback is also newer than that in-flight response.
+  const beginWrite = useCallback(() => {
+    pendingRef.current += 1
+    setPendingWrites((n) => n + 1)
+    if (cacheKey) markCacheWrite(cacheKey)
+  }, [cacheKey])
+
+  const endWrite = useCallback(() => {
+    pendingRef.current = Math.max(0, pendingRef.current - 1)
+    setPendingWrites((n) => Math.max(0, n - 1))
+    if (cacheKey) markCacheWrite(cacheKey)
+  }, [cacheKey])
 
   // Optimistic writes go straight into the shared cache, which is also what the
   // board renders from — so a change survives navigating away and back.
@@ -198,12 +219,16 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
     async (id: string, newStatus: string, extra?: { niReason?: string; collaborationType?: string }): Promise<boolean> => {
       if (!brandId) return false
 
-      // 1. Save snapshot for rollback
-      let snapshot: PipelineInfluencer[] = []
+      // 1. Save the previous state of THIS row only. Rolling back a full-list
+      //    snapshot would also revert every other row updated since this call
+      //    started, which is what made a run of status changes (a bulk move, or
+      //    several dropdowns in quick succession) appear to do nothing as soon
+      //    as one of them failed.
+      let previous: PipelineInfluencer | undefined
 
       // 2. Apply optimistic update immediately (no spinner)
       setData((prev) => {
-        snapshot = prev
+        previous = prev.find((item) => item.id === id)
         const next = prev.map((item) =>
           item.id === id ? applyStatusChange(item, newStatus, extra?.niReason, extra?.collaborationType) : item
         )
@@ -212,7 +237,13 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
         return next
       })
 
-      pendingRef.current += 1
+      // Restores just this row, leaving concurrent updates to other rows intact.
+      const rollback = () => {
+        if (!previous) return
+        setData((prev) => prev.map((item) => (item.id === id ? previous! : item)))
+      }
+
+      beginWrite()
 
       try {
         const res = await fetch(`/api/brand/${brandId}/pipeline/${id}`, {
@@ -226,9 +257,11 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
         })
 
         if (!res.ok) {
-          // Server rejected — rollback silently
-          setData(snapshot)
-          if (cacheKey) setCachedData(cacheKey, snapshot)
+          // Server rejected — undo this row and say why, so a silent rollback
+          // isn't the only signal the user gets.
+          const err = await res.json().catch(() => ({}))
+          console.error(`[pipeline] PATCH ${id} → ${newStatus} failed (${res.status}):`, err.error || res.statusText)
+          rollback()
           return false
         }
 
@@ -238,15 +271,15 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
         // is marked stale so opening it shows the new stage without a refresh.
         invalidateInfluencerDerivedCaches(brandId, [pipelineCacheKey(brandId)])
         return true
-      } catch {
-        setData(snapshot)
-        if (cacheKey) setCachedData(cacheKey, snapshot)
+      } catch (err) {
+        console.error(`[pipeline] PATCH ${id} → ${newStatus} failed:`, err)
+        rollback()
         return false
       } finally {
-        pendingRef.current -= 1
+        endWrite()
       }
     },
-    [brandId, cacheKey, setData]
+    [brandId, cacheKey, setData, beginWrite, endWrite]
   )
 
   return {
@@ -256,8 +289,11 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
     isLoading: Boolean(brandId) && isLoading,
     error,
     updateStatus,
-    // Public refetch (e.g. retry button) — no spinner so board stays visible
-    refetch: () => { void refetch() },
+    isSaving: pendingWrites > 0,
+    // Public refetch (e.g. retry button) — no spinner so board stays visible.
+    // Skipped while a write is in flight: its response would predate the
+    // mutation, which is exactly what pendingRef is here to prevent.
+    refetch: () => { if (pendingRef.current === 0) void refetch() },
   }
   
 }

@@ -385,6 +385,21 @@ export default function BrandPartnersPage({ brandId }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId])
 
+  // Re-read just the partner list — used after a partner is added, so the new
+  // row appears without a page refresh. Campaigns and tier settings are
+  // untouched by that action, so they are not refetched.
+  const reloadPartners = useCallback(async () => {
+    if (!brandId) return
+    try {
+      const partnerRecords = await partnersApi.list(brandId)
+      setPartners(partnerRecords.map(dbToPartner))
+      // A new partner also changes what the other influencer views cover.
+      invalidateInfluencerDerivedCaches(brandId, [cacheKey])
+    } catch (e: any) {
+      setError(e?.message || "Failed to refresh partners.")
+    }
+  }, [brandId, cacheKey])
+
   // Mirror the loaded/mutated view into the shared cache, so optimistic edits
   // made here are what the next visit renders from.
   useEffect(() => {
@@ -846,7 +861,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
               <table className="pt">
                 <thead>
                   <tr>
-                    <th style={{ width: 28, color: "#bbb" }}>#</th>
+                    <th className="rn" style={{ width: 40, minWidth: 40 }}>#</th>
                     <th><div className="thi" onClick={() => handleSort("alpha")}><span className="cl">Creator</span><span className="sa">↕</span></div></th>
                     <th><span className="cl">Platform</span></th>
                     <th><span className="cl">Niche</span></th>
@@ -878,7 +893,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
                         onClick={() => openPartnerSidebar(p)}
                         style={{ cursor: "pointer" }}
                       >
-                        <td style={{ color: "#bbb", fontSize: 11 }}>{(currentPage - 1) * rowsPerPage + idx + 1}</td>
+                        <td className="rn">{(currentPage - 1) * rowsPerPage + idx + 1}</td>
                         <td style={{ fontWeight: 500, fontSize: 12 }}>{p.handle}</td>
                         <td>
                           <div className="flex justify-center items-center">
@@ -1438,7 +1453,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
         isOpen={showAddPartnerModal}
         onClose={() => setShowAddPartnerModal(false)}
         brandId={brandId}
-        onAdded={() => {}}
+        onAdded={reloadPartners}
       />
 
       <NewCampaignModal
@@ -1504,16 +1519,22 @@ export default function BrandPartnersPage({ brandId }: Props) {
         .fc-btn { font-size: 11px; padding: 5px 10px; border-radius: 7px; border: 0.5px solid rgba(0,0,0,0.15); background: transparent; color: #888; cursor: pointer; }
         .fa-btn { font-size: 11px; padding: 5px 12px; border-radius: 7px; border: none; background: #1FAE5B; color: #fff; cursor: pointer; }
         .content { padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; }
-        .tw { background: #fff; border: 0.5px solid rgba(0,0,0,0.08); border-radius: 10px; overflow: hidden; overflow-x: auto; }
+        /* Spreadsheet-style table, matching the Influencer List sheet
+           (components/table-sheet/table-sheet.tsx): a gray-200 grid on every
+           cell, a sticky gray-50 header with semibold gray-600 labels, tight
+           rows, and horizontal scrolling inside a rounded, shadowed frame. */
+        .tw { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; overflow: auto; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
         .pt { width: 100%; border-collapse: collapse; font-size: 12px; }
-        .pt thead { background: #fafaf9; }
-        .pt th { padding: 9px 10px; font-weight: 500; font-size: 11px; border-bottom: 0.5px solid rgba(0,0,0,0.08); white-space: nowrap; }
-        .pt td { padding: 9px 10px; border-bottom: 0.5px solid rgba(0,0,0,0.05); color: #1E1E1E; vertical-align: middle; white-space: nowrap; }
-        .pt tr:last-child td { border-bottom: none; }
-        .dr:hover td { background: #f0faf5; }
+        .pt thead { position: sticky; top: 0; z-index: 10; }
+        .pt th { background: #f9fafb; padding: 6px 8px; text-align: left; font-weight: 600; font-size: 12px; color: #4b5563; border: 1px solid #e5e7eb; white-space: nowrap; vertical-align: middle; }
+        .pt td { padding: 4px 8px; border: 1px solid #e5e7eb; font-size: 12px; color: #1E1E1E; vertical-align: middle; white-space: nowrap; }
+        .dr:hover td { background: rgba(249,250,251,0.6); }
+        /* Row-number gutter, as in the Influencer List sheet. */
+        .pt th.rn { text-align: center; color: #9ca3af; }
+        .pt td.rn { text-align: center; font-size: 11px; color: #9ca3af; background: rgba(249,250,251,0.4); }
         .thi { display: flex; align-items: center; gap: 3px; cursor: pointer; }
-        .cl { font-size: 11px; color: #888; }
-        .sa { font-size: 10px; color: #ccc; }
+        .cl { font-size: 12px; font-weight: 600; color: #4b5563; }
+        .sa { font-size: 10px; color: #d1d5db; }
         .tb { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 20px; }
         .tg { background: #fff8e1; color: #854F0B; }
         .ts { background: #f0f0f0; color: #444; }

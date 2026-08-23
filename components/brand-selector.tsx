@@ -46,6 +46,7 @@ export function BrandSelector() {
   const [selectedBrandId, setSelectedBrandId] = useState<string>("")
   const [mounted, setMounted] = useState(false)
   const [error, setError] = useState("")
+  const [upgradeRequired, setUpgradeRequired] = useState(false)
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const [dropdownPos, setDropdownPos] = useState<DropdownPosition>({ top: 0, right: 0 })
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -169,6 +170,7 @@ export function BrandSelector() {
   const checkBrandLimitAndBuy = async () => {
     try {
       setError("")
+      if (upgradeRequired) { router.push("/dashboard/settings/billing"); return }
       const res = await fetch("/api/subscription/check-brand-limit")
       const data = await res.json()
       if (!res.ok) { setError(data.error || "Failed to check brand limit"); return }
@@ -185,7 +187,7 @@ export function BrandSelector() {
       } else if (data.allowed) {
         router.push("/dashboard/brand/create")
       } else {
-        setError(data.message || "You've reached your brand limit and cannot purchase more.")
+        setUpgradeRequired(true)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred")
@@ -352,6 +354,11 @@ export function BrandSelector() {
             <Plus className="h-3.5 w-3.5 text-gray-400" />
           </div>
           <span className="text-sm font-medium text-gray-500">Add Workspace</span>
+          {upgradeRequired && (
+            <span className="ml-auto text-[10px] font-semibold text-[#0F6B3E] bg-[#0F6B3E]/10 px-2 py-0.5 rounded-full">
+              Upgrade
+            </span>
+          )}
         </button>
       </div>
 
@@ -440,6 +447,19 @@ export function BrandSelector() {
 
   return (
     <>
+      {upgradeRequired && (
+        <div className="flex items-center gap-3 px-3 py-1.5 rounded-md bg-amber-50 text-amber-800 border border-amber-100 text-sm transition-colors">
+          <span>You&apos;ve reached your brand limit. Upgrade your plan to add more brands.</span>
+          <Button
+            size="sm"
+            className="h-7 px-3 ml-auto bg-[#0F6B3E] hover:bg-[#0F6B3E]/90 text-white text-xs"
+            onClick={() => router.push("/dashboard/settings/billing")}
+          >
+            Upgrade
+          </Button>
+        </div>
+      )}
+
       {error && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-red-50 text-red-700 border border-red-200 text-sm">
           <AlertCircle className="h-4 w-4 flex-shrink-0" />

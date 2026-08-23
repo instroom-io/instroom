@@ -296,7 +296,7 @@ const ReactionBar = memo(function ReactionBar({
           aria-label={`${r.emoji} ${r.count} reaction${r.count === 1 ? "" : "s"}`}
           className={`flex h-[22px] items-center gap-1 rounded-full border px-1.5 text-[11.5px] transition-all active:scale-95 ${
             r.me
-              ? "border-[#5865F2]/50 bg-[#5865F2]/10 text-[#4752C4]"
+              ? "border-[#0F6B3E]/50 bg-[#0F6B3E]/10 text-[#0F6B3E]"
               : "border-gray-200 bg-gray-50 text-gray-500 hover:border-gray-300 hover:bg-gray-100"
           }`}
         >
@@ -571,7 +571,7 @@ const GroupView = memo(function GroupView({
                 Instroom
               </span>
             ) : automated ? (
-              <span className="inline-flex items-center gap-[3px] rounded bg-[#5865F2] px-1 py-[1px] text-[9px] font-bold uppercase tracking-wide text-white">
+              <span className="inline-flex items-center gap-[3px] rounded bg-[#0F6B3E] px-1 py-[1px] text-[9px] font-bold uppercase tracking-wide text-white">
                 <IconBolt size={8} fill="currentColor" aria-hidden />
                 Bot
               </span>

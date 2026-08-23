@@ -81,7 +81,7 @@ function StepProgress({
                   s.done
                     ? "bg-[#1FAE5B] text-white"
                     : isCurrent
-                      ? "bg-[#5865F2] text-white"
+                      ? "bg-[#0F6B3E] text-white"
                       : "bg-gray-100 text-gray-400"
                 }`}
               >
@@ -861,7 +861,6 @@ export function DiscordClient({ brandId }: { brandId: string }) {
             {status.botConfigured ? (
               <DiscordCta
                 href={`/api/community/discord/install?brandId=${encodeURIComponent(brandId)}&returnTo=${RETURN_TO}`}
-                icon={<IconBrandDiscord size={17} />}
                 dataTour="community-connect-server"
               >
                 {botMissing ? "Authorize Instroom Bot" : "Connect Discord Server"}

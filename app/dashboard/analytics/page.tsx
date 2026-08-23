@@ -29,6 +29,7 @@ interface AnalyticsInfluencer {
   hasOutreach: boolean
   /** True when an outreach log recorded a reply. */
   hasResponse: boolean
+  isDeclined: boolean
   outreachCount: number
   rejectionReason: string | null
   rejectionBucket: "hard" | "soft" | null
@@ -712,10 +713,18 @@ function AnalyticsPageContent() {
     const CLOSED_OR_BEYOND    = ["Onboarded", "In Transit", "Content Pending", "Posted"]
 
     const totalOutreach = dataToUse.length
-    // A reply logged against an outreach record counts as a response even if the
-    // pipeline stage has not been moved yet.
+    // A response is a RECORDED response: a reply logged against the outreach
+    // record, or a reply the inbox recorded on the row (hasResponse). Reaching a
+    // stage that cannot be entered without the influencer answering counts too.
+    //
+    // A decline never counts on its own. Not Interested can be set without the
+    // influencer ever answering ("Ghosted / no longer active", "Can't ship to
+    // their location"), so a declined row only counts when an actual response is
+    // recorded against it — checked off the persisted row rather than the stage
+    // it happens to render in, so a decline that already passed through the Post
+    // Tracker cannot slip back in through RESPONDED_OR_BEYOND.
     const responded = dataToUse.filter(
-      i => i.hasResponse || RESPONDED_OR_BEYOND.includes(i.pipelineStatus)
+      i => i.hasResponse || (!i.isDeclined && RESPONDED_OR_BEYOND.includes(i.pipelineStatus))
     ).length
     const closed = dataToUse.filter(i => CLOSED_OR_BEYOND.includes(i.pipelineStatus)).length
     // "Rejected" is left out of `responded`: a decline can be recorded without

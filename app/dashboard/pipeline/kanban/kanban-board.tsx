@@ -43,6 +43,7 @@ import {
   IconShoppingBag,
   IconCoins,
   IconStar,
+  IconLoader2,
 } from "@tabler/icons-react"
 
 import InfluencerProfileSidebar, {
@@ -539,10 +540,15 @@ function NotInterestedModal({ influencer, onConfirm, onCancel, bulkCount }: NIMo
   const softReasons = NI_REASONS.filter((r) => r.bucket === "soft")
   const initials = influencer.influencer.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()
 
+  const selected = NI_REASONS.find((r) => r.r === selectedReason)
+
+  // Same shell, padding rhythm and footer as the Collaboration Type ("Deal
+  // Agreed") modal; the card scrolls when the two reason columns run long.
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onCancel}>
-      <div className="bg-white rounded-2xl shadow-2xl w-[800px] max-w-[95vw] max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-start justify-between px-7 pt-6 pb-4 border-b border-gray-100">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4" onClick={onCancel}>
+      <div className="bg-white rounded-2xl shadow-2xl w-[760px] max-w-[calc(100vw-2rem)] max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        {/* Header */}
+        <div className="flex items-start justify-between px-4 sm:px-6 pt-5 sm:pt-6 pb-4 border-b border-gray-100">
           <div>
             <h2 className="text-base font-semibold text-gray-900">Mark as not interested</h2>
             <p className="text-xs text-gray-500 mt-0.5">
@@ -553,11 +559,13 @@ function NotInterestedModal({ influencer, onConfirm, onCancel, bulkCount }: NIMo
           </div>
           <button onClick={onCancel} className="text-gray-400 hover:text-gray-600 transition ml-4 mt-0.5"><IconX size={18} /></button>
         </div>
-        <div className="px-7 pt-5">
-          <div className="flex items-center gap-3 bg-gray-50 rounded-xl px-4 py-3 border border-gray-100">
+
+        {/* Influencer Info */}
+        <div className="px-4 sm:px-6 pt-4 sm:pt-5 pb-2">
+          <div className="flex flex-wrap items-center gap-3 bg-gray-50 rounded-xl px-3 sm:px-4 py-3 border border-gray-100">
             {bulkCount ? (
               <>
-                <div className="w-9 h-9 rounded-full bg-red-100 flex items-center justify-center text-red-600 font-semibold text-sm">{bulkCount}</div>
+                <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center text-red-600 font-semibold text-sm">{bulkCount}</div>
                 <div>
                   <p className="text-sm font-semibold text-gray-900">{bulkCount} influencers selected</p>
                   <p className="text-xs text-gray-500">The reason below applies to all of them</p>
@@ -566,9 +574,9 @@ function NotInterestedModal({ influencer, onConfirm, onCancel, bulkCount }: NIMo
             ) : (
               <>
                 {influencer.profileImageUrl ? (
-                  <img src={influencer.profileImageUrl} alt={influencer.influencer} className="w-9 h-9 rounded-full object-cover" />
+                  <img src={influencer.profileImageUrl} alt={influencer.influencer} className="w-10 h-10 rounded-full object-cover" />
                 ) : (
-                  <div className="w-9 h-9 rounded-full bg-red-100 flex items-center justify-center text-red-600 font-semibold text-sm">{initials}</div>
+                  <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center text-red-600 font-semibold text-sm">{initials}</div>
                 )}
                 <div>
                   <p className="text-sm font-semibold text-gray-900">{influencer.influencer}</p>
@@ -576,65 +584,80 @@ function NotInterestedModal({ influencer, onConfirm, onCancel, bulkCount }: NIMo
                 </div>
               </>
             )}
-          </div>
-        </div>
-        <div className="px-7 pt-5 pb-3 grid grid-cols-2 gap-x-5 gap-y-5">
-          <div>
-            <div className="flex items-center gap-2 mb-2.5">
-              <span className="text-[10px] font-bold uppercase tracking-widest text-red-700">Hard pass</span>
-              <span className="text-[10px] text-gray-400">— don't reach out soon</span>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              {hardReasons.map((reason) => (
-                <button key={reason.r} onClick={() => setSelectedReason(reason.r)}
-                  className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl border text-left transition-all w-full ${selectedReason === reason.r ? "border-red-400 bg-red-50" : "border-gray-100 hover:border-gray-200 hover:bg-gray-50"}`}>
-                  <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: reason.color }} />
-                  <span className="text-sm text-gray-700 flex-1 leading-snug">{reason.r}</span>
-                  {selectedReason === reason.r && (
-                    <span className="w-4 h-4 rounded-full bg-red-500 flex items-center justify-center flex-shrink-0">
-                      <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 4L3.2 5.7L6.5 2.3" stroke="white" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div>
-            <div className="flex items-center gap-2 mb-2.5">
-              <span className="text-[10px] font-bold uppercase tracking-widest text-blue-700">Soft pass</span>
-              <span className="text-[10px] text-gray-400">— follow up next campaign</span>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              {softReasons.map((reason) => (
-                <button key={reason.r} onClick={() => setSelectedReason(reason.r)}
-                  className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl border text-left transition-all w-full ${selectedReason === reason.r ? "border-blue-400 bg-blue-50" : "border-gray-100 hover:border-gray-200 hover:bg-gray-50"}`}>
-                  <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: reason.color }} />
-                  <span className="text-sm text-gray-700 flex-1 leading-snug">{reason.r}</span>
-                  {selectedReason === reason.r && (
-                    <span className="w-4 h-4 rounded-full bg-blue-500 flex items-center justify-center flex-shrink-0">
-                      <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 4L3.2 5.7L6.5 2.3" stroke="white" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-            {selectedReason && (
-              <div className="mt-3 px-3.5 py-2.5 rounded-xl bg-gray-50 border border-gray-100">
-                <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-0.5">Selected reason</p>
-                <p className="text-sm font-medium text-gray-800">{selectedReason}</p>
+            {selected && (
+              <div className="ml-auto text-right">
+                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Selected reason</p>
+                <div className="flex items-center justify-end gap-2 mt-0.5">
+                  <span className="w-2 h-2 rounded-full" style={{ background: selected.color }} />
+                  <span className="text-sm font-semibold text-gray-900">{selected.r}</span>
+                </div>
                 <p className="text-[11px] text-gray-400 mt-0.5">
-                  {NI_REASONS.find((r) => r.r === selectedReason)?.bucket === "soft"
-                    ? "This influencer can be re-approached in a future campaign."
-                    : "This influencer should not be contacted again soon."}
+                  {selected.bucket === "soft"
+                    ? "Can be re-approached in a future campaign"
+                    : "Should not be contacted again soon"}
                 </p>
               </div>
             )}
           </div>
         </div>
-        <div className="flex items-center justify-end gap-2 px-7 py-4 border-t border-gray-100">
-          <button onClick={onCancel} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 rounded-lg border border-gray-200 hover:bg-gray-50 transition">Cancel</button>
-          <button onClick={() => selectedReason && onConfirm(selectedReason)} disabled={!selectedReason}
-            className="px-6 py-2 text-sm font-medium text-white bg-red-500 rounded-lg hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed">Confirm</button>
+
+        {/* Reasons */}
+        <div className="px-4 sm:px-6 pt-4 sm:pt-5 pb-3">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Reason</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-5">
+            <div>
+              <div className="flex items-center gap-2 mb-2.5">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-red-700">Hard pass</span>
+                <span className="text-[10px] text-gray-400">&mdash; don&apos;t reach out soon</span>
+              </div>
+              <div className="flex flex-col gap-2">
+                {hardReasons.map((reason) => (
+                  <button key={reason.r} onClick={() => setSelectedReason(reason.r)}
+                    className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl border text-left transition-all w-full ${selectedReason === reason.r ? "border-red-400 bg-red-50" : "border-gray-100 hover:border-gray-200 hover:bg-gray-50"}`}>
+                    <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: reason.color }} />
+                    <span className="text-sm text-gray-700 flex-1 leading-snug">{reason.r}</span>
+                    {selectedReason === reason.r && (
+                      <span className="w-4 h-4 rounded-full bg-red-500 flex items-center justify-center flex-shrink-0">
+                        <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 4L3.2 5.7L6.5 2.3" stroke="white" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center gap-2 mb-2.5">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-blue-700">Soft pass</span>
+                <span className="text-[10px] text-gray-400">&mdash; follow up next campaign</span>
+              </div>
+              <div className="flex flex-col gap-2">
+                {softReasons.map((reason) => (
+                  <button key={reason.r} onClick={() => setSelectedReason(reason.r)}
+                    className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl border text-left transition-all w-full ${selectedReason === reason.r ? "border-blue-400 bg-blue-50" : "border-gray-100 hover:border-gray-200 hover:bg-gray-50"}`}>
+                    <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: reason.color }} />
+                    <span className="text-sm text-gray-700 flex-1 leading-snug">{reason.r}</span>
+                    {selectedReason === reason.r && (
+                      <span className="w-4 h-4 rounded-full bg-blue-500 flex items-center justify-center flex-shrink-0">
+                        <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 4L3.2 5.7L6.5 2.3" stroke="white" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Footer — caption on the left, actions on the right */}
+        <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 px-4 sm:px-6 py-3 sm:py-4 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl">
+          <span className="text-[11px] text-gray-400">
+            This marks the influencer as Not Interested and removes them from the active pipeline
+          </span>
+          <div className="flex items-center justify-end gap-2">
+            <button onClick={onCancel} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 rounded-lg border border-gray-200 hover:bg-gray-50 transition bg-white">Cancel</button>
+            <button onClick={() => selectedReason && onConfirm(selectedReason)} disabled={!selectedReason}
+              className="px-4 sm:px-6 py-2 text-sm font-medium text-white bg-red-500 rounded-lg hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap">Confirm</button>
+          </div>
         </div>
       </div>
     </div>
@@ -658,10 +681,10 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
   const selectedCollab = COLLAB_TYPES.find((c) => c.id === selectedType)
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onCancel}>
-      <div className="bg-white rounded-2xl shadow-2xl w-[700px] max-w-[95vw] max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4" onClick={onCancel}>
+      <div className="bg-white rounded-2xl shadow-2xl w-[760px] max-w-[calc(100vw-2rem)] max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
-        <div className="flex items-start justify-between px-7 pt-6 pb-4 border-b border-gray-100">
+        <div className="flex items-start justify-between px-4 sm:px-6 pt-5 sm:pt-6 pb-4 border-b border-gray-100">
           <div>
             <h2 className="text-base font-semibold text-gray-900">Select Collaboration Type</h2>
             <p className="text-xs text-gray-500 mt-0.5">
@@ -676,8 +699,8 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
         </div>
 
         {/* Influencer Info */}
-        <div className="px-7 pt-5 pb-2">
-          <div className="flex items-center gap-3 bg-gray-50 rounded-xl px-4 py-3 border border-gray-100">
+        <div className="px-4 sm:px-6 pt-4 sm:pt-5 pb-2">
+          <div className="flex flex-wrap items-center gap-3 bg-gray-50 rounded-xl px-3 sm:px-4 py-3 border border-gray-100">
             {bulkCount ? (
               <>
                 <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center text-green-600 font-semibold text-sm">{bulkCount}</div>
@@ -699,17 +722,22 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
                 </div>
               </>
             )}
-            <div className="ml-auto flex items-center gap-1.5 text-xs text-gray-400">
-              <IconArrowRight size={14} />
-              <span>Moving to Post Tracker</span>
-            </div>
+            {selectedCollab && (
+              <div className="ml-auto text-right">
+                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Selected Collaboration</p>
+                <div className="flex items-center justify-end gap-2 mt-0.5">
+                  <span className={`w-2 h-2 rounded-full ${selectedCollab.dotColor}`} />
+                  <span className="text-sm font-semibold text-gray-900">{selectedCollab.title}</span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
         {/* Collaboration Types Grid */}
-        <div className="px-7 pt-5 pb-3">
+        <div className="px-4 sm:px-6 pt-4 sm:pt-5 pb-3">
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Collaboration Type</p>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 sm:gap-3">
             {COLLAB_TYPES.map((type) => (
               <button
                 key={type.id}
@@ -737,26 +765,12 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
           </div>
         </div>
 
-        {/* Selected Type Summary */}
-        {selectedCollab && (
-          <div className="px-7 pb-3">
-            <div className="rounded-xl bg-gray-50 border border-gray-100 p-4">
-              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Selected Collaboration</p>
-              <div className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded-full ${selectedCollab.dotColor}`} />
-                <span className="text-sm font-semibold text-gray-900">{selectedCollab.title}</span>
-              </div>
-              <p className="text-xs text-gray-500 mt-1">{selectedCollab.description}</p>
-            </div>
-          </div>
-        )}
-
         {/* Footer */}
-        <div className="flex items-center justify-between px-7 py-4 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl">
+        <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 px-4 sm:px-6 py-3 sm:py-4 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl">
           <p className="text-[11px] text-gray-400">
             This marks the deal agreed and moves the influencer to Post Tracker
           </p>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center justify-end gap-2">
             <button
               onClick={onCancel}
               className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 rounded-lg border border-gray-200 hover:bg-gray-50 transition bg-white"
@@ -766,10 +780,10 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
             <button
               onClick={() => selectedType && onConfirm(selectedType)}
               disabled={!selectedType}
-              className="px-6 py-2 text-sm font-medium text-white bg-green-500 rounded-lg hover:bg-green-600 transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
+              className="px-4 sm:px-6 py-2 text-sm font-medium text-white bg-green-500 rounded-lg hover:bg-green-600 transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 whitespace-nowrap"
             >
               <IconArrowRight size={14} />
-              Confirm &amp; Move to Post Tracker
+              Move to Post Tracker
             </button>
           </div>
         </div>
@@ -1019,7 +1033,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   const bulkBtnRef   = useRef<HTMLButtonElement>(null)
   const selectAllRef = useRef<HTMLInputElement>(null)
 
-  const { data, isLoading, error, updateStatus, refetch } = usePipelineData(brandId)
+  const { data, isLoading, error, updateStatus, isSaving, refetch } = usePipelineData(brandId)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
   const { canApproveInfluencers, loading: capabilitiesLoading } = useBrandCapabilities(brandId)
@@ -1145,8 +1159,8 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     const influencer = data.find((i) => i.id === id)
     const success = await updateStatus(id, newStatus)
     toast(success
-      ? `${influencer?.influencer} updated to ${newStatus}`
-      : `Failed to update ${influencer?.influencer}`, 2000)
+      ? `${influencer?.influencer} moved to ${newStatus}`
+      : `Failed to move ${influencer?.influencer}`, 2000)
   }
 
   // ── Bulk selection helpers ────────────────────────────────────────────────
@@ -1384,11 +1398,22 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
         />
       )}
 
-      {showSuccessMessage && (
-        <div className="fixed top-4 right-4 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg z-50 animate-in slide-in-from-top-2">
-          {showSuccessMessage}
-        </div>
-      )}
+      {/* Save state lives in the bottom-right corner, out of the way of the
+          board: a subtle "Saving" pill while a status write is actually in
+          flight, and the outcome message in the same spot once it lands. */}
+      <div className="fixed bottom-4 right-4 z-50 flex flex-col items-end gap-2">
+        {isSaving && (
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-900/90 text-white text-xs font-medium shadow-lg animate-in fade-in">
+            <IconLoader2 size={12} className="animate-spin" />
+            Saving
+          </div>
+        )}
+        {showSuccessMessage && (
+          <div className="bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg animate-in slide-in-from-bottom-2">
+            {showSuccessMessage}
+          </div>
+        )}
+      </div>
 
       {sidebarOpen && selectedPartner && (
         <InfluencerProfileSidebar

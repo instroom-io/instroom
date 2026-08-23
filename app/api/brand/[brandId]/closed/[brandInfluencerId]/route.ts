@@ -70,8 +70,11 @@ export async function PATCH(
     }
 
     // ✅ Get current record
+    // Scoped to the brand in the URL: the access check above proves membership
+    // of THAT brand, so looking the row up by id alone would let a member of one
+    // brand move another brand's row through the Post Tracker.
     const record = await prisma.brandInfluencer.findUnique({
-      where: { id: brandInfluencerId },
+      where: { id: brandInfluencerId, brand_id: brandId },
       // Only pull what mapClosedToPipelineFields / safeParse actually read —
       // this route fires on every drag-and-drop stage move, so avoid loading
       // the record's large @db.Text fields (notes, deliverables, etc.) here.
@@ -167,7 +170,7 @@ export async function PATCH(
 
     // ✅ Update DB
     const updated = await prisma.brandInfluencer.update({
-      where: { id: brandInfluencerId },
+      where: { id: brandInfluencerId, brand_id: brandId },
       data: updateData,
     })
 

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
+import { checkBrandAccess } from "@/lib/brand-access"
 
 export async function GET(
   req: NextRequest,
@@ -13,7 +14,22 @@ export async function GET(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const { partnerId } = await context.params
+    const { brandId, partnerId } = await context.params
+
+    // Same gate the sibling partner routes use: membership of the brand in the
+    // URL, and the row must belong to THAT brand — without this, any signed-in
+    // user could read another brand's content posts by id.
+    if (!(await checkBrandAccess(brandId, session.user.id))) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
+
+    const partner = await prisma.brandInfluencer.findFirst({
+      where: { id: partnerId, brand_id: brandId },
+      select: { id: true },
+    })
+    if (!partner) {
+      return NextResponse.json({ error: "Partner not found" }, { status: 404 })
+    }
 
     const posts = await prisma.contentPost.findMany({
       where: { brand_influencer_id: partnerId },
@@ -36,8 +52,20 @@ export async function POST(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const { partnerId } = await context.params
+    const { brandId, partnerId } = await context.params
     const body = await req.json()
+
+    if (!(await checkBrandAccess(brandId, session.user.id))) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
+
+    const partner = await prisma.brandInfluencer.findFirst({
+      where: { id: partnerId, brand_id: brandId },
+      select: { id: true },
+    })
+    if (!partner) {
+      return NextResponse.json({ error: "Partner not found" }, { status: 404 })
+    }
 
     if (!body.post_url || !body.platform || !body.posted_date) {
       return NextResponse.json(
@@ -62,10 +90,13 @@ export async function POST(
     })
 
     await prisma.brandInfluencer.update({
-      where: { id: partnerId },
+      where: { id: partnerId, brand_id: brandId },
       data: {
         content_posted: true,
-        stage:          5,
+        // Posted is stage 8 in the shared vocabulary (lib/post-tracker-status.ts).
+        // Writing 5 here left the row reading "For Order Creation" on the
+        // Pipeline while the Post Tracker showed it as Posted.
+        stage:          8,
         posted_at:      new Date(body.posted_date),
         post_url:       body.post_url,
         post_caption:   body.caption ?? null,

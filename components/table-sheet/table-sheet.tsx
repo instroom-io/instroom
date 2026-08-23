@@ -12,7 +12,7 @@ import {
   IconSettings, IconChevronDown, IconLoader2, IconArrowsSort, IconDots, IconDotsVertical, IconEye,
 } from "@tabler/icons-react"
 
-import type { InfluencerRow, CustomColumn, AnyColDef, CustomColDef, CellAddress, FilterState, ToastNotification } from "./types"
+import type { InfluencerRow, CustomColumn, AnyColDef, CustomColDef, CellAddress, FilterState, ToastNotification, BulkApprovalResult } from "./types"
 import {
   DEFAULT_NICHES, DEFAULT_LOCATIONS, DEFAULT_GENDERS, DEFAULT_CONTACT_STATUSES,
   OUTREACH_FIELDS, platforms, STATUS_STYLE, STATUS_LABEL, APPROVAL_STYLE,
@@ -123,7 +123,7 @@ function EmptyState({
 export default function TableSheet({
   initialRows = [], initialCustomColumns = [],
   onRowsChange, onDeleteRow, onFetchComplete, onRegisterIdSwap,
-  onCustomColumnsChange, onImportRows, readOnly = false, brandId,
+  onCustomColumnsChange, onImportRows, onBulkApprove, readOnly = false, brandId,
   subscriptionStatus, onShowTrialModal, canApproveInfluencers = true,
 }: {
   initialRows?: InfluencerRow[]
@@ -134,6 +134,8 @@ export default function TableSheet({
   onRegisterIdSwap?: (fn: (tempId: string, realId: string) => void) => void
   onCustomColumnsChange?: (cols: CustomColumn[]) => void
   onImportRows?: (rows: InfluencerRow[]) => void
+  /** Approves a whole selection in one request; resolves with what the DB stored. */
+  onBulkApprove?: (influencerIds: string[]) => Promise<BulkApprovalResult | null>
   readOnly?: boolean
   brandId?: string
   subscriptionStatus?: { status: string; isExpired: boolean } | null
@@ -240,6 +242,8 @@ export default function TableSheet({
   const [openRowMenuId, setOpenRowMenuId]                 = useState<string | null>(null)
   const [showBulkStatusMenu, setShowBulkStatusMenu]       = useState(false)
   const [showBulkTransferConfirm, setShowBulkTransferConfirm] = useState(false)
+  // Guards against a second submit while the bulk write is in flight.
+  const [bulkApproving, setBulkApproving] = useState(false)
   const bulkStatusRef = useRef<HTMLDivElement>(null)
 
   const commitGuardRef     = useRef(false)
@@ -548,24 +552,49 @@ export default function TableSheet({
       onRowsChange?.(next); return next
     })
     setShowBulkStatusMenu(false)
-    addToast("success", `Updated ${selectedRowIds.size} row${selectedRowIds.size !== 1 ? "s" : ""} to "${STATUS_LABEL[newStatus] || newStatus}"`)
+    addToast("success", `${selectedRowIds.size} influencer${selectedRowIds.size !== 1 ? "s" : ""} moved to ${STATUS_LABEL[newStatus] || newStatus}`)
   }
 
-  const handleBulkTransferToOutreach = () => {
-    if (!selectedRowIds.size) return
-    const t = new Date()
-    const dateStr = [t.getFullYear(), String(t.getMonth() + 1).padStart(2, "0"), String(t.getDate()).padStart(2, "0")].join("-")
-    setRows(prev => {
-      const next = prev.map(row => !selectedRowIds.has(row.id) ? row : {
-        ...row, approval_status: "Approved" as const,
-        transferred_date: row.transferred_date || dateStr,
-        contact_status: row.contact_status === "not_contacted" ? "contacted" : row.contact_status,
-      })
-      onRowsChange?.(next); return next
-    })
-    setShowBulkTransferConfirm(false)
-    addToast("success", `Transferred ${selectedRowIds.size} influencer${selectedRowIds.size !== 1 ? "s" : ""} to outreach`)
-    setSelectedRowIds(new Set())
+  // One request for the whole selection, applied by the DB in a transaction, and
+  // the rows are then set from what the DB returned — not from what we guessed.
+  // Deliberately does NOT route through onRowsChange: that path debounces one
+  // PUT per row, which is what made a large selection slow and lossy.
+  const handleBulkTransferToOutreach = async () => {
+    if (!selectedRowIds.size || bulkApproving) return
+    const ids = rows.filter(r => selectedRowIds.has(r.id) && !r.id.startsWith("temp-")).map(r => r.id)
+    if (!ids.length) { setShowBulkTransferConfirm(false); return }
+
+    setBulkApproving(true)
+    try {
+      const result = await onBulkApprove?.(ids)
+      if (!result) {
+        addToast("error", "Could not transfer to outreach — please try again")
+        return
+      }
+      const byId = new Map(result.updated.map(u => [u.influencer_id, u]))
+      setRows(prev => prev.map(row => {
+        const saved = byId.get(row.id)
+        if (!saved) return row
+        return {
+          ...row,
+          approval_status: (saved.approval_status ?? "Pending") as "Approved" | "Declined" | "Pending",
+          transferred_date: saved.transferred_date
+            ? new Date(saved.transferred_date).toISOString().split("T")[0]
+            : "",
+          contact_status: saved.contact_status ?? row.contact_status,
+        }
+      }))
+      setShowBulkTransferConfirm(false)
+      if (result.failed.length) {
+        addToast("error", `${result.updated.length} moved to Approved, ${result.failed.length} failed — try refreshing`)
+        setSelectedRowIds(new Set(result.failed))
+      } else {
+        addToast("success", `${result.updated.length} influencer${result.updated.length !== 1 ? "s" : ""} moved to Approved`)
+        setSelectedRowIds(new Set())
+      }
+    } finally {
+      setBulkApproving(false)
+    }
   }
 
   const saveRowToDatabase = useCallback(async (row: InfluencerRow): Promise<void> => {
@@ -1330,7 +1359,7 @@ export default function TableSheet({
             </div>
             <div className="flex gap-2">
               <button onClick={() => setShowBulkTransferConfirm(false)} className="flex-1 px-3 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition">Cancel</button>
-              <button onClick={handleBulkTransferToOutreach} className="flex-1 px-3 py-1.5 rounded-lg bg-green-600 text-white text-xs hover:bg-green-700 transition font-medium">Confirm Transfer</button>
+              <button onClick={handleBulkTransferToOutreach} disabled={bulkApproving} className="flex-1 px-3 py-1.5 rounded-lg bg-green-600 text-white text-xs hover:bg-green-700 transition font-medium disabled:opacity-60 disabled:cursor-not-allowed">{bulkApproving ? "Transferring…" : "Confirm Transfer"}</button>
             </div>
           </div>
         </div>
