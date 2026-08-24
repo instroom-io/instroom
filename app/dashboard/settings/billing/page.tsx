@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 import { SettingsSkeleton } from "@/components/shared/skeletons"
-import { fetchCached, getCachedData } from "@/lib/data-cache"
+import { fetchCached, getCachedData, useRestoredCache } from "@/lib/data-cache"
 
 type PaymentMethod = {
   cardBrand: string | null
@@ -103,6 +103,23 @@ export default function BillingPage() {
       .catch(() => {})
       .finally(() => setSubscriptionLoaded(true))
   }
+
+  // Persisted payloads arrive after mount — the initializers above must keep
+  // returning undefined during hydration, or the server's placeholders and the
+  // client's real figures disagree. Each existing fetch below still runs.
+  useRestoredCache<any>(
+    subscriptionKey,
+    (data) => { setSubscription(data?.subscription ?? null); setSubscriptionLoaded(true) }
+  )
+  useRestoredCache<{ brandCount?: number }>("/api/user/brand-usage", (data) => {
+    setBrandCount(data?.brandCount ?? 0)
+  })
+  useRestoredCache<{ paymentMethod: PaymentMethod | null }>("/api/subscription/payment-method", (data) => {
+    setPaymentMethod(data?.paymentMethod ?? null); setPaymentMethodLoaded(true)
+  })
+  useRestoredCache<{ payments?: PaymentRecord[] }>("/api/subscription/payment-history", (data) => {
+    setPayments(data?.payments ?? []); setPaymentsLoaded(true)
+  })
 
   useEffect(() => {
     if (status === "unauthenticated") {

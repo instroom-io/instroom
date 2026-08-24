@@ -163,7 +163,7 @@ export function DiscordCta({
     <a
       href={href}
       data-tour={dataTour}
-      className={`inline-flex items-center gap-2 bg-[#5865F2] font-medium text-white transition-colors hover:bg-[#4752C4] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5865F2] ${sizing} ${className}`}
+      className={`inline-flex items-center gap-2 bg-[#0F6B3E] font-medium text-white transition-colors hover:bg-[#166534] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0F6B3E] ${sizing} ${className}`}
     >
       {icon}
       {children}

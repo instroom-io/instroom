@@ -3,12 +3,18 @@ import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { logActivity } from "@/lib/activity-log"
 import { provisionGoAffProAffiliate } from "@/lib/goaffpro-provision"
+import { hasBrandCapability } from "@/lib/permissions"
 import { NextRequest, NextResponse } from "next/server"
 
+// Must cover every contact_status the app writes anywhere, because an unknown
+// value here is silently rewritten to "not_contacted". "pending" is written by
+// the Pipeline (For Outreach) and "for_order_creation" by the Pipeline and Post
+// Tracker (stages 5-8), so leaving them out meant editing any field of such a
+// row in the Influencer List knocked it out of the Post Tracker.
 const VALID_CONTACT_STATUSES = new Set([
-  "not_contacted", "contacted", "interested", "agreed",
+  "not_contacted", "pending", "contacted", "interested", "agreed",
   "not_interested", "responded", "replied", "email_error",
-  "no_response", "paid_collab", "negotiating",
+  "no_response", "paid_collab", "negotiating", "for_order_creation",
 ])
 const VALID_APPROVAL_STATUSES = new Set(["Pending", "Approved", "Declined"])
 
@@ -24,11 +30,34 @@ export async function PUT(
 
     const { brandId, id } = await params
     const brand = await prisma.brand.findUnique({ where: { id: brandId } })
-    if (!brand || brand.owner_id !== session.user.id) {
+    if (!brand) {
       return NextResponse.json({ error: "Not found" }, { status: 404 })
     }
 
+    // Owner OR member, matching the GET/POST gate on this brand's influencers.
+    // Owner-only here meant a Manager's edit — including an approval made
+    // through a UI that allows it — 404'd, so the row silently reverted to its
+    // stored value on the next read.
+    const isOwner = brand.owner_id === session.user.id
+    const isMember = isOwner
+      ? true
+      : !!(await prisma.brandMember.findFirst({
+          where: { brand_id: brandId, user_id: session.user.id },
+        }))
+    if (!isMember) {
+      return NextResponse.json({ error: "Access denied" }, { status: 403 })
+    }
+
     const data = await req.json()
+
+    // Approval is a privileged decision: enforce the same capability the UI
+    // gates its approval controls on, server-side.
+    if (data.approval_status !== undefined) {
+      const canApprove = await hasBrandCapability(brandId, session.user.id, "approveInfluencers")
+      if (!canApprove) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+      }
+    }
 
     // Snapshot BEFORE state for change tracking
     const before = await prisma.brandInfluencer.findUnique({
@@ -64,8 +93,11 @@ export async function PUT(
       bi.contact_status = VALID_CONTACT_STATUSES.has(data.contact_status)
         ? data.contact_status
         : "not_contacted"
+    // 0 = Not Interested, 1-5 = pipeline columns, 6-8 = Post Tracker stages
+    // (lib/post-tracker-status.ts). Clamping at 5 demoted a Delivered/Posted row
+    // to For Order Creation whenever it was saved from the Influencer List.
     if (data.stage !== undefined)
-      bi.stage = Math.max(1, Math.min(5, parseInt(String(data.stage)) || 1))
+      bi.stage = Math.max(0, Math.min(8, parseInt(String(data.stage)) || 1))
     if (data.agreed_rate !== undefined)
       bi.agreed_rate = data.agreed_rate ? parseFloat(String(data.agreed_rate)) : null
     if (data.notes !== undefined) bi.notes = data.notes || null
@@ -81,12 +113,18 @@ export async function PUT(
     if (Object.keys(inf).length > 0) {
       updates.push(prisma.influencer.update({ where: { id }, data: inf }))
     }
+    // Kept separate from `updates` so the persisted row can be read back and
+    // returned — the client trusts what the DB stored, not what it sent.
+    let savedBi: { approval_status: string | null; transferred_date: Date | null } | null = null
     if (Object.keys(bi).length > 0) {
       updates.push(
-        prisma.brandInfluencer.update({
-          where: { brand_id_influencer_id: { brand_id: brandId, influencer_id: id } },
-          data: bi,
-        })
+        prisma.brandInfluencer
+          .update({
+            where: { brand_id_influencer_id: { brand_id: brandId, influencer_id: id } },
+            data: bi,
+            select: { approval_status: true, transferred_date: true },
+          })
+          .then((row) => { savedBi = row })
       )
     }
     if (updates.length > 0) await Promise.all(updates)
@@ -176,7 +214,15 @@ export async function PUT(
 
     if (logs.length > 0) Promise.all(logs).catch(console.error)
 
-    return NextResponse.json({ success: true })
+    return NextResponse.json({
+      success: true,
+      ...(savedBi
+        ? {
+            approval_status:   (savedBi as { approval_status: string | null }).approval_status,
+            transferred_date: (savedBi as { transferred_date: Date | null }).transferred_date,
+          }
+        : {}),
+    })
   } catch (err: any) {
     if (err?.code === "P2025") {
       return NextResponse.json({ error: "Not found", code: err.code }, { status: 404 })

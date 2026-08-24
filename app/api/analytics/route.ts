@@ -65,7 +65,10 @@ export async function GET(req: Request) {
     // Filters are pushed into the query, so changing one re-queries the
     // database rather than re-slicing an array in the browser.
     const influencerFilter = {
-      ...(platform !== "all" ? { platform } : {}),
+      // The platform filter arrives as the UI label ("TikTok"), while
+      // Influencer.platform stores the lower-case key the influencers list
+      // writes ("tiktok"), so match on that key.
+      ...(platform !== "all" ? { platform: platform.trim().toLowerCase() } : {}),
       ...(niche    !== "all" ? { niche }    : {}),
       ...(location !== "all" ? { location } : {}),
     }
@@ -173,7 +176,16 @@ export async function GET(req: Request) {
         // Outreach activity — the source of truth for Total Outreach.
         outreachCount:    outreachCountById.get(r.id) ?? 0,
         hasOutreach:      (outreachCountById.get(r.id) ?? 0) > 0 || wasContacted(r),
-        hasResponse:      (responseCountById.get(r.id) ?? 0) > 0,
+        // A response is only ever a RECORDED one: an OutreachLog entry flagged
+        // response_received, or a contact_status the app writes when a reply
+        // actually lands (the inbox sets "responded"/"replied" off a real
+        // thread). Never inferred from a manual decline.
+        hasResponse:      (responseCountById.get(r.id) ?? 0) > 0 ||
+                          RESPONDED_CONTACT_STATUSES.has(r.contact_status ?? ""),
+        // Declined / Not Interested, straight off the persisted row — used to
+        // keep a decline out of the response count regardless of which stage the
+        // row is currently rendered in.
+        isDeclined:       r.approval_status === "Declined" || r.contact_status === "not_interested",
 
         rejectionReason:  r.approval_notes ?? null,
         rejectionBucket:  resolveRejectionBucket(r.approval_notes),
@@ -285,6 +297,13 @@ const CLOSED_COLUMNS = ["For Order Creation", "In-Transit", "Delivered", "Posted
  * until someone actually reaches out, so those are excluded.
  */
 const NOT_CONTACTED_STATUSES = new Set(["not_contacted", "pending", ""])
+
+/**
+ * Contact statuses the app only writes once the influencer has actually replied.
+ * "not_interested" is deliberately absent: marking someone Not Interested is a
+ * decision the brand records, not evidence that the influencer answered.
+ */
+const RESPONDED_CONTACT_STATUSES = new Set(["responded", "replied"])
 
 function wasContacted(r: {
   contact_status: string

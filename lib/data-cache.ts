@@ -33,6 +33,171 @@ const cache = new Map<string, CacheEntry>()
 const inflight = new Map<string, Promise<unknown>>()
 const subscribers = new Map<string, Set<() => void>>()
 
+/**
+ * Per-key write generation.
+ *
+ * A background revalidation that was already in flight when a mutation ran
+ * carries PRE-mutation data. Left alone it resolves afterwards and overwrites
+ * the newer persisted state, so the change appears to snap back until the next
+ * fetch. Callers bracket a mutation with `markCacheWrite(key)` (once when it
+ * starts, once when it settles); `fetchCached` records the generation it started
+ * on and refuses to cache a payload whose generation has moved on.
+ *
+ * It is a counter, not a lock: there is nothing to release, so a failed or
+ * abandoned mutation can never leave an entry permanently blocked, and keys are
+ * independent of each other.
+ */
+const writeGenerations = new Map<string, number>()
+
+/**
+ * Mark that `key`'s underlying data is being written. Call once before the
+ * mutation and once after it settles (success OR failure), so any request whose
+ * lifetime overlaps the mutation window is discarded rather than cached.
+ */
+export function markCacheWrite(key: string): void {
+  writeGenerations.set(key, (writeGenerations.get(key) ?? 0) + 1)
+}
+
+function writeGeneration(key: string): number {
+  return writeGenerations.get(key) ?? 0
+}
+
+/* ── Reload persistence ────────────────────────────────────────────────────
+   The cache above is a module-level Map, so it dies with the page: a refresh
+   (F5) meant every screen went back to a skeleton and re-read the database even
+   though the payload it was about to receive was the one just discarded.
+
+   Entries are mirrored into `sessionStorage`, which is the conservative choice
+   here: it survives a reload but is dropped when the tab closes, so a brand's
+   data never outlives the session on a shared machine — and it is per-tab, so
+   two tabs signed into different accounts cannot read each other's payloads.
+
+   Restored payloads never enter the live cache directly. Several components
+   read `getCachedData` / `hasCachedData` DURING RENDER to seed their initial
+   state (BrandPartnersPage, DiscordClient, the inbox, billing) — if such a read
+   can return a restored payload while React is hydrating, the server's skeleton
+   and the client's populated markup disagree and the tree is thrown away with a
+   hydration error.
+
+   So the mirror is read into a staging map that only `useCachedFetch`'s mount
+   effect consults. Promotion into the live cache happens there, in an effect,
+   which is a normal client update React never diffs against the server HTML.
+   Anything reading the cache during render therefore behaves exactly as it did
+   before persistence existed.
+   ------------------------------------------------------------------------ */
+
+const STORAGE_PREFIX = "instroom:cache:"
+
+/**
+ * Payloads read back from the mirror, waiting to be promoted. Deliberately not
+ * the live `cache`: nothing that renders may observe these until a mount effect
+ * moves them across.
+ */
+const restored = new Map<string, unknown>()
+
+/** Payloads larger than this are not mirrored — quota is shared and small. */
+const MAX_PERSISTED_BYTES = 512_000
+
+function storage(): Storage | null {
+  // Private mode, disabled site data and SSR all land here.
+  try {
+    if (typeof window === "undefined") return null
+    return window.sessionStorage
+  } catch {
+    return null
+  }
+}
+
+function persist(key: string, entry: CacheEntry): void {
+  const store = storage()
+  if (!store) return
+  try {
+    const serialised = JSON.stringify({ data: entry.data, updatedAt: entry.updatedAt })
+    if (serialised.length > MAX_PERSISTED_BYTES) {
+      store.removeItem(STORAGE_PREFIX + key)
+      return
+    }
+    store.setItem(STORAGE_PREFIX + key, serialised)
+  } catch {
+    // Out of quota or unserialisable — the in-memory cache is unaffected, this
+    // key simply won't survive the next reload.
+  }
+}
+
+function clearPersisted(): void {
+  const store = storage()
+  if (!store) return
+  try {
+    const keys: string[] = []
+    for (let i = 0; i < store.length; i += 1) {
+      const k = store.key(i)
+      if (k && k.startsWith(STORAGE_PREFIX)) keys.push(k)
+    }
+    keys.forEach((k) => store.removeItem(k))
+  } catch { /* nothing to do */ }
+}
+
+/**
+ * Move one restored payload into the live cache. Called only from an effect.
+ *
+ * Stamped `updatedAt: 0` — the same marker `invalidateCache` uses — so the
+ * payload paints immediately and the very next read still treats it as stale
+ * and revalidates in the background. A payload is never trusted as fresh just
+ * because it was written shortly before the reload.
+ *
+ * Returns true when something was promoted, so the caller knows a re-render is
+ * warranted.
+ */
+function promoteRestored(key: string): boolean {
+  if (!restored.has(key) || cache.has(key)) {
+    restored.delete(key)
+    return false
+  }
+  const data = restored.get(key)
+  restored.delete(key)
+  cache.set(key, { data, updatedAt: 0 })
+  notify(key)
+  return true
+}
+
+let hydrated = false
+
+/**
+ * Read the mirror into the staging map. Runs once per page load, from
+ * `useCachedFetch`'s mount effect. Emits no notifications and touches no live
+ * entry, so calling it cannot change what any component is currently rendering.
+ */
+export function hydrateCacheFromStorage(): void {
+  if (hydrated) return
+  hydrated = true
+
+  const store = storage()
+  if (!store) return
+
+  try {
+    for (let i = 0; i < store.length; i += 1) {
+      const storageKey = store.key(i)
+      if (!storageKey || !storageKey.startsWith(STORAGE_PREFIX)) continue
+
+      const key = storageKey.slice(STORAGE_PREFIX.length)
+      // Anything already in memory is newer than the mirror by definition.
+      if (cache.has(key)) continue
+
+      const raw = store.getItem(storageKey)
+      if (!raw) continue
+
+      try {
+        const parsed = JSON.parse(raw) as { data: unknown }
+        if (!parsed || !("data" in parsed)) continue
+        restored.set(key, parsed.data)
+      } catch {
+        // Corrupt entry — discard it rather than carrying it forward.
+        store.removeItem(storageKey)
+      }
+    }
+  } catch { /* storage became unavailable mid-loop; keep the memory cache */ }
+}
+
 /** How long a cached entry is considered fresh before a background refresh. */
 export const DEFAULT_TTL = 30_000
 
@@ -62,7 +227,10 @@ export function hasCachedData(key: string): boolean {
 }
 
 export function setCachedData<T>(key: string, data: T): void {
-  cache.set(key, { data, updatedAt: Date.now() })
+  const entry: CacheEntry = { data, updatedAt: Date.now() }
+  cache.set(key, entry)
+  // Mirrored so the next page load can render this without a request.
+  persist(key, entry)
   notify(key)
 }
 
@@ -82,7 +250,9 @@ export function isStale(key: string, ttl: number = DEFAULT_TTL): boolean {
 export function invalidateCache(keyOrPrefix: string): void {
   for (const [key, entry] of cache) {
     if (key === keyOrPrefix || key.startsWith(keyOrPrefix)) {
-      cache.set(key, { ...entry, updatedAt: 0 })
+      const invalidated = { ...entry, updatedAt: 0 }
+      cache.set(key, invalidated)
+      persist(key, invalidated)
       notify(key)
     }
   }
@@ -92,6 +262,10 @@ export function invalidateCache(keyOrPrefix: string): void {
 export function clearCache(): void {
   cache.clear()
   inflight.clear()
+  restored.clear()
+  // The mirror goes too, or a sign-out would leave the next session able to
+  // render the previous account's data before its first fetch returns.
+  clearPersisted()
   subscribers.forEach((_, key) => notify(key))
 }
 
@@ -113,8 +287,17 @@ export async function fetchCached<T>(
   const pending = inflight.get(key)
   if (pending) return pending as Promise<T>
 
+  // Generation at request start. If a mutation happens while this is in flight,
+  // the response describes state older than what is already cached, so it is
+  // returned to the caller but NOT written to the cache.
+  const startedAtGeneration = writeGeneration(key)
+
   const request = fetcher()
     .then((data) => {
+      if (writeGeneration(key) !== startedAtGeneration) {
+        const current = cache.get(key)
+        return (current ? current.data : data) as T
+      }
       setCachedData(key, data)
       return data
     })
@@ -124,6 +307,34 @@ export async function fetchCached<T>(
 
   inflight.set(key, request)
   return request as Promise<T>
+}
+
+/**
+ * Promote this key's persisted payload after mount and hand it over once.
+ *
+ * For components that seed state from the cache DURING RENDER (their
+ * `useState` initializers call `getCachedData`). Those reads must keep
+ * returning undefined while React hydrates, or the server's skeleton and the
+ * client's populated markup disagree — so the payload is delivered here
+ * instead, from an effect, which is a normal client update.
+ *
+ * `onRestore` fires only when a payload actually came out of the mirror, i.e.
+ * after a page reload. On a client navigation the entry is already live and the
+ * component's own initializer has read it, so nothing is delivered twice. When
+ * nothing was persisted, this is inert and the component behaves exactly as it
+ * did before persistence existed.
+ */
+export function useRestoredCache<T>(key: string | null, onRestore: (data: T) => void): void {
+  const handler = useRef(onRestore)
+  handler.current = onRestore
+
+  useEffect(() => {
+    hydrateCacheFromStorage()
+    if (!key) return
+    if (!promoteRestored(key)) return
+    const data = getCachedData<T>(key)
+    if (data !== undefined) handler.current(data)
+  }, [key])
 }
 
 export type CachedFetchResult<T> = {
@@ -163,6 +374,15 @@ export function useCachedFetch<T>(
   fetcherRef.current = fetcher
 
   const data = key ? getCachedData<T>(key) : undefined
+
+  // Read the mirror, then promote just this key. Both happen in an effect, so
+  // the first render still matches the server-rendered HTML — and a key nothing
+  // mirrored behaves exactly as it did before persistence: no entry, normal
+  // fetch, normal loading state.
+  useEffect(() => {
+    hydrateCacheFromStorage()
+    if (key) promoteRestored(key) // notify() re-renders every consumer of the key
+  }, [key])
 
   // Re-render this component when the shared entry changes, so every consumer
   // of the same key stays in sync without its own request.

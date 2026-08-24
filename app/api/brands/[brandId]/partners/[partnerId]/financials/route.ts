@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
+import { checkBrandAccess } from "@/lib/brand-access"
 
 // Re-flattens the Attribution relation back onto the response object so
 // consumers keep reading these as top-level fields, exactly as when they
@@ -35,6 +36,12 @@ export async function PATCH(
 
     const { brandId, partnerId } = await context.params
     const body = await req.json()
+
+    // Scoping the row by brand_id is not authorization on its own: the caller
+    // still has to belong to that brand, as the sibling partner routes require.
+    if (!(await checkBrandAccess(brandId, session.user.id))) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
 
     const bi = await prisma.brandInfluencer.findFirst({
       where: { id: partnerId, brand_id: brandId },
@@ -91,7 +98,7 @@ export async function PATCH(
     }
 
     const updated = await prisma.brandInfluencer.findUnique({
-      where: { id: partnerId },
+      where: { id: partnerId, brand_id: brandId },
       include: {
         influencer: true,
         campaign: { select: { id: true, name: true, status: true } },

@@ -49,6 +49,53 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Transient connection failures
+// ─────────────────────────────────────────────────────────────────────────────
+// This deployment's MySQL is a shared cPanel host with max_user_connections=30
+// on a server whose Max_used_connections has already touched its 500 ceiling
+// (Aborted_connects is in the hundreds of thousands). When no connection is
+// available, Prisma raises P1001 "Can't reach database server" — a request-level
+// blip, not a broken query: the same query issued a moment later succeeds.
+//
+// Left alone, one blip becomes a hard 500 for the user. This retries ONLY the
+// connection-level codes, twice, with a short backoff. Nothing is swallowed: if
+// the database is genuinely down, the original error is rethrown and the route
+// still fails with the real reason.
+
+/** Prisma codes that mean "no connection", not "bad query". */
+const TRANSIENT_DB_CODES = new Set([
+  "P1001", // can't reach database server
+  "P1017", // server closed the connection
+])
+
+function isTransientDbError(error: unknown): boolean {
+  const code = (error as { code?: unknown })?.code
+  return typeof code === "string" && TRANSIENT_DB_CODES.has(code)
+}
+
+/**
+ * Run a query, retrying only if the failure was the connection rather than the
+ * query. Query, permission and validation errors are rethrown immediately.
+ */
+export async function withDbRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
+  let lastError: unknown
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await fn()
+    } catch (error) {
+      if (!isTransientDbError(error)) throw error
+      lastError = error
+      if (attempt < attempts - 1) {
+        // 150ms, then 300ms — long enough for a pooled connection to free up,
+        // short enough to stay well inside a request.
+        await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)))
+      }
+    }
+  }
+  throw lastError
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 4-byte UTF-8 (emoji) writes — utf8mb4 on a server that forces utf8mb3
 // ─────────────────────────────────────────────────────────────────────────────
 // Every text column in this database is already utf8mb4/utf8mb4_unicode_ci and

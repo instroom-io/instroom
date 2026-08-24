@@ -4,9 +4,10 @@
 //   2. On successful PATCH, we update local state directly — no refetch needed
 //   3. Only refetch (silently) on failure to restore correct server state
 
-import { useCallback, useRef } from "react"
-import { useCachedFetch, getCachedData, setCachedData } from "@/lib/data-cache"
-import { invalidateInfluencerDerivedCaches, pipelineCacheKey } from "@/lib/cache-invalidation"
+import { useCallback, useRef, useState } from "react"
+import { useCachedFetch, getCachedData, setCachedData, markCacheWrite, invalidateCache } from "@/lib/data-cache"
+import { invalidateInfluencerDerivedCaches, pipelineCacheKey, closedCacheKey } from "@/lib/cache-invalidation"
+import type { ClosedInfluencer } from "@/hooks/useClosedData"
 
 /** Stable empty reference used before the first payload arrives. */
 const EMPTY_PIPELINE: PipelineInfluencer[] = []
@@ -63,6 +64,8 @@ interface UsePipelineDataReturn {
   isLoading: boolean
   error: string | null
   updateStatus: (id: string, newStatus: string, extra?: { niReason?: string; collaborationType?: string }) => Promise<boolean>
+  /** True while at least one status write is in flight — drives the saving indicator. */
+  isSaving: boolean
   refetch: () => void
 }
 
@@ -156,6 +159,215 @@ function applyStatusChange(
   }
 }
 
+/**
+ * The Post Tracker's entry stage. A row lands here the moment a Collaboration
+ * Type is confirmed on Deal Agreed, or on an explicit move to For Order
+ * Creation — the two writes that hand an influencer over to Post Tracker.
+ */
+const POST_TRACKER_ENTRY = "For Order Creation"
+
+/**
+ * Build the Post Tracker's row shape from the Pipeline row being moved.
+ *
+ * Every value comes from the record already in hand; the fields left null / 0
+ * are the ones the closed route itself returns null / 0 for a row at the entry
+ * stage — nothing has shipped, nothing is posted, detection has found nothing.
+ * The background revalidation that follows replaces this with the server's own
+ * mapping either way, so this only has to be right for the seconds in between.
+ */
+function toClosedRow(item: PipelineInfluencer, collaborationType?: string): ClosedInfluencer {
+  return {
+    id:              item.id,
+    influencerId:    item.influencerId,
+    campaignId:      item.campaignId,
+    campaignName:    item.campaignName,
+
+    influencer:      item.influencer,
+    handle:          item.handle,
+    platform:        item.platform,
+    followers:       item.followers,
+    followerCount:   item.followerCount,
+    engagementRate:  item.engagementRate,
+    niche:           item.niche,
+    location:        item.location,
+    email:           item.email,
+    profileImageUrl: item.profileImageUrl,
+    bio:             "",
+
+    closedStatus:    POST_TRACKER_ENTRY,
+
+    contactStatus:   "for_order_creation",
+    stage:           5,
+    orderStatus:     item.orderStatus,
+    contentPosted:   false,
+    approvalStatus:  "Approved",
+    approvalNotes:   item.approvalNotes ?? "",
+
+    scriptStatus:    null,
+    contentStatus:   null,
+
+    agreedRate:      item.agreedRate,
+    currency:        item.currency,
+    deliverables:    item.deliverables,
+    deadline:        item.deadline,
+    notes:           item.notes,
+
+    campaignType:    collaborationType ?? item.collabType ?? null,
+    productDetails:  null,
+
+    shippedAt:       null,
+    deliveredAt:     null,
+    trackingNumber:  null,
+
+    postUrl:         null,
+    postedAt:        null,
+
+    detectedPostCount: 0,
+    latestDetectedAt:  null,
+    likesCount:        0,
+    commentsCount:     0,
+    engagementCount:   0,
+
+    paidCollabData:  null,
+
+    internalRating:  item.internalRating,
+    lastContact:     item.lastContact,
+    createdAt:       item.createdAt,
+  }
+}
+
+/** Matches the Pipeline route's own follower formatting. */
+function formatFollowers(n: number): string {
+  if (!n) return "0"
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M"
+  if (n >= 1_000)     return (n / 1_000).toFixed(1).replace(/\.0$/, "") + "K"
+  return String(n)
+}
+
+/**
+ * The fields an approved Influencer List row carries into the Pipeline cache.
+ * Deliberately narrow: the caller passes what the list already has, nothing is
+ * fetched to build it.
+ */
+export type ApprovedRowSeed = {
+  /** BrandInfluencer.id — the Pipeline board's row id. */
+  brandInfluencerId: string
+  /** Influencer.id — the Influencer List's row id. */
+  influencerId: string
+  name: string
+  handle: string
+  platform: string
+  followerCount: number
+  engagementRate: number
+  niche: string
+  location: string
+  email: string
+  profileImageUrl: string | null
+  notes: string
+  approvalNotes: string | null
+}
+
+/**
+ * Put a just-approved influencer into the Pipeline cache so the board shows it
+ * the moment it is opened, with no wait on `/pipeline`.
+ *
+ * Approving writes approval_status "Approved" at stage 1, which the Pipeline
+ * route derives as "For Outreach" — the column this row is placed in.
+ *
+ * Only an entry that already exists is touched: writing into a missing one would
+ * leave the board rendering a single row as if it were the whole pipeline. The
+ * entry is then marked stale, so the board still revalidates on open and the
+ * server's own mapping replaces this. Returns true when a row was added.
+ */
+export function seedPipelineFromApproval(brandId: string, seedRow: ApprovedRowSeed): boolean {
+  const key = pipelineCacheKey(brandId)
+  const rows = getCachedData<PipelineInfluencer[]>(key)
+  if (!rows) return false
+
+  const existing = rows.find((r) => r.id === seedRow.brandInfluencerId)
+  markCacheWrite(key)
+
+  if (existing) {
+    // Already on the board (a re-approval, or a Declined row being approved
+    // again): correct the fields the approval changed, leave the rest.
+    setCachedData(
+      key,
+      rows.map((r) =>
+        r.id === seedRow.brandInfluencerId
+          ? { ...r, approvalStatus: "Approved", pipelineStatus: r.pipelineStatus === "Not Interested" ? "For Outreach" : r.pipelineStatus }
+          : r
+      )
+    )
+    invalidateCache(key)
+    markCacheWrite(key)
+    return false
+  }
+
+  const row: PipelineInfluencer = {
+    id:              seedRow.brandInfluencerId,
+    influencerId:    seedRow.influencerId,
+    campaignId:      null,
+    campaignName:    null,
+    influencer:      seedRow.name,
+    instagramHandle:  seedRow.handle,
+    handle:          seedRow.handle,
+    platform:        seedRow.platform,
+    followers:       formatFollowers(seedRow.followerCount),
+    followerCount:   seedRow.followerCount,
+    engagementRate:  `${seedRow.engagementRate.toFixed(1)}%`,
+    avgLikes:        null,
+    avgComments:     null,
+    avgViews:        null,
+    niche:           seedRow.niche,
+    location:        seedRow.location,
+    email:           seedRow.email,
+    profileImageUrl: seedRow.profileImageUrl,
+    // What approval persists: stage 1 / not yet contacted, which the board
+    // derives as For Outreach.
+    pipelineStatus:  "For Outreach",
+    contactStatus:   "not_contacted",
+    stage:           1,
+    orderStatus:     null,
+    contentPosted:   false,
+    approvalStatus:  "Approved",
+    approvalNotes:   seedRow.approvalNotes,
+    agreedRate:      null,
+    currency:        null,
+    deliverables:    null,
+    deadline:        null,
+    notes:           seedRow.notes,
+    internalRating:  null,
+    lastContact:     new Date().toISOString(),
+    createdAt:       new Date().toISOString(),
+    affiliateId:     null,
+    refCode:         null,
+    coupon:          null,
+    sparkAds:        null,
+    affiliateLink:   null,
+    clicks:          0,
+    salesCount:      0,
+    gmv:             0,
+  }
+
+  setCachedData(key, [...rows, row])
+  // Kept stale so the board still revalidates on open, as after any other
+  // cross-module write.
+  invalidateCache(key)
+  markCacheWrite(key)
+  return true
+}
+
+/** Undo a seed when the approval write turns out to have failed. */
+export function unseedPipelineRow(brandId: string, brandInfluencerId: string): void {
+  const key = pipelineCacheKey(brandId)
+  const rows = getCachedData<PipelineInfluencer[]>(key)
+  if (!rows) return
+  markCacheWrite(key)
+  setCachedData(key, rows.filter((r) => r.id !== brandInfluencerId))
+  invalidateCache(key)
+  markCacheWrite(key)
+}
+
 export function usePipelineData(brandId?: string): UsePipelineDataReturn {
   // Shared cache key — returning to the board renders the cached cards at once
   // and only revalidates in the background.
@@ -163,6 +375,25 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
 
   // Track in-flight PATCH requests, so a refetch is not fired while one is pending.
   const pendingRef = useRef(0)
+  // Mirrored into state so the board can show a saving indicator while a write
+  // is actually in flight (a ref alone never triggers a render).
+  const [pendingWrites, setPendingWrites] = useState(0)
+
+  // Bracketing the write bumps the cache's write generation, so a revalidation
+  // that started before this mutation cannot overwrite the newer state when it
+  // resolves. Called on both edges — a failed write matters just as much,
+  // because the rollback is also newer than that in-flight response.
+  const beginWrite = useCallback(() => {
+    pendingRef.current += 1
+    setPendingWrites((n) => n + 1)
+    if (cacheKey) markCacheWrite(cacheKey)
+  }, [cacheKey])
+
+  const endWrite = useCallback(() => {
+    pendingRef.current = Math.max(0, pendingRef.current - 1)
+    setPendingWrites((n) => Math.max(0, n - 1))
+    if (cacheKey) markCacheWrite(cacheKey)
+  }, [cacheKey])
 
   // Optimistic writes go straight into the shared cache, which is also what the
   // board renders from — so a change survives navigating away and back.
@@ -198,12 +429,16 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
     async (id: string, newStatus: string, extra?: { niReason?: string; collaborationType?: string }): Promise<boolean> => {
       if (!brandId) return false
 
-      // 1. Save snapshot for rollback
-      let snapshot: PipelineInfluencer[] = []
+      // 1. Save the previous state of THIS row only. Rolling back a full-list
+      //    snapshot would also revert every other row updated since this call
+      //    started, which is what made a run of status changes (a bulk move, or
+      //    several dropdowns in quick succession) appear to do nothing as soon
+      //    as one of them failed.
+      let previous: PipelineInfluencer | undefined
 
       // 2. Apply optimistic update immediately (no spinner)
       setData((prev) => {
-        snapshot = prev
+        previous = prev.find((item) => item.id === id)
         const next = prev.map((item) =>
           item.id === id ? applyStatusChange(item, newStatus, extra?.niReason, extra?.collaborationType) : item
         )
@@ -212,7 +447,51 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
         return next
       })
 
-      pendingRef.current += 1
+      // ── Hand the row to Post Tracker's cache at the same moment ──────────
+      // Deal Agreed with a Collaboration Type (and an explicit For Order
+      // Creation move) lands the row at Post Tracker's entry stage. Inserting
+      // it into the closed entry here means opening Post Tracker renders the
+      // card immediately instead of waiting on its own fetch.
+      //
+      // Only an entry that already exists is touched: writing into a missing
+      // one would leave Post Tracker rendering a single-row list as if it were
+      // the whole board. With no entry there is nothing to keep in step — the
+      // normal fetch on open still applies.
+      const closedKey = brandId ? closedCacheKey(brandId) : null
+      const entersPostTracker =
+        newStatus === POST_TRACKER_ENTRY ||
+        (newStatus === "Deal Agreed" && extra?.collaborationType !== undefined)
+
+      let seededClosed = false
+      if (closedKey && entersPostTracker && previous) {
+        const closedRows = getCachedData<ClosedInfluencer[]>(closedKey)
+        if (closedRows && !closedRows.some((row) => row.id === id)) {
+          markCacheWrite(closedKey)
+          setCachedData(closedKey, [...closedRows, toClosedRow(previous, extra?.collaborationType)])
+          // Kept stale so Post Tracker still revalidates on open, exactly as it
+          // does after any other cross-module write.
+          invalidateCache(closedKey)
+          seededClosed = true
+        }
+      }
+
+      // Restores just this row, leaving concurrent updates to other rows intact.
+      const rollback = () => {
+        if (previous) {
+          setData((prev) => prev.map((item) => (item.id === id ? previous! : item)))
+        }
+        // The seeded card goes with it — the same rollback the Pipeline row gets.
+        if (seededClosed && closedKey) {
+          const closedRows = getCachedData<ClosedInfluencer[]>(closedKey)
+          if (closedRows) {
+            setCachedData(closedKey, closedRows.filter((row) => row.id !== id))
+            invalidateCache(closedKey)
+          }
+          markCacheWrite(closedKey)
+        }
+      }
+
+      beginWrite()
 
       try {
         const res = await fetch(`/api/brand/${brandId}/pipeline/${id}`, {
@@ -226,9 +505,11 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
         })
 
         if (!res.ok) {
-          // Server rejected — rollback silently
-          setData(snapshot)
-          if (cacheKey) setCachedData(cacheKey, snapshot)
+          // Server rejected — undo this row and say why, so a silent rollback
+          // isn't the only signal the user gets.
+          const err = await res.json().catch(() => ({}))
+          console.error(`[pipeline] PATCH ${id} → ${newStatus} failed (${res.status}):`, err.error || res.statusText)
+          rollback()
           return false
         }
 
@@ -238,15 +519,19 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
         // is marked stale so opening it shows the new stage without a refresh.
         invalidateInfluencerDerivedCaches(brandId, [pipelineCacheKey(brandId)])
         return true
-      } catch {
-        setData(snapshot)
-        if (cacheKey) setCachedData(cacheKey, snapshot)
+      } catch (err) {
+        console.error(`[pipeline] PATCH ${id} → ${newStatus} failed:`, err)
+        rollback()
         return false
       } finally {
-        pendingRef.current -= 1
+        endWrite()
+        // Close the generation window on the Post Tracker entry too, so a
+        // revalidation that started while this write was in flight cannot land
+        // afterwards and drop the seeded card.
+        if (seededClosed && closedKey) markCacheWrite(closedKey)
       }
     },
-    [brandId, cacheKey, setData]
+    [brandId, cacheKey, setData, beginWrite, endWrite]
   )
 
   return {
@@ -256,8 +541,11 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
     isLoading: Boolean(brandId) && isLoading,
     error,
     updateStatus,
-    // Public refetch (e.g. retry button) — no spinner so board stays visible
-    refetch: () => { void refetch() },
+    isSaving: pendingWrites > 0,
+    // Public refetch (e.g. retry button) — no spinner so board stays visible.
+    // Skipped while a write is in flight: its response would predate the
+    // mutation, which is exactly what pendingRef is here to prevent.
+    refetch: () => { if (pendingRef.current === 0) void refetch() },
   }
   
 }

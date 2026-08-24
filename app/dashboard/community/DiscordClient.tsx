@@ -37,7 +37,7 @@ import { DiscordCta } from "./_discord/ui"
 import type { Channel, Message, Member } from "./_discord/types"
 import type { MentionResolver } from "./_discord/markdown"
 import { useUnread } from "./_discord/useUnread"
-import { getCachedData, setCachedData } from "@/lib/data-cache"
+import { getCachedData, useRestoredCache, setCachedData } from "@/lib/data-cache"
 
 const MESSAGE_POLL_MS = 5_000
 const CHANNEL_POLL_MS = 30_000
@@ -81,7 +81,7 @@ function StepProgress({
                   s.done
                     ? "bg-[#1FAE5B] text-white"
                     : isCurrent
-                      ? "bg-[#5865F2] text-white"
+                      ? "bg-[#0F6B3E] text-white"
                       : "bg-gray-100 text-gray-400"
                 }`}
               >
@@ -434,6 +434,27 @@ export function DiscordClient({ brandId }: { brandId: string }) {
       if (aliveRef.current) setLoadingMessages(false)
     }
   }, [base])
+
+  // Persisted payloads are handed over after mount: the initializers above read
+  // the cache during render, which must stay empty while React hydrates or the
+  // server's skeleton and the client's populated markup disagree. Every poll
+  // below still runs and refreshes these in the background.
+  useRestoredCache<Channel[]>(`${base}/channels`, (data) => {
+    setChannels((prev) => prev ?? data)
+  })
+  useRestoredCache<Member[]>(`${base}/members`, (data) => {
+    setMembers((prev) => (prev.length ? prev : data))
+    setMembersLoading(false)
+  })
+  useRestoredCache<any>(`${base}/status`, (data) => {
+    setStatus((prev) => prev ?? data)
+  })
+  // Keyed on the active channel, so switching channels promotes that channel's
+  // own persisted history before the effect below reads it.
+  useRestoredCache<Message[]>(
+    activeId ? `${base}/messages?channelId=${activeId}` : null,
+    (data) => { setMessages((prev) => (prev.length ? prev : data)) }
+  )
 
   useEffect(() => {
     if (!activeId) return
@@ -861,7 +882,6 @@ export function DiscordClient({ brandId }: { brandId: string }) {
             {status.botConfigured ? (
               <DiscordCta
                 href={`/api/community/discord/install?brandId=${encodeURIComponent(brandId)}&returnTo=${RETURN_TO}`}
-                icon={<IconBrandDiscord size={17} />}
                 dataTour="community-connect-server"
               >
                 {botMissing ? "Authorize Instroom Bot" : "Connect Discord Server"}

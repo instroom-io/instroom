@@ -12,7 +12,7 @@ import {
   IconSettings, IconChevronDown, IconLoader2, IconArrowsSort, IconDots, IconDotsVertical, IconEye,
 } from "@tabler/icons-react"
 
-import type { InfluencerRow, CustomColumn, AnyColDef, CustomColDef, CellAddress, FilterState, ToastNotification } from "./types"
+import type { InfluencerRow, CustomColumn, AnyColDef, CustomColDef, CellAddress, FilterState, ToastNotification, BulkApprovalResult } from "./types"
 import {
   DEFAULT_NICHES, DEFAULT_LOCATIONS, DEFAULT_GENDERS, DEFAULT_CONTACT_STATUSES,
   OUTREACH_FIELDS, platforms, STATUS_STYLE, STATUS_LABEL, APPROVAL_STYLE,
@@ -123,7 +123,7 @@ function EmptyState({
 export default function TableSheet({
   initialRows = [], initialCustomColumns = [],
   onRowsChange, onDeleteRow, onFetchComplete, onRegisterIdSwap,
-  onCustomColumnsChange, onImportRows, readOnly = false, brandId,
+  onCustomColumnsChange, onImportRows, onBulkApprove, readOnly = false, brandId,
   subscriptionStatus, onShowTrialModal, canApproveInfluencers = true,
 }: {
   initialRows?: InfluencerRow[]
@@ -134,6 +134,8 @@ export default function TableSheet({
   onRegisterIdSwap?: (fn: (tempId: string, realId: string) => void) => void
   onCustomColumnsChange?: (cols: CustomColumn[]) => void
   onImportRows?: (rows: InfluencerRow[]) => void
+  /** Approves a whole selection in one request; resolves with what the DB stored. */
+  onBulkApprove?: (influencerIds: string[]) => Promise<BulkApprovalResult | null>
   readOnly?: boolean
   brandId?: string
   subscriptionStatus?: { status: string; isExpired: boolean; subscription?: { plan?: { name?: string } } | null } | null
@@ -146,6 +148,11 @@ export default function TableSheet({
 
   const [rows, setRows] = useState<InfluencerRow[]>(initialRows)
   const [customCols, setCustomCols] = useState<CustomColumn[]>(initialCustomColumns)
+
+  // Mirrors `rows` for callbacks that must read the current table synchronously
+  // (autoFetchInfluencer's credit guards) without taking `rows` as a dependency.
+  const rowsRef = useRef<InfluencerRow[]>(rows)
+  rowsRef.current = rows
 
   const swapIdRef = useRef<(tempId: string, realId: string) => void>(() => {})
   useEffect(() => {
@@ -244,6 +251,8 @@ export default function TableSheet({
   const [openRowMenuId, setOpenRowMenuId]                 = useState<string | null>(null)
   const [showBulkStatusMenu, setShowBulkStatusMenu]       = useState(false)
   const [showBulkTransferConfirm, setShowBulkTransferConfirm] = useState(false)
+  // Guards against a second submit while the bulk write is in flight.
+  const [bulkApproving, setBulkApproving] = useState(false)
   const bulkStatusRef = useRef<HTMLDivElement>(null)
 
   const commitGuardRef     = useRef(false)
@@ -552,24 +561,49 @@ export default function TableSheet({
       onRowsChange?.(next); return next
     })
     setShowBulkStatusMenu(false)
-    addToast("success", `Updated ${selectedRowIds.size} row${selectedRowIds.size !== 1 ? "s" : ""} to "${STATUS_LABEL[newStatus] || newStatus}"`)
+    addToast("success", `${selectedRowIds.size} influencer${selectedRowIds.size !== 1 ? "s" : ""} moved to ${STATUS_LABEL[newStatus] || newStatus}`)
   }
 
-  const handleBulkTransferToOutreach = () => {
-    if (!selectedRowIds.size) return
-    const t = new Date()
-    const dateStr = [t.getFullYear(), String(t.getMonth() + 1).padStart(2, "0"), String(t.getDate()).padStart(2, "0")].join("-")
-    setRows(prev => {
-      const next = prev.map(row => !selectedRowIds.has(row.id) ? row : {
-        ...row, approval_status: "Approved" as const,
-        transferred_date: row.transferred_date || dateStr,
-        contact_status: row.contact_status === "not_contacted" ? "contacted" : row.contact_status,
-      })
-      onRowsChange?.(next); return next
-    })
-    setShowBulkTransferConfirm(false)
-    addToast("success", `Transferred ${selectedRowIds.size} influencer${selectedRowIds.size !== 1 ? "s" : ""} to outreach`)
-    setSelectedRowIds(new Set())
+  // One request for the whole selection, applied by the DB in a transaction, and
+  // the rows are then set from what the DB returned — not from what we guessed.
+  // Deliberately does NOT route through onRowsChange: that path debounces one
+  // PUT per row, which is what made a large selection slow and lossy.
+  const handleBulkTransferToOutreach = async () => {
+    if (!selectedRowIds.size || bulkApproving) return
+    const ids = rows.filter(r => selectedRowIds.has(r.id) && !r.id.startsWith("temp-")).map(r => r.id)
+    if (!ids.length) { setShowBulkTransferConfirm(false); return }
+
+    setBulkApproving(true)
+    try {
+      const result = await onBulkApprove?.(ids)
+      if (!result) {
+        addToast("error", "Could not transfer to outreach — please try again")
+        return
+      }
+      const byId = new Map(result.updated.map(u => [u.influencer_id, u]))
+      setRows(prev => prev.map(row => {
+        const saved = byId.get(row.id)
+        if (!saved) return row
+        return {
+          ...row,
+          approval_status: (saved.approval_status ?? "Pending") as "Approved" | "Declined" | "Pending",
+          transferred_date: saved.transferred_date
+            ? new Date(saved.transferred_date).toISOString().split("T")[0]
+            : "",
+          contact_status: saved.contact_status ?? row.contact_status,
+        }
+      }))
+      setShowBulkTransferConfirm(false)
+      if (result.failed.length) {
+        addToast("error", `${result.updated.length} moved to Approved, ${result.failed.length} failed — try refreshing`)
+        setSelectedRowIds(new Set(result.failed))
+      } else {
+        addToast("success", `${result.updated.length} influencer${result.updated.length !== 1 ? "s" : ""} moved to Approved`)
+        setSelectedRowIds(new Set())
+      }
+    } finally {
+      setBulkApproving(false)
+    }
   }
 
   const saveRowToDatabase = useCallback(async (row: InfluencerRow): Promise<void> => {
@@ -641,20 +675,31 @@ export default function TableSheet({
     if (!clean || clean.length < 2) return
     if (platform !== "instagram" && platform !== "tiktok") return
 
-    setRows(prev => {
-      const existingRow = prev.find(r => r.id === rowId)
-      if (existingRow && Number(existingRow.follower_count) > 0) return prev
-      const duplicate = prev.find(r =>
-        r.id !== rowId && cleanHandle(r.handle).toLowerCase() === clean && r.platform === platform
-      )
-      if (duplicate) {
-        setPendingDuplicateInfo({ rowId, handle: clean, existingName: duplicate.full_name || duplicate.handle })
-        setDuplicateRowIds(p => { const n = new Set(p); n.add(rowId); return n })
-        return prev
-      }
-      setDuplicateRowIds(p => { if (!p.has(rowId)) return p; const n = new Set(p); n.delete(rowId); return n })
-      return prev
-    })
+    // ── Credit guards ────────────────────────────────────────────────────────
+    // These two checks used to live inside a setRows updater, which React runs
+    // during the next render — long after the lines below had already fired the
+    // request. So `return prev` only skipped the state update, never the fetch:
+    // rows that arrived with full details (a CSV import, or an influencer added
+    // from Discovery) were re-fetched from the provider and spent a credit each
+    // time, and so were rows flagged as duplicates. Reading the mirrored rows
+    // lets the function actually return before spending anything.
+    const currentRows = rowsRef.current
+    const existingRow = currentRows.find(r => r.id === rowId)
+
+    // Already-known details are treated as fetched: imported and
+    // already-enriched rows stay editable and approvable, they are just not
+    // re-requested. A row genuinely missing its numbers still fetches.
+    if (existingRow && Number(existingRow.follower_count) > 0) return
+
+    const duplicate = currentRows.find(r =>
+      r.id !== rowId && cleanHandle(r.handle).toLowerCase() === clean && r.platform === platform
+    )
+    if (duplicate) {
+      setPendingDuplicateInfo({ rowId, handle: clean, existingName: duplicate.full_name || duplicate.handle })
+      setDuplicateRowIds(p => { const n = new Set(p); n.add(rowId); return n })
+      return
+    }
+    setDuplicateRowIds(p => { if (!p.has(rowId)) return p; const n = new Set(p); n.delete(rowId); return n })
 
     setFetchingRows(prev => { const n = new Set(prev); n.add(rowId); return n })
 
@@ -1113,7 +1158,7 @@ export default function TableSheet({
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="flex flex-col gap-3 text-gray-700 text-sm">
+    <div className="flex flex-col gap-4 text-gray-700 text-sm">
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
       <ConfirmationDialog
@@ -1144,9 +1189,6 @@ export default function TableSheet({
                 <p className="mt-2 text-sm text-gray-600">
                   We couldn't fetch data for <strong>@{apiErrorModal.handle}</strong>. You may retry or continue adding the influencer manually.
                 </p>
-                {apiErrorModal.reason && (
-                  <p className="mt-2 text-xs text-gray-500">{apiErrorModal.reason}</p>
-                )}
               </div>
             </div>
             <div className="mt-6 flex justify-end gap-2">
@@ -1207,13 +1249,13 @@ export default function TableSheet({
       {!readOnly && (
         <div className="flex items-center gap-2 flex-wrap">
           {/* Search */}
-          <div className="relative flex-1 min-w-[180px] max-w-xs">
-            <IconSearch size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          <div className="relative flex-1 min-w-[200px] max-w-xs">
+            <IconSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
             <input
               type="text" value={searchInput} onChange={e => { setSearchInput(e.target.value); setCurrentPage(1) }}
-              placeholder="Search influencers…"
+              placeholder="Search influencer..."
               data-tour="table-search"
-              className="w-full pl-8 pr-3 py-2 text-xs border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-200 bg-white"
+              className="w-full pl-9 pr-3 h-9 border border-[#0F6B3E]/20 rounded-lg outline-none focus:ring-2 focus:ring-[#1FAE5B] text-sm bg-white"
             />
           </div>
 
@@ -1221,8 +1263,13 @@ export default function TableSheet({
           <div className="relative">
             <button ref={filterBtnRef} onClick={() => setShowFilterPopover(v => !v)}
               data-tour="table-filters"
-              className={`flex items-center gap-1.5 px-3 py-2 text-xs border rounded-lg transition ${hasActiveFilters ? "bg-blue-600 text-white border-blue-600" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>
-              <IconFilter size={13} /> Filters {hasActiveFilters && `(${[filters.platform !== "all", filters.niche !== "all", filters.location !== "all", filters.gender !== "all", filters.approval !== "all", !!filters.dateFrom, !!filters.dateTo].filter(Boolean).length})`}
+              className={`h-9 px-3 rounded-lg text-sm flex items-center gap-1.5 border transition-colors ${hasActiveFilters ? "bg-[#1FAE5B] text-white border-[#1FAE5B]" : "border-[#0F6B3E]/20 text-gray-600 hover:border-[#0F6B3E]/40"}`}>
+              <IconFilter size={15} /> Filters
+              {hasActiveFilters && (
+                <span className="text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center bg-white/20 text-white">
+                  {[filters.platform !== "all", filters.niche !== "all", filters.location !== "all", filters.gender !== "all", filters.approval !== "all", !!filters.dateFrom, !!filters.dateTo].filter(Boolean).length}
+                </span>
+              )}
             </button>
             {showFilterPopover && (
               <FilterPopover
@@ -1234,10 +1281,15 @@ export default function TableSheet({
             )}
           </div>
 
+          {/* Count — same slot and wording as the Post Tracker's. */}
+          <span className="text-sm text-gray-500 whitespace-nowrap ml-1">
+            {filteredRows.length} of {rows.length} influencer{rows.length !== 1 ? "s" : ""}
+          </span>
+
           {/* Right-side controls */}
-          <div className="flex items-center gap-1.5 ml-auto">
+          <div className="flex items-center gap-2 ml-auto">
             {!readOnly && (
-              <button onClick={addRow} data-tour="table-add-influencer" className="flex items-center gap-1.5 px-2.5 py-2 text-xs font-medium border border-gray-200 rounded-lg text-gray-700 hover:bg-green-50 hover:text-green-700 hover:border-green-200 transition" title="Add a new influencer"><IconPlus size={18} /> Add Influencer</button>
+              <button onClick={addRow} data-tour="table-add-influencer" className="h-9 px-3 flex items-center gap-1.5 text-sm font-medium border border-[#0F6B3E]/20 rounded-lg text-gray-700 hover:bg-green-50 hover:text-green-700 hover:border-[#0F6B3E]/40 transition-colors" title="Add a new influencer"><IconPlus size={15} /> Add Influencer</button>
             )}
 
             <div className="relative">
@@ -1248,15 +1300,15 @@ export default function TableSheet({
                   if (isOnBasicPlan) { onShowTrialModal?.(); return }
                   setShowImportExportMenu(v => !v)
                 }}
-                disabled={isOnBasicPlan}
-                className={`flex items-center gap-1.5 px-2.5 py-2 text-xs border rounded-lg transition ${
-                  isOnBasicPlan
+                disabled={subscriptionStatus?.status === "trialing"}
+                className={`h-9 px-3 flex items-center gap-1.5 text-sm border rounded-lg transition-colors ${
+                  subscriptionStatus?.status === "trialing"
                     ? "opacity-50 cursor-not-allowed border-gray-200 text-gray-400 bg-gray-50"
-                    : "border-gray-200 text-gray-600 hover:bg-gray-50"
+                    : "border-[#0F6B3E]/20 text-gray-600 hover:border-[#0F6B3E]/40"
                 }`}
                 title={isOnBasicPlan ? "Import and Export are not available on the Basic plan" : undefined}
               >
-                <IconSettings size={13} /> Import / Export
+                <IconSettings size={15} /> Import / Export
               </button>
               {showImportExportMenu && (
                 <div ref={importExportRef} className="absolute right-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-lg shadow-xl w-52 py-1">
@@ -1268,7 +1320,7 @@ export default function TableSheet({
             </div>
 
             <div className="relative">
-              <button ref={settingsBtnRef} onClick={() => setShowSettingsMenu(v => !v)} className="flex items-center px-2.5 py-2 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 transition" title="Settings" aria-label="Settings"><IconDotsVertical size={13} /></button>
+              <button ref={settingsBtnRef} onClick={() => setShowSettingsMenu(v => !v)} className="h-9 px-3 flex items-center border border-[#0F6B3E]/20 rounded-lg text-gray-600 hover:border-[#0F6B3E]/40 transition-colors" title="Settings" aria-label="Settings"><IconDotsVertical size={15} /></button>
               {showSettingsMenu && (
                 <div ref={settingsMenuRef} className="absolute right-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-lg shadow-xl w-52 py-1">
                   <button onClick={() => { setShowManageNiches(true); setShowSettingsMenu(false) }} className="flex items-center gap-2 w-full text-left px-3 py-2 text-xs hover:bg-gray-50 transition text-gray-700"><IconTags size={13} className="text-gray-400" /> Add Niche</button>
@@ -1334,7 +1386,7 @@ export default function TableSheet({
             </div>
             <div className="flex gap-2">
               <button onClick={() => setShowBulkTransferConfirm(false)} className="flex-1 px-3 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition">Cancel</button>
-              <button onClick={handleBulkTransferToOutreach} className="flex-1 px-3 py-1.5 rounded-lg bg-green-600 text-white text-xs hover:bg-green-700 transition font-medium">Confirm Transfer</button>
+              <button onClick={handleBulkTransferToOutreach} disabled={bulkApproving} className="flex-1 px-3 py-1.5 rounded-lg bg-green-600 text-white text-xs hover:bg-green-700 transition font-medium disabled:opacity-60 disabled:cursor-not-allowed">{bulkApproving ? "Transferring…" : "Confirm Transfer"}</button>
             </div>
           </div>
         </div>

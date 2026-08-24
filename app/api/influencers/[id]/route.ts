@@ -136,9 +136,42 @@ export async function DELETE(
       return NextResponse.json({ error: "Influencer ID is required" }, { status: 400 })
     }
 
-    await prisma.influencer.delete({
-      where: { id },
+    // The schema declares onDelete: Cascade from Influencer to BrandInfluencer
+    // (and onward to its own children), but these tables are MyISAM, where MySQL
+    // accepts foreign keys and then ignores them — so nothing actually cascades.
+    // Deleting the Influencer alone left BrandInfluencer rows pointing at a row
+    // that no longer exists, and Prisma then failed every read of that required
+    // relation with "Field influencer is required to return data, got null",
+    // which is what took /api/analytics down. Perform the declared cascade
+    // explicitly, in dependency order, in one transaction.
+    const memberships = await prisma.brandInfluencer.findMany({
+      where: { influencer_id: id },
+      select: { id: true },
     })
+    const membershipIds = memberships.map((m) => m.id)
+
+    await prisma.$transaction([
+      ...(membershipIds.length
+        ? [
+            prisma.brandPartner.deleteMany({ where: { brand_influencer_id: { in: membershipIds } } }),
+            prisma.attribution.deleteMany({ where: { brand_influencer_id: { in: membershipIds } } }),
+            prisma.brandInfluencerCustomValue.deleteMany({ where: { brand_influencer_id: { in: membershipIds } } }),
+            prisma.outreachLog.deleteMany({ where: { brand_influencer_id: { in: membershipIds } } }),
+            // GoAffPro / Shopify orders are onDelete: SetNull — the order history
+            // survives the influencer, it just loses the link.
+            prisma.goAffProOrder.updateMany({
+              where: { brand_influencer_id: { in: membershipIds } },
+              data: { brand_influencer_id: null },
+            }),
+            prisma.shopifyOrder.updateMany({
+              where: { brand_influencer_id: { in: membershipIds } },
+              data: { brand_influencer_id: null },
+            }),
+            prisma.brandInfluencer.deleteMany({ where: { influencer_id: id } }),
+          ]
+        : []),
+      prisma.influencer.delete({ where: { id } }),
+    ])
 
     return NextResponse.json({ success: true })
   } catch (error: any) {

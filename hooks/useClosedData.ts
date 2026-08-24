@@ -7,8 +7,8 @@
 //   4. On failure: silent rollback via snapshot
 //   5. updatePaidCollab / updateCampaignType: same pattern
 
-import { useCallback, useRef } from "react"
-import { useCachedFetch, getCachedData, setCachedData } from "@/lib/data-cache"
+import { useCallback, useRef, useState } from "react"
+import { useCachedFetch, getCachedData, setCachedData, markCacheWrite } from "@/lib/data-cache"
 import { invalidateInfluencerDerivedCaches, closedCacheKey } from "@/lib/cache-invalidation"
 
 /** Stable empty reference used before the first payload arrives. */
@@ -147,7 +147,8 @@ interface UseClosedDataReturn {
   updatePaidCollab: (id: string, paidCollabData: PaidCollabData) => Promise<boolean>
   updateCampaignType: (id: string, campaignType: string) => Promise<boolean>
   updatePostUrl: (id: string, postUrl: string) => Promise<boolean>
-  updateOrderDetails: (id: string, fields: OrderDetailsFields) => Promise<boolean>
+  /** True while at least one write is in flight — drives the saving indicator. */
+  isSaving: boolean
   refetch: () => void
 }
 
@@ -311,6 +312,24 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
   const cacheKey = brandId ? `/api/brand/${brandId}/closed` : null
 
   const pendingRef  = useRef(0)
+  // Mirrored into state so the board can show a saving indicator while a write
+  // is actually in flight (a ref alone never triggers a render).
+  const [pendingWrites, setPendingWrites] = useState(0)
+
+  // Bracketing the write bumps the cache's write generation, so a revalidation
+  // that started before this mutation cannot overwrite the newer state when it
+  // resolves. Both edges are marked — a rollback is also newer than that
+  // in-flight response.
+  const beginWrite = useCallback(() => {
+    pendingRef.current += 1
+    setPendingWrites((n) => n + 1)
+    if (cacheKey) markCacheWrite(cacheKey)
+  }, [cacheKey])
+  const endWrite = useCallback(() => {
+    pendingRef.current = Math.max(0, pendingRef.current - 1)
+    setPendingWrites((n) => Math.max(0, n - 1))
+    if (cacheKey) markCacheWrite(cacheKey)
+  }, [cacheKey])
 
   // ── Fetch ─────────────────────────────────────────────────────────────────
   const fetchClosed = useCallback(async (): Promise<ClosedInfluencer[]> => {
@@ -353,16 +372,24 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
     ): Promise<UpdateColumnResult> => {
       if (!brandId) return { ok: false, error: "No brand selected" }
 
-      let snapshot: ClosedInfluencer[] = []
+      // Only THIS row is remembered for rollback. Restoring a whole-list
+      // snapshot also reverted every other card moved since this call started,
+      // so one failed move undid its neighbours' successful ones.
+      let previous: ClosedInfluencer | undefined
 
       setDataCached((prev) => {
-        snapshot = prev
+        previous = prev.find((item) => item.id === id)
         return prev.map((item) =>
           item.id === id ? applyColumnChange(item, newColumn) : item
         )
       })
 
-      pendingRef.current += 1
+      const rollback = () => {
+        if (!previous) return
+        setDataCached((prev) => prev.map((item) => (item.id === id ? previous! : item)))
+      }
+
+      beginWrite()
 
       try {
         const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
@@ -376,7 +403,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
 
         if (!res.ok) {
           // Roll the optimistic change back — the persisted stage is the truth.
-          setDataCached(snapshot)
+          rollback()
           const body = await res.json().catch(() => ({}))
           return {
             ok: false,
@@ -393,13 +420,13 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId!)])
         return { ok: true }
       } catch {
-        setDataCached(snapshot)
+        rollback()
         return { ok: false, error: "Network error" }
       } finally {
-        pendingRef.current -= 1
+        endWrite()
       }
     },
-    [brandId, setDataCached]
+    [brandId, setDataCached, beginWrite, endWrite]
   )
 
   // ── Update Paid Collab (optimistic) ───────────────────────────────────────
@@ -407,10 +434,11 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
     async (id: string, paidCollabData: PaidCollabData): Promise<boolean> => {
       if (!brandId) return false
 
-      let snapshot: ClosedInfluencer[] = []
+      // Per-row rollback — see updateColumn.
+      let previous: ClosedInfluencer | undefined
 
       setDataCached((prev) => {
-        snapshot = prev
+        previous = prev.find((item) => item.id === id)
         return prev.map((item) =>
           item.id !== id ? item : {
             ...item,
@@ -420,6 +448,11 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         )
       })
 
+      const rollback = () => {
+        if (!previous) return
+        setDataCached((prev) => prev.map((item) => (item.id === id ? previous! : item)))
+      }
+
       try {
         const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
           method:  "PATCH",
@@ -428,14 +461,14 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         })
 
         if (!res.ok) {
-          setDataCached(snapshot)
+          rollback()
           return false
         }
 
         invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId!)])
         return true
       } catch {
-        setDataCached(snapshot)
+        rollback()
         return false
       }
     },
@@ -447,14 +480,20 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
     async (id: string, campaignType: string): Promise<boolean> => {
       if (!brandId) return false
 
-      let snapshot: ClosedInfluencer[] = []
+      // Per-row rollback — see updateColumn.
+      let previous: ClosedInfluencer | undefined
 
       setDataCached((prev) => {
-        snapshot = prev
+        previous = prev.find((item) => item.id === id)
         return prev.map((item) =>
           item.id !== id ? item : { ...item, campaignType }
         )
       })
+
+      const rollback = () => {
+        if (!previous) return
+        setDataCached((prev) => prev.map((item) => (item.id === id ? previous! : item)))
+      }
 
       try {
         const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
@@ -464,14 +503,14 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         })
 
         if (!res.ok) {
-          setDataCached(snapshot)
+          rollback()
           return false
         }
 
         invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId!)])
         return true
       } catch {
-        setDataCached(snapshot)
+        rollback()
         return false
       }
     },
@@ -485,14 +524,20 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
       if (!brandId) return false
 
       const trimmed = postUrl.trim()
-      let snapshot: ClosedInfluencer[] = []
+      // Per-row rollback — see updateColumn.
+      let previous: ClosedInfluencer | undefined
 
       setDataCached((prev) => {
-        snapshot = prev
+        previous = prev.find((item) => item.id === id)
         return prev.map((item) =>
           item.id !== id ? item : { ...item, postUrl: trimmed || null }
         )
       })
+
+      const rollback = () => {
+        if (!previous) return
+        setDataCached((prev) => prev.map((item) => (item.id === id ? previous! : item)))
+      }
 
       try {
         const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
@@ -502,14 +547,14 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         })
 
         if (!res.ok) {
-          setDataCached(snapshot)
+          rollback()
           return false
         }
 
         invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId!)])
         return true
       } catch {
-        setDataCached(snapshot)
+        rollback()
         return false
       }
     },
@@ -572,7 +617,9 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
     updatePaidCollab,
     updateCampaignType,
     updatePostUrl,
-    updateOrderDetails,
-    refetch: () => { void refetch() }, // background sync, no spinner
+    isSaving: pendingWrites > 0,
+    // Skipped while a write is in flight: its response would predate the
+    // mutation, which is what pendingRef is here to prevent.
+    refetch: () => { if (pendingRef.current === 0) void refetch() }, // background sync, no spinner
   }
 }

@@ -8,7 +8,7 @@
 
 "use client"
 
-import { useState, useCallback, useMemo, useRef, Suspense, useEffect } from "react"
+import { useState, useCallback, useMemo, useRef, Suspense, useEffect, memo, type CSSProperties } from "react"
 import { useSearchParams } from "next/navigation"
 import { useSession } from "next-auth/react"
 import {
@@ -20,7 +20,7 @@ import { useDraggable } from "@dnd-kit/core"
 import {
   IconSearch, IconX, IconChevronDown, IconChevronUp,
   IconLayoutKanban, IconList, IconFilter, IconLocation,
-  IconLayoutList, IconLink, IconArrowRight, IconAlertTriangle,
+  IconLayoutList, IconLink, IconArrowRight, IconAlertTriangle, IconLoader2,
 } from "@tabler/icons-react"
 import { useClosedData, type ClosedInfluencer, type ClosedColumn, type OrderDetailsFields } from "@/hooks/useClosedData"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
@@ -373,7 +373,20 @@ function ColumnInfoTooltip({ colKey, variant }: { colKey: ClosedColumn; variant:
 }
 
 // ─── Post Tracker Card — consistent with pipeline card ────────────────────────
-function PostTrackerCard({ inf, onOpen, onMove, canApproveInfluencers }: {
+// Off-screen list items are skipped by the browser's own layout and paint pass
+// (`content-visibility: auto`), with `contain-intrinsic-size` standing in for
+// their height so the scrollbar geometry stays honest.
+//
+// Containment rather than JS windowing, deliberately: every item stays in the
+// DOM, so dnd-kit keeps its drag sources and drop targets, find-in-page still
+// works, and no interaction, measurement or markup changes — only the work the
+// browser does for items nobody is looking at.
+const OFFSCREEN_SKIP: CSSProperties = {
+  contentVisibility: "auto",
+  containIntrinsicSize: "auto 180px",
+}
+
+function PostTrackerCardBase({ inf, onOpen, onMove, canApproveInfluencers }: {
   inf: ClosedInfluencer
   onOpen: (inf: ClosedInfluencer) => void
   onMove: (id: string, col: ClosedColumn) => void
@@ -385,7 +398,7 @@ function PostTrackerCard({ inf, onOpen, onMove, canApproveInfluencers }: {
   const showNoPost = !isTerminal && canQuickMarkNoPost(inf.closedStatus)
 
   return (
-    <div className={`bg-white border rounded-lg p-3 hover:shadow-md transition-shadow ${
+    <div style={OFFSCREEN_SKIP} className={`bg-white border rounded-lg p-3 hover:shadow-md transition-shadow ${
       isExit ? "border-red-100 bg-red-50/30" : "border-gray-200"
     }`}>
       {/* Clickable body — same layout as pipeline card */}
@@ -464,6 +477,14 @@ function PostTrackerCard({ inf, onOpen, onMove, canApproveInfluencers }: {
 }
 
 // ─── Droppable / Draggable ────────────────────────────────────────────────────
+/** Same reasoning as the Pipeline board's card memo. */
+const PostTrackerCard = memo(PostTrackerCardBase, (prev, next) =>
+  prev.inf === next.inf &&
+  prev.canApproveInfluencers === next.canApproveInfluencers &&
+  prev.onOpen === next.onOpen &&
+  prev.onMove === next.onMove
+)
+
 function DroppableColumn({ id, children, isExit }: { id: string; children: React.ReactNode; isExit?: boolean }) {
   const { setNodeRef, isOver } = useDroppable({ id })
   return (
@@ -1195,13 +1216,14 @@ function PostTrackerContent() {
   // feature for free-tier users. A cached answer resolves on mount instead.
   const { isSubscribed, status: subscriptionStatus } = useSubscriptionGate(brandId)
 
-  const { data, isLoading, error, updateColumn, updateCampaignType, updatePostUrl, updateOrderDetails, refetch } = useClosedData(brandId)
+  const { data, isLoading, error, updateColumn, updateCampaignType, updatePostUrl, isSaving, refetch } = useClosedData(brandId)
 
   const [view,                 setView]                 = useState<"Board"|"list">("Board")
   const [search,               setSearch]               = useState("")
   const [activeId,             setActiveId]             = useState<string|null>(null)
   const [selectedInf,          setSelectedInf]          = useState<ClosedInfluencer|null>(null)
   const [toastMsg,             setToastMsg]             = useState<string|null>(null)
+  const [toastType,            setToastType]            = useState<"success"|"error">("success")
   const [showFilterPanel,      setShowFilterPanel]      = useState(false)
   // Name/handle filtering lives in the global search bar only — the panel
   // holds filters that search can't express.
@@ -1227,12 +1249,14 @@ function PostTrackerContent() {
   // Set when the drawer is opened from the warning's "Go to Post Details"
   const [drawerFocusPostUrl, setDrawerFocusPostUrl] = useState(false)
 
-  const showToast = (msg: string) => { setToastMsg(msg); setTimeout(()=>setToastMsg(null),3000) }
+  const showToast = (msg: string, type: "success"|"error" = "success") => {
+    setToastMsg(msg); setToastType(type); setTimeout(()=>setToastMsg(null),3000)
+  }
   const sensors   = useSensors(useSensor(PointerSensor,{activationConstraint:{distance:5}}))
 
   const handleMove = useCallback(async (id: string, col: ClosedColumn, opts?: { resetWorkflow?: boolean }) => {
     if (!canApprove) {
-      showToast("Only Owners and Managers can update post status")
+      showToast("Only Owners and Managers can update post status", "error")
       return false
     }
     const inf = data.find(d=>d.id===id)
@@ -1250,7 +1274,7 @@ function PostTrackerContent() {
       // Posted is final. Offer the explicit reset rather than failing silently.
       setResetBlocked({ inf, target: col })
     } else {
-      showToast(res.error || "Failed to move")
+      showToast(res.error || "Failed to move", "error")
     }
     return res.ok
   }, [data, updateColumn, canApprove])
@@ -1370,9 +1394,12 @@ function PostTrackerContent() {
     const terminalNote = terminalSkipped > 0
       ? ` · ${terminalSkipped} already Posted (reset the workflow to move ${terminalSkipped === 1 ? "it" : "them"})`
       : ""
-    showToast(failedIds.length === 0
-      ? `${moved} influencer${moved === 1 ? "" : "s"} moved to ${col} ✓${skippedNote}`
-      : `${moved} moved to ${col}, ${failedIds.length} failed${skippedNote}${terminalNote} — the failed ones are still selected`)
+    showToast(
+      failedIds.length === 0
+        ? `${moved} influencer${moved === 1 ? "" : "s"} moved to ${col} ✓${skippedNote}`
+        : `${moved} moved to ${col}, ${failedIds.length} failed${skippedNote}${terminalNote} — the failed ones are still selected`,
+      failedIds.length === 0 ? "success" : "error"
+    )
   }
 
   const handleBulkStageSelect = (col: ClosedColumn) => {
@@ -1482,7 +1509,21 @@ function PostTrackerContent() {
   return (
     <SubscriptionGate isSubscribed={isSubscribed} status={subscriptionStatus} featureName="Post Tracker">
       <div className="flex flex-col gap-4 p-6">
-      {toastMsg&&<div className="fixed top-4 right-4 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg z-50 animate-in slide-in-from-top-2">{toastMsg}</div>}
+      {/* Save state and outcome live in the bottom-right corner, clear of the
+          board columns and the bulk action bar — same pattern as the Pipeline. */}
+      <div className="fixed bottom-4 right-4 z-50 flex flex-col items-end gap-2">
+        {isSaving && (
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-900/90 text-white text-xs font-medium shadow-lg animate-in fade-in">
+            <IconLoader2 size={12} className="animate-spin" />
+            Saving
+          </div>
+        )}
+        {toastMsg && (
+          <div className={`px-4 py-2 rounded-lg shadow-lg text-white animate-in slide-in-from-bottom-2 ${toastType === "error" ? "bg-red-600" : "bg-green-500"}`}>
+            {toastMsg}
+          </div>
+        )}
+      </div>
 
       {postUrlBlocked.length>0&&(
         <PostUrlRequiredDialog
@@ -1812,7 +1853,7 @@ function PostTrackerContent() {
                 {filteredData.length===0?(
                   <tr><td colSpan={10} className="px-4 py-8 text-center text-gray-500">No influencers found</td></tr>
                 ):filteredData.map(inf=>(
-                  <tr key={inf.id} className={`border-t hover:bg-gray-50 cursor-pointer transition ${selectedIds.has(inf.id)?"bg-blue-50/60":""}`} onClick={()=>setSelectedInf(inf)}>
+                  <tr key={inf.id} style={{ contentVisibility: "auto", containIntrinsicSize: "auto 49px" }} className={`border-t hover:bg-gray-50 cursor-pointer transition ${selectedIds.has(inf.id)?"bg-blue-50/60":""}`} onClick={()=>setSelectedInf(inf)}>
                     <td className="px-4 py-3" onClick={e=>e.stopPropagation()}>
                       <input
                         type="checkbox"

@@ -7,7 +7,7 @@
 // ============================================================================
 
 import { NextResponse } from "next/server"
-import { prisma } from "@/lib/prisma"
+import { prisma, withDbRetry } from "@/lib/prisma"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { userHasActiveSubscription } from "@/lib/subscription-limits"
@@ -22,7 +22,7 @@ export async function GET() {
     const userId = session.user.id
 
     // Get brands the user owns
-    const ownedBrands = await prisma.brand.findMany({
+    const ownedBrands = await withDbRetry(() => prisma.brand.findMany({
       where: {
         owner_id: userId,
         is_active: true,
@@ -35,10 +35,10 @@ export async function GET() {
         description: true,
       },
       orderBy: { created_at: "asc" },
-    })
+    }))
 
     // Get brands the user is a member of (but doesn't own)
-    const memberships = await prisma.brandMember.findMany({
+    const memberships = await withDbRetry(() => prisma.brandMember.findMany({
       where: {
         user_id: userId,
       },
@@ -55,7 +55,7 @@ export async function GET() {
           },
         },
       },
-    })
+    }))
 
     // Filter member brands where owner has active subscription
     const memberBrands = []

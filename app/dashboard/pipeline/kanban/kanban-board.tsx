@@ -8,7 +8,7 @@
 
 "use client"
 
-import { useState, useEffect, useMemo, useRef, type ReactNode } from "react"
+import { useState, useEffect, useMemo, useRef, useCallback, memo, type CSSProperties, type ReactNode } from "react"
 import ReactDOM from "react-dom"
 import {
   DndContext,
@@ -43,6 +43,7 @@ import {
   IconShoppingBag,
   IconCoins,
   IconStar,
+  IconLoader2,
 } from "@tabler/icons-react"
 
 import InfluencerProfileSidebar, {
@@ -539,10 +540,15 @@ function NotInterestedModal({ influencer, onConfirm, onCancel, bulkCount }: NIMo
   const softReasons = NI_REASONS.filter((r) => r.bucket === "soft")
   const initials = influencer.influencer.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()
 
+  const selected = NI_REASONS.find((r) => r.r === selectedReason)
+
+  // Same shell, padding rhythm and footer as the Collaboration Type ("Deal
+  // Agreed") modal; the card scrolls when the two reason columns run long.
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onCancel}>
-      <div className="bg-white rounded-2xl shadow-2xl w-[800px] max-w-[95vw] max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-start justify-between px-7 pt-6 pb-4 border-b border-gray-100">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4" onClick={onCancel}>
+      <div className="bg-white rounded-2xl shadow-2xl w-[760px] max-w-[calc(100vw-2rem)] max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        {/* Header */}
+        <div className="flex items-start justify-between px-4 sm:px-6 pt-5 sm:pt-6 pb-4 border-b border-gray-100">
           <div>
             <h2 className="text-base font-semibold text-gray-900">Mark as not interested</h2>
             <p className="text-xs text-gray-500 mt-0.5">
@@ -553,11 +559,13 @@ function NotInterestedModal({ influencer, onConfirm, onCancel, bulkCount }: NIMo
           </div>
           <button onClick={onCancel} className="text-gray-400 hover:text-gray-600 transition ml-4 mt-0.5"><IconX size={18} /></button>
         </div>
-        <div className="px-7 pt-5">
-          <div className="flex items-center gap-3 bg-gray-50 rounded-xl px-4 py-3 border border-gray-100">
+
+        {/* Influencer Info */}
+        <div className="px-4 sm:px-6 pt-4 sm:pt-5 pb-2">
+          <div className="flex flex-wrap items-center gap-3 bg-gray-50 rounded-xl px-3 sm:px-4 py-3 border border-gray-100">
             {bulkCount ? (
               <>
-                <div className="w-9 h-9 rounded-full bg-red-100 flex items-center justify-center text-red-600 font-semibold text-sm">{bulkCount}</div>
+                <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center text-red-600 font-semibold text-sm">{bulkCount}</div>
                 <div>
                   <p className="text-sm font-semibold text-gray-900">{bulkCount} influencers selected</p>
                   <p className="text-xs text-gray-500">The reason below applies to all of them</p>
@@ -566,9 +574,9 @@ function NotInterestedModal({ influencer, onConfirm, onCancel, bulkCount }: NIMo
             ) : (
               <>
                 {influencer.profileImageUrl ? (
-                  <img src={influencer.profileImageUrl} alt={influencer.influencer} className="w-9 h-9 rounded-full object-cover" />
+                  <img src={influencer.profileImageUrl} alt={influencer.influencer} className="w-10 h-10 rounded-full object-cover" />
                 ) : (
-                  <div className="w-9 h-9 rounded-full bg-red-100 flex items-center justify-center text-red-600 font-semibold text-sm">{initials}</div>
+                  <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center text-red-600 font-semibold text-sm">{initials}</div>
                 )}
                 <div>
                   <p className="text-sm font-semibold text-gray-900">{influencer.influencer}</p>
@@ -576,65 +584,80 @@ function NotInterestedModal({ influencer, onConfirm, onCancel, bulkCount }: NIMo
                 </div>
               </>
             )}
-          </div>
-        </div>
-        <div className="px-7 pt-5 pb-3 grid grid-cols-2 gap-x-5 gap-y-5">
-          <div>
-            <div className="flex items-center gap-2 mb-2.5">
-              <span className="text-[10px] font-bold uppercase tracking-widest text-red-700">Hard pass</span>
-              <span className="text-[10px] text-gray-400">— don't reach out soon</span>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              {hardReasons.map((reason) => (
-                <button key={reason.r} onClick={() => setSelectedReason(reason.r)}
-                  className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl border text-left transition-all w-full ${selectedReason === reason.r ? "border-red-400 bg-red-50" : "border-gray-100 hover:border-gray-200 hover:bg-gray-50"}`}>
-                  <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: reason.color }} />
-                  <span className="text-sm text-gray-700 flex-1 leading-snug">{reason.r}</span>
-                  {selectedReason === reason.r && (
-                    <span className="w-4 h-4 rounded-full bg-red-500 flex items-center justify-center flex-shrink-0">
-                      <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 4L3.2 5.7L6.5 2.3" stroke="white" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div>
-            <div className="flex items-center gap-2 mb-2.5">
-              <span className="text-[10px] font-bold uppercase tracking-widest text-blue-700">Soft pass</span>
-              <span className="text-[10px] text-gray-400">— follow up next campaign</span>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              {softReasons.map((reason) => (
-                <button key={reason.r} onClick={() => setSelectedReason(reason.r)}
-                  className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl border text-left transition-all w-full ${selectedReason === reason.r ? "border-blue-400 bg-blue-50" : "border-gray-100 hover:border-gray-200 hover:bg-gray-50"}`}>
-                  <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: reason.color }} />
-                  <span className="text-sm text-gray-700 flex-1 leading-snug">{reason.r}</span>
-                  {selectedReason === reason.r && (
-                    <span className="w-4 h-4 rounded-full bg-blue-500 flex items-center justify-center flex-shrink-0">
-                      <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 4L3.2 5.7L6.5 2.3" stroke="white" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-            {selectedReason && (
-              <div className="mt-3 px-3.5 py-2.5 rounded-xl bg-gray-50 border border-gray-100">
-                <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-0.5">Selected reason</p>
-                <p className="text-sm font-medium text-gray-800">{selectedReason}</p>
+            {selected && (
+              <div className="ml-auto text-right">
+                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Selected reason</p>
+                <div className="flex items-center justify-end gap-2 mt-0.5">
+                  <span className="w-2 h-2 rounded-full" style={{ background: selected.color }} />
+                  <span className="text-sm font-semibold text-gray-900">{selected.r}</span>
+                </div>
                 <p className="text-[11px] text-gray-400 mt-0.5">
-                  {NI_REASONS.find((r) => r.r === selectedReason)?.bucket === "soft"
-                    ? "This influencer can be re-approached in a future campaign."
-                    : "This influencer should not be contacted again soon."}
+                  {selected.bucket === "soft"
+                    ? "Can be re-approached in a future campaign"
+                    : "Should not be contacted again soon"}
                 </p>
               </div>
             )}
           </div>
         </div>
-        <div className="flex items-center justify-end gap-2 px-7 py-4 border-t border-gray-100">
-          <button onClick={onCancel} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 rounded-lg border border-gray-200 hover:bg-gray-50 transition">Cancel</button>
-          <button onClick={() => selectedReason && onConfirm(selectedReason)} disabled={!selectedReason}
-            className="px-6 py-2 text-sm font-medium text-white bg-red-500 rounded-lg hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed">Confirm</button>
+
+        {/* Reasons */}
+        <div className="px-4 sm:px-6 pt-4 sm:pt-5 pb-3">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Reason</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-5">
+            <div>
+              <div className="flex items-center gap-2 mb-2.5">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-red-700">Hard pass</span>
+                <span className="text-[10px] text-gray-400">&mdash; don&apos;t reach out soon</span>
+              </div>
+              <div className="flex flex-col gap-2">
+                {hardReasons.map((reason) => (
+                  <button key={reason.r} onClick={() => setSelectedReason(reason.r)}
+                    className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl border text-left transition-all w-full ${selectedReason === reason.r ? "border-red-400 bg-red-50" : "border-gray-100 hover:border-gray-200 hover:bg-gray-50"}`}>
+                    <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: reason.color }} />
+                    <span className="text-sm text-gray-700 flex-1 leading-snug">{reason.r}</span>
+                    {selectedReason === reason.r && (
+                      <span className="w-4 h-4 rounded-full bg-red-500 flex items-center justify-center flex-shrink-0">
+                        <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 4L3.2 5.7L6.5 2.3" stroke="white" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center gap-2 mb-2.5">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-blue-700">Soft pass</span>
+                <span className="text-[10px] text-gray-400">&mdash; follow up next campaign</span>
+              </div>
+              <div className="flex flex-col gap-2">
+                {softReasons.map((reason) => (
+                  <button key={reason.r} onClick={() => setSelectedReason(reason.r)}
+                    className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl border text-left transition-all w-full ${selectedReason === reason.r ? "border-blue-400 bg-blue-50" : "border-gray-100 hover:border-gray-200 hover:bg-gray-50"}`}>
+                    <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: reason.color }} />
+                    <span className="text-sm text-gray-700 flex-1 leading-snug">{reason.r}</span>
+                    {selectedReason === reason.r && (
+                      <span className="w-4 h-4 rounded-full bg-blue-500 flex items-center justify-center flex-shrink-0">
+                        <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 4L3.2 5.7L6.5 2.3" stroke="white" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Footer — caption on the left, actions on the right */}
+        <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 px-4 sm:px-6 py-3 sm:py-4 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl">
+          <span className="text-[11px] text-gray-400">
+            This marks the influencer as Not Interested and removes them from the active pipeline
+          </span>
+          <div className="flex items-center justify-end gap-2">
+            <button onClick={onCancel} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 rounded-lg border border-gray-200 hover:bg-gray-50 transition bg-white">Cancel</button>
+            <button onClick={() => selectedReason && onConfirm(selectedReason)} disabled={!selectedReason}
+              className="px-4 sm:px-6 py-2 text-sm font-medium text-white bg-red-500 rounded-lg hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap">Confirm</button>
+          </div>
         </div>
       </div>
     </div>
@@ -658,10 +681,10 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
   const selectedCollab = COLLAB_TYPES.find((c) => c.id === selectedType)
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onCancel}>
-      <div className="bg-white rounded-2xl shadow-2xl w-[700px] max-w-[95vw] max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4" onClick={onCancel}>
+      <div className="bg-white rounded-2xl shadow-2xl w-[760px] max-w-[calc(100vw-2rem)] max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
-        <div className="flex items-start justify-between px-7 pt-6 pb-4 border-b border-gray-100">
+        <div className="flex items-start justify-between px-4 sm:px-6 pt-5 sm:pt-6 pb-4 border-b border-gray-100">
           <div>
             <h2 className="text-base font-semibold text-gray-900">Select Collaboration Type</h2>
             <p className="text-xs text-gray-500 mt-0.5">
@@ -676,8 +699,8 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
         </div>
 
         {/* Influencer Info */}
-        <div className="px-7 pt-5 pb-2">
-          <div className="flex items-center gap-3 bg-gray-50 rounded-xl px-4 py-3 border border-gray-100">
+        <div className="px-4 sm:px-6 pt-4 sm:pt-5 pb-2">
+          <div className="flex flex-wrap items-center gap-3 bg-gray-50 rounded-xl px-3 sm:px-4 py-3 border border-gray-100">
             {bulkCount ? (
               <>
                 <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center text-green-600 font-semibold text-sm">{bulkCount}</div>
@@ -699,17 +722,22 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
                 </div>
               </>
             )}
-            <div className="ml-auto flex items-center gap-1.5 text-xs text-gray-400">
-              <IconArrowRight size={14} />
-              <span>Moving to Post Tracker</span>
-            </div>
+            {selectedCollab && (
+              <div className="ml-auto text-right">
+                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Selected Collaboration</p>
+                <div className="flex items-center justify-end gap-2 mt-0.5">
+                  <span className={`w-2 h-2 rounded-full ${selectedCollab.dotColor}`} />
+                  <span className="text-sm font-semibold text-gray-900">{selectedCollab.title}</span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
         {/* Collaboration Types Grid */}
-        <div className="px-7 pt-5 pb-3">
+        <div className="px-4 sm:px-6 pt-4 sm:pt-5 pb-3">
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Collaboration Type</p>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 sm:gap-3">
             {COLLAB_TYPES.map((type) => (
               <button
                 key={type.id}
@@ -737,26 +765,12 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
           </div>
         </div>
 
-        {/* Selected Type Summary */}
-        {selectedCollab && (
-          <div className="px-7 pb-3">
-            <div className="rounded-xl bg-gray-50 border border-gray-100 p-4">
-              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Selected Collaboration</p>
-              <div className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded-full ${selectedCollab.dotColor}`} />
-                <span className="text-sm font-semibold text-gray-900">{selectedCollab.title}</span>
-              </div>
-              <p className="text-xs text-gray-500 mt-1">{selectedCollab.description}</p>
-            </div>
-          </div>
-        )}
-
         {/* Footer */}
-        <div className="flex items-center justify-between px-7 py-4 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl">
+        <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 px-4 sm:px-6 py-3 sm:py-4 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl">
           <p className="text-[11px] text-gray-400">
             This marks the deal agreed and moves the influencer to Post Tracker
           </p>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center justify-end gap-2">
             <button
               onClick={onCancel}
               className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 rounded-lg border border-gray-200 hover:bg-gray-50 transition bg-white"
@@ -766,10 +780,10 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
             <button
               onClick={() => selectedType && onConfirm(selectedType)}
               disabled={!selectedType}
-              className="px-6 py-2 text-sm font-medium text-white bg-green-500 rounded-lg hover:bg-green-600 transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
+              className="px-4 sm:px-6 py-2 text-sm font-medium text-white bg-green-500 rounded-lg hover:bg-green-600 transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 whitespace-nowrap"
             >
               <IconArrowRight size={14} />
-              Confirm &amp; Move to Post Tracker
+              Move to Post Tracker
             </button>
           </div>
         </div>
@@ -779,7 +793,20 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
 }
 
 // ─── Pipeline Card ────────────────────────────────────────────────────────────
-function PipelineCard({ influencer, onOpenSidebar, onStatusChange, canApproveInfluencers }: {
+// Off-screen list items are skipped by the browser's own layout and paint pass
+// (`content-visibility: auto`), with `contain-intrinsic-size` standing in for
+// their height so the scrollbar geometry stays honest.
+//
+// Containment rather than JS windowing, deliberately: every item stays in the
+// DOM, so dnd-kit keeps its drag sources and drop targets, find-in-page still
+// works, and no interaction, measurement or markup changes — only the work the
+// browser does for items nobody is looking at.
+const OFFSCREEN_SKIP: CSSProperties = {
+  contentVisibility: "auto",
+  containIntrinsicSize: "auto 168px",
+}
+
+function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApproveInfluencers }: {
   influencer: PipelineInfluencer
   onOpenSidebar: (inf: PipelineInfluencer) => void
   onStatusChange: (id: string, newStatus: string) => void
@@ -791,7 +818,7 @@ function PipelineCard({ influencer, onOpenSidebar, onStatusChange, canApproveInf
   const terminal   = isTerminal(influencer.pipelineStatus)
 
   return (
-    <div className={`bg-white border rounded-lg p-3 hover:shadow-md transition-shadow ${
+    <div style={OFFSCREEN_SKIP} className={`bg-white border rounded-lg p-3 hover:shadow-md transition-shadow ${
       influencer.pipelineStatus === "Not Interested"      ? "border-red-100 bg-red-50/30"     :
       influencer.pipelineStatus === "For Order Creation"  ? "border-emerald-100 bg-emerald-50/30" :
       "border-gray-200"
@@ -799,29 +826,31 @@ function PipelineCard({ influencer, onOpenSidebar, onStatusChange, canApproveInf
       <div className="cursor-pointer" onClick={() => onOpenSidebar(influencer)}>
         <div className="flex flex-col text-sm mb-2">
           <span className="font-medium text-gray-900">{influencer.influencer}</span>
-          <span className="text-xs text-gray-500">{influencer.instagramHandle}</span>
+          <span className="text-xs text-gray-500">@{influencer.handle}</span>
         </div>
         <div className="flex items-center gap-2 text-xs text-gray-500 mb-1.5">
           <span className="flex items-center gap-1">{getPlatformIcon(influencer.platform)}{influencer.platform || "Instagram"}</span>
           <span>•</span>
-          <span>{influencer.location || "—"}</span>
+          <span className="flex items-center gap-0.5">
+            <IconLocation size={11} />{influencer.location || "—"}
+          </span>
         </div>
         <div className="flex items-center gap-3 text-xs text-gray-500">
-          <span>{influencer.followerCount?.toLocaleString() || influencer.followers || "—"} followers</span>
+          <span>{influencer.followers || "—"} followers</span>
           <span>{influencer.engagementRate || "—"}% eng</span>
         </div>
 
         {/* NI reason pill */}
         {influencer.pipelineStatus === "Not Interested" && influencer.niReason && (
-          <div className="mt-2 text-xs text-red-600 bg-red-100 rounded-full px-2.5 py-1 inline-block font-medium">
+          <div className="mt-2 text-[10px] text-red-500 bg-red-50 rounded-full px-2.5 py-1 inline-block font-medium">
             {influencer.niReason}
           </div>
         )}
 
         {/* For Order Creation badge */}
         {influencer.pipelineStatus === "For Order Creation" && (
-          <div className="mt-2 flex items-center gap-1 text-xs text-emerald-700 bg-emerald-100 rounded-full px-2.5 py-1 inline-flex font-medium">
-            <IconPackage size={12} />
+          <div className="mt-2 text-[10px] text-green-600 bg-green-50 rounded-full px-2.5 py-1 inline-flex items-center gap-1 font-medium">
+            <IconPackage size={10} />
             In Post Tracker
           </div>
         )}
@@ -829,7 +858,7 @@ function PipelineCard({ influencer, onOpenSidebar, onStatusChange, canApproveInf
         {/* Collab type badge — Deal Agreed now cascades straight to For Order
             Creation on confirm, but legacy rows can still rest at Deal Agreed */}
         {(influencer.pipelineStatus === "For Order Creation" || influencer.pipelineStatus === "Deal Agreed") && influencer.collabType && (
-          <div className="mt-1.5">
+          <div className="mt-2">
             {(() => {
               const collab = COLLAB_TYPES.find((c) => c.id === influencer.collabType)
               if (!collab) return null
@@ -866,6 +895,17 @@ function PipelineCard({ influencer, onOpenSidebar, onStatusChange, canApproveInf
     </div>
   )
 }
+
+/**
+ * Compared on the fields a card actually renders. Without this, one keystroke in
+ * the search box re-rendered every card in every column.
+ */
+const PipelineCard = memo(PipelineCardBase, (prev, next) =>
+  prev.influencer === next.influencer &&
+  prev.canApproveInfluencers === next.canApproveInfluencers &&
+  prev.onOpenSidebar === next.onOpenSidebar &&
+  prev.onStatusChange === next.onStatusChange
+)
 
 // ─── Portal StatusDropdown ────────────────────────────────────────────────────
 function StatusDropdown({ currentStatus, onStatusChange, canApproveInfluencers }: { currentStatus: string; onStatusChange: (s: string) => void; canApproveInfluencers: boolean }) {
@@ -943,7 +983,7 @@ function DroppableColumn({ id, children }: { id: string; children: React.ReactNo
   return (
     <div ref={setNodeRef}
       style={{ scrollSnapAlign: "start" }}
-      className={`flex flex-col gap-3 w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0 transition-colors rounded-lg ${
+      className={`flex flex-col gap-3 w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0 transition-all rounded-lg ${
         isOver ? (isExit ? "bg-red-50" : "bg-gray-50") : ""
       }`}>
       {children}
@@ -1019,16 +1059,16 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   const bulkBtnRef   = useRef<HTMLButtonElement>(null)
   const selectAllRef = useRef<HTMLInputElement>(null)
 
-  const { data, isLoading, error, updateStatus, refetch } = usePipelineData(brandId)
+  const { data, isLoading, error, updateStatus, isSaving, refetch } = usePipelineData(brandId)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
   const { canApproveInfluencers, loading: capabilitiesLoading } = useBrandCapabilities(brandId)
   const canApprove = !capabilitiesLoading && canApproveInfluencers
 
-  const toast = (msg: string, duration = 3000) => {
+  const toast = useCallback((msg: string, duration = 3000) => {
     setShowSuccessMessage(msg)
     setTimeout(() => setShowSuccessMessage(null), duration)
-  }
+  }, [])
 
   // ── Collab type confirmed → deal agreed AND straight into Post Tracker ────
   // Confirming a Collaboration Type is the single action that both marks the
@@ -1123,7 +1163,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   const handleNiCancel = () => { setNiModalInfluencer(null); setPendingNiId(null) }
 
   // ── Status update from card buttons / list dropdown ───────────────────────
-  const handleStatusUpdate = async (id: string, newStatus: string) => {
+  const handleStatusUpdate = useCallback(async (id: string, newStatus: string) => {
     if (!canApprove) {
       toast("Only Owners and Managers can approve influencers", 2500)
       return
@@ -1145,9 +1185,9 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     const influencer = data.find((i) => i.id === id)
     const success = await updateStatus(id, newStatus)
     toast(success
-      ? `${influencer?.influencer} updated to ${newStatus}`
-      : `Failed to update ${influencer?.influencer}`, 2000)
-  }
+      ? `${influencer?.influencer} moved to ${newStatus}`
+      : `Failed to move ${influencer?.influencer}`, 2000)
+  }, [data, canApprove, updateStatus, toast])
 
   // ── Bulk selection helpers ────────────────────────────────────────────────
   const clearSelection = () => setSelectedIds(new Set())
@@ -1231,10 +1271,10 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     await runBulkUpdate("Deal Agreed", { collaborationType: collabType })
   }
 
-  const openSidebar = (inf: PipelineInfluencer) => {
+  const openSidebar = useCallback((inf: PipelineInfluencer) => {
     setSelectedPartner(influencerToPartner(inf, brandId))
     setSidebarOpen(true)
-  }
+  }, [brandId])
 
   const handleColumnClick = (column: typeof columns[0]) => {
     setSelectedColumnStatus(column.status)
@@ -1327,8 +1367,21 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   const activeInfluencer   = activeId ? data.find((item) => item.id === activeId) : null
   const selectedColumnInfo = selectedColumnStatus ? columns.find((col) => col.status === selectedColumnStatus) : null
 
-  const getItemsByColumn = (columnKey: string) =>
-    filteredData.filter((item) => item.pipelineStatus === getStatusFromColumnKey(columnKey))
+  // Confirming a Collaboration Type sends the row straight to Post Tracker's
+  // entry stage ("For Order Creation"), whose column is hidden on this board —
+  // so the card vanished and Deal Agreed read as empty even though the deal had
+  // just been closed. Display-only: the row keeps rendering under Deal Agreed,
+  // with its collaboration details, while the persisted stage (and Post Tracker)
+  // stay exactly as they are. One record, two views.
+  const getItemsByColumn = (columnKey: string) => {
+    const status = getStatusFromColumnKey(columnKey)
+    if (status === "Deal Agreed") {
+      return filteredData.filter(
+        (item) => item.pipelineStatus === "Deal Agreed" || item.pipelineStatus === "For Order Creation"
+      )
+    }
+    return filteredData.filter((item) => item.pipelineStatus === status)
+  }
 
   const renderCard = (inf: PipelineInfluencer) => (
     <PipelineCard
@@ -1384,11 +1437,22 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
         />
       )}
 
-      {showSuccessMessage && (
-        <div className="fixed top-4 right-4 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg z-50 animate-in slide-in-from-top-2">
-          {showSuccessMessage}
-        </div>
-      )}
+      {/* Save state lives in the bottom-right corner, out of the way of the
+          board: a subtle "Saving" pill while a status write is actually in
+          flight, and the outcome message in the same spot once it lands. */}
+      <div className="fixed bottom-4 right-4 z-50 flex flex-col items-end gap-2">
+        {isSaving && (
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-900/90 text-white text-xs font-medium shadow-lg animate-in fade-in">
+            <IconLoader2 size={12} className="animate-spin" />
+            Saving
+          </div>
+        )}
+        {showSuccessMessage && (
+          <div className="bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg animate-in slide-in-from-bottom-2">
+            {showSuccessMessage}
+          </div>
+        )}
+      </div>
 
       {sidebarOpen && selectedPartner && (
         <InfluencerProfileSidebar
@@ -1514,9 +1578,10 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
           )}
         </div>
 
-        {/* Count */}
+        {/* Count — "N of M", as the Post Tracker toolbar reads, so a filtered
+            view shows how much of the total is on screen. */}
         <span className="text-sm text-gray-500 whitespace-nowrap ml-1">
-          {data.length} influencer{data.length !== 1 ? "s" : ""}
+          {filteredData.length} of {data.length} influencer{data.length !== 1 ? "s" : ""}
         </span>
 
         {/* Spacer */}
@@ -1573,7 +1638,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                       </div>
                     </div>
 
-                    <div className="flex flex-col gap-2 min-h-[400px]">
+                    <div className="flex flex-col gap-2 min-h-[400px] mt-2">
                       {items.map((inf) => (
                         <DraggableCard key={inf.id} id={inf.id} disabled={!canApprove}>
                           {renderCard(inf)}
@@ -1608,12 +1673,12 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                         {col.title}
                       </span>
                       <div className="flex items-center gap-1.5 flex-shrink-0">
-                        <span className="bg-red-200 text-red-700 rounded-full px-2 py-0.5 text-xs">{items.length}</span>
                         <ColumnInfoTooltip status={col.status} variant="light" />
+                        <span className="bg-red-200 text-red-700 rounded-full px-2 py-0.5 text-xs">{items.length}</span>
                       </div>
                     </div>
 
-                    <div className="flex flex-col gap-2 min-h-[400px]">
+                    <div className="flex flex-col gap-2 min-h-[400px] mt-2">
                       {items.map((inf) => (
                         <DraggableCard key={inf.id} id={inf.id} disabled={!canApprove}>
                           {renderCard(inf)}
