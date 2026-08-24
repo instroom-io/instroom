@@ -418,7 +418,15 @@ function InboxContent() {
   // ── Subscription gate ──────────────────────────────────────────────────────
   // Served from the shared cache, so a return visit resolves on mount instead
   // of gating the inbox behind a skeleton again.
-  const { isSubscribed, status: subscriptionStatus } = useSubscriptionGate(brandId)
+  // Inbox is Solo/Team only per the pricing page — Basic gets no Gmail/Outlook
+  // access at all, unlike Pipeline and Post Tracker which Basic does include.
+  const { isSubscribed, status: subscriptionStatus, planDisplayName } = useSubscriptionGate(brandId, ["solo", "team"])
+
+  // Relative URL — some callers run inside a useState lazy initializer, which
+  // React invokes during the server-side render "use client" pages still get
+  // before hydration, where `window` doesn't exist yet.
+  const threadsUrl = (provider: "gmail" | "outlook") =>
+    brandId ? `/api/${provider}/threads?brandId=${encodeURIComponent(brandId)}` : `/api/${provider}/threads`
 
   // Threads already fetched for this brand render immediately; the mount checks
   // below still run and update these silently in the background.
@@ -435,11 +443,19 @@ function InboxContent() {
     const outlook = read("outlook")
     return [
       ...((gmail?.threads ?? []) as any[]).map((t, i) => mapGmailThreadToEmail(t, i)),
+      ...((gmail?.sentAwaitingReply ?? []) as any[]).map((t, i) => mapLightweightSentThread(t, i)),
       ...((outlook?.threads ?? []) as any[]).map((t, i) => mapOutlookThreadToEmail(t, i)),
     ]
   }
 
   const [emails, setEmails] = useState<Email[]>(cachedEmails)
+  // The connected Gmail account's own address — lets the UI tell a thread with
+  // an external contact apart from a thread with the user's own mailbox (e.g.
+  // a self-sent verification/test email), instead of treating the latter as
+  // an unregistered influencer.
+  const [gmailConnectedEmail, setGmailConnectedEmail] = useState<string | null>(
+    () => getCachedData<any>(threadsUrl("gmail"))?.connectedEmail ?? null
+  )
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null)
   const [loadingThreadId, setLoadingThreadId] = useState<string | number | null>(null)
   const [selectedStage, setSelectedStage] = useState<PipelineStage | "ALL">("ALL")
@@ -520,13 +536,24 @@ function InboxContent() {
     const checkMobile = () => setIsMobile(window.innerWidth < 768)
     checkMobile()
     window.addEventListener("resize", checkMobile)
-    checkGmailConnection()
-    checkOutlookConnection()
 
     const params = new URLSearchParams(window.location.search)
+    const justConnectedGmail = params.get("gmailConnected") === "1"
+    const justConnectedOutlook = params.get("outlookConnected") === "1"
+
+    // A fresh connect/reconnect can land on a still-valid client-side cache
+    // entry from before the switch (e.g. Change Gmail to a different
+    // account) — checkGmailConnection's force:false read would then keep
+    // showing the previous account's threads. Force a real refetch instead
+    // of the normal cached check whenever we're returning from that flow.
+    if (justConnectedGmail) loadGmailThreads()
+    else checkGmailConnection()
+
+    if (justConnectedOutlook) loadOutlookThreads()
+    else checkOutlookConnection()
 
     // Handle ?gmailConnected=1 redirect from OAuth callback
-    if (params.get("gmailConnected") === "1") {
+    if (justConnectedGmail) {
       const clean = new URL(window.location.href)
       clean.searchParams.delete("gmailConnected")
       window.history.replaceState({}, "", clean.toString())
@@ -543,7 +570,7 @@ function InboxContent() {
     }
 
     // Handle ?outlookConnected=1 redirect from Outlook OAuth callback
-    if (params.get("outlookConnected") === "1") {
+    if (justConnectedOutlook) {
       const clean = new URL(window.location.href)
       clean.searchParams.delete("outlookConnected")
       window.history.replaceState({}, "", clean.toString())
@@ -605,10 +632,14 @@ function InboxContent() {
     try {
       const data = await fetchThreads("gmail", false)
       if (requestId !== gmailRequestIdRef.current) return // superseded by a newer request
-      const mappedEmails = (data.threads || []).map((t: any, i: number) => mapGmailThreadToEmail(t, i))
+      const mappedEmails = [
+        ...(data.threads || []).map((t: any, i: number) => mapGmailThreadToEmail(t, i)),
+        ...(data.sentAwaitingReply || []).map((t: any, i: number) => mapLightweightSentThread(t, i)),
+      ]
       setEmails(prev => [...prev.filter(e => e.source !== "gmail"), ...mappedEmails])
       setGmailConnected(true)
       setGmailSyncState("connected")
+      setGmailConnectedEmail(data.connectedEmail ?? null)
     } catch (err: any) {
       if (requestId !== gmailRequestIdRef.current) return
       // reauth = the provider says this account isn't linked (or its grant
@@ -619,7 +650,7 @@ function InboxContent() {
         setGmailSyncState("not_connected")
         return
       }
-      setGmailError(err?.body?.error || "Network error. Please check your connection.")
+      setGmailError(err?.body?.error || err?.message || "Failed to check Gmail connection.")
       setGmailSyncState("error")
     }
   }
@@ -664,10 +695,14 @@ function InboxContent() {
     try {
       const data = await fetchThreads("gmail", true)
       if (requestId !== gmailRequestIdRef.current) return // superseded by a newer request
-      const mappedEmails = (data.threads || []).map((t: any, i: number) => mapGmailThreadToEmail(t, i))
+      const mappedEmails = [
+        ...(data.threads || []).map((t: any, i: number) => mapGmailThreadToEmail(t, i)),
+        ...(data.sentAwaitingReply || []).map((t: any, i: number) => mapLightweightSentThread(t, i)),
+      ]
       setEmails(prev => [...prev.filter(e => e.source !== "gmail"), ...mappedEmails])
       setGmailConnected(true)
       setGmailSyncState("connected")
+      setGmailConnectedEmail(data.connectedEmail ?? null)
     } catch (err: any) {
       if (requestId !== gmailRequestIdRef.current) return
       if (err?.body?.reauth) {
@@ -700,7 +735,7 @@ function InboxContent() {
         setOutlookSyncState("not_connected")
         return
       }
-      setOutlookError(err?.body?.error || "Network error. Please check your connection.")
+      setOutlookError(err?.body?.error || err?.message || "Failed to check Outlook connection.")
       setOutlookSyncState("error")
     }
   }
@@ -763,6 +798,25 @@ function InboxContent() {
       if (!res.ok) {
         setComposeError(data?.error || "Failed to send email.")
       } else {
+        // Show it in the list immediately rather than waiting for the next
+        // real refresh — Gmail-only, since sentAwaitingReply (and its
+        // lightweight-thread rendering) has no Outlook equivalent. A later
+        // refresh replaces every gmail-sourced entry wholesale anyway, so
+        // this placeholder is naturally superseded by the real one, not a
+        // lasting duplicate.
+        if (composeSource !== "outlook") {
+          const placeholder = mapLightweightSentThread(
+            {
+              id: `local-sent-${Date.now()}`,
+              recipientEmail: composeTo.trim(),
+              subject: composeSubject.trim() || "(No subject)",
+              snippet: composeBody.trim(),
+              date: new Date().toISOString(),
+            },
+            0
+          )
+          setEmails((prev) => [placeholder, ...prev])
+        }
         setComposeSent(true)
         setTimeout(() => {
           setOpenCompose(false)
@@ -845,15 +899,31 @@ function InboxContent() {
   }
 
   const updateEmailStage = async (emailId: number | string, newStage: PipelineStage) => {
-    const previousStatus = emails.find((e) => e.id === emailId)?.status
-    setEmails((prev) => prev.map((email) => (email.id === emailId ? { ...email, status: newStage } : email)))
-    if (selectedEmail?.id === emailId) {
-      setSelectedEmail((prev) => (prev ? { ...prev, status: newStage } : null))
-    }
     setUpdateStageModal({ open: false, email: null })
 
     const email = emails.find((e) => e.id === emailId)
     if (!email?.fromEmail) return
+
+    // This thread's other party is the user's own connected mailbox (e.g. a
+    // self-sent verification/test email) — there's no influencer to update,
+    // and hitting the API would just surface a confusing "not registered"
+    // error for something that was never meant to be one.
+    if (gmailConnectedEmail && email.fromEmail.toLowerCase() === gmailConnectedEmail.toLowerCase()) {
+      setStageNotification({
+        show: true,
+        message: "This conversation is with your own connected mailbox — there's no influencer to update.",
+        type: "error",
+      })
+      setTimeout(() => setStageNotification({ show: false, message: "", type: "error" }), 5000)
+      return
+    }
+
+    const previousStatus = emails.find((e) => e.id === emailId)?.status
+    setEmails((prev) => prev.map((e) => (e.id === emailId ? { ...e, status: newStage } : e)))
+    if (selectedEmail?.id === emailId) {
+      setSelectedEmail((prev) => (prev ? { ...prev, status: newStage } : null))
+    }
+
     try {
       const res = await fetch("/api/inbox/stage", {
         method: "PATCH",
@@ -916,19 +986,25 @@ function InboxContent() {
     setSendError(undefined)
     setIsSending(true)
 
+    const sentAt = new Date().toISOString()
     const newReply = {
       sender: "You",
       message: messageText,
-      timestamp: new Date().toISOString(),
+      timestamp: sentAt,
       isUser: true,
     }
+    // Also update preview/timestamp — otherwise the list row keeps showing
+    // whatever Gmail last returned, looking untouched even though a reply
+    // was just sent, until the next real refresh happens to catch up.
     setEmails((prev) =>
       prev.map((email) =>
-        email.id === selectedEmail.id ? { ...email, replies: [...(email.replies || []), newReply] } : email
+        email.id === selectedEmail.id
+          ? { ...email, replies: [...(email.replies || []), newReply], preview: messageText, timestamp: sentAt }
+          : email
       )
     )
     setSelectedEmail((prev) =>
-      prev ? { ...prev, replies: [...(prev.replies || []), newReply] } : null
+      prev ? { ...prev, replies: [...(prev.replies || []), newReply], preview: messageText, timestamp: sentAt } : null
     )
     setReply("")
 
@@ -1016,6 +1092,7 @@ function InboxContent() {
       status={subscriptionStatus || "inactive"}
       featureName="the inbox"
       plans={["Solo", "Team"]}
+      currentPlanDisplayName={planDisplayName}
     >
     <div className="flex flex-col h-screen bg-gray-50">
     <DndContext sensors={dragSensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
@@ -1121,19 +1198,26 @@ function InboxContent() {
             </div>
             <div className="flex items-center gap-2">
               <div
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium border transition-all ${
+                className={`group flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium border transition-all ${
                   isGmailReady
-                    ? "bg-green-50 border-green-200 text-green-700"
+                    ? "bg-green-50 border-green-200 text-green-700 cursor-pointer hover:bg-green-100"
                     : gmailSyncState === "not_connected"
                     ? "bg-yellow-50 border-yellow-200 text-yellow-700 cursor-pointer hover:bg-yellow-100"
                     : isGmailLoading
                     ? "bg-gray-50 border-gray-200 text-gray-400"
                     : "bg-red-50 border-red-200 text-red-500"
                 }`}
-                onClick={gmailSyncState === "not_connected" ? handleConnectGmail : undefined}
+                onClick={gmailSyncState === "not_connected" || isGmailReady ? handleConnectGmail : undefined}
               >
                 <IconBrandGmail size={11} />
-                <span>{isGmailReady ? "Gmail" : gmailSyncState === "not_connected" ? "Connect Gmail" : isGmailLoading ? "Gmail…" : "Gmail error"}</span>
+                {isGmailReady ? (
+                  <>
+                    <span className="group-hover:hidden">Gmail</span>
+                    <span className="hidden group-hover:inline">Change Gmail</span>
+                  </>
+                ) : (
+                  <span>{gmailSyncState === "not_connected" ? "Connect Gmail" : isGmailLoading ? "Gmail…" : "Gmail error"}</span>
+                )}
               </div>
               <div
                 className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium border transition-all ${
@@ -1334,9 +1418,20 @@ function InboxContent() {
 
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between gap-2">
-                            <span className={`text-sm truncate ${!email.read ? "font-semibold text-gray-900" : "text-gray-700"}`}>
-                              {email.name}
-                            </span>
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className={`text-sm truncate ${!email.read ? "font-semibold text-gray-900" : "text-gray-700"}`}>
+                                {email.name}
+                              </span>
+                              {email.isLightweight && (
+                                <span
+                                  className="flex items-center gap-0.5 flex-shrink-0 text-[10px] font-medium text-gray-400 bg-gray-100 rounded-full px-1.5 py-0.5"
+                                  title="Sent — awaiting reply"
+                                >
+                                  <IconSend size={9} />
+                                  Sent
+                                </span>
+                              )}
+                            </div>
                             <span className="text-xs text-gray-400 flex-shrink-0">{formatDate(email.timestamp)}</span>
                           </div>
                           <p className={`text-xs truncate mt-0.5 ${!email.read ? "text-gray-800 font-medium" : "text-gray-500"}`}>
@@ -1403,10 +1498,24 @@ function InboxContent() {
                 </div>
 
                 <div className="px-4 md:px-6 py-2 bg-gray-50 border-t border-gray-100 flex flex-wrap items-center gap-2">
-                  <button onClick={() => setUpdateStageModal({ open: true, email: selectedEmail })} className="flex items-center gap-1 md:gap-2 px-2 md:px-3 py-1.5 text-xs bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
-                    <IconUserCheck size={14} />
-                    <span className="hidden sm:inline">Update Stage</span>
-                  </button>
+                  {(() => {
+                    const isSelfThread = !!gmailConnectedEmail && selectedEmail.fromEmail?.toLowerCase() === gmailConnectedEmail.toLowerCase()
+                    return (
+                      <button
+                        onClick={() => !isSelfThread && setUpdateStageModal({ open: true, email: selectedEmail })}
+                        disabled={isSelfThread}
+                        className={`flex items-center gap-1 md:gap-2 px-2 md:px-3 py-1.5 text-xs border rounded-lg transition-colors ${
+                          isSelfThread
+                            ? "opacity-50 cursor-not-allowed bg-gray-50 border-gray-200 text-gray-400"
+                            : "bg-white border-gray-200 hover:bg-gray-50"
+                        }`}
+                        title={isSelfThread ? "This conversation is with your own connected mailbox — nothing to update" : undefined}
+                      >
+                        <IconUserCheck size={14} />
+                        <span className="hidden sm:inline">Update Stage</span>
+                      </button>
+                    )
+                  })()}
                 </div>
 
                 {showActions && (
@@ -1500,7 +1609,7 @@ function InboxContent() {
                                 return (
                                   <div
                                     key={mIdx}
-                                    className={`rounded-2xl px-4 md:px-5 py-3 shadow-sm overflow-hidden ${group.isUser ? "bg-[#1FAE5B] rounded-tr-none" : "bg-white border border-gray-100 rounded-tl-none"}`}
+                                    className={`rounded-2xl px-4 md:px-5 py-3 shadow-sm overflow-hidden ${group.isUser ? "bg-gray-100 border border-gray-200 rounded-tr-none" : "bg-white border border-gray-100 rounded-tl-none"}`}
                                   >
                                     <HtmlMessageFrame html={msg.message} />
                                   </div>
@@ -1513,7 +1622,7 @@ function InboxContent() {
                               return (
                                 <div
                                   key={mIdx}
-                                  className={`rounded-2xl px-4 md:px-5 py-3 shadow-sm ${group.isUser ? "bg-[#1FAE5B] text-white rounded-tr-none" : "bg-white border border-gray-100 text-gray-700 rounded-tl-none"}`}
+                                  className={`rounded-2xl px-4 md:px-5 py-3 shadow-sm ${group.isUser ? "bg-gray-100 border border-gray-200 text-gray-800 rounded-tr-none" : "bg-white border border-gray-100 text-gray-700 rounded-tl-none"}`}
                                 >
                                   <p className="text-sm whitespace-pre-wrap leading-relaxed">{main}</p>
                                   {quoted && (
@@ -1527,7 +1636,7 @@ function InboxContent() {
                                             return next
                                           })
                                         }
-                                        className={`text-xs underline underline-offset-2 ${group.isUser ? "text-white/70 hover:text-white" : "text-gray-400 hover:text-gray-600"}`}
+                                        className="text-xs underline underline-offset-2 text-gray-400 hover:text-gray-600"
                                       >
                                         {isExpanded ? "Hide quoted text" : "Show quoted text"}
                                       </button>
@@ -1535,15 +1644,15 @@ function InboxContent() {
                                         const { attribution, text } = parseQuotedBlock(quoted)
                                         return (
                                           <div
-                                            className={`mt-2 rounded-lg px-3 py-2 text-xs leading-relaxed ${group.isUser ? "bg-white/10" : "bg-gray-50 border border-gray-100"}`}
+                                            className="mt-2 rounded-lg px-3 py-2 text-xs leading-relaxed bg-gray-50 border border-gray-100"
                                           >
                                             {attribution && (
-                                              <p className={`mb-1.5 italic ${group.isUser ? "text-white/60" : "text-gray-400"}`}>
+                                              <p className="mb-1.5 italic text-gray-400">
                                                 {attribution}
                                               </p>
                                             )}
                                             <div
-                                              className={`pl-2.5 border-l-2 whitespace-pre-wrap ${group.isUser ? "border-white/30 text-white/80" : "border-gray-300 text-gray-500"}`}
+                                              className="pl-2.5 border-l-2 whitespace-pre-wrap border-gray-300 text-gray-500"
                                             >
                                               {text}
                                             </div>

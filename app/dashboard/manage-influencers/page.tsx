@@ -349,7 +349,11 @@ function InfluencersContent() {
 
   const [showSubscriptionDialog, setShowSubscriptionDialog] = useState(false)
   const [showWorkspaceUnavailableModal, setShowWorkspaceUnavailableModal] = useState(false)
-  const [subscriptionStatus, setSubscriptionStatus] = useState<{ status: string; isExpired: boolean } | null>(null)
+  const [subscriptionStatus, setSubscriptionStatus] = useState<{
+    status: string
+    isExpired: boolean
+    subscription?: { plan?: { name?: string } } | null
+  } | null>(null)
   const [showTrialLimitModal, setShowTrialLimitModal] = useState(false)
 
   const handleWorkspaceUnavailableClose = () => {
@@ -1024,13 +1028,13 @@ function InfluencersContent() {
                 className="text-xl font-semibold leading-tight"
                 style={{ color: "#111827", letterSpacing: "-0.025em" }}
               >
-                Upgrade to use the influencer list
+                Import/Export unavailable on Basic plan
               </h2>
               <p
                 className="text-sm leading-relaxed mx-auto"
                 style={{ color: "#6b7280", maxWidth: 280 }}
               >
-                You're currently on a free trial. Upgrade to a paid plan to access the influencer list.
+                You're currently on the Basic plan. Upgrade to Solo or Team to import or export influencers.
               </p>
             </div>
 

@@ -476,11 +476,14 @@ export default function CreateBrandPage() {
                 <div className="text-[10px] font-bold text-gray-300 uppercase tracking-widest mb-2.5">
                   Pipeline at a glance
                 </div>
-                <div className="flex flex-wrap gap-1.5">
+                <div
+                  className="grid gap-1.5"
+                  style={{ gridTemplateColumns: "repeat(auto-fill, minmax(100px, 1fr))" }}
+                >
                   {SUCCESS_STAGE_CHIPS.map((c) => (
                     <span
                       key={c.label}
-                      className="text-[10px] font-medium px-2.5 py-0.5 rounded-full border"
+                      className="text-[10px] font-medium px-2.5 py-0.5 rounded-full border text-center truncate"
                       style={{ background: c.bg, color: c.color, borderColor: c.border }}
                     >
                       {c.label}

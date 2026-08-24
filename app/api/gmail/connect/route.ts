@@ -31,7 +31,12 @@ export async function GET(req: NextRequest) {
       "https://www.googleapis.com/auth/gmail.send",
     ].join(" "),
     access_type: "offline",
-    prompt: "consent",        // force consent so we always get a refresh_token
+    // "consent" guarantees a refresh_token every time; "select_account" forces
+    // Google's account chooser even when only one Google session is active in
+    // the browser, so switching which Gmail gets connected is always possible
+    // without first signing out of Google elsewhere. Same reasoning already
+    // applied to the login flow's Google provider — see lib/auth.ts.
+    prompt: "consent select_account",
     state,
   })
 

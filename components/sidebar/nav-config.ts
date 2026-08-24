@@ -13,6 +13,7 @@
 import {
   LayoutDashboard, Search, Mail, Users, GitBranch, CircleCheck,
   Store, MessageCircle, BarChart3, Star, Megaphone, Clock, ShieldCheck,
+  RotateCcw,
   type LucideIcon,
 } from "lucide-react"
 
@@ -73,6 +74,7 @@ export const ADMIN_NAV: NavSection[] = [
       { href: "/admin/influencers", label: "Influencers", title: "Influencer Management", icon: Star },
       { href: "/admin/campaigns", label: "Campaigns", title: "Campaign Management", icon: Megaphone },
       { href: "/admin/early-access", label: "Early Access", title: "Early Access Users", icon: Clock },
+      { href: "/admin/refund-requests", label: "Refund Requests", title: "Refund Requests", icon: RotateCcw },
     ],
   },
   {

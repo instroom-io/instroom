@@ -13,7 +13,11 @@ function safeParse(value: string | null) {
   try {
     return JSON.parse(value)
   } catch {
-    return {}
+    // Legacy plain-text product details predate this column being used as a
+    // JSON store (closedStatus/paidCollab/campaignType/note all live here
+    // now) — rescue the original text into the new structure instead of
+    // silently discarding it the next time anything else on this row saves.
+    return { note: value }
   }
 }
 
@@ -51,7 +55,13 @@ export async function PATCH(
     }
 
     const body = await req.json()
-    const { closedStatus, paidCollabData, campaignType, postUrl, resetWorkflow } = body
+    const {
+      closedStatus, paidCollabData, campaignType, postUrl, resetWorkflow,
+      // Order tab fields — note/trackingNumber live inside the product_details
+      // JSON blob (alongside closedStatus/paidCollab/campaignType above);
+      // the rest are their own BrandInfluencer columns.
+      note, trackingNumber, shippedAt, deliveredAt, deadline, currency, deliverables,
+    } = body
 
     // ✅ Validate closedStatus
     const validStatuses: ClosedColumn[] = [
@@ -144,6 +154,12 @@ export async function PATCH(
     if (campaignType !== undefined) {
       productDetails.campaignType = campaignType
     }
+    if (note !== undefined) {
+      productDetails.note = note
+    }
+    if (trackingNumber !== undefined) {
+      productDetails.trackingNumber = trackingNumber
+    }
 
     // ✅ Validate postUrl
     if (postUrl !== undefined && postUrl !== null && typeof postUrl !== "string") {
@@ -160,6 +176,23 @@ export async function PATCH(
     // published post. An empty string clears it.
     if (postUrl !== undefined) {
       updateData.post_url = typeof postUrl === "string" ? (postUrl.trim() || null) : null
+    }
+
+    // ✅ Order tab fields with their own columns — an empty string clears them.
+    if (shippedAt !== undefined) {
+      updateData.shipped_at = shippedAt ? new Date(shippedAt) : null
+    }
+    if (deliveredAt !== undefined) {
+      updateData.delivered_at = deliveredAt ? new Date(deliveredAt) : null
+    }
+    if (deadline !== undefined) {
+      updateData.deadline = deadline ? new Date(deadline) : null
+    }
+    if (currency !== undefined) {
+      updateData.currency = currency || null
+    }
+    if (deliverables !== undefined) {
+      updateData.deliverables = deliverables || null
     }
 
     // ✅ Apply pipeline mapping

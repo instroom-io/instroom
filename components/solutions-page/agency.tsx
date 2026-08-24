@@ -31,11 +31,11 @@ export function Agency({ onBack }: { onBack: () => void }) {
               Spreadsheet chaos across clients. Time wasted switching tools. Difficulty proving ROI. Instroom is the single workspace your team actually sticks to — because it was built for exactly this work.
             </p>
             <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
-              <Link href="/signup">
+              <Link href="/signup?plan=basic">
                 <button style={{ fontSize: 14, fontWeight: 600, padding: "12px 28px", borderRadius: 10, border: "none", background: "var(--green)", color: "#fff", cursor: "pointer", fontFamily: "'Inter',sans-serif", transition: "all 0.15s" }}
                   onMouseEnter={e => (e.currentTarget.style.background = "var(--green-dark)")}
                   onMouseLeave={e => (e.currentTarget.style.background = "var(--green)")}
-                >Start free trial</button>
+                >Start for free</button>
               </Link>
               <button
                 onClick={() => setShowBookDemo(true)}

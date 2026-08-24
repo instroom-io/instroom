@@ -138,10 +138,14 @@ export default function TableSheet({
   onBulkApprove?: (influencerIds: string[]) => Promise<BulkApprovalResult | null>
   readOnly?: boolean
   brandId?: string
-  subscriptionStatus?: { status: string; isExpired: boolean } | null
+  subscriptionStatus?: { status: string; isExpired: boolean; subscription?: { plan?: { name?: string } } | null } | null
   onShowTrialModal?: () => void
   canApproveInfluencers?: boolean
 }) {
+  // Import/Export are a Solo & Team feature — Basic (the free plan) doesn't
+  // include them, regardless of subscription status.
+  const isOnBasicPlan = subscriptionStatus?.subscription?.plan?.name === "basic"
+
   const [rows, setRows] = useState<InfluencerRow[]>(initialRows)
   const [customCols, setCustomCols] = useState<CustomColumn[]>(initialCustomColumns)
 
@@ -1293,7 +1297,7 @@ export default function TableSheet({
                 ref={importExportBtnRef}
                 data-tour="table-import-export"
                 onClick={() => {
-                  if (subscriptionStatus?.status === "trialing") { onShowTrialModal?.(); return }
+                  if (isOnBasicPlan) { onShowTrialModal?.(); return }
                   setShowImportExportMenu(v => !v)
                 }}
                 disabled={subscriptionStatus?.status === "trialing"}
@@ -1302,7 +1306,7 @@ export default function TableSheet({
                     ? "opacity-50 cursor-not-allowed border-gray-200 text-gray-400 bg-gray-50"
                     : "border-[#0F6B3E]/20 text-gray-600 hover:border-[#0F6B3E]/40"
                 }`}
-                title={subscriptionStatus?.status === "trialing" ? "Import and Export are not available during your free trial" : undefined}
+                title={isOnBasicPlan ? "Import and Export are not available on the Basic plan" : undefined}
               >
                 <IconSettings size={15} /> Import / Export
               </button>

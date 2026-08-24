@@ -83,6 +83,7 @@ export async function GET(request: Request) {
         plan: {
           name: subscription.plan.name,
           display_name: subscription.plan.display_name,
+          max_influencers: subscription.plan.max_influencers,
         },
         billing_cycle: subscription.billing_cycle,
         current_period_end: endDate?.toISOString() ?? null,

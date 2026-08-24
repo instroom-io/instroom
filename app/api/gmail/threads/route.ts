@@ -4,7 +4,7 @@ import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import { sendNotification } from "@/lib/notifications"
 import { autoAdvanceRepliedToInConversation } from "@/lib/pipeline"
-import { getGmailAccessToken, shapeGmailThread, getHeader } from "@/lib/gmail"
+import { getGmailAccessToken, getGmailAccountEmail, shapeGmailThread, getHeader } from "@/lib/gmail"
 
 // Short-TTL in-memory cache so rapid refresh/mount cycles (e.g. React effects
 // firing twice, quick manual "Refresh" clicks) don't repeat the full N-thread
@@ -38,6 +38,7 @@ export async function GET(req: NextRequest) {
   // looked at.
   const userId = session.user?.id
   const accessToken = await getGmailAccessToken(userId)
+  const connectedEmail = await getGmailAccountEmail(userId)
 
   if (!accessToken) {
     return NextResponse.json(
@@ -119,7 +120,7 @@ export async function GET(req: NextRequest) {
         ...thread,
         brandInfluencer: null,
       }))
-      const body = { threads, sentAwaitingReply: [] }
+      const body = { threads, sentAwaitingReply: [], connectedEmail }
       if (cacheKey) threadsCache.set(cacheKey, { expiresAt: Date.now() + THREADS_CACHE_TTL_MS, body })
       return NextResponse.json(body)
     }
@@ -302,7 +303,7 @@ export async function GET(req: NextRequest) {
       )
     }
 
-    const body = { threads: threads.map(({ hasReply, ...thread }) => thread), sentAwaitingReply }
+    const body = { threads: threads.map(({ hasReply, ...thread }) => thread), sentAwaitingReply, connectedEmail }
     if (cacheKey) threadsCache.set(cacheKey, { expiresAt: Date.now() + THREADS_CACHE_TTL_MS, body })
     return NextResponse.json(body)
   } catch (err: any) {

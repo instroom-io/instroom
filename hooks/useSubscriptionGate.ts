@@ -23,9 +23,22 @@ export interface SubscriptionGateState {
   /** Raw status string, or undefined until first resolved. */
   status: string | undefined
   isLoading: boolean
+  /** Display name of the subscriber's current plan (e.g. "Basic"), or null
+   *  when there's no subscription at all. Lets a blocked page say "upgrade
+   *  from Basic" instead of implying there's no subscription to begin with. */
+  planDisplayName: string | null
 }
 
-export function useSubscriptionGate(brandId?: string | null): SubscriptionGateState {
+export function useSubscriptionGate(
+  brandId?: string | null,
+  /**
+   * Plan names (lowercase, e.g. "solo", "team") allowed to pass this gate.
+   * Omit for "any active/trialing subscription, any plan" — Pipeline and Post
+   * Tracker are included in Basic, so they don't pass this. Inbox is Solo/Team
+   * only per the pricing page, so it does.
+   */
+  requiredPlans?: string[]
+): SubscriptionGateState {
   const { data: session, status: sessionStatus } = useSession()
 
   // Same URL the pages requested before, so nothing changes server-side.
@@ -36,7 +49,11 @@ export function useSubscriptionGate(brandId?: string | null): SubscriptionGateSt
   const fetcher = useCallback(async () => {
     const res = await fetch(url)
     if (!res.ok) throw new Error(`Failed to check subscription (${res.status})`)
-    return (await res.json()) as { status?: string; isExpired?: boolean }
+    return (await res.json()) as {
+      status?: string
+      isExpired?: boolean
+      subscription?: { plan?: { name?: string; display_name?: string } } | null
+    }
   }, [url])
 
   const enabled = sessionStatus === "authenticated" && Boolean(session?.user?.id)
@@ -44,16 +61,21 @@ export function useSubscriptionGate(brandId?: string | null): SubscriptionGateSt
 
   // A failed check is treated as "not subscribed", exactly as the pages did.
   if (error) {
-    return { isSubscribed: false, status: "inactive", isLoading: false }
+    return { isSubscribed: false, status: "inactive", isLoading: false, planDisplayName: null }
   }
 
   if (!data) {
-    return { isSubscribed: null, status: undefined, isLoading }
+    return { isSubscribed: null, status: undefined, isLoading, planDisplayName: null }
   }
 
+  const statusOk = (data.status === "active" || data.status === "trialing") && !data.isExpired
+  const planName = data.subscription?.plan?.name
+  const planOk = !requiredPlans || (!!planName && requiredPlans.includes(planName))
+
   return {
-    isSubscribed: (data.status === "active" || data.status === "trialing") && !data.isExpired,
+    isSubscribed: statusOk && planOk,
     status: data.status || "inactive",
     isLoading: false,
+    planDisplayName: data.subscription?.plan?.display_name ?? null,
   }
 }
