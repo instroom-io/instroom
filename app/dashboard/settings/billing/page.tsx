@@ -13,6 +13,14 @@ import {
 } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 import { SettingsSkeleton } from "@/components/shared/skeletons"
 import { fetchCached, getCachedData } from "@/lib/data-cache"
@@ -31,6 +39,8 @@ type PaymentRecord = {
   description: string | null
   invoice_url: string | null
   created_at: string
+  eligibleForRefund: boolean
+  refundRequestStatus: "pending" | "approved" | "denied" | null
 }
 
 export default function BillingPage() {
@@ -61,6 +71,10 @@ export default function BillingPage() {
 
   const [payments, setPayments] = useState<PaymentRecord[]>(cachedHistory?.payments ?? [])
   const [paymentsLoaded, setPaymentsLoaded] = useState(cachedHistory !== undefined)
+
+  const [refundDialogPayment, setRefundDialogPayment] = useState<PaymentRecord | null>(null)
+  const [refundReason, setRefundReason] = useState("")
+  const [submittingRefund, setSubmittingRefund] = useState(false)
 
   const showToast = (message: string, type: "success" | "error") => {
     setToast({ message, type })
@@ -172,6 +186,34 @@ export default function BillingPage() {
       setConfirmCancel(false)
     } finally {
       setCancelling(false)
+    }
+  }
+
+  async function submitRefundRequest() {
+    if (!refundDialogPayment) return
+    setSubmittingRefund(true)
+    try {
+      const res = await fetch("/api/subscription/refund-request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paymentHistoryId: refundDialogPayment.id, reason: refundReason }),
+      })
+      if (res.ok) {
+        const paidId = refundDialogPayment.id
+        setPayments((prev) =>
+          prev.map((x) => (x.id === paidId ? { ...x, refundRequestStatus: "pending" } : x))
+        )
+        showToast("Refund request submitted.", "success")
+        setRefundDialogPayment(null)
+        setRefundReason("")
+      } else {
+        const data = await res.json().catch(() => ({}))
+        showToast(data.error || "Could not submit refund request.", "error")
+      }
+    } catch {
+      showToast("Could not submit refund request.", "error")
+    } finally {
+      setSubmittingRefund(false)
     }
   }
 
@@ -450,7 +492,7 @@ export default function BillingPage() {
                         >
                           {p.status}
                         </span>
-                        {p.invoice_url ? (
+                        {p.invoice_url && (
                           <a
                             href={p.invoice_url}
                             target="_blank"
@@ -459,7 +501,31 @@ export default function BillingPage() {
                           >
                             View
                           </a>
-                        ) : (
+                        )}
+                        {p.refundRequestStatus === "pending" && (
+                          <span className="rounded-md px-2 py-1 text-xs font-medium bg-amber-50 text-amber-700">
+                            Refund requested
+                          </span>
+                        )}
+                        {p.refundRequestStatus === "approved" && (
+                          <span className="rounded-md px-2 py-1 text-xs font-medium bg-emerald-50 text-emerald-700">
+                            Refund approved
+                          </span>
+                        )}
+                        {p.refundRequestStatus === "denied" && (
+                          <span className="rounded-md px-2 py-1 text-xs font-medium bg-gray-100 text-gray-600">
+                            Refund denied
+                          </span>
+                        )}
+                        {p.eligibleForRefund && !p.refundRequestStatus && (
+                          <button
+                            onClick={() => { setRefundDialogPayment(p); setRefundReason("") }}
+                            className="text-xs font-medium text-emerald-700 hover:underline"
+                          >
+                            Request refund
+                          </button>
+                        )}
+                        {!p.invoice_url && !p.refundRequestStatus && !p.eligibleForRefund && (
                           <span className="w-8" />
                         )}
                       </div>
@@ -469,6 +535,39 @@ export default function BillingPage() {
               )}
             </CardContent>
           </Card>
+
+          <Dialog
+            open={!!refundDialogPayment}
+            onOpenChange={(open) => { if (!open) { setRefundDialogPayment(null); setRefundReason("") } }}
+          >
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Request a refund</DialogTitle>
+                <DialogDescription>
+                  Refunds are reviewed manually and typically decided within 5 business days.
+                </DialogDescription>
+              </DialogHeader>
+              <textarea
+                value={refundReason}
+                onChange={(e) => setRefundReason(e.target.value)}
+                placeholder="Tell us why you're requesting a refund"
+                rows={4}
+                className="w-full rounded-lg border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-600/20 focus:border-emerald-600"
+              />
+              <DialogFooter>
+                <Button variant="outline" onClick={() => { setRefundDialogPayment(null); setRefundReason("") }}>
+                  Cancel
+                </Button>
+                <Button
+                  onClick={submitRefundRequest}
+                  disabled={submittingRefund || refundReason.trim().length < 10}
+                  className="bg-[#15803d] text-white hover:bg-[#166534]"
+                >
+                  {submittingRefund ? "Submitting…" : "Submit request"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </>
       )}
     </div>

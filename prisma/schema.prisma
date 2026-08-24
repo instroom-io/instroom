@@ -15,6 +15,7 @@ model User {
   password_hash String?
   image         String?  @map("avatar_url")
   platform_role String   @default("user") @db.VarChar(20)
+  job_title     String?  @db.VarChar(150)
   is_active     Boolean  @default(true)
   created_at    DateTime @default(now())
   updated_at    DateTime @updatedAt
@@ -28,6 +29,12 @@ model User {
   // ["onboarding","influencers","pipeline"]) — each page's contextual tour
   // is tracked independently, so seeing one never marks the others seen.
   product_tour_seen_scenes Json?
+
+  // Display preferences from Settings → Profile → Preferences. Null until the
+  // user saves once; the UI falls back to its own defaults in that case.
+  timezone         String? @db.VarChar(64)
+  currency_display String? @db.VarChar(10)
+  date_format      String? @db.VarChar(20)
 
   onboarding   Onboarding?
   subscription UserSubscription?
@@ -56,6 +63,19 @@ model Account {
   token_type        String? @db.VarChar(50)
   scope             String? @db.VarChar(255)
   id_token          String? @db.Text
+
+  // Populated by /api/gmail/callback from Google's userinfo endpoint at
+  // connect time. Lets the inbox tell "this thread's other party" apart from
+  // "this thread is with my own connected mailbox" without a live API call.
+  email             String? @db.VarChar(255)
+
+  // Set explicitly by /api/gmail/callback on every deliberate connect or
+  // reconnect — NOT touched by refreshGmailToken's silent background token
+  // refresh. This is what "most recently connected wins" actually orders by;
+  // the row's own id can't be used for that, since reconnecting an account
+  // used before updates its existing row rather than creating a new one, so
+  // the id stays fixed at whenever that row was first ever created.
+  last_selected_at  DateTime?
 
   @@unique([provider, providerAccountId])
   @@index([userId])
@@ -181,6 +201,36 @@ model PaymentHistory {
   @@index([user_id])
   @@index([brand_id])
   @@index([subscription_id])
+}
+
+// A request to refund a specific PaymentHistory row, reviewed by an admin.
+// This is a request/review record only — approving it does NOT call Lemon
+// Squeezy's refund API. The actual refund is still issued manually in their
+// dashboard, exactly as before this feature existed.
+model RefundRequest {
+  id                 String    @id @default(cuid()) @db.VarChar(30)
+  user_id            String    @db.VarChar(30)
+  payment_history_id String    @db.VarChar(30)
+
+  // Snapshot at request time — protects this record from ever silently
+  // changing even though PaymentHistory is treated as immutable.
+  amount     Decimal  @db.Decimal(65, 30)
+  currency   String   @default("USD") @db.VarChar(10)
+  plan_name  String?  @db.VarChar(50)
+
+  reason      String  @db.Text
+  status      String  @default("pending") @db.VarChar(20) // "pending" | "approved" | "denied"
+  admin_notes String? @db.Text
+
+  decided_by String?   @db.VarChar(255)
+  decided_at DateTime?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([user_id])
+  @@index([status])
+  @@index([payment_history_id])
 }
 
 model Brand {

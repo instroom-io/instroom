@@ -103,10 +103,11 @@ export async function canAddCollaborator(
 }
 
 /**
- * Check if user can add a new influencer to their brand
- * Trial users can add up to 100 influencers
- * Paid users get limits from their plan
- * Free users cannot add influencers at all
+ * Check if user can add a new influencer to their brand.
+ * Basic (free): a one-time lifetime cap of plan.max_influencers total.
+ * Solo/Team: plan.max_influencers new influencers per calendar month, reset
+ * on the 1st (UTC) regardless of billing cycle.
+ * No active/trialing subscription: cannot add influencers at all.
  */
 export async function canAddInfluencer(
   userId: string,
@@ -169,37 +170,41 @@ export async function canAddInfluencer(
       }
     }
 
-    // Count existing influencers for this brand
-    const influencerCount = await prisma.brandInfluencer.count({
-      where: { brand_id: brandId },
-    })
+    const maxInfluencers = subscription.plan.max_influencers ?? 0
 
-    // Trial users: 100 influencer limit
-    if (subscription.status === "trialing") {
-      const TRIAL_LIMIT = 3
+    // Basic: free-forever plan with a one-time lifetime cap.
+    if (subscription.plan.name === "basic") {
+      const influencerCount = await prisma.brandInfluencer.count({
+        where: { brand_id: brandId },
+      })
+
       return {
-        allowed: influencerCount < TRIAL_LIMIT,
+        allowed: influencerCount < maxInfluencers,
         current: influencerCount,
-        max: TRIAL_LIMIT,
-        subscriptionStatus: "trialing",
+        max: maxInfluencers,
+        subscriptionStatus: subscription.status,
         message:
-          influencerCount >= TRIAL_LIMIT
-            ? `You've reached your trial limit (${TRIAL_LIMIT} influencers). Upgrade to a paid plan to add more.`
+          influencerCount >= maxInfluencers
+            ? `You've reached your influencer limit (${maxInfluencers}). Upgrade to Solo or Team to add more.`
             : undefined,
       }
     }
 
-    // Paid users: use plan limits (Solo: 100, Team: 500)
-    const maxInfluencers = subscription.plan.max_influencers ?? 0
+    // Solo/Team: limit resets every calendar month.
+    const now = new Date()
+    const startOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
+    const influencerCountThisMonth = await prisma.brandInfluencer.count({
+      where: { brand_id: brandId, created_at: { gte: startOfMonth } },
+    })
 
     return {
-      allowed: influencerCount < maxInfluencers,
-      current: influencerCount,
+      allowed: influencerCountThisMonth < maxInfluencers,
+      current: influencerCountThisMonth,
       max: maxInfluencers,
-      subscriptionStatus: "active",
+      subscriptionStatus: subscription.status,
       message:
-        influencerCount >= maxInfluencers
-          ? `You've reached your influencer limit (${maxInfluencers}). Upgrade your plan to add more.`
+        influencerCountThisMonth >= maxInfluencers
+          ? `You've reached your monthly influencer limit (${maxInfluencers}). It resets at the start of next month, or upgrade your plan for more.`
           : undefined,
     }
   } catch (error) {

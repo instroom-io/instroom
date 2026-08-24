@@ -26,11 +26,11 @@ export function Freelancer({ onBack }: { onBack: () => void }) {
               You're doing the work of three people. Instroom gives you the structure, the templates, and the reporting to deliver professional results — and win the next client while you're at it.
             </p>
             <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
-              <Link href="/signup">
+              <Link href="/signup?plan=basic">
                 <button style={{ fontSize: 14, fontWeight: 600, padding: "12px 28px", borderRadius: 10, border: "none", background: "var(--green)", color: "#fff", cursor: "pointer", fontFamily: "'Inter',sans-serif", transition: "all 0.15s" }}
                   onMouseEnter={e => (e.currentTarget.style.background = "var(--green-dark)")}
                   onMouseLeave={e => (e.currentTarget.style.background = "var(--green)")}
-                >Start free trial</button>
+                >Start for free</button>
               </Link>
               <button style={{ fontSize: 14, fontWeight: 500, padding: "11px 22px", borderRadius: 10, border: "0.5px solid var(--border)", background: "transparent", color: "var(--ink2)", cursor: "pointer", fontFamily: "'Inter',sans-serif", transition: "all 0.15s" }}
                 onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--ink2)"; e.currentTarget.style.color = "var(--ink)"; }}

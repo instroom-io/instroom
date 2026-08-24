@@ -22,7 +22,7 @@ import {
   IconLayoutKanban, IconList, IconFilter, IconLocation,
   IconLayoutList, IconLink, IconArrowRight, IconAlertTriangle,
 } from "@tabler/icons-react"
-import { useClosedData, type ClosedInfluencer, type ClosedColumn } from "@/hooks/useClosedData"
+import { useClosedData, type ClosedInfluencer, type ClosedColumn, type OrderDetailsFields } from "@/hooks/useClosedData"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { SubscriptionGate } from "@/components/ui/subscription-gate"
 import { HistoryTab } from "@/components/InfluencerProfileSidebar"
@@ -408,7 +408,7 @@ function PostTrackerCard({ inf, onOpen, onMove, canApproveInfluencers }: {
         {/* Stats */}
         <div className="flex items-center gap-3 text-xs text-gray-500">
           <span>{inf.followers} followers</span>
-          <span>{inf.engagementRate || "—"}% eng</span>
+          <span>{inf.engagementRate || "—"} eng</span>
         </div>
 
         {/* Campaign badge */}
@@ -493,11 +493,29 @@ function DraggableCard({ id, children, onClick, disabled }: { id: string; childr
 const STAGE_OPTIONS: ClosedColumn[] = ["For Order Creation", "In-Transit", "Delivered", "Posted", "No post"]
 const PROFILE_TABS = ["Basic", "Order", "Post", "Stats", "Paid collab details", "History"]
 
-function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChange, onPostUrlChange, canApproveInfluencers, subscriptionStatus, initialTab = 0, focusPostUrl = false }: {
+// The Order tab's "Order Status" field is the same underlying stage as the
+// Stage dropdown above it, just scoped to the order-fulfillment steps and
+// spelled the way an order-status field reads. It drives the SAME
+// onColumnChange path rather than a separate write, so the two controls can
+// never disagree about what stage this influencer is actually in.
+const ORDER_STATUS_TO_STAGE: Record<string, ClosedColumn> = {
+  pending: "For Order Creation",
+  shipped: "In-Transit",
+  delivered: "Delivered",
+}
+const STAGE_TO_ORDER_STATUS: Partial<Record<ClosedColumn, string>> = {
+  "For Order Creation": "pending",
+  "In-Transit": "shipped",
+  "Delivered": "delivered",
+  "Posted": "delivered",
+}
+
+function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChange, onPostUrlChange, onOrderDetailsChange, canApproveInfluencers, subscriptionStatus, initialTab = 0, focusPostUrl = false }: {
   inf: ClosedInfluencer; brandId?: string; onClose: () => void
   onColumnChange: (id: string, col: ClosedColumn) => Promise<boolean>
   onCollabTypeChange: (id: string, type: string) => Promise<boolean>
   onPostUrlChange: (id: string, postUrl: string) => Promise<boolean>
+  onOrderDetailsChange: (id: string, fields: OrderDetailsFields) => Promise<boolean>
   canApproveInfluencers: boolean
   subscriptionStatus?: string
   /** Tab to open on — used by the "Go to Post Details" warning action */
@@ -538,12 +556,29 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
     if (profileTab === 4 && !showPaidCollabTab) setProfileTab(0)
   }, [showPaidCollabTab, profileTab])
 
-  const [orderData, setOrderData] = useState({
-    orderStatus: inf.orderStatus || "", productDetails: inf.productDetails || "",
+  // product_details is a JSON store shared by several features (pipeline
+  // stage tracking, Shopify order metadata, and this tab's own note/tracking
+  // fields) — parse it once, up front, so nothing below has to guess.
+  // Legacy plain text predating this JSON convention is rescued into `note`
+  // rather than silently dropped (mirrors the same fallback in the PATCH
+  // route's safeParse, so client and server never disagree on this).
+  const savedProductDetails = (() => {
+    const raw = inf.productDetails || ""
+    if (!raw) return {}
+    try { return JSON.parse(raw) } catch { return { note: raw } }
+  })()
+
+  // Shared by the initial state and the Order tab's Cancel button, so
+  // "discard my edits" reverts to exactly what was last loaded, not some
+  // separately-maintained copy of the same defaults.
+  const buildOrderData = () => ({
+    productDetails: savedProductDetails.note || "",
     trackingNumber: inf.trackingNumber || "", shippedAt: inf.shippedAt ? inf.shippedAt.slice(0,10) : "",
     deliveredAt: inf.deliveredAt ? inf.deliveredAt.slice(0,10) : "", deadline: inf.deadline ? inf.deadline.slice(0,10) : "",
     deliverables: inf.deliverables || "", currency: inf.currency || "USD",
   })
+  const [orderData, setOrderData] = useState(buildOrderData)
+  const [savingOrder, setSavingOrder] = useState(false)
   const [postData, setPostData] = useState({
     postUrl: inf.postUrl || "", postedAt: inf.postedAt ? inf.postedAt.slice(0,10) : "",
     likes: inf.likesCount ? String(inf.likesCount) : "", comments: inf.commentsCount ? String(inf.commentsCount) : "",
@@ -554,16 +589,14 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
   postUrlValueRef.current = postData.postUrl
 
   // ── Shopify push flow (self-contained — doesn't depend on the manual
-  // Order tab fields above, whose Save button has no handler wired up) ──────
+  // Order tab fields above) ──────────────────────────────────────────────────
   const isGifting = campaignType === "gifting"
-  const savedShippingAddress = (() => {
-    try { return JSON.parse(inf.productDetails || "{}")?.shippingAddress || null } catch { return null }
-  })()
+  const savedShippingAddress = savedProductDetails?.shippingAddress || null
   const [shopifyConnected, setShopifyConnected] = useState(false)
   const [shopifyProducts, setShopifyProducts] = useState<any[]>([])
   const [shopifyLoading, setShopifyLoading] = useState(false)
   const [shopifyForm, setShopifyForm] = useState({
-    variantId: "", quantity: "1",
+    variantId: savedProductDetails?.variantId || "", quantity: "1",
     firstName: savedShippingAddress?.first_name || "", lastName: savedShippingAddress?.last_name || "",
     address1: savedShippingAddress?.address1 || "", address2: savedShippingAddress?.address2 || "",
     city: savedShippingAddress?.city || "", province: savedShippingAddress?.province || "",
@@ -585,6 +618,26 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
       .then(json => setShopifyConnected(!!json?.integrations?.shopify?.connected))
       .catch(() => {})
   }, [brandId])
+
+  // An order placed in an earlier session is still real — without this, the
+  // panel always shows the blank "Create Order" form even when one already
+  // exists (e.g. the influencer is already at Delivered), since
+  // shopifyOrderResult otherwise only ever gets set right after a create.
+  useEffect(() => {
+    if (!brandId || !inf.id) return
+    fetch(`/api/brand/${brandId}/pipeline/${inf.id}/shopify-order`)
+      .then(r => r.ok ? r.json() : null)
+      .then(json => {
+        if (!json?.order) return
+        setShopifyOrderResult(json.order)
+        // Suggest the real ordered product as the note, but only into an
+        // empty field — never overwrite something someone already typed.
+        if (json.order.productSummary) {
+          setOrderData(d => d.productDetails ? d : { ...d, productDetails: json.order.productSummary })
+        }
+      })
+      .catch(() => {})
+  }, [brandId, inf.id])
 
   useEffect(() => {
     if (!shopifyConnected || !brandId) return
@@ -655,6 +708,20 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
     setSavingPost(false)
     if (ok) setPostUrlOrigin("stored")
     showToast(ok ? "Post details saved" : "Failed to save post details")
+  }
+  const handleSaveOrder = async () => {
+    setSavingOrder(true)
+    const ok = await onOrderDetailsChange(inf.id, {
+      note: orderData.productDetails,
+      trackingNumber: orderData.trackingNumber,
+      shippedAt: orderData.shippedAt,
+      deliveredAt: orderData.deliveredAt,
+      deadline: orderData.deadline,
+      currency: orderData.currency,
+      deliverables: orderData.deliverables,
+    })
+    setSavingOrder(false)
+    showToast(ok ? "Order details saved" : "Failed to save order details")
   }
 
   // ── Automatic Post Detection → Post URL ───────────────────────────────────
@@ -818,7 +885,14 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <div className="pfg">
                 <div className="pfl">Order Status</div>
-                <select className="pfi" value={orderData.orderStatus} onChange={e => setOrderData(d => ({ ...d, orderStatus: e.target.value }))}>
+                <select
+                  className="pfi"
+                  value={STAGE_TO_ORDER_STATUS[inf.closedStatus] || ""}
+                  onChange={e => {
+                    const stage = ORDER_STATUS_TO_STAGE[e.target.value]
+                    if (stage) handleStageChange(stage)
+                  }}
+                >
                   <option value="">Select...</option><option value="pending">Pending</option><option value="shipped">Shipped</option><option value="delivered">Delivered</option>
                 </select>
               </div>
@@ -918,8 +992,10 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
                   padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
                 }}
               >
-                <button className="btn-secondary">Cancel</button>
-                <button className="btn-primary">Save</button>
+                <button className="btn-secondary" onClick={() => setOrderData(buildOrderData())}>Cancel</button>
+                <button className="btn-primary" onClick={handleSaveOrder} disabled={savingOrder} style={{ opacity: savingOrder ? 0.6 : 1 }}>
+                  {savingOrder ? "Saving…" : "Save"}
+                </button>
               </div>
             </div>
           )}
@@ -1119,7 +1195,7 @@ function PostTrackerContent() {
   // feature for free-tier users. A cached answer resolves on mount instead.
   const { isSubscribed, status: subscriptionStatus } = useSubscriptionGate(brandId)
 
-  const { data, isLoading, error, updateColumn, updateCampaignType, updatePostUrl, refetch } = useClosedData(brandId)
+  const { data, isLoading, error, updateColumn, updateCampaignType, updatePostUrl, updateOrderDetails, refetch } = useClosedData(brandId)
 
   const [view,                 setView]                 = useState<"Board"|"list">("Board")
   const [search,               setSearch]               = useState("")
@@ -1336,6 +1412,22 @@ function PostTrackerContent() {
     return ok
   }, [updatePostUrl])
 
+  const handleOrderDetailsChange = useCallback(async (id: string, fields: OrderDetailsFields): Promise<boolean> => {
+    const ok = await updateOrderDetails(id, fields)
+    if (ok) {
+      setSelectedInf(p => (p?.id !== id ? p : {
+        ...p,
+        ...(fields.trackingNumber !== undefined && { trackingNumber: fields.trackingNumber || null }),
+        ...(fields.shippedAt !== undefined && { shippedAt: fields.shippedAt || null }),
+        ...(fields.deliveredAt !== undefined && { deliveredAt: fields.deliveredAt || null }),
+        ...(fields.deadline !== undefined && { deadline: fields.deadline || null }),
+        ...(fields.currency !== undefined && { currency: fields.currency || null }),
+        ...(fields.deliverables !== undefined && { deliverables: fields.deliverables || null }),
+      }))
+    }
+    return ok
+  }, [updateOrderDetails])
+
   const handleCollabTypeChange = useCallback(async (id: string, type: string): Promise<boolean> => {
     if (!canApprove) {
       showToast("Only Owners and Managers can update collaboration type")
@@ -1429,7 +1521,8 @@ function PostTrackerContent() {
           inf={selectedInf} brandId={brandId}
           onClose={()=>{ setSelectedInf(null); setDrawerFocusPostUrl(false) }}
           onColumnChange={handleMove} onCollabTypeChange={handleCollabTypeChange}
-          onPostUrlChange={handlePostUrlChange} canApproveInfluencers={canApprove}
+          onPostUrlChange={handlePostUrlChange} onOrderDetailsChange={handleOrderDetailsChange}
+          canApproveInfluencers={canApprove}
           subscriptionStatus={subscriptionStatus}
           initialTab={drawerFocusPostUrl ? 2 : 0} focusPostUrl={drawerFocusPostUrl}/>
       )}

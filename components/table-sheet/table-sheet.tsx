@@ -136,10 +136,14 @@ export default function TableSheet({
   onImportRows?: (rows: InfluencerRow[]) => void
   readOnly?: boolean
   brandId?: string
-  subscriptionStatus?: { status: string; isExpired: boolean } | null
+  subscriptionStatus?: { status: string; isExpired: boolean; subscription?: { plan?: { name?: string } } | null } | null
   onShowTrialModal?: () => void
   canApproveInfluencers?: boolean
 }) {
+  // Import/Export are a Solo & Team feature — Basic (the free plan) doesn't
+  // include them, regardless of subscription status.
+  const isOnBasicPlan = subscriptionStatus?.subscription?.plan?.name === "basic"
+
   const [rows, setRows] = useState<InfluencerRow[]>(initialRows)
   const [customCols, setCustomCols] = useState<CustomColumn[]>(initialCustomColumns)
 
@@ -1241,16 +1245,16 @@ export default function TableSheet({
                 ref={importExportBtnRef}
                 data-tour="table-import-export"
                 onClick={() => {
-                  if (subscriptionStatus?.status === "trialing") { onShowTrialModal?.(); return }
+                  if (isOnBasicPlan) { onShowTrialModal?.(); return }
                   setShowImportExportMenu(v => !v)
                 }}
-                disabled={subscriptionStatus?.status === "trialing"}
+                disabled={isOnBasicPlan}
                 className={`flex items-center gap-1.5 px-2.5 py-2 text-xs border rounded-lg transition ${
-                  subscriptionStatus?.status === "trialing"
+                  isOnBasicPlan
                     ? "opacity-50 cursor-not-allowed border-gray-200 text-gray-400 bg-gray-50"
                     : "border-gray-200 text-gray-600 hover:bg-gray-50"
                 }`}
-                title={subscriptionStatus?.status === "trialing" ? "Import and Export are not available during your free trial" : undefined}
+                title={isOnBasicPlan ? "Import and Export are not available on the Basic plan" : undefined}
               >
                 <IconSettings size={13} /> Import / Export
               </button>
