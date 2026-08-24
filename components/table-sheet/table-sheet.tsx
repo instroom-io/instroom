@@ -145,6 +145,11 @@ export default function TableSheet({
   const [rows, setRows] = useState<InfluencerRow[]>(initialRows)
   const [customCols, setCustomCols] = useState<CustomColumn[]>(initialCustomColumns)
 
+  // Mirrors `rows` for callbacks that must read the current table synchronously
+  // (autoFetchInfluencer's credit guards) without taking `rows` as a dependency.
+  const rowsRef = useRef<InfluencerRow[]>(rows)
+  rowsRef.current = rows
+
   const swapIdRef = useRef<(tempId: string, realId: string) => void>(() => {})
   useEffect(() => {
     const swapFn = (tempId: string, realId: string) => {
@@ -666,20 +671,31 @@ export default function TableSheet({
     if (!clean || clean.length < 2) return
     if (platform !== "instagram" && platform !== "tiktok") return
 
-    setRows(prev => {
-      const existingRow = prev.find(r => r.id === rowId)
-      if (existingRow && Number(existingRow.follower_count) > 0) return prev
-      const duplicate = prev.find(r =>
-        r.id !== rowId && cleanHandle(r.handle).toLowerCase() === clean && r.platform === platform
-      )
-      if (duplicate) {
-        setPendingDuplicateInfo({ rowId, handle: clean, existingName: duplicate.full_name || duplicate.handle })
-        setDuplicateRowIds(p => { const n = new Set(p); n.add(rowId); return n })
-        return prev
-      }
-      setDuplicateRowIds(p => { if (!p.has(rowId)) return p; const n = new Set(p); n.delete(rowId); return n })
-      return prev
-    })
+    // ── Credit guards ────────────────────────────────────────────────────────
+    // These two checks used to live inside a setRows updater, which React runs
+    // during the next render — long after the lines below had already fired the
+    // request. So `return prev` only skipped the state update, never the fetch:
+    // rows that arrived with full details (a CSV import, or an influencer added
+    // from Discovery) were re-fetched from the provider and spent a credit each
+    // time, and so were rows flagged as duplicates. Reading the mirrored rows
+    // lets the function actually return before spending anything.
+    const currentRows = rowsRef.current
+    const existingRow = currentRows.find(r => r.id === rowId)
+
+    // Already-known details are treated as fetched: imported and
+    // already-enriched rows stay editable and approvable, they are just not
+    // re-requested. A row genuinely missing its numbers still fetches.
+    if (existingRow && Number(existingRow.follower_count) > 0) return
+
+    const duplicate = currentRows.find(r =>
+      r.id !== rowId && cleanHandle(r.handle).toLowerCase() === clean && r.platform === platform
+    )
+    if (duplicate) {
+      setPendingDuplicateInfo({ rowId, handle: clean, existingName: duplicate.full_name || duplicate.handle })
+      setDuplicateRowIds(p => { const n = new Set(p); n.add(rowId); return n })
+      return
+    }
+    setDuplicateRowIds(p => { if (!p.has(rowId)) return p; const n = new Set(p); n.delete(rowId); return n })
 
     setFetchingRows(prev => { const n = new Set(prev); n.add(rowId); return n })
 
@@ -1138,7 +1154,7 @@ export default function TableSheet({
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="flex flex-col gap-3 text-gray-700 text-sm">
+    <div className="flex flex-col gap-4 text-gray-700 text-sm">
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
       <ConfirmationDialog
@@ -1169,9 +1185,6 @@ export default function TableSheet({
                 <p className="mt-2 text-sm text-gray-600">
                   We couldn't fetch data for <strong>@{apiErrorModal.handle}</strong>. You may retry or continue adding the influencer manually.
                 </p>
-                {apiErrorModal.reason && (
-                  <p className="mt-2 text-xs text-gray-500">{apiErrorModal.reason}</p>
-                )}
               </div>
             </div>
             <div className="mt-6 flex justify-end gap-2">
@@ -1232,13 +1245,13 @@ export default function TableSheet({
       {!readOnly && (
         <div className="flex items-center gap-2 flex-wrap">
           {/* Search */}
-          <div className="relative flex-1 min-w-[180px] max-w-xs">
-            <IconSearch size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          <div className="relative flex-1 min-w-[200px] max-w-xs">
+            <IconSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
             <input
               type="text" value={searchInput} onChange={e => { setSearchInput(e.target.value); setCurrentPage(1) }}
-              placeholder="Search influencers…"
+              placeholder="Search influencer..."
               data-tour="table-search"
-              className="w-full pl-8 pr-3 py-2 text-xs border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-200 bg-white"
+              className="w-full pl-9 pr-3 h-9 border border-[#0F6B3E]/20 rounded-lg outline-none focus:ring-2 focus:ring-[#1FAE5B] text-sm bg-white"
             />
           </div>
 
@@ -1246,8 +1259,13 @@ export default function TableSheet({
           <div className="relative">
             <button ref={filterBtnRef} onClick={() => setShowFilterPopover(v => !v)}
               data-tour="table-filters"
-              className={`flex items-center gap-1.5 px-3 py-2 text-xs border rounded-lg transition ${hasActiveFilters ? "bg-blue-600 text-white border-blue-600" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>
-              <IconFilter size={13} /> Filters {hasActiveFilters && `(${[filters.platform !== "all", filters.niche !== "all", filters.location !== "all", filters.gender !== "all", filters.approval !== "all", !!filters.dateFrom, !!filters.dateTo].filter(Boolean).length})`}
+              className={`h-9 px-3 rounded-lg text-sm flex items-center gap-1.5 border transition-colors ${hasActiveFilters ? "bg-[#1FAE5B] text-white border-[#1FAE5B]" : "border-[#0F6B3E]/20 text-gray-600 hover:border-[#0F6B3E]/40"}`}>
+              <IconFilter size={15} /> Filters
+              {hasActiveFilters && (
+                <span className="text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center bg-white/20 text-white">
+                  {[filters.platform !== "all", filters.niche !== "all", filters.location !== "all", filters.gender !== "all", filters.approval !== "all", !!filters.dateFrom, !!filters.dateTo].filter(Boolean).length}
+                </span>
+              )}
             </button>
             {showFilterPopover && (
               <FilterPopover
@@ -1259,10 +1277,15 @@ export default function TableSheet({
             )}
           </div>
 
+          {/* Count — same slot and wording as the Post Tracker's. */}
+          <span className="text-sm text-gray-500 whitespace-nowrap ml-1">
+            {filteredRows.length} of {rows.length} influencer{rows.length !== 1 ? "s" : ""}
+          </span>
+
           {/* Right-side controls */}
-          <div className="flex items-center gap-1.5 ml-auto">
+          <div className="flex items-center gap-2 ml-auto">
             {!readOnly && (
-              <button onClick={addRow} data-tour="table-add-influencer" className="flex items-center gap-1.5 px-2.5 py-2 text-xs font-medium border border-gray-200 rounded-lg text-gray-700 hover:bg-green-50 hover:text-green-700 hover:border-green-200 transition" title="Add a new influencer"><IconPlus size={18} /> Add Influencer</button>
+              <button onClick={addRow} data-tour="table-add-influencer" className="h-9 px-3 flex items-center gap-1.5 text-sm font-medium border border-[#0F6B3E]/20 rounded-lg text-gray-700 hover:bg-green-50 hover:text-green-700 hover:border-[#0F6B3E]/40 transition-colors" title="Add a new influencer"><IconPlus size={15} /> Add Influencer</button>
             )}
 
             <div className="relative">
@@ -1274,14 +1297,14 @@ export default function TableSheet({
                   setShowImportExportMenu(v => !v)
                 }}
                 disabled={subscriptionStatus?.status === "trialing"}
-                className={`flex items-center gap-1.5 px-2.5 py-2 text-xs border rounded-lg transition ${
+                className={`h-9 px-3 flex items-center gap-1.5 text-sm border rounded-lg transition-colors ${
                   subscriptionStatus?.status === "trialing"
                     ? "opacity-50 cursor-not-allowed border-gray-200 text-gray-400 bg-gray-50"
-                    : "border-gray-200 text-gray-600 hover:bg-gray-50"
+                    : "border-[#0F6B3E]/20 text-gray-600 hover:border-[#0F6B3E]/40"
                 }`}
                 title={subscriptionStatus?.status === "trialing" ? "Import and Export are not available during your free trial" : undefined}
               >
-                <IconSettings size={13} /> Import / Export
+                <IconSettings size={15} /> Import / Export
               </button>
               {showImportExportMenu && (
                 <div ref={importExportRef} className="absolute right-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-lg shadow-xl w-52 py-1">
@@ -1293,7 +1316,7 @@ export default function TableSheet({
             </div>
 
             <div className="relative">
-              <button ref={settingsBtnRef} onClick={() => setShowSettingsMenu(v => !v)} className="flex items-center px-2.5 py-2 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 transition" title="Settings" aria-label="Settings"><IconDotsVertical size={13} /></button>
+              <button ref={settingsBtnRef} onClick={() => setShowSettingsMenu(v => !v)} className="h-9 px-3 flex items-center border border-[#0F6B3E]/20 rounded-lg text-gray-600 hover:border-[#0F6B3E]/40 transition-colors" title="Settings" aria-label="Settings"><IconDotsVertical size={15} /></button>
               {showSettingsMenu && (
                 <div ref={settingsMenuRef} className="absolute right-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-lg shadow-xl w-52 py-1">
                   <button onClick={() => { setShowManageNiches(true); setShowSettingsMenu(false) }} className="flex items-center gap-2 w-full text-left px-3 py-2 text-xs hover:bg-gray-50 transition text-gray-700"><IconTags size={13} className="text-gray-400" /> Add Niche</button>

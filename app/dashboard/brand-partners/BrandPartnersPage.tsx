@@ -11,7 +11,7 @@ import { useBrandTaxonomy } from "@/hooks/useBrandTaxonomy"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { TableSkeleton } from "@/components/shared/skeletons"
 
-import { getCachedData, setCachedData, hasCachedData } from "@/lib/data-cache"
+import { getCachedData, setCachedData, hasCachedData, useRestoredCache } from "@/lib/data-cache"
 import { invalidateInfluencerDerivedCaches } from "@/lib/cache-invalidation"
 
 import {
@@ -342,6 +342,16 @@ export default function BrandPartnersPage({ brandId }: Props) {
 
   // ── Taxonomy ─────────────────────────────────────────────────────────────
   const { niches, locations } = useBrandTaxonomy(brandId)
+
+  // A reload starts with an empty in-memory cache, so the initializers above see
+  // nothing (which is what keeps hydration matching). The persisted payload is
+  // handed over here, after mount, and the background load below still runs.
+  useRestoredCache<PartnersCache>(cacheKey, (data) => {
+    setPartners((prev) => (prev.length ? prev : data.partners ?? []))
+    setCampaigns((prev) => (prev.length ? prev : data.campaigns ?? []))
+    if (data.tierThresholds) setTierThresholds(data.tierThresholds)
+    setLoading(false)
+  })
 
   // ── Initial data load ────────────────────────────────────────────────────
   useEffect(() => {
@@ -787,18 +797,11 @@ export default function BrandPartnersPage({ brandId }: Props) {
       {/* ── Tab Bar + Search ── */}
       {!showCampaignDetail && (
         <div className="tab-search-row">
-          <div className="tab-bar">
-            {["Partner List", "Campaigns"].map((tab, idx) => (
-              <div key={idx} className={`tab ${activeTab === idx ? "active" : ""}`} onClick={() => setActiveTab(idx)}>
-                {tab}
-              </div>
-            ))}
-          </div>
           <div className="sfg">
             <div className="sw relative">
               <IconSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
-                className="sb pl-9"
+                className="sb"
                 data-tour="brand-partners-search"
                 placeholder="Search creators…"
                 value={searchQuery}
@@ -806,8 +809,8 @@ export default function BrandPartnersPage({ brandId }: Props) {
               />
             </div>
             <div className="fw">
-              <button onClick={() => setShowFilterPanel(!showFilterPanel)} data-tour="brand-partners-filters" className="px-3 py-1.5 rounded-lg text-sm flex items-center gap-1 border border-[#0F6B3E]/20">
-                <IconFilter size={16} /> Filters
+              <button onClick={() => setShowFilterPanel(!showFilterPanel)} data-tour="brand-partners-filters" className="h-9 px-3 rounded-lg text-sm flex items-center gap-1.5 border border-[#0F6B3E]/20 hover:border-[#0F6B3E]/40 transition-colors">
+                <IconFilter size={15} /> Filters
               </button>
               {showFilterPanel && (
                 <div className="fp open">
@@ -841,6 +844,14 @@ export default function BrandPartnersPage({ brandId }: Props) {
                 </div>
               )}
             </div>
+          </div>
+          <div className="row-spacer" />
+          <div className="tab-bar">
+            {["Partner List", "Campaigns"].map((tab, idx) => (
+              <div key={idx} className={`tab ${activeTab === idx ? "active" : ""}`} onClick={() => setActiveTab(idx)}>
+                {tab}
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -1501,16 +1512,18 @@ export default function BrandPartnersPage({ brandId }: Props) {
         .btn-primary { background: #1FAE5B; color: #fff; border: none; padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 11px; font-weight: 500; font-family: 'Inter', sans-serif; }
         .btn-primary:hover { background: #0F6B3E; }
         .btn-outline { background: transparent; border: 0.5px solid rgba(0,0,0,0.2); padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 11px; font-weight: 500; color: #555; font-family: 'Inter', sans-serif; }
-        .tab-search-row { background: #fff; border-bottom: 0.5px solid rgba(0,0,0,0.08); padding: 8px 20px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+        .tab-search-row { background: #fff; border-bottom: 0.5px solid rgba(0,0,0,0.08); padding: 8px 20px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .row-spacer { flex: 1 1 auto; }
         .sb { max-width: 100%; }
         .tab-bar { display: flex; }
         .tab { padding: 10px 16px; cursor: pointer; font-size: 12px; font-weight: 500; color: #888; border-bottom: 2px solid transparent; }
         .tab.active { color: #1FAE5B; border-bottom-color: #1FAE5B; }
         .sfg { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
-        .sw { position: relative; }
-        .sb { font-size: 12px; padding: 6px 10px 6px 28px; border-radius: 8px; border: 0.5px solid rgba(0,0,0,0.15); background: #f7f9f8; width: 200px; font-family: 'Inter', sans-serif; }
+        .sw { position: relative; flex: 1 1 200px; min-width: 200px; max-width: 20rem; }
+        .sb { font-size: 14px; height: 36px; padding: 0 12px 0 36px; border-radius: 8px; border: 1px solid rgba(15,107,62,0.2); background: #fff; width: 100%; font-family: 'Inter', sans-serif; outline: none; }
+        .sb:focus { box-shadow: 0 0 0 2px #1FAE5B; }
         .fw { position: relative; }
-        .fp { position: absolute; top: calc(100% + 6px); right: 0; z-index: 200; background: #fff; border: 0.5px solid rgba(0,0,0,0.12); border-radius: 10px; padding: 14px; box-shadow: 0 4px 16px rgba(0,0,0,0.1); width: 360px; max-width: 90vw; }
+        .fp { position: absolute; top: calc(100% + 6px); left: 0; z-index: 200; background: #fff; border: 0.5px solid rgba(0,0,0,0.12); border-radius: 10px; padding: 14px; box-shadow: 0 4px 16px rgba(0,0,0,0.1); width: 360px; max-width: 90vw; }
         .fp-title { font-size: 11px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; }
         .fg { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         .fg label { font-size: 11px; color: #888; display: block; margin-bottom: 4px; }
@@ -1570,7 +1583,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
         .cd-section { background: #fff; border: 0.5px solid rgba(0,0,0,0.08); border-radius: 10px; padding: 14px 16px; }
         .cd-section-title { font-size: 11px; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; }
         .kpi-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; }
-        @media (max-width: 640px) { .kpi-grid { grid-template-columns: repeat(2,1fr); } .sb { width: 100%; max-width: 100%; } }
+        @media (max-width: 640px) { .kpi-grid { grid-template-columns: repeat(2,1fr); } .sw { max-width: 100%; } }
         .kpi-card { background: #fff; border: 0.5px solid rgba(0,0,0,0.08); border-radius: 10px; padding: 12px 14px; }
         .kpi-l { font-size: 10px; color: #888; }
         .kpi-v { font-size: 17px; font-weight: 600; color: #1E1E1E; margin-top: 2px; }

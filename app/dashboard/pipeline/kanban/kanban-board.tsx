@@ -8,7 +8,7 @@
 
 "use client"
 
-import { useState, useEffect, useMemo, useRef, type ReactNode } from "react"
+import { useState, useEffect, useMemo, useRef, useCallback, memo, type CSSProperties, type ReactNode } from "react"
 import ReactDOM from "react-dom"
 import {
   DndContext,
@@ -793,7 +793,20 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
 }
 
 // ─── Pipeline Card ────────────────────────────────────────────────────────────
-function PipelineCard({ influencer, onOpenSidebar, onStatusChange, canApproveInfluencers }: {
+// Off-screen list items are skipped by the browser's own layout and paint pass
+// (`content-visibility: auto`), with `contain-intrinsic-size` standing in for
+// their height so the scrollbar geometry stays honest.
+//
+// Containment rather than JS windowing, deliberately: every item stays in the
+// DOM, so dnd-kit keeps its drag sources and drop targets, find-in-page still
+// works, and no interaction, measurement or markup changes — only the work the
+// browser does for items nobody is looking at.
+const OFFSCREEN_SKIP: CSSProperties = {
+  contentVisibility: "auto",
+  containIntrinsicSize: "auto 168px",
+}
+
+function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApproveInfluencers }: {
   influencer: PipelineInfluencer
   onOpenSidebar: (inf: PipelineInfluencer) => void
   onStatusChange: (id: string, newStatus: string) => void
@@ -805,7 +818,7 @@ function PipelineCard({ influencer, onOpenSidebar, onStatusChange, canApproveInf
   const terminal   = isTerminal(influencer.pipelineStatus)
 
   return (
-    <div className={`bg-white border rounded-lg p-3 hover:shadow-md transition-shadow ${
+    <div style={OFFSCREEN_SKIP} className={`bg-white border rounded-lg p-3 hover:shadow-md transition-shadow ${
       influencer.pipelineStatus === "Not Interested"      ? "border-red-100 bg-red-50/30"     :
       influencer.pipelineStatus === "For Order Creation"  ? "border-emerald-100 bg-emerald-50/30" :
       "border-gray-200"
@@ -813,29 +826,31 @@ function PipelineCard({ influencer, onOpenSidebar, onStatusChange, canApproveInf
       <div className="cursor-pointer" onClick={() => onOpenSidebar(influencer)}>
         <div className="flex flex-col text-sm mb-2">
           <span className="font-medium text-gray-900">{influencer.influencer}</span>
-          <span className="text-xs text-gray-500">{influencer.instagramHandle}</span>
+          <span className="text-xs text-gray-500">@{influencer.handle}</span>
         </div>
         <div className="flex items-center gap-2 text-xs text-gray-500 mb-1.5">
           <span className="flex items-center gap-1">{getPlatformIcon(influencer.platform)}{influencer.platform || "Instagram"}</span>
           <span>•</span>
-          <span>{influencer.location || "—"}</span>
+          <span className="flex items-center gap-0.5">
+            <IconLocation size={11} />{influencer.location || "—"}
+          </span>
         </div>
         <div className="flex items-center gap-3 text-xs text-gray-500">
-          <span>{influencer.followerCount?.toLocaleString() || influencer.followers || "—"} followers</span>
+          <span>{influencer.followers || "—"} followers</span>
           <span>{influencer.engagementRate || "—"}% eng</span>
         </div>
 
         {/* NI reason pill */}
         {influencer.pipelineStatus === "Not Interested" && influencer.niReason && (
-          <div className="mt-2 text-xs text-red-600 bg-red-100 rounded-full px-2.5 py-1 inline-block font-medium">
+          <div className="mt-2 text-[10px] text-red-500 bg-red-50 rounded-full px-2.5 py-1 inline-block font-medium">
             {influencer.niReason}
           </div>
         )}
 
         {/* For Order Creation badge */}
         {influencer.pipelineStatus === "For Order Creation" && (
-          <div className="mt-2 flex items-center gap-1 text-xs text-emerald-700 bg-emerald-100 rounded-full px-2.5 py-1 inline-flex font-medium">
-            <IconPackage size={12} />
+          <div className="mt-2 text-[10px] text-green-600 bg-green-50 rounded-full px-2.5 py-1 inline-flex items-center gap-1 font-medium">
+            <IconPackage size={10} />
             In Post Tracker
           </div>
         )}
@@ -843,7 +858,7 @@ function PipelineCard({ influencer, onOpenSidebar, onStatusChange, canApproveInf
         {/* Collab type badge — Deal Agreed now cascades straight to For Order
             Creation on confirm, but legacy rows can still rest at Deal Agreed */}
         {(influencer.pipelineStatus === "For Order Creation" || influencer.pipelineStatus === "Deal Agreed") && influencer.collabType && (
-          <div className="mt-1.5">
+          <div className="mt-2">
             {(() => {
               const collab = COLLAB_TYPES.find((c) => c.id === influencer.collabType)
               if (!collab) return null
@@ -880,6 +895,17 @@ function PipelineCard({ influencer, onOpenSidebar, onStatusChange, canApproveInf
     </div>
   )
 }
+
+/**
+ * Compared on the fields a card actually renders. Without this, one keystroke in
+ * the search box re-rendered every card in every column.
+ */
+const PipelineCard = memo(PipelineCardBase, (prev, next) =>
+  prev.influencer === next.influencer &&
+  prev.canApproveInfluencers === next.canApproveInfluencers &&
+  prev.onOpenSidebar === next.onOpenSidebar &&
+  prev.onStatusChange === next.onStatusChange
+)
 
 // ─── Portal StatusDropdown ────────────────────────────────────────────────────
 function StatusDropdown({ currentStatus, onStatusChange, canApproveInfluencers }: { currentStatus: string; onStatusChange: (s: string) => void; canApproveInfluencers: boolean }) {
@@ -957,7 +983,7 @@ function DroppableColumn({ id, children }: { id: string; children: React.ReactNo
   return (
     <div ref={setNodeRef}
       style={{ scrollSnapAlign: "start" }}
-      className={`flex flex-col gap-3 w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0 transition-colors rounded-lg ${
+      className={`flex flex-col gap-3 w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0 transition-all rounded-lg ${
         isOver ? (isExit ? "bg-red-50" : "bg-gray-50") : ""
       }`}>
       {children}
@@ -1039,10 +1065,10 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   const { canApproveInfluencers, loading: capabilitiesLoading } = useBrandCapabilities(brandId)
   const canApprove = !capabilitiesLoading && canApproveInfluencers
 
-  const toast = (msg: string, duration = 3000) => {
+  const toast = useCallback((msg: string, duration = 3000) => {
     setShowSuccessMessage(msg)
     setTimeout(() => setShowSuccessMessage(null), duration)
-  }
+  }, [])
 
   // ── Collab type confirmed → deal agreed AND straight into Post Tracker ────
   // Confirming a Collaboration Type is the single action that both marks the
@@ -1137,7 +1163,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   const handleNiCancel = () => { setNiModalInfluencer(null); setPendingNiId(null) }
 
   // ── Status update from card buttons / list dropdown ───────────────────────
-  const handleStatusUpdate = async (id: string, newStatus: string) => {
+  const handleStatusUpdate = useCallback(async (id: string, newStatus: string) => {
     if (!canApprove) {
       toast("Only Owners and Managers can approve influencers", 2500)
       return
@@ -1161,7 +1187,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     toast(success
       ? `${influencer?.influencer} moved to ${newStatus}`
       : `Failed to move ${influencer?.influencer}`, 2000)
-  }
+  }, [data, canApprove, updateStatus, toast])
 
   // ── Bulk selection helpers ────────────────────────────────────────────────
   const clearSelection = () => setSelectedIds(new Set())
@@ -1245,10 +1271,10 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     await runBulkUpdate("Deal Agreed", { collaborationType: collabType })
   }
 
-  const openSidebar = (inf: PipelineInfluencer) => {
+  const openSidebar = useCallback((inf: PipelineInfluencer) => {
     setSelectedPartner(influencerToPartner(inf, brandId))
     setSidebarOpen(true)
-  }
+  }, [brandId])
 
   const handleColumnClick = (column: typeof columns[0]) => {
     setSelectedColumnStatus(column.status)
@@ -1341,8 +1367,21 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   const activeInfluencer   = activeId ? data.find((item) => item.id === activeId) : null
   const selectedColumnInfo = selectedColumnStatus ? columns.find((col) => col.status === selectedColumnStatus) : null
 
-  const getItemsByColumn = (columnKey: string) =>
-    filteredData.filter((item) => item.pipelineStatus === getStatusFromColumnKey(columnKey))
+  // Confirming a Collaboration Type sends the row straight to Post Tracker's
+  // entry stage ("For Order Creation"), whose column is hidden on this board —
+  // so the card vanished and Deal Agreed read as empty even though the deal had
+  // just been closed. Display-only: the row keeps rendering under Deal Agreed,
+  // with its collaboration details, while the persisted stage (and Post Tracker)
+  // stay exactly as they are. One record, two views.
+  const getItemsByColumn = (columnKey: string) => {
+    const status = getStatusFromColumnKey(columnKey)
+    if (status === "Deal Agreed") {
+      return filteredData.filter(
+        (item) => item.pipelineStatus === "Deal Agreed" || item.pipelineStatus === "For Order Creation"
+      )
+    }
+    return filteredData.filter((item) => item.pipelineStatus === status)
+  }
 
   const renderCard = (inf: PipelineInfluencer) => (
     <PipelineCard
@@ -1539,9 +1578,10 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
           )}
         </div>
 
-        {/* Count */}
+        {/* Count — "N of M", as the Post Tracker toolbar reads, so a filtered
+            view shows how much of the total is on screen. */}
         <span className="text-sm text-gray-500 whitespace-nowrap ml-1">
-          {data.length} influencer{data.length !== 1 ? "s" : ""}
+          {filteredData.length} of {data.length} influencer{data.length !== 1 ? "s" : ""}
         </span>
 
         {/* Spacer */}
@@ -1598,7 +1638,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                       </div>
                     </div>
 
-                    <div className="flex flex-col gap-2 min-h-[400px]">
+                    <div className="flex flex-col gap-2 min-h-[400px] mt-2">
                       {items.map((inf) => (
                         <DraggableCard key={inf.id} id={inf.id} disabled={!canApprove}>
                           {renderCard(inf)}
@@ -1633,12 +1673,12 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                         {col.title}
                       </span>
                       <div className="flex items-center gap-1.5 flex-shrink-0">
-                        <span className="bg-red-200 text-red-700 rounded-full px-2 py-0.5 text-xs">{items.length}</span>
                         <ColumnInfoTooltip status={col.status} variant="light" />
+                        <span className="bg-red-200 text-red-700 rounded-full px-2 py-0.5 text-xs">{items.length}</span>
                       </div>
                     </div>
 
-                    <div className="flex flex-col gap-2 min-h-[400px]">
+                    <div className="flex flex-col gap-2 min-h-[400px] mt-2">
                       {items.map((inf) => (
                         <DraggableCard key={inf.id} id={inf.id} disabled={!canApprove}>
                           {renderCard(inf)}

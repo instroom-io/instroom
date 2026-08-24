@@ -12,6 +12,7 @@ import TableSheet, {
   type BulkApprovalResult,
 } from "@/components/table-sheet"
 import { useInfluencerData } from "@/hooks/useInfluencerData"
+import { seedPipelineFromApproval, unseedPipelineRow, type ApprovedRowSeed } from "@/hooks/usePipelineData"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { fetchCached } from "@/lib/data-cache"
 import { invalidateInfluencerDerivedCaches } from "@/lib/cache-invalidation"
@@ -89,6 +90,30 @@ function buildUpdatePayload(row: InfluencerRow) {
 const APPROVAL_DESTINATION: Record<string, string> = {
   Approved: "For Outreach",
   Declined: "Not Interested",
+}
+
+/**
+ * The Pipeline cache's view of a just-approved row, built entirely from what the
+ * Influencer List already holds — nothing is fetched. `brand_influencer_id` is
+ * the Pipeline board's row id (the list's own `id` is the Influencer id).
+ */
+function approvalSeed(row: InfluencerRow): ApprovedRowSeed | null {
+  if (!row.brand_influencer_id) return null
+  return {
+    brandInfluencerId: row.brand_influencer_id,
+    influencerId:      row.id,
+    name:              row.full_name || row.handle,
+    handle:            row.handle,
+    platform:          row.platform,
+    followerCount:     Number(row.follower_count) || 0,
+    engagementRate:    Number(row.engagement_rate) || 0,
+    niche:             row.niche || "",
+    location:          row.location || "",
+    email:             row.contact_info || row.email || "",
+    profileImageUrl:   row.profile_image_url || null,
+    notes:             row.notes || "",
+    approvalNotes:     row.approval_notes || null,
+  }
 }
 
 /** Discrete lifecycle fields — a change to one of these is saved immediately. */
@@ -372,6 +397,12 @@ function InfluencersContent() {
       // Typing needs the debounce; a discrete lifecycle action (approve/decline,
       // status, stage, review date) does not — those go straight out so the save
       // finishes while the user is still looking at the row.
+      const prevApprovalStatus = (() => {
+        if (!lastSent) return null
+        try { return (JSON.parse(lastSent) as { approval_status?: string }).approval_status ?? null }
+        catch { return null }
+      })()
+
       const { discrete, moveMessage } = (() => {
         if (!lastSent) return { discrete: false, moveMessage: null as string | null }
         try {
@@ -395,9 +426,16 @@ function InfluencersContent() {
         } catch { return { discrete: false, moveMessage: null as string | null } }
       })()
 
+      // An approval is what puts a row on the Pipeline board, so the board's
+      // cache is seeded as the write goes out — opening Pipeline then shows the
+      // card with no wait on /pipeline. Undone below if the write fails.
+      const seed = row.approval_status === "Approved" ? approvalSeed(row) : null
+      const seedsPipeline = Boolean(seed) && discrete && prevApprovalStatus !== "Approved"
+
       const timer = setTimeout(() => {
         updateTimers.current.delete(row.id)
         if (!dbIds.current.has(row.id)) return
+        const seeded = seedsPipeline && brandId ? seedPipelineFromApproval(brandId, seed!) : false
         putQueue.current.enqueue({
           url,
           payload,
@@ -417,6 +455,11 @@ function InfluencersContent() {
             invalidateInfluencerDerivedCaches(brandId)
           },
           onError(status) {
+            // The approval did not persist, so take the seeded card back off the
+            // board — same rollback rule the Pipeline's own writes follow.
+            if (seeded && brandId && row.brand_influencer_id) {
+              unseedPipelineRow(brandId, row.brand_influencer_id)
+            }
             if (status === 404) {
               dbIds.current.delete(row.id)
               toast.error(`Could not save @${handle} — not found. Try refreshing.`)
@@ -599,6 +642,14 @@ function InfluencersContent() {
           return null
         }
         const result = (await res.json()) as BulkApprovalResult
+        // Persisted rows only — `failed` ids are never seeded. Each row's
+        // profile fields come from the table, its ids from the response.
+        result.updated.forEach((saved) => {
+          const row = rows.find((r) => r.id === saved.influencer_id)
+          if (!row) return
+          const seed = approvalSeed({ ...row, brand_influencer_id: saved.id })
+          if (seed) seedPipelineFromApproval(brandId, seed)
+        })
         invalidateInfluencerDerivedCaches(brandId)
         return result
       } catch {
@@ -606,7 +657,7 @@ function InfluencersContent() {
         return null
       }
     },
-    [brandId, trackSave]
+    [brandId, trackSave, rows]
   )
 
   // ── handleRowsChange ──────────────────────────────────────────────────────
@@ -862,7 +913,7 @@ function InfluencersContent() {
   }
 
   return (
-    <div className="flex flex-col gap-4 p-4 relative min-h-screen">
+    <div className="flex flex-col gap-4 p-6 relative min-h-screen">
       {isLoading ? (
         <TableSkeleton rows={10} cols={7} label="Fetching data..." />
       ) : (

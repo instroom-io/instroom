@@ -52,9 +52,12 @@ function PipelineContent() {
           </div>
         </div>
       ) : isSubscribed ? (
-        <div className="flex flex-col gap-4 p-4">
-          <KanbanBoard brandId={brandId} />
-        </div>
+        // Rendered directly, as the Post Tracker page renders its board: the
+        // board's own root is already `flex flex-col gap-4 p-6`, so wrapping it
+        // in another padded flex column added 16px on every side and a second
+        // 16px gap — which is what made the toolbar row and the columns sit
+        // looser than the Post Tracker's.
+        <KanbanBoard brandId={brandId} />
       ) : (
         <BoardSkeleton label="Fetching data..." />
       )}

@@ -4,7 +4,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback, Suspense } from "react"
 // Tabler, not lucide: the other dashboard pages (post-tracker,
 // manage-influencers, table-sheet) all draw their toolbar icons from Tabler.
-import { IconFilter, IconDownload, IconX, IconChevronDown, IconSearch } from "@tabler/icons-react"
+import { IconFilter, IconDownload, IconX, IconChevronDown, IconSearch, IconInfoCircle } from "@tabler/icons-react"
 import { useSession } from "next-auth/react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { DashboardSkeleton } from "@/components/shared/skeletons"
@@ -142,6 +142,28 @@ const ReasonTooltip = ({ reason }: { reason: string }) => {
   )
 }
 
+/**
+ * KPI info affordance: a 15px Tabler icon (balanced against the 11px uppercase
+ * KPI label) with the same dark hover bubble ReasonTooltip uses.
+ *
+ * Opens ABOVE the icon: a KPI label sits at the top of its card, so a bubble
+ * below it would cover the very number it explains. The label's uppercase and
+ * letter-spacing are reset inside the bubble, or the copy inherits them and
+ * becomes unreadable.
+ */
+const InfoTip = ({ text }: { text: string }) => (
+  <span className="group relative inline-flex shrink-0 cursor-help items-center align-middle">
+    <IconInfoCircle size={15} className="text-gray-400 transition-colors group-hover:text-gray-700" aria-hidden />
+    <span className="sr-only">{text}</span>
+    <span
+      role="tooltip"
+      className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 hidden w-64 max-w-[min(16rem,78vw)] -translate-x-1/2 rounded-lg bg-gray-900 p-3 text-left text-[11.5px] font-normal normal-case leading-relaxed tracking-normal text-white shadow-lg group-hover:block"
+    >
+      {text}
+    </span>
+  </span>
+)
+
 /* ── Card shells ──────────────────────────────────────────────────────────
    h-full on both so that any two cards sharing a grid row end up the same
    height without anyone hard-coding one.
@@ -203,9 +225,15 @@ const EmptyState = ({ children }: { children: React.ReactNode }) => (
    across a row even when one description wraps to two lines.
    ------------------------------------------------------------------------ */
 const MetricCard = ({
-  label, value, subLabel, isGreen = false, nested = false,
+  label, value, subLabel, isGreen = false, nested = false, info,
 }: {
   label: string; value: string | number; subLabel?: string; isGreen?: boolean
+  /**
+   * What the number means and what it counts. Rendered as the same hover ⓘ the
+   * rejection-reason headings use, so the explanation costs no layout space and
+   * behaves identically on touch (long-press) as elsewhere on this page.
+   */
+  info?: string
   /**
    * Drop the card shell. A bordered card inside a bordered card reads as a
    * different component family — these tiles sit inside SectionCards on the
@@ -217,7 +245,10 @@ const MetricCard = ({
   if (nested) {
     return (
       <div className="flex min-w-0 flex-col">
-        <div className={LABEL}>{label}</div>
+        <div className={`${LABEL} flex items-center gap-1.5`}>
+          {label}
+          {info && <InfoTip text={info} />}
+        </div>
         <div className={`mt-1 text-xl font-semibold leading-none tracking-tight ${NUM} ${isGreen && isPositiveValue(value) ? VALUE_BRAND : 'text-gray-900'}`}>
           {value}
         </div>
@@ -228,7 +259,10 @@ const MetricCard = ({
 
   return (
     <div className={`${CARD} flex h-full min-w-0 flex-col p-4`}>
-      <div className={LABEL}>{label}</div>
+      <div className={`${LABEL} flex items-center gap-1.5`}>
+        {label}
+        {info && <InfoTip text={info} />}
+      </div>
       <div className={`mt-1.5 text-[26px] font-semibold leading-none tracking-tight ${NUM} ${isGreen && isPositiveValue(value) ? VALUE_BRAND : 'text-gray-900'}`}>
         {value}
       </div>
@@ -323,7 +357,9 @@ const ReasonRow = ({ name, count, total, max, color }: { name: string; count: nu
       <div className="flex min-w-0 items-baseline gap-3">
         <span className="min-w-0 flex-1 cursor-help truncate text-[13px] text-gray-700">
           {name}
-          <span className="ml-1 text-gray-300">ⓘ</span>
+          {/* Same icon as InfoTip, one step smaller to sit inside 13px body
+              text. The bubble here is the row's own ReasonTooltip. */}
+          <IconInfoCircle size={13} className="ml-1 inline-block align-text-bottom text-gray-400 transition-colors group-hover:text-gray-700" aria-hidden />
         </span>
         <span className={`w-8 shrink-0 text-right text-[13px] font-semibold text-gray-900 ${NUM}`}>{count}</span>
         <span className={`w-9 shrink-0 text-right text-xs text-gray-400 ${NUM}`}>{formatPercent(count, total)}</span>
@@ -348,7 +384,7 @@ const ReasonGroupHeading = ({ tone, label, note, total }: { tone: 'hard' | 'soft
       </span>
       {/* The explanatory clause moves to a title attribute: it was the single
           noisiest element in the card and it repeats twice. */}
-      <span className="cursor-help text-gray-300" title={note}>ⓘ</span>
+      <InfoTip text={note} />
     </span>
     <span className={`text-xs text-gray-500 ${NUM}`}>{total}</span>
   </div>
@@ -691,6 +727,12 @@ function AnalyticsPageContent() {
   const outreachInfluencers = useMemo(
     () => visibleInfluencers.filter(i => i.hasOutreach),
     [visibleInfluencers]
+  )
+
+  /** Same set ignoring the search box, so the toolbar can show "N of M". */
+  const totalOutreachInfluencers = useMemo(
+    () => influencers.filter(i => i.hasOutreach).length,
+    [influencers]
   )
 
   // Calculate metrics from real data
@@ -1123,7 +1165,12 @@ function AnalyticsPageContent() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-gray-50">
+    // The boards' search row starts 24px down (their root's `p-6`). This bar
+    // adds its own 10px of `py-2.5` inside, so the parent contributes 14px —
+    // 14 + 10 = the same 24px, instead of the 34px a flat pt-6 produced. The
+    // bar still pins to top-0 on scroll: the padding is on the parent, not on
+    // the sticky element.
+    <div className="flex min-h-screen flex-col bg-gray-50 pt-3.5">
       {/* ── Toolbar + tabs ────────────────────────────────────────────────
           One sticky block instead of two independently stuck bars. The tabs
           used to carry a hard-coded top-[73px] that had to match the
@@ -1139,7 +1186,7 @@ function AnalyticsPageContent() {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search..."
+              placeholder="Search influencer..."
               aria-label="Search influencer"
               data-tour="analytics-search"
               className="h-9 w-full rounded-lg border border-[#0F6B3E]/20 pl-9 pr-8 text-sm outline-none focus:ring-2 focus:ring-[#1FAE5B]"
@@ -1202,9 +1249,8 @@ function AnalyticsPageContent() {
           </div>
 
           {/* Subtle metadata, and it counts the subset actually being charted. */}
-          <p className={`text-xs text-gray-500 ${NUM}`}>
-            Showing {metrics.totalOutreach} influencer{metrics.totalOutreach !== 1 ? 's' : ''}
-            {search && <span className="text-gray-400"> for “{search}”</span>}
+          <p className={`ml-1 text-sm text-gray-500 ${NUM}`}>
+            {metrics.totalOutreach} of {totalOutreachInfluencers} influencer{totalOutreachInfluencers !== 1 ? 's' : ''}
           </p>
 
           <button onClick={exportCSV} data-tour="analytics-export" className={`${BTN_SECONDARY} ml-auto`}>
@@ -1234,11 +1280,26 @@ function AnalyticsPageContent() {
         {activeTab === 0 && (
           <div className="space-y-5">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-              <MetricCard label="Total outreach" value={metrics.totalOutreach} subLabel="influencers contacted" />
-              <MetricCard label="Responded" value={metrics.responded} subLabel={`of ${metrics.totalOutreach} reached out`} />
-              <MetricCard label="Response rate" value={`${Math.round(metrics.responseRate)}%`} subLabel={`${metrics.responded} responded`} isGreen />
-              <MetricCard label="Closed collaborations" value={metrics.closed} subLabel="agreed to work" />
-              <MetricCard label="Closing rate" value={`${Math.round(metrics.closingRate)}%`} subLabel={`of ${metrics.responded} who responded`} isGreen />
+              <MetricCard
+                label="Total outreach" value={metrics.totalOutreach} subLabel="influencers contacted"
+                info="Influencers you have actually reached out to — a logged outreach, or a contact status/stage the app only writes once someone has been contacted. Influencers merely imported or approved are not counted. This is the base of the funnel and the denominator of Response rate."
+              />
+              <MetricCard
+                label="Responded" value={metrics.responded} subLabel={`of ${metrics.totalOutreach} reached out`}
+                info="Influencers who actually replied: a recorded response on their outreach (or a reply captured in the Inbox), plus anyone who has reached In Conversation or a later stage, which cannot happen without a reply. Marking someone Not Interested does not count as a response on its own."
+              />
+              <MetricCard
+                label="Response rate" value={`${Math.round(metrics.responseRate)}%`} subLabel={`${metrics.responded} responded`} isGreen
+                info="Responded ÷ Total outreach × 100. How many of the influencers you contacted actually answered."
+              />
+              <MetricCard
+                label="Closed collaborations" value={metrics.closed} subLabel="agreed to work"
+                info="Collaborations that reached Deal Agreed and moved on into the post-collaboration flow — For Order Creation, In Transit, Content Pending and Posted. Counted cumulatively, so an influencer who has already posted is still counted here."
+              />
+              <MetricCard
+                label="Closing rate" value={`${Math.round(metrics.closingRate)}%`} subLabel={`of ${metrics.responded} who responded`} isGreen
+                info="Closed collaborations ÷ Responded × 100. Of the influencers who replied, how many turned into an agreed collaboration. Everyone counted as closed is also counted as responded, so this can never exceed 100%."
+              />
             </div>
 
             <div className="grid items-start gap-4 md:grid-cols-2">
@@ -1339,10 +1400,22 @@ function AnalyticsPageContent() {
         {activeTab === 1 && (
           <div className="space-y-5">
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-              <MetricCard label="Closed collaborations" value={metrics.closedCollaborations} subLabel="agreed to work" />
-              <MetricCard label="Received product" value={metrics.receivedProduct} subLabel={`posted (${metrics.posted}) + no post (${metrics.noPost})`} />
-              <MetricCard label="Posted" value={metrics.posted} subLabel={`of ${metrics.receivedProduct} who received`} isGreen />
-              <MetricCard label="Post rate" value={`${Math.round(metrics.postRate)}%`} subLabel="posted ÷ received product" isGreen />
+              <MetricCard
+                label="Closed collaborations" value={metrics.closedCollaborations} subLabel="agreed to work"
+                info="The same closed collaborations as the Campaign Summary: influencers who agreed and entered the post-collaboration flow. This is where the funnel continues — from a closed deal to a published post."
+              />
+              <MetricCard
+                label="Received product" value={metrics.receivedProduct} subLabel={`posted (${metrics.posted}) + no post (${metrics.noPost})`}
+                info="Influencers whose product has arrived, so a post is now expected: Posted plus No Post (delivered but still waiting on content). Influencers with no order yet, in transit, or with a delivery problem are excluded, and it is the denominator of Post rate."
+              />
+              <MetricCard
+                label="Posted" value={metrics.posted} subLabel={`of ${metrics.receivedProduct} who received`} isGreen
+                info="Influencers who published their content — the Posted stage in the Post Tracker, whether the post was detected automatically or the stage was set manually."
+              />
+              <MetricCard
+                label="Post rate" value={`${Math.round(metrics.postRate)}%`} subLabel="posted ÷ received product" isGreen
+                info="Posted ÷ Received product × 100. Of the influencers who received your product, how many actually posted. The last step of the funnel: outreach → response → closed collaboration → post."
+              />
             </div>
 
             <div className="grid items-start gap-4 md:grid-cols-2">

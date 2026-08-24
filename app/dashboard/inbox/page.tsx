@@ -17,7 +17,7 @@ import {
 } from "@dnd-kit/core"
 import { SubscriptionGate } from "@/components/ui/subscription-gate"
 import { ListSkeleton } from "@/components/shared/skeletons"
-import { fetchCached, getCachedData } from "@/lib/data-cache"
+import { fetchCached, getCachedData, useRestoredCache } from "@/lib/data-cache"
 import { useSubscriptionGate } from "@/hooks/useSubscriptionGate"
 import { invalidateInfluencerDerivedCaches } from "@/lib/cache-invalidation"
 import {
@@ -494,6 +494,28 @@ function InboxContent() {
   const gmailRequestIdRef = useRef(0)
   const outlookRequestIdRef = useRef(0)
 
+  // Persisted threads are handed over after mount — `cachedEmails` and
+  // `hasCachedThreads` above read the cache during render and must stay empty
+  // while React hydrates. The connection checks below still run and revalidate.
+  useRestoredCache<any>(threadsKey("gmail"), (data) => {
+    const restoredEmails = ((data?.threads ?? []) as any[]).map((t, i) => mapGmailThreadToEmail(t, i))
+    if (restoredEmails.length) {
+      setEmails((prev) => [...prev.filter((e) => e.source !== "gmail"), ...restoredEmails])
+    }
+    // A mailbox with stored threads was connected last time, so it renders as
+    // connected while the check re-runs — the same rule the initializers use.
+    setGmailConnected(true)
+    setGmailSyncState((prev) => (prev === "checking" ? "connected" : prev))
+  })
+  useRestoredCache<any>(threadsKey("outlook"), (data) => {
+    const restoredEmails = ((data?.threads ?? []) as any[]).map((t, i) => mapOutlookThreadToEmail(t, i))
+    if (restoredEmails.length) {
+      setEmails((prev) => [...prev.filter((e) => e.source !== "outlook"), ...restoredEmails])
+    }
+    setOutlookConnected(true)
+    setOutlookSyncState((prev) => (prev === "checking" ? "connected" : prev))
+  })
+
   useEffect(() => {
     const checkMobile = () => setIsMobile(window.innerWidth < 768)
     checkMobile()
@@ -602,11 +624,38 @@ function InboxContent() {
     }
   }
 
+  // The OAuth tab consumes the callback, so this tab never sees
+  // ?gmailConnected=1. Re-check once focus comes back, forcing past the shared
+  // cache since the mailbox that was "not connected" a moment ago now is.
+  const awaitConnection = (provider: "gmail" | "outlook") => {
+    const onFocus = () => {
+      window.removeEventListener("focus", onFocus)
+      void (provider === "gmail" ? loadGmailThreads() : loadOutlookThreads())
+    }
+    window.addEventListener("focus", onFocus)
+  }
+
   // ── Connect Gmail — separate OAuth flow, no NextAuth signIn ───────────────
+  // Opens in a new tab so this one stays put: the user lands back on the inbox
+  // they were already looking at instead of having to press Back. The provider
+  // tab still hits the same callback with the same returnTo, so the connection
+  // flow is unchanged — and `awaitConnection` re-checks here when that tab is
+  // done and focus comes back.
   const handleConnectGmail = () => {
     setGmailSyncState("connecting")
     const returnTo = window.location.pathname + window.location.search
-    window.location.href = `/api/gmail/connect?returnTo=${encodeURIComponent(returnTo)}`
+    const opened = window.open(
+      `/api/gmail/connect?returnTo=${encodeURIComponent(returnTo)}`,
+      "_blank",
+      "noopener,noreferrer"
+    )
+    // Popup/tab blocked — fall back to the previous same-tab navigation rather
+    // than leaving the button stuck on "connecting".
+    if (!opened) {
+      window.location.href = `/api/gmail/connect?returnTo=${encodeURIComponent(returnTo)}`
+      return
+    }
+    awaitConnection("gmail")
   }
 
   const loadGmailThreads = async () => {
@@ -657,10 +706,20 @@ function InboxContent() {
   }
 
   // ── Connect Outlook — Microsoft OAuth flow ────────────────────────────────
+  // New tab, same reasoning as Gmail above.
   const handleConnectOutlook = () => {
     setOutlookSyncState("connecting")
     const returnTo = window.location.pathname + window.location.search
-    window.location.href = `/api/outlook/connect?returnTo=${encodeURIComponent(returnTo)}`
+    const opened = window.open(
+      `/api/outlook/connect?returnTo=${encodeURIComponent(returnTo)}`,
+      "_blank",
+      "noopener,noreferrer"
+    )
+    if (!opened) {
+      window.location.href = `/api/outlook/connect?returnTo=${encodeURIComponent(returnTo)}`
+      return
+    }
+    awaitConnection("outlook")
   }
 
   const loadOutlookThreads = async () => {
@@ -1258,6 +1317,9 @@ function InboxContent() {
                   filteredEmails.map((email) => (
                     <DraggableEmailRow key={email.id} id={String(email.id)}>
                       <div
+                        // Off-screen rows skip layout and paint; the row stays in
+                        // the DOM so drag, selection and find-in-page are unchanged.
+                        style={{ contentVisibility: "auto", containIntrinsicSize: "auto 68px" }}
                         onClick={() => openEmail(email)}
                         className={`flex items-start gap-3 px-4 py-3.5 sm:py-3 min-h-[68px] sm:min-h-0 cursor-pointer transition-colors duration-150 active:bg-gray-100 ${
                           selectedEmail?.id === email.id ? "bg-gray-100 shadow-[inset_3px_0_0_#1FAE5B]" : "hover:bg-gray-50"
