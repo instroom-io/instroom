@@ -1,4 +1,3 @@
-// app/api/settings/account/route.ts
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"

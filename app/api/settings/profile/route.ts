@@ -16,13 +16,14 @@ export async function GET() {
 
   const user = await prisma.user.findUnique({
     where: { id: session.user.id },
-    select: { name: true, email: true, image: true },
+    select: { name: true, email: true, image: true, job_title: true },
   })
 
   return NextResponse.json({
     name: user?.name,
     email: user?.email,
     image: user?.image,
+    jobTitle: user?.job_title,
   })
 }
 
@@ -31,15 +32,16 @@ export async function PATCH(req: NextRequest) {
   if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
   const body = await req.json()
-  const { firstName, lastName, name, email } = body
+  const { firstName, lastName, name, email, jobTitle } = body
 
   const resolvedName = name?.trim() || [firstName, lastName].filter(Boolean).join(" ").trim()
 
   const user = await prisma.user.update({
     where: { id: session.user.id },
     data: {
-      ...(resolvedName && { name: resolvedName }),
-      ...(email        && { email }),
+      ...(resolvedName        && { name: resolvedName }),
+      ...(email               && { email }),
+      ...(jobTitle !== undefined && { job_title: jobTitle }),
     },
   })
 
@@ -47,6 +49,7 @@ export async function PATCH(req: NextRequest) {
     name: user.name,
     email: user.email,
     image: user.image,
+    jobTitle: user.job_title,
   })
 }
 

@@ -8,6 +8,7 @@ import BrandInvitationEmail from "@/emails/brand-invitation"
 import EarlyAccessApprovedEmail from "@/emails/early-access-approved"
 import SubscriptionExpiringEmail from "@/emails/subscription-expiring"
 import NotificationEmail, { type NotifType } from "@/emails/notification"
+import { appBaseUrl } from "@/lib/app-url"
 
 // ── Nodemailer transporter ────────────────────────────────────────────────────
 
@@ -141,6 +142,43 @@ export async function sendNotificationEmail({
     NotificationEmail({ name, type, title, message, actionUrl }),
   )
   return sendEmail({ to, subject: title, html })
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+}
+
+/** Internal-only — notifies billing of a new refund request. Never seen by a
+ *  customer, so this is plain inline HTML rather than a branded template. */
+export async function sendRefundRequestSubmittedEmail({
+  userEmail,
+  userName,
+  amount,
+  currency,
+  reason,
+  refundRequestId,
+}: {
+  userEmail:       string
+  userName:        string | null
+  amount:          number
+  currency:        string
+  reason:          string
+  refundRequestId: string
+}): Promise<boolean> {
+  const to = process.env.REFUND_NOTIFY_EMAIL || "billing@instroom.io"
+  const html = `
+    <p>New refund request submitted.</p>
+    <p><strong>User:</strong> ${escapeHtml(userEmail)} (${escapeHtml(userName ?? "—")})</p>
+    <p><strong>Amount:</strong> ${amount} ${escapeHtml(currency)}</p>
+    <p><strong>Reason:</strong> ${escapeHtml(reason)}</p>
+    <p><a href="${appBaseUrl()}/admin/refund-requests">Review in admin</a> (request ${escapeHtml(refundRequestId)})</p>
+  `
+  return sendEmail({ to, subject: `Refund request — ${userEmail}`, html })
 }
 
 // ── Future: swap to Resend ────────────────────────────────────────────────────

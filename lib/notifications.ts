@@ -54,9 +54,17 @@ export async function sendNotification({
     influencer_reply: true,
     stage_change:     false,
     deal_agreed:      true,
+    // Critical account/financial notifications — not gated by activity-feed
+    // preferences (NotificationPreference has no column for them), always on.
+    refund_approved:  true,
+    refund_denied:    true,
   }
 
-  const wantsEmail = prefs ? prefs[type] : defaults[type]
+  // Only the original 3 types have a NotificationPreference column. Anything
+  // else structurally isn't a key on `prefs`, so it always falls through to
+  // its default instead of being silently treated as "off".
+  const prefValue = prefs && type in prefs ? (prefs as Record<string, unknown>)[type] : undefined
+  const wantsEmail = typeof prefValue === "boolean" ? prefValue : defaults[type]
   console.log(`[Notification] wantsEmail=${wantsEmail} for type=${type}`)
 
   if (!wantsEmail) {

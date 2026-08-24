@@ -2,9 +2,13 @@ import { NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
-import { writeFile, mkdir } from "fs/promises"
-import { join } from "path"
-import { existsSync } from "fs"
+import { v2 as cloudinary } from "cloudinary"
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+})
 
 export async function POST(req: Request) {
   try {
@@ -76,24 +80,21 @@ export async function POST(req: Request) {
         )
       }
 
-      // Create brands directory if it doesn't exist
-      const brandsDir = join(process.cwd(), "public", "brands")
-      if (!existsSync(brandsDir)) {
-        await mkdir(brandsDir, { recursive: true })
-      }
+      // Local disk writes don't persist on Vercel's serverless filesystem —
+      // this used to write to public/brands/, which worked in dev but left
+      // every deployed logo broken. Cloudinary, same as profile photos.
+      const arrayBuffer = await logo.arrayBuffer()
+      const base64 = Buffer.from(arrayBuffer).toString("base64")
+      const dataUri = `data:${logo.type};base64,${base64}`
 
-      // Generate unique filename
-      const timestamp = Date.now()
-      const ext = logo.name.split(".").pop()
-      const filename = `${brandId}-${timestamp}.${ext}`
-      const filepath = join(brandsDir, filename)
+      const uploaded = await cloudinary.uploader.upload(dataUri, {
+        folder: "brands",
+        public_id: `brand_${brandId}`,
+        overwrite: true,
+        transformation: [{ width: 512, height: 512, crop: "limit" }],
+      })
 
-      // Save file
-      const bytes = await logo.arrayBuffer()
-      await writeFile(filepath, Buffer.from(bytes))
-
-      // Set logo URL
-      logoUrl = `/brands/${filename}`
+      logoUrl = uploaded.secure_url
     }
 
     // Update brand

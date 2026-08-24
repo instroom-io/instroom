@@ -659,7 +659,15 @@ export default function InfluencerList() {
   const [modalType, setModalType] = useState<ModalType>("select")
   const [historyTarget, setHistoryTarget] = useState<InfluencerRow | null>(null)
   const [showTrialLimitModal, setShowTrialLimitModal] = useState(false)
-  const [subscriptionStatus, setSubscriptionStatus] = useState<{ status: string; isExpired: boolean } | null>(null)
+  const [subscriptionStatus, setSubscriptionStatus] = useState<{
+    status: string
+    isExpired: boolean
+    subscription?: { plan?: { name?: string } } | null
+  } | null>(null)
+
+  // Import/Export are a Solo & Team feature — Basic (the free plan) doesn't
+  // include them, regardless of subscription status.
+  const isOnBasicPlan = subscriptionStatus?.subscription?.plan?.name === "basic"
 
   const { data: session } = useSession()
 
@@ -771,36 +779,36 @@ export default function InfluencerList() {
             </button>
             <button
               onClick={() => {
-                if (subscriptionStatus?.status === "trialing") {
+                if (isOnBasicPlan) {
                   setShowTrialLimitModal(true)
                   return
                 }
                 setOpenImport(true)
               }}
-              disabled={subscriptionStatus?.status === "trialing"}
+              disabled={isOnBasicPlan}
               className={`h-10 px-4 border rounded-lg text-sm transition ${
-                subscriptionStatus?.status === "trialing"
+                isOnBasicPlan
                   ? "opacity-50 cursor-not-allowed bg-gray-50 border-gray-200 text-gray-400"
                   : "hover:bg-gray-50 text-gray-600"
               }`}
-              title={subscriptionStatus?.status === "trialing" ? "Import is not available during your free trial" : undefined}
+              title={isOnBasicPlan ? "Import is not available on the Basic plan" : undefined}
             >
               Import
             </button>
             <button
               onClick={() => {
-                if (subscriptionStatus?.status === "trialing") {
+                if (isOnBasicPlan) {
                   setShowTrialLimitModal(true)
                   return
                 }
               }}
-              disabled={subscriptionStatus?.status === "trialing"}
+              disabled={isOnBasicPlan}
               className={`h-10 px-4 border rounded-lg text-sm transition ${
-                subscriptionStatus?.status === "trialing"
+                isOnBasicPlan
                   ? "opacity-50 cursor-not-allowed bg-gray-50 border-gray-200 text-gray-400"
                   : "hover:bg-gray-50 text-gray-600"
               }`}
-              title={subscriptionStatus?.status === "trialing" ? "Export is not available during your free trial" : undefined}
+              title={isOnBasicPlan ? "Export is not available on the Basic plan" : undefined}
             >
               Export
             </button>
@@ -1242,13 +1250,13 @@ export default function InfluencerList() {
                 className="text-xl font-semibold leading-tight"
                 style={{ color: "#111827", letterSpacing: "-0.025em" }}
               >
-                Import unavailable on trial
+                Import unavailable on Basic plan
               </h2>
               <p
                 className="text-sm leading-relaxed mx-auto"
                 style={{ color: "#6b7280", maxWidth: 280 }}
               >
-                You're currently on a free trial with a 100-influencer limit. Upgrade to a paid plan to import influencers in bulk.
+                You're currently on the Basic plan. Upgrade to Solo or Team to import influencers in bulk.
               </p>
             </div>
 

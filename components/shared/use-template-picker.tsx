@@ -77,7 +77,7 @@ export function UseTemplatePicker({
         <IconTemplate size={14} /> Use template <IconChevronDown size={12} />
       </button>
       {open && (
-        <div className="absolute z-20 mt-1 w-64 max-h-64 overflow-y-auto bg-white border border-gray-100 rounded-lg shadow-lg py-1">
+        <div className="absolute right-0 z-20 mt-1 w-64 max-h-64 overflow-y-auto bg-white border border-gray-100 rounded-lg shadow-lg py-1">
           {loading ? (
             <p className="px-3 py-2 text-xs text-gray-400">Loading…</p>
           ) : templates.length === 0 ? (

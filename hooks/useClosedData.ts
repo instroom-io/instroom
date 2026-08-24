@@ -123,6 +123,18 @@ export interface UpdateColumnResult {
   error?: string
 }
 
+export interface OrderDetailsFields {
+  /** Human-typed product note — kept separate from the Shopify-order JSON
+   *  that shares the same underlying column. */
+  note?: string
+  trackingNumber?: string
+  shippedAt?: string
+  deliveredAt?: string
+  deadline?: string
+  currency?: string
+  deliverables?: string
+}
+
 interface UseClosedDataReturn {
   data: ClosedInfluencer[]
   isLoading: boolean
@@ -135,6 +147,7 @@ interface UseClosedDataReturn {
   updatePaidCollab: (id: string, paidCollabData: PaidCollabData) => Promise<boolean>
   updateCampaignType: (id: string, campaignType: string) => Promise<boolean>
   updatePostUrl: (id: string, postUrl: string) => Promise<boolean>
+  updateOrderDetails: (id: string, fields: OrderDetailsFields) => Promise<boolean>
   refetch: () => void
 }
 
@@ -503,6 +516,54 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
     [brandId, setDataCached]
   )
 
+  // ── Update Order Details (optimistic) ─────────────────────────────────────
+  // Everything the Post Tracker's "Order" tab Save button covers except
+  // stage — that stays on updateColumn, the same path the Stage dropdown
+  // uses, so the two never disagree about what stage this influencer is in.
+  const updateOrderDetails = useCallback(
+    async (id: string, fields: OrderDetailsFields): Promise<boolean> => {
+      if (!brandId) return false
+
+      let snapshot: ClosedInfluencer[] = []
+
+      setDataCached((prev) => {
+        snapshot = prev
+        return prev.map((item) => {
+          if (item.id !== id) return item
+          return {
+            ...item,
+            ...(fields.trackingNumber !== undefined && { trackingNumber: fields.trackingNumber || null }),
+            ...(fields.shippedAt !== undefined && { shippedAt: fields.shippedAt || null }),
+            ...(fields.deliveredAt !== undefined && { deliveredAt: fields.deliveredAt || null }),
+            ...(fields.deadline !== undefined && { deadline: fields.deadline || null }),
+            ...(fields.currency !== undefined && { currency: fields.currency || null }),
+            ...(fields.deliverables !== undefined && { deliverables: fields.deliverables || null }),
+          }
+        })
+      })
+
+      try {
+        const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
+          method:  "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify(fields),
+        })
+
+        if (!res.ok) {
+          setDataCached(snapshot)
+          return false
+        }
+
+        invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId!)])
+        return true
+      } catch {
+        setDataCached(snapshot)
+        return false
+      }
+    },
+    [brandId, setDataCached]
+  )
+
   return {
     data,
     isLoading: Boolean(brandId) && isLoading,
@@ -511,6 +572,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
     updatePaidCollab,
     updateCampaignType,
     updatePostUrl,
+    updateOrderDetails,
     refetch: () => { void refetch() }, // background sync, no spinner
   }
 }

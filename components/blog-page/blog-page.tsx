@@ -349,7 +349,7 @@ function ArticleView({
     <div style="background:#0a1a0f;border-radius:14px;padding:36px;text-align:center;margin:48px 0 0;">
       <h3 style="font-family:'Manrope',sans-serif;font-size:22px;font-weight:700;color:#fff;margin-bottom:10px;letter-spacing:-0.3px;">Ready to run campaigns like this?</h3>
       <p style="font-size:14px;color:rgba(255,255,255,0.4);margin-bottom:24px;line-height:1.6;">Instroom gives you one workspace for every creator, every campaign, and every result. Start free — no credit card required.</p>
-      <a href="/signup" style="font-family:'Inter',sans-serif;font-size:14px;font-weight:600;color:#fff;background:#1FAE5B;border-radius:8px;padding:10px 24px;text-decoration:none;display:inline-block;">Start free for 30 days</a>
+      <a href="/signup?plan=basic" style="font-family:'Inter',sans-serif;font-size:14px;font-weight:600;color:#fff;background:#1FAE5B;border-radius:8px;padding:10px 24px;text-decoration:none;display:inline-block;">Start for free</a>
     </div>
   `;
 

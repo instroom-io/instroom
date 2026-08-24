@@ -1,6 +1,15 @@
 import "server-only"
 import { prisma } from "@/lib/prisma"
 
+// A distinct provider label from NextAuth's own "google" (used for login).
+// Both used to upsert the same Account row (same provider + providerAccountId
+// for the same real Google account), so a plain re-login would blindly
+// overwrite Gmail's tokens/scope with login's narrower ones — Google omits
+// refresh_token on any re-consent-less login, so this could silently null out
+// a working Gmail connection. Keeping Gmail's row under its own provider
+// label means the login flow never touches it, full stop.
+export const GMAIL_PROVIDER = "gmail"
+
 // ─── Token handling ───────────────────────────────────────────────────────────
 // Previously duplicated near-identically in app/api/gmail/send/route.ts and
 // inlined again in app/api/gmail/threads/route.ts — extracted here so a third
@@ -51,11 +60,16 @@ export async function getGmailAccessToken(userId: string | null | undefined): Pr
 
   // A user can have more than one linked Google account (e.g. reconnected
   // Gmail with a different account than before) — most recently connected
-  // wins, since that's the one they just told us to use.
+  // wins, since that's the one they just told us to use. Ordering by
+  // last_selected_at, not id: reconnecting an account used before updates
+  // its existing row rather than creating a new one, so id alone can't tell
+  // "just reconnected" apart from "connected a while ago." Rows from before
+  // this field existed have it as null and fall back to id ordering among
+  // themselves, same as before.
   const account = await prisma.account.findFirst({
-    where: { userId, provider: "google" },
+    where: { userId, provider: GMAIL_PROVIDER },
     select: { id: true, access_token: true, refresh_token: true, expires_at: true },
-    orderBy: { id: "desc" },
+    orderBy: [{ last_selected_at: "desc" }, { id: "desc" }],
   })
 
   if (!account?.access_token) return null
@@ -69,6 +83,22 @@ export async function getGmailAccessToken(userId: string | null | undefined): Pr
   }
 
   return account.access_token
+}
+
+/** The email address of the currently-connected Gmail account, so callers can
+ *  tell "a thread with an external contact" apart from "a thread with my own
+ *  connected mailbox" (e.g. a self-sent verification/test email). Same
+ *  most-recently-connected-wins rule as getGmailAccessToken. */
+export async function getGmailAccountEmail(userId: string | null | undefined): Promise<string | null> {
+  if (!userId) return null
+
+  const account = await prisma.account.findFirst({
+    where: { userId, provider: GMAIL_PROVIDER },
+    select: { email: true },
+    orderBy: [{ last_selected_at: "desc" }, { id: "desc" }],
+  })
+
+  return account?.email ?? null
 }
 
 // ─── Thread shaping ───────────────────────────────────────────────────────────

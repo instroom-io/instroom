@@ -13,6 +13,10 @@ import { cn } from "@/lib/utils"
 import { SettingsSkeleton } from "@/components/shared/skeletons"
 import { fetchCached, getCachedData, hasCachedData } from "@/lib/data-cache"
 
+// Must match the server-side check in api/brand/branding/route.ts.
+const ALLOWED_LOGO_TYPES = ["image/png", "image/jpeg", "image/svg+xml", "image/webp"]
+const MAX_LOGO_SIZE_BYTES = 5 * 1024 * 1024
+
 function LoadingScreen() {
   return <SettingsSkeleton sections={[{ fields: 2 }]} label="Loading branding…" />
 }
@@ -124,14 +128,30 @@ function BrandingContent() {
 
   const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
-    if (file) {
-      setLogoFile(file)
-      const reader = new FileReader()
-      reader.onloadend = () => {
-        setLogoPreview(reader.result as string)
-      }
-      reader.readAsDataURL(file)
+    if (!file) return
+
+    // The input's accept= attribute only filters the OS picker's default
+    // view — drag-and-drop and "All Files" bypass it entirely, so a rejected
+    // file still needs to be caught here, not just relied on server-side.
+    // Same allowed list and size cap as api/brand/branding/route.ts.
+    if (!ALLOWED_LOGO_TYPES.includes(file.type)) {
+      setError("That file type isn't supported. Please upload a PNG, JPG, SVG, or WebP image.")
+      e.target.value = ""
+      return
     }
+    if (file.size > MAX_LOGO_SIZE_BYTES) {
+      setError("That image is too large. Please upload a file under 5MB.")
+      e.target.value = ""
+      return
+    }
+
+    setError("")
+    setLogoFile(file)
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      setLogoPreview(reader.result as string)
+    }
+    reader.readAsDataURL(file)
   }
 
   const handleRemoveLogo = async () => {
@@ -268,7 +288,7 @@ function BrandingContent() {
                       <span className="text-[11px] leading-tight text-muted-foreground">
                         Upload logo
                         <br />
-                        PNG, JPG, SVG
+                        PNG, JPG, SVG, WebP
                         <br />
                         max 5MB
                       </span>

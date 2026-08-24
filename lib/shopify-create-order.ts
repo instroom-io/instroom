@@ -14,7 +14,11 @@ function safeParse(value: string | null) {
   try {
     return JSON.parse(value)
   } catch {
-    return {}
+    // Legacy plain-text product details predate this column being used as a
+    // JSON store — rescue the original text into the new structure instead of
+    // silently discarding it when this order-creation flow re-saves the
+    // column (mirrors the same fallback in the closed/[id] PATCH route).
+    return { note: value }
   }
 }
 
@@ -104,6 +108,7 @@ export async function createShopifyOrderForInfluencer(params: {
   })
 
   productDetails.shippingAddress = shippingAddress
+  productDetails.variantId = String(variantId)
   await prisma.brandInfluencer.update({
     where: { id: brandInfluencerId },
     data: { product_details: JSON.stringify(productDetails) },

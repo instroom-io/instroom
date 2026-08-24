@@ -29,7 +29,7 @@ export function AboutCTA() {
           marketing — with Instroom.
         </p>
         <div className="flex gap-3 justify-center mb-4 flex-wrap">
-          <Link href="/signup">
+          <Link href="/signup?plan=basic">
             <Button className="bg-[#1FAE5B] text-white font-bold h-13 px-9 rounded-xl hover:bg-[#158a48] shadow-lg shadow-emerald-500/40 text-base transition-all duration-150" style={{ height: "52px", fontSize: "1rem" }}>
               Sign Up for Free
             </Button>

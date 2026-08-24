@@ -160,16 +160,31 @@ export async function POST(req: Request) {
         })
       }
 
-      await prisma.paymentHistory.create({
-        data: {
-          user_id: userId,
-          subscription_id: subscription.id,
-          amount: (jsonBody.data.attributes.total as number) / 100 || 0,
-          status: "completed",
-          description: `${planKey} plan subscription (${cycle})`,
-          stripe_payment_id: jsonBody.data.id,
-        },
-      }).catch(() => void 0)
+      // A single purchase fires several of the four event names handled in
+      // this block (e.g. both an "order" event and "subscription_created")
+      // — only the order-type events carry a real `total`; recording the
+      // others too created a second, bogus $0 PaymentHistory row for every
+      // purchase. Also guard against the same event being redelivered
+      // (Lemon Squeezy retries failed deliveries) creating a real duplicate.
+      const total = jsonBody.data.attributes.total
+      if (typeof total === "number") {
+        const alreadyRecorded = await prisma.paymentHistory.findFirst({
+          where: { stripe_payment_id: jsonBody.data.id },
+          select: { id: true },
+        })
+        if (!alreadyRecorded) {
+          await prisma.paymentHistory.create({
+            data: {
+              user_id: userId,
+              subscription_id: subscription.id,
+              amount: total / 100,
+              status: "completed",
+              description: `${planKey} plan subscription (${cycle})`,
+              stripe_payment_id: jsonBody.data.id,
+            },
+          }).catch(() => void 0)
+        }
+      }
 
       // Sync brand activity with new subscription status
       await syncBrandActivityWithSubscription(userId)

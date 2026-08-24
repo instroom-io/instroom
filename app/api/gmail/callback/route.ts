@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
+import { GMAIL_PROVIDER } from "@/lib/gmail"
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
@@ -102,22 +103,27 @@ export async function GET(req: NextRequest) {
   }
 
   // ── Upsert into Account table ─────────────────────────────────────────────
-  // If a Google Account row already exists for this user, update it.
-  // If not, create one. This is separate from NextAuth's own account row
-  // (NextAuth uses "openid email profile" scopes); we store the Gmail-scoped
-  // tokens here so the credentials user gets Gmail access without re-logging in.
+  // If a Gmail Account row already exists for this user, update it.
+  // If not, create one. Stored under its own provider label (GMAIL_PROVIDER),
+  // deliberately distinct from NextAuth's own "google" login row — both would
+  // otherwise upsert the same (provider, providerAccountId) row for the same
+  // real Google account, and a later plain login would blindly overwrite
+  // these Gmail-scoped tokens with login's narrower ones (Google omits
+  // refresh_token on a repeat login, so that overwrite can silently null out
+  // a working Gmail connection). Keeping this on its own row means the login
+  // flow never touches it.
   try {
     await prisma.account.upsert({
       where: {
         provider_providerAccountId: {
-          provider: "google",
+          provider: GMAIL_PROVIDER,
           providerAccountId: googleAccountId,
         },
       },
       create: {
         userId,
         type: "oauth",
-        provider: "google",
+        provider: GMAIL_PROVIDER,
         providerAccountId: googleAccountId,
         access_token: accessToken,
         refresh_token: refreshToken,
@@ -125,6 +131,8 @@ export async function GET(req: NextRequest) {
         token_type: "Bearer",
         scope,
         id_token: null,
+        email: googleEmail || null,
+        last_selected_at: new Date(),
       },
       update: {
         userId,                        // re-bind in case the Google account was previously linked elsewhere
@@ -134,6 +142,11 @@ export async function GET(req: NextRequest) {
         ...(refreshToken ? { refresh_token: refreshToken } : {}),
         expires_at: expiresAt,
         scope,
+        email: googleEmail || null,
+        // The whole point of reconnecting — this is what makes THIS account
+        // "the most recently connected one" again, not just refreshed tokens
+        // on an account that's still second-most-recent.
+        last_selected_at: new Date(),
       },
     })
   } catch (err) {
