@@ -147,6 +147,7 @@ interface UseClosedDataReturn {
   updatePaidCollab: (id: string, paidCollabData: PaidCollabData) => Promise<boolean>
   updateCampaignType: (id: string, campaignType: string) => Promise<boolean>
   updatePostUrl: (id: string, postUrl: string) => Promise<boolean>
+  updateOrderDetails: (id: string, fields: OrderDetailsFields) => Promise<boolean>
   /** True while at least one write is in flight — drives the saving indicator. */
   isSaving: boolean
   refetch: () => void
@@ -617,6 +618,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
     updatePaidCollab,
     updateCampaignType,
     updatePostUrl,
+    updateOrderDetails,
     isSaving: pendingWrites > 0,
     // Skipped while a write is in flight: its response would predate the
     // mutation, which is what pendingRef is here to prevent.

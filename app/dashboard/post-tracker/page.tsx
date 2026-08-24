@@ -1216,7 +1216,7 @@ function PostTrackerContent() {
   // feature for free-tier users. A cached answer resolves on mount instead.
   const { isSubscribed, status: subscriptionStatus } = useSubscriptionGate(brandId)
 
-  const { data, isLoading, error, updateColumn, updateCampaignType, updatePostUrl, isSaving, refetch } = useClosedData(brandId)
+  const { data, isLoading, error, updateColumn, updateCampaignType, updatePostUrl, updateOrderDetails, isSaving, refetch } = useClosedData(brandId)
 
   const [view,                 setView]                 = useState<"Board"|"list">("Board")
   const [search,               setSearch]               = useState("")
