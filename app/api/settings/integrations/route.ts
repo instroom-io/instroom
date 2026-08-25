@@ -57,12 +57,37 @@ export async function GET(req: Request) {
       }
     }
 
-    let shopify: { connected: boolean; connectedAs?: string; unmatchedOrders?: number } =
-      defaultIntegrations().shopify
+    let shopify: {
+      connected: boolean
+      connectedAs?: string
+      unmatchedOrders?: number
+      /**
+       * Connected AND actually usable.
+       *
+       * `connected` is the row's own boolean, which is what the Settings page
+       * shows. It can be true while the stored config has no credentials — a
+       * half-finished install leaves exactly that — and every Shopify request
+       * then fails, because getShopifyConnection (lib/shopify-connection.ts)
+       * requires shopDomain and accessTokenEncrypted before it returns anything.
+       *
+       * Callers that are about to CALL Shopify should gate on this instead, so
+       * they skip the request rather than making one that cannot succeed. Only
+       * the presence of the two fields is checked — nothing is decrypted and no
+       * credential value is read here.
+       */
+      ready?: boolean
+    } = defaultIntegrations().shopify
     if (shopifySetting) {
+      const config = (shopifySetting.config as Record<string, unknown> | null) ?? {}
       shopify = {
         connected: shopifySetting.connected,
         connectedAs: shopifySetting.connected_as ?? undefined,
+        ready:
+          shopifySetting.connected &&
+          typeof config.shopDomain === "string" &&
+          Boolean(config.shopDomain) &&
+          typeof config.accessTokenEncrypted === "string" &&
+          Boolean(config.accessTokenEncrypted),
       }
       if (shopifySetting.connected) {
         shopify.unmatchedOrders = await prisma.shopifyOrder.count({

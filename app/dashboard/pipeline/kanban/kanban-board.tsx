@@ -52,6 +52,8 @@ import InfluencerProfileSidebar, {
 } from "@/components/InfluencerProfileSidebar"
 
 import { usePipelineData, type PipelineInfluencer } from "@/hooks/usePipelineData"
+import { invalidateInfluencerDerivedCaches, pipelineCacheKey } from "@/lib/cache-invalidation"
+import { DataSyncStatus } from "@/components/data-sync-status"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { BoardSkeleton } from "@/components/shared/skeletons"
 
@@ -94,6 +96,15 @@ const NI_REASONS = [
 ]
 
 // ─── Collaboration Types ──────────────────────────────────────────────────────
+/**
+ * How many bulk status writes may be in flight at once.
+ *
+ * Two, not unbounded: the Prisma pool is capped at connection_limit=3, so a
+ * request per selected row queues against three connections and crosses the
+ * 10s pool timeout. Two leaves one connection for whatever the user does next.
+ */
+const BULK_CONCURRENCY = 2
+
 const COLLAB_TYPES = [
   {
     id: "gifting",
@@ -847,30 +858,43 @@ function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApprov
           </div>
         )}
 
-        {/* For Order Creation badge */}
-        {influencer.pipelineStatus === "For Order Creation" && (
-          <div className="mt-2 text-[10px] text-green-600 bg-green-50 rounded-full px-2.5 py-1 inline-flex items-center gap-1 font-medium">
-            <IconPackage size={10} />
-            In Post Tracker
-          </div>
-        )}
+        {/* ── Status row ──────────────────────────────────────────────────────
+            "In Post Tracker" and the collaboration/payment type (Paid, Gifting,
+            Affiliate, UGC — whatever the Pipeline's Deal Agreed step stored on
+            this row) share ONE row now. They used to be two stacked blocks,
+            each with its own mt-2, so a card that had both was 2 rows taller
+            than a card that had one. Both badges keep their own styling; the
+            row's `mt-2` and `gap-1.5` replace their individual margins, and it
+            renders only when at least one of them has something to show. */}
+        {(() => {
+          const inPostTracker = influencer.pipelineStatus === "For Order Creation"
+          // Deal Agreed now cascades straight to For Order Creation on confirm,
+          // but legacy rows can still rest at Deal Agreed.
+          const collab =
+            (influencer.pipelineStatus === "For Order Creation" || influencer.pipelineStatus === "Deal Agreed") &&
+            influencer.collabType
+              ? COLLAB_TYPES.find((c) => c.id === influencer.collabType)
+              : undefined
 
-        {/* Collab type badge — Deal Agreed now cascades straight to For Order
-            Creation on confirm, but legacy rows can still rest at Deal Agreed */}
-        {(influencer.pipelineStatus === "For Order Creation" || influencer.pipelineStatus === "Deal Agreed") && influencer.collabType && (
-          <div className="mt-2">
-            {(() => {
-              const collab = COLLAB_TYPES.find((c) => c.id === influencer.collabType)
-              if (!collab) return null
-              return (
+          if (!inPostTracker && !collab) return null
+
+          return (
+            <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+              {inPostTracker && (
+                <span className="text-[10px] text-green-600 bg-green-50 rounded-full px-2.5 py-1 inline-flex items-center gap-1 font-medium">
+                  <IconPackage size={10} />
+                  In Post Tracker
+                </span>
+              )}
+              {collab && (
                 <span className={`inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full border ${collab.color.split(" ")[0]} ${collab.color.split(" ")[1]}`}>
                   {collab.icon}
                   {collab.title}
                 </span>
-              )
-            })()}
-          </div>
-        )}
+              )}
+            </div>
+          )
+        })()}
       </div>
 
       {/* Quick-move buttons — only for non-terminal cards */}
@@ -1032,6 +1056,11 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   const [view,                 setView]                 = useState<"Board" | "list">("Board")
   const [search,               setSearch]               = useState("")
   const [showSuccessMessage,   setShowSuccessMessage]   = useState<string | null>(null)
+  // Every message used to render in the green success colour, including
+  // "Failed to move …" and the permission refusals — a failure that looks like
+  // a success. Same split the Post Tracker and Influencer List docks use:
+  // green by default, red for an actual failure.
+  const [toastType,            setToastType]            = useState<"success" | "error">("success")
   const [activeId,             setActiveId]             = useState<string | null>(null)
   const [sidebarOpen,          setSidebarOpen]          = useState(false)
   const [selectedPartner,      setSelectedPartner]      = useState<Partner | null>(null)
@@ -1065,7 +1094,8 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   const { canApproveInfluencers, loading: capabilitiesLoading } = useBrandCapabilities(brandId)
   const canApprove = !capabilitiesLoading && canApproveInfluencers
 
-  const toast = useCallback((msg: string, duration = 3000) => {
+  const toast = useCallback((msg: string, duration = 3000, type: "success" | "error" = "success") => {
+    setToastType(type)
     setShowSuccessMessage(msg)
     setTimeout(() => setShowSuccessMessage(null), duration)
   }, [])
@@ -1081,7 +1111,9 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     toast(
       success
         ? `${collabModalInfluencer.influencer} moved to Post Tracker · ${collabName} ✓`
-        : `Failed to move ${collabModalInfluencer.influencer}`
+        : `Failed to move ${collabModalInfluencer.influencer}`,
+      3000,
+      success ? "success" : "error"
     )
     setCollabModalInfluencer(null)
     setPendingCollabId(null)
@@ -1097,7 +1129,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     if (success) {
       setSelectedPartner((prev) => (prev ? { ...prev, collabType: newType } : prev))
     }
-    toast(success ? "Collaboration type updated ✓" : "Failed to update collaboration type")
+    toast(success ? "Collaboration type updated ✓" : "Failed to update collaboration type", 3000, success ? "success" : "error")
   }
 
   const handleCollabTypeCancel = () => {
@@ -1118,7 +1150,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     if (!dragged) return
 
     if (!canApprove) {
-      toast("Only Owners and Managers can approve influencers", 2500)
+      toast("Only Owners and Managers can approve influencers", 2500, "error")
       return
     }
 
@@ -1126,7 +1158,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     if (dragged.pipelineStatus === newStatus) return
 
     if (isTerminal(dragged.pipelineStatus)) {
-      toast(`Cannot move from "${dragged.pipelineStatus}"`, 2000)
+      toast(`Cannot move from "${dragged.pipelineStatus}"`, 2000, "error")
       return
     }
 
@@ -1147,7 +1179,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
 
     const success = await updateStatus(draggedId, newStatus)
     const colTitle = columns.find((col) => col.key === destKey)?.title
-    toast(success ? `${dragged.influencer} moved to ${colTitle}` : `Failed to move ${dragged.influencer}`)
+    toast(success ? `${dragged.influencer} moved to ${colTitle}` : `Failed to move ${dragged.influencer}`, 3000, success ? "success" : "error")
   }
 
   const handleNiConfirm = async (reason: string) => {
@@ -1155,7 +1187,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     const success = await updateStatus(pendingNiId, "Not Interested", { niReason: reason })
     toast(success
       ? `${niModalInfluencer.influencer} marked as Not Interested · ${reason}`
-      : `Failed to update ${niModalInfluencer.influencer}`)
+      : `Failed to update ${niModalInfluencer.influencer}`, 3000, success ? "success" : "error")
     setNiModalInfluencer(null)
     setPendingNiId(null)
   }
@@ -1165,7 +1197,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   // ── Status update from card buttons / list dropdown ───────────────────────
   const handleStatusUpdate = useCallback(async (id: string, newStatus: string) => {
     if (!canApprove) {
-      toast("Only Owners and Managers can approve influencers", 2500)
+      toast("Only Owners and Managers can approve influencers", 2500, "error")
       return
     }
     if (newStatus === "Not Interested") {
@@ -1186,7 +1218,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     const success = await updateStatus(id, newStatus)
     toast(success
       ? `${influencer?.influencer} moved to ${newStatus}`
-      : `Failed to move ${influencer?.influencer}`, 2000)
+      : `Failed to move ${influencer?.influencer}`, 2000, success ? "success" : "error")
   }, [data, canApprove, updateStatus, toast])
 
   // ── Bulk selection helpers ────────────────────────────────────────────────
@@ -1202,10 +1234,19 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
 
   // ── Bulk stage move ───────────────────────────────────────────────────────
   // Reuses the exact same per-row `updateStatus` the single-row dropdown and
-  // drag-and-drop use — no new endpoint, no duplicated status logic. Runs
-  // sequentially on purpose: `updateStatus` rolls back from a full-list
-  // snapshot on failure, so overlapping calls could roll back each other's
-  // successful writes. Sequential keeps every success intact when one fails.
+  // drag-and-drop use — no new endpoint, no duplicated status logic.
+  //
+  // Concurrency is capped rather than unbounded OR strictly serial:
+  //
+  //   * unbounded would put one request per selected row into a Prisma pool
+  //     capped at connection_limit=3, which is what produced P2024 timeouts
+  //     (see lib/dashboard-prefetch.ts for the measurements);
+  //   * strictly serial was the previous behaviour, and its stated reason —
+  //     that a failure rolls back a full-list snapshot — is no longer true.
+  //     `updateStatus` restores only its own row now, so overlapping calls can
+  //     no longer undo each other's successful writes.
+  //
+  // Two at a time leaves a connection free for whatever the user does next.
   const runBulkUpdate = async (
     newStatus: string,
     extra?: { niReason?: string; collaborationType?: string }
@@ -1218,17 +1259,37 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     const stageTitle = columns.find((c) => c.status === newStatus)?.title ?? newStatus
 
     if (targets.length === 0) {
-      toast(`Nothing to move — the selected influencers are already in ${stageTitle} or can't be moved`, 3500)
+      toast(`Nothing to move — the selected influencers are already in ${stageTitle} or can't be moved`, 3500, "error")
       return
     }
 
     setBulkBusy(true)
     const failedIds: string[] = []
     let moved = 0
-    for (const target of targets) {
-      const success = await updateStatus(target.id, newStatus, extra)
-      if (success) moved += 1
-      else failedIds.push(target.id)
+
+    // Each worker takes the next index, so `BULK_CONCURRENCY` requests are in
+    // flight at most, no matter how many rows are selected.
+    let cursor = 0
+    const worker = async () => {
+      while (cursor < targets.length) {
+        const target = targets[cursor++]
+        // Derived views are marked stale ONCE after the run, not per row.
+        const success = await updateStatus(target.id, newStatus, {
+          ...extra,
+          deferDerivedInvalidation: true,
+        })
+        if (success) moved += 1
+        else failedIds.push(target.id)
+      }
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(BULK_CONCURRENCY, targets.length) }, worker)
+    )
+
+    // One invalidation for the whole run. The board's own entry is excluded —
+    // it is already correct from the optimistic writes above.
+    if (moved > 0 && brandId) {
+      invalidateInfluencerDerivedCaches(brandId, [pipelineCacheKey(brandId)])
     }
     setBulkBusy(false)
 
@@ -1240,9 +1301,11 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     if (failedIds.length === 0) {
       toast(`${moved} influencer${moved === 1 ? "" : "s"} moved to ${stageTitle} ✓${skippedNote}`, 3500)
     } else {
+      // A partial failure is still a failure — the user has rows to retry.
       toast(
         `${moved} moved to ${stageTitle}, ${failedIds.length} failed${skippedNote} — the failed ones are still selected`,
-        5000
+        5000,
+        "error"
       )
     }
   }
@@ -1250,7 +1313,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   const handleBulkStageSelect = (newStatus: string) => {
     setShowBulkStageMenu(false)
     if (!canApprove) {
-      toast("Only Owners and Managers can approve influencers", 2500)
+      toast("Only Owners and Managers can approve influencers", 2500, "error")
       return
     }
     if (selectedIds.size === 0) return
@@ -1440,7 +1503,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
       {/* Save state lives in the bottom-right corner, out of the way of the
           board: a subtle "Saving" pill while a status write is actually in
           flight, and the outcome message in the same spot once it lands. */}
-      <div className="fixed bottom-4 right-4 z-50 flex flex-col items-end gap-2">
+      <div className="notice-dock">
         {isSaving && (
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-900/90 text-white text-xs font-medium shadow-lg animate-in fade-in">
             <IconLoader2 size={12} className="animate-spin" />
@@ -1448,7 +1511,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
           </div>
         )}
         {showSuccessMessage && (
-          <div className="bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg animate-in slide-in-from-bottom-2">
+          <div className={`px-4 py-2 rounded-lg shadow-lg text-white animate-in slide-in-from-bottom-2 ${toastType === "error" ? "bg-red-600" : "bg-green-500"}`}>
             {showSuccessMessage}
           </div>
         )}
@@ -1583,6 +1646,10 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
         <span className="text-sm text-gray-500 whitespace-nowrap ml-1">
           {filteredData.length} of {data.length} influencer{data.length !== 1 ? "s" : ""}
         </span>
+
+        {/* Real freshness, from the shared cache entry this board renders
+            from — same component and placement on every board. */}
+        <DataSyncStatus cacheKey={brandId ? `/api/brand/${brandId}/pipeline` : null} />
 
         {/* Spacer */}
         <div className="flex-1" />

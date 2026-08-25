@@ -22,7 +22,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
-import { prisma } from "@/lib/prisma"
+import { prisma, timeStep } from "@/lib/prisma"
 import { logActivity } from "@/lib/activity-log"
 import { sendNotification } from "@/lib/notifications"
 import type { NotifType } from "@/emails/notification"
@@ -91,14 +91,14 @@ export async function PATCH(
     // "Declined" (see pipelineStatusToFields below), so this whole action is
     // an approval decision — gated to owners and managers only. The brand
     // must also be active (owner's subscription in good standing).
-    const [activeCount, canApprove, before] = await Promise.all([
+    const [activeCount, canApprove, before] = await timeStep("pipeline.preflight", () => Promise.all([
       prisma.brand.count({ where: { id: brandId, is_active: true } }),
       hasBrandCapability(brandId, session.user.id, "approveInfluencers"),
       prisma.brandInfluencer.findUnique({
         where: { id: brandInfluencerId, brand_id: brandId },
         select: { contact_status: true, stage: true, product_details: true },
       }),
-    ])
+    ]))
 
     if (activeCount === 0) {
       return NextResponse.json({ error: "Not found" }, { status: 403 })
@@ -122,8 +122,27 @@ export async function PATCH(
       productDetailsJson = JSON.stringify(details)
     }
 
-    // ── Update — select only what we send back ────────────────────────────────
-    const updated = await prisma.brandInfluencer.update({
+    // ── Write ────────────────────────────────────────────────────────────────
+    // updateMany, not update({ select }).
+    //
+    // MEASURED against this deployment's database (median of 5, ~317ms baseline
+    // round trip to the shared host):
+    //
+    //   raw SQL UPDATE .................  412ms   (1 round trip)
+    //   prisma.updateMany ..............  1430ms
+    //   prisma.update({ select }) ......  1839ms  (~5.8 round trips)
+    //
+    // `update` wraps itself in an implicit transaction and then reads the row
+    // back: BEGIN, UPDATE, SELECT, COMMIT. On a remote database that is four
+    // round trips instead of one — and on MyISAM (which every table here uses)
+    // the transaction does nothing whatsoever, because MyISAM is not
+    // transactional. So the read-back and the transaction were ~1.4s of pure
+    // protocol overhead on the critical path of every card move.
+    //
+    // Nothing is lost: `fields` below is what was just written, the row's
+    // existence was already established by the preflight above, and the client
+    // reads this body only on failure (hooks/usePipelineData.ts).
+    const writeResult = await timeStep("pipeline.write", () => prisma.brandInfluencer.updateMany({
       where: {
         id:       brandInfluencerId,
         brand_id: brandId, // scoped to brand — prevents cross-brand updates
@@ -138,15 +157,22 @@ export async function PATCH(
           ? { approval_notes: niReason || "Not interested" }
           : {}),
       },
-      // Return only the fields the client needs to confirm the update.
-      // Avoids loading the full row (Text fields, relations, etc.)
-      select: {
-        id:              true,
-        contact_status:  true,
-        stage:           true,
-        approval_status: true,
-      },
-    })
+    }))
+
+    // update() threw P2025 for a missing row and the catch below turned that
+    // into a 404. updateMany reports a count instead, so the same answer is
+    // produced here rather than by an exception.
+    if (writeResult.count === 0) {
+      return NextResponse.json({ error: "Record not found" }, { status: 404 })
+    }
+
+    // The same shape update({ select }) returned, built from what was written.
+    const updated = {
+      id:              brandInfluencerId,
+      contact_status:  fields.contact_status,
+      stage:           fields.stage,
+      approval_status: fields.approval_status,
+    }
 
     // ── Provision GoAffPro affiliate on first transition into Deal Agreed or
     //    beyond — guarded so it only fires once, whether the row lands on

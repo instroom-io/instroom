@@ -54,6 +54,82 @@ const writeGenerations = new Map<string, number>()
  * mutation and once after it settles (success OR failure), so any request whose
  * lifetime overlaps the mutation window is discarded rather than cached.
  */
+/**
+ * Keys with a write currently in flight.
+ *
+ * The generation counter already discards a response whose key was written
+ * WHILE the request was out. It cannot discard one whose request both started
+ * and finished inside the write window — and that is the window a cross-module
+ * seed lives in: the Post Tracker entry is written the moment Pipeline's Deal
+ * Agreed PATCH goes out, and that PATCH takes ~1.3s while a closed GET takes
+ * ~400ms. A fetch landing in that gap wrote server state that does not yet
+ * include the seeded row, and the card vanished.
+ *
+ * This is the same discard path, keyed the same way, with one more reason to
+ * take it: a write is pending for this key, so any response is by definition
+ * describing state older than what is about to be persisted.
+ */
+const pendingWrites = new Map<string, number>()
+
+/**
+ * The `updatedAt` a key carried when its first pending write opened.
+ *
+ * A mutation writes to the cache optimistically, and `setCachedData` stamps a
+ * fresh `updatedAt` — so a mutation that then FAILED and rolled back would still
+ * have moved the timestamp, and anything reporting freshness would say the data
+ * had just been refreshed when it had not. Keeping the pre-write value lets a
+ * failed write put it back.
+ */
+const preWriteUpdatedAt = new Map<string, number>()
+
+/** Open a write window for a key. Pair with `endKeyWrite`. */
+export function beginKeyWrite(key: string): void {
+  const depth = (pendingWrites.get(key) ?? 0) + 1
+  pendingWrites.set(key, depth)
+  // Only the outermost write records it; nested writes must not overwrite the
+  // value the first one saved.
+  if (depth === 1) {
+    const entry = cache.get(key)
+    preWriteUpdatedAt.set(key, entry?.updatedAt ?? 0)
+  }
+  // Subscribers re-render on this, which is what lets a freshness indicator flip
+  // to "Syncing…" the moment a save starts rather than only when the cache is
+  // next written.
+  notify(key)
+}
+
+/**
+ * Close a write window.
+ *
+ * `succeeded` defaults to true, so existing callers keep their behaviour. Pass
+ * false for a write that failed: the key's `updatedAt` is restored to what it
+ * was before the write, so the rollback's own setCachedData does not read as a
+ * successful refresh.
+ */
+export function endKeyWrite(key: string, succeeded = true): void {
+  const next = (pendingWrites.get(key) ?? 0) - 1
+  if (next > 0) {
+    pendingWrites.set(key, next)
+    return
+  }
+  pendingWrites.delete(key)
+
+  const previous = preWriteUpdatedAt.get(key)
+  preWriteUpdatedAt.delete(key)
+  if (!succeeded && previous !== undefined) {
+    const entry = cache.get(key)
+    // The data itself is whatever the rollback left; only the freshness stamp
+    // is reverted.
+    if (entry) cache.set(key, { ...entry, updatedAt: previous })
+  }
+  notify(key)
+}
+
+/** Is a write in flight for this key right now? */
+export function hasPendingWrite(key: string): boolean {
+  return (pendingWrites.get(key) ?? 0) > 0
+}
+
 export function markCacheWrite(key: string): void {
   writeGenerations.set(key, (writeGenerations.get(key) ?? 0) + 1)
 }
@@ -222,6 +298,22 @@ export function getCachedData<T>(key: string): T | undefined {
   return cache.get(key)?.data as T | undefined
 }
 
+/**
+ * When this key was last written by a SUCCESSFUL fetch, in ms since epoch.
+ *
+ * `null` when nothing is cached, and null when the entry carries the stale
+ * marker (`updatedAt: 0`, set by invalidateCache and by promoteRestored). That
+ * marker is deliberately not a timestamp — treating it as one would report a
+ * refresh in 1970 — so callers that want to show freshness get "unknown"
+ * instead, which is the truth: the entry is there but its age is not vouched
+ * for.
+ */
+export function getCacheUpdatedAt(key: string): number | null {
+  const entry = cache.get(key)
+  if (!entry || entry.updatedAt === 0) return null
+  return entry.updatedAt
+}
+
 export function hasCachedData(key: string): boolean {
   return cache.has(key)
 }
@@ -232,6 +324,48 @@ export function setCachedData<T>(key: string, data: T): void {
   // Mirrored so the next page load can render this without a request.
   persist(key, entry)
   notify(key)
+}
+
+/**
+ * Is a fetch for this key already running?
+ *
+ * `fetchCached` dedupes on its own, so callers never NEED this to stay correct.
+ * It exists for the background prefetch, which wants to skip a key rather than
+ * attach to someone else's request and hold a slot in its own queue.
+ */
+export function isFetching(key: string): boolean {
+  return inflight.has(key)
+}
+
+/**
+ * Requests that do NOT go through this cache but still occupy a pooled database
+ * connection — the optimistic save paths, which issue their own PATCH/PUT.
+ *
+ * Without this, `inFlightCount()` read 0 during a save, so the background
+ * prefetch saw an idle app and took a connection while the user was writing.
+ * The save hooks already bracket every write with beginWrite/endWrite, so
+ * counting there is one line in each.
+ */
+let externalInFlight = 0
+
+/** Bracket a non-cache request so the prefetch knows the app is busy. */
+export function beginExternalRequest(): void {
+  externalInFlight += 1
+}
+
+export function endExternalRequest(): void {
+  externalInFlight = Math.max(0, externalInFlight - 1)
+}
+
+/**
+ * How many fetches are in flight right now, across every key.
+ *
+ * Read by the background prefetch as a "is the app busy?" signal: while a page
+ * the user actually opened is still loading, the prefetch waits rather than
+ * competing with it for one of the three pooled database connections.
+ */
+export function inFlightCount(): number {
+  return inflight.size + externalInFlight
 }
 
 export function isStale(key: string, ttl: number = DEFAULT_TTL): boolean {
@@ -294,7 +428,10 @@ export async function fetchCached<T>(
 
   const request = fetcher()
     .then((data) => {
-      if (writeGeneration(key) !== startedAtGeneration) {
+      // Two reasons to keep what is cached instead of what just arrived:
+      // the key was written while this was out (generation moved), or a write
+      // for it is still in flight, so this response predates it either way.
+      if (writeGeneration(key) !== startedAtGeneration || hasPendingWrite(key)) {
         const current = cache.get(key)
         return (current ? current.data : data) as T
       }

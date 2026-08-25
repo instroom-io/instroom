@@ -23,6 +23,8 @@ import {
   IconLayoutList, IconLink, IconArrowRight, IconAlertTriangle, IconLoader2,
 } from "@tabler/icons-react"
 import { useClosedData, type ClosedInfluencer, type ClosedColumn, type OrderDetailsFields } from "@/hooks/useClosedData"
+import { invalidateInfluencerDerivedCaches, closedCacheKey } from "@/lib/cache-invalidation"
+import { DataSyncStatus } from "@/components/data-sync-status"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { SubscriptionGate } from "@/components/ui/subscription-gate"
 import { HistoryTab } from "@/components/InfluencerProfileSidebar"
@@ -30,7 +32,7 @@ import { PaidCollabTab } from "@/components/table-sheet/profile-sidebar"
 import { BoardSkeleton } from "@/components/shared/skeletons"
 import { StageDropdown, type StageOption } from "@/components/shared/stage-dropdown"
 import AutoPostDetectionCard from "./AutoPostDetection"
-import { readDroppedPostUrl } from "./DetectedPostsList"
+import { readDroppedPostUrl, type DetectedPost } from "./DetectedPostsList"
 import { fetchCached } from "@/lib/data-cache"
 import { useSubscriptionGate } from "@/hooks/useSubscriptionGate"
 
@@ -144,6 +146,36 @@ const hasDetectedPost = (inf: Pick<ClosedInfluencer, "detectedPostCount">) =>
 const hasPostEvidence = (inf: Pick<ClosedInfluencer, "postUrl" | "detectedPostCount">) =>
   hasPostUrl(inf) || hasDetectedPost(inf)
 
+/**
+ * Stages where the post FIELDS make sense.
+ *
+ * Delivered is the earliest: the product has arrived, so the influencer CAN
+ * post — not that they have. Before that (For Order Creation, In-Transit) there
+ * is nothing to describe, and an empty Post URL / Posted At / Likes form on an
+ * order that has not arrived invites recording a post that cannot exist.
+ *
+ * "No post" keeps the fields: it is the record of a decision made after
+ * delivery, and a URL can still be pasted if the influencer posts late.
+ */
+const POST_FIELD_STAGES: ClosedColumn[] = ["Delivered", "Posted", "No post"]
+
+/** Should the post fields be offered for this influencer? */
+const canTrackPost = (status: ClosedColumn) => POST_FIELD_STAGES.includes(status)
+
+/**
+ * Stages where Automatic Post Detection runs.
+ *
+ * Narrower than the fields, and deliberately identical to the server's gate in
+ * lib/post-tracker/monitor.ts, which keeps only stage >= 7 (Delivered = 7,
+ * Posted = 8). "No post" is stage 0 — a decision that no post exists — so the
+ * pass skips it, and offering "Check now" there would be a button that appears
+ * to work and polls nothing.
+ */
+const POST_DETECTION_STAGES: ClosedColumn[] = ["Delivered", "Posted"]
+
+/** Should Automatic Post Detection be offered for this influencer? */
+const canDetectPost = (status: ClosedColumn) => POST_DETECTION_STAGES.includes(status)
+
 // Forward flow
 const NEXT_STAGE: Record<ClosedColumn, ClosedColumn | null> = {
   "For Order Creation": "In-Transit",
@@ -233,9 +265,7 @@ function ResetWorkflowDialog({ influencerName, target, onConfirm, onCancel }: {
   )
 }
 
-function PostUrlRequiredDialog({ count, onGoToPostDetails, onCancel }: {
-  /** How many influencers were blocked — >1 when a bulk move is rejected */
-  count: number
+function PostUrlRequiredDialog({ onGoToPostDetails, onCancel }: {
   onGoToPostDetails: (() => void) | null
   onCancel: () => void
 }) {
@@ -255,12 +285,7 @@ function PostUrlRequiredDialog({ count, onGoToPostDetails, onCancel }: {
           <div className="flex-1">
             <h2 id="post-url-required-title" className="text-base font-semibold text-gray-900">Cannot Move to Posted</h2>
             <p className="text-sm text-gray-600 mt-2 leading-relaxed">
-              The Posted stage needs proof of a published post, and {count > 1 ? `these ${count} influencers have` : "this influencer has"} neither
-              a Post URL nor a post found by Automatic Post Detection.
-            </p>
-            <p className="text-sm text-gray-600 mt-2 leading-relaxed">
-              Add the post link, or run a check in Automatic Post Detection — once it finds a matching
-              post, this influencer can move to Posted without a link.
+              A post link or detected post is required.
             </p>
           </div>
         </div>
@@ -531,8 +556,28 @@ const STAGE_TO_ORDER_STATUS: Partial<Record<ClosedColumn, string>> = {
   "Posted": "delivered",
 }
 
-function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChange, onPostUrlChange, onOrderDetailsChange, canApproveInfluencers, subscriptionStatus, initialTab = 0, focusPostUrl = false }: {
+/**
+ * How many bulk column writes may be in flight at once.
+ *
+ * Matches the Pipeline board. Two, not unbounded: the Prisma pool is capped at
+ * connection_limit=3, so a request per selected row queues against three
+ * connections and crosses the 10s pool timeout.
+ */
+const BULK_CONCURRENCY = 2
+
+function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onCollabTypeChange, onPostUrlChange, onOrderDetailsChange, canApproveInfluencers, subscriptionStatus, initialTab = 0, focusPostUrl = false }: {
   inf: ClosedInfluencer; brandId?: string; onClose: () => void
+  /**
+   * Report a save through the PAGE's notification dock.
+   *
+   * This drawer used to own a `.drawer-toast` positioned `absolute` inside the
+   * panel, so every message it raised was anchored to the panel rather than to
+   * the dashboard — it sat over the panel's own content and read as part of it.
+   * Handing the message up means it lands in the one dock every other module
+   * uses, which also steps aside from this panel (`.notice-dock` in
+   * app/globals.css).
+   */
+  onNotify: (msg: string, type?: "success" | "error") => void
   onColumnChange: (id: string, col: ClosedColumn) => Promise<boolean>
   onCollabTypeChange: (id: string, type: string) => Promise<boolean>
   onPostUrlChange: (id: string, postUrl: string) => Promise<boolean>
@@ -545,7 +590,7 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
   focusPostUrl?: boolean
 }) {
   const [profileTab, setProfileTab] = useState(initialTab)
-  const [drawerToast, setDT]        = useState("")
+
   const [savingPost, setSavingPost] = useState(false)
   const postUrlRef = useRef<HTMLInputElement>(null)
   // How the Post URL currently in the field got there. Only drives the hint
@@ -555,7 +600,9 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
   const [urlDropActive, setUrlDropActive] = useState(false)
   // Mirrors the Post URL currently in the form — see handleDetectedPost.
   const postUrlValueRef = useRef("")
-  const showToast = (msg: string) => { setDT(msg); setTimeout(()=>setDT(""),2600) }
+  // Forwarded to the page's dock — see onNotify above. Same call sites, same
+  // messages, same timing; only where it renders changed.
+  const showToast = (msg: string) => onNotify(msg)
 
   // Land the user directly on the Post URL field when sent here from the
   // "Cannot Move to Posted" warning.
@@ -636,7 +683,15 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
       if (!r.ok) throw new Error(`Failed to load integrations (${r.status})`)
       return r.json()
     })
-      .then(json => setShopifyConnected(!!json?.integrations?.shopify?.connected))
+      // `ready`, not `connected`: the row's boolean can be true while the stored
+      // config has no credentials, and every Shopify request then fails. Gating
+      // on `ready` is what stops the products request from being made at all in
+      // that state, instead of firing it and taking a 400/500 back. Falls back
+      // to `connected` for an older response shape without the field.
+      .then(json => {
+        const shopify = json?.integrations?.shopify
+        setShopifyConnected(!!(shopify?.ready ?? shopify?.connected))
+      })
       .catch(() => {})
   }, [brandId])
 
@@ -755,9 +810,34 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
   // The current value is read through a ref rather than from `postData`, so the
   // callback identity stays stable — it is a dependency of the detection card's
   // notify effect, and a new function every keystroke would re-run it.
-  const handleDetectedPost = useCallback((post: { postUrl: string }) => {
+  /**
+   * Take a detected post into the Post form.
+   *
+   * One set of fields for both routes: a detected post fills the SAME Post URL,
+   * Posted At, Likes, Comments and Engagement inputs a user types into, and the
+   * same Save button persists them. There is no separate manual-vs-automatic
+   * form.
+   *
+   * A manual URL still wins — the early return is unchanged. Only fields the
+   * provider actually returned are written; a missing metric leaves whatever is
+   * already in the form rather than being zeroed, and nothing is invented.
+   */
+  const handleDetectedPost = useCallback((post: DetectedPost) => {
     if (postUrlValueRef.current.trim()) return
-    setPostData(d => ({ ...d, postUrl: post.postUrl }))
+    setPostData(d => ({
+      ...d,
+      postUrl: post.postUrl,
+      // The date input wants YYYY-MM-DD, as buildPostData does for stored dates.
+      ...(post.publishedAt ? { postedAt: post.publishedAt.slice(0, 10) } : {}),
+      ...(post.likeCount    != null ? { likes:    String(post.likeCount) } : {}),
+      ...(post.commentCount != null ? { comments: String(post.commentCount) } : {}),
+      // Engagement is interactions — likes + comments, not views. Written only
+      // when both halves are present, since a sum missing one would read as a
+      // real figure while understating it.
+      ...(post.likeCount != null && post.commentCount != null
+        ? { engagement: String(post.likeCount + post.commentCount) }
+        : {}),
+    }))
     setPostUrlOrigin("detected")
   }, [])
 
@@ -1024,7 +1104,10 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
           {/* ════ POST TAB ════ */}
           {profileTab === 2 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {brandId && (
+              {/* Gated on the stage, not just hidden: rendering the card is what
+                  mounts it and fires its GET, so an influencer who cannot have
+                  posted yet costs no request and no API allowance. */}
+              {brandId && canDetectPost(inf.closedStatus) && (
                 <AutoPostDetectionCard
                   brandId={brandId}
                   biId={inf.id}
@@ -1032,6 +1115,24 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
                   onDetectedPost={handleDetectedPost}
                 />
               )}
+              {/* Before Delivered there is no post to describe, so the fields are
+                  not offered — an empty Post URL / Posted At / Likes form on an
+                  order that has not arrived invites entering data for a post
+                  that cannot exist. Nothing is created or defaulted either way;
+                  this only changes what is shown. */}
+              {!canTrackPost(inf.closedStatus) && (
+                <div className="pfg">
+                  <div className="pfl">Post details</div>
+                  <div style={{ fontSize: 12, color: "#888", lineHeight: 1.5 }}>
+                    Available once this influencer is marked <strong>Delivered</strong>.
+                    {" "}Post details and Automatic Post Detection start there, because
+                    the product has to arrive before there can be a post to find.
+                  </div>
+                </div>
+              )}
+
+              {canTrackPost(inf.closedStatus) && (
+                <>
               {/* Post URL — typed, auto-filled from detection, or dropped from
                   the detected posts list above. All three end up as the same
                   form value and are saved by the same Save button. */}
@@ -1102,6 +1203,8 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
                 <button className="btn-secondary" onClick={() => { setPostData(d => ({ ...d, postUrl: inf.postUrl || "" })); setPostUrlOrigin("stored") }}>Cancel</button>
                 <button className="btn-primary" onClick={handleSavePost} disabled={savingPost}>{savingPost ? "Saving…" : "Save"}</button>
               </div>
+                </>
+              )}
             </div>
           )}
 
@@ -1137,8 +1240,6 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
           )}
 
         </div>
-
-        {drawerToast && <div className="drawer-toast">{drawerToast}</div>}
 
         <style jsx>{`
           .pp { position:fixed; top:0; right:0; width:520px; max-width:100vw; height:100%; background:#fff; box-shadow:-8px 0 40px rgba(0,0,0,0.14); z-index:500; display:flex; flex-direction:column; font-family:"Inter",system-ui,sans-serif; }
@@ -1188,7 +1289,6 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
           .btn-secondary { background:transparent; color:#6b7280; border:1.5px solid #e5e7eb; padding:9px 18px; border-radius:8px; cursor:pointer; font-size:13px; font-weight:600; font-family:inherit; transition:background .15s,border-color .15s; }
           .btn-secondary:hover { background:#f9fafb; border-color:#d1d5db; }
           .btn-primary:hover { background:#0f6b3e; }
-          .drawer-toast { position:absolute; bottom:20px; right:20px; background:#111827; color:#fff; font-size:13px; padding:8px 16px; border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,.2); z-index:600; }
         `}</style>
       </div>
     </>
@@ -1345,9 +1445,9 @@ function PostTrackerContent() {
   // ── Bulk stage move ────────────────────────────────────────────────────────
   // Reuses the same per-row `updateColumn` that the single-row dropdown, the
   // card arrows and drag-and-drop all use — no new endpoint, no duplicated
-  // stage logic. Sequential on purpose: `updateColumn` rolls back from a
-  // full-list snapshot on failure, so overlapping calls could undo each
-  // other's successful writes. Sequential keeps every success intact.
+  // stage logic. Concurrency is capped rather than serial: `updateColumn`
+  // restores only its own row on failure, so overlapping calls cannot undo each
+  // other's successful writes (see BULK_CONCURRENCY).
   const runBulkStageMove = async (col: ClosedColumn) => {
     const candidates = selectedInfluencers.filter(d => d.closedStatus !== col)
 
@@ -1373,17 +1473,37 @@ function PostTrackerContent() {
     const failedIds: string[] = []
     let moved = 0
     let terminalSkipped = 0
-    for (const target of targets) {
-      const res = await updateColumn(target.id, col)
-      if (res.ok) {
-        moved += 1
-        setSelectedInf(p => (p?.id === target.id ? { ...p, closedStatus: col } : p))
-      } else {
-        // Already Posted — counted separately so the toast can say why, rather
-        // than reporting a generic failure the user can't act on.
-        if (res.terminal) terminalSkipped += 1
-        failedIds.push(target.id)
+
+    // Capped concurrency, not one request per selected row: the Prisma pool is
+    // capped at connection_limit=3, so unbounded parallel writes queue against
+    // three connections and cross the 10s pool timeout. `updateColumn` restores
+    // only its own row on failure, so overlapping calls cannot undo each
+    // other's successful writes.
+    let cursor = 0
+    const worker = async () => {
+      while (cursor < targets.length) {
+        const target = targets[cursor++]
+        // Derived views are marked stale once after the run, not per row.
+        const res = await updateColumn(target.id, col, { deferDerivedInvalidation: true })
+        if (res.ok) {
+          moved += 1
+          setSelectedInf(p => (p?.id === target.id ? { ...p, closedStatus: col } : p))
+        } else {
+          // Already Posted — counted separately so the toast can say why, rather
+          // than reporting a generic failure the user can't act on.
+          if (res.terminal) terminalSkipped += 1
+          failedIds.push(target.id)
+        }
       }
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(BULK_CONCURRENCY, targets.length) }, worker)
+    )
+
+    // One invalidation for the whole run. This board's own entry is excluded —
+    // already correct from the optimistic writes.
+    if (moved > 0 && brandId) {
+      invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId)])
     }
     setBulkBusy(false)
 
@@ -1511,7 +1631,7 @@ function PostTrackerContent() {
       <div className="flex flex-col gap-4 p-6">
       {/* Save state and outcome live in the bottom-right corner, clear of the
           board columns and the bulk action bar — same pattern as the Pipeline. */}
-      <div className="fixed bottom-4 right-4 z-50 flex flex-col items-end gap-2">
+      <div className="notice-dock">
         {isSaving && (
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-900/90 text-white text-xs font-medium shadow-lg animate-in fade-in">
             <IconLoader2 size={12} className="animate-spin" />
@@ -1527,7 +1647,6 @@ function PostTrackerContent() {
 
       {postUrlBlocked.length>0&&(
         <PostUrlRequiredDialog
-          count={postUrlBlocked.length}
           // With one influencer we can take the user straight to its Post tab;
           // for a bulk rejection there's no single record to open.
           onGoToPostDetails={postUrlBlocked.length===1 ? ()=>{
@@ -1561,6 +1680,7 @@ function PostTrackerContent() {
           key={`${selectedInf.id}${drawerFocusPostUrl ? ":post" : ""}`}
           inf={selectedInf} brandId={brandId}
           onClose={()=>{ setSelectedInf(null); setDrawerFocusPostUrl(false) }}
+          onNotify={showToast}
           onColumnChange={handleMove} onCollabTypeChange={handleCollabTypeChange}
           onPostUrlChange={handlePostUrlChange} onOrderDetailsChange={handleOrderDetailsChange}
           canApproveInfluencers={canApprove}
@@ -1634,6 +1754,10 @@ function PostTrackerContent() {
         <span className="text-sm text-gray-500 whitespace-nowrap ml-1">
           {filteredData.length} of {data.length} influencer{data.length!==1?"s":""}
         </span>
+
+        {/* Real freshness, from the shared cache entry this board renders
+            from — same component and placement on every board. */}
+        <DataSyncStatus cacheKey={brandId ? `/api/brand/${brandId}/closed` : null} />
 
         {/* Spacer */}
         <div className="flex-1"/>

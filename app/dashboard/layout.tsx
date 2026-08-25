@@ -1,10 +1,12 @@
 "use client"
 
+import { Suspense } from "react"
 import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
 import { SubscriptionStatusProvider } from "@/components/subscription-status-provider"
 import { TourProvider } from "@/components/product-tour/tour-provider"
 import InstroomChatbot from "@/components/instroom-chatbot"
+import { DashboardPrefetcher } from "@/components/dashboard-prefetcher"
 
 import {
   SidebarInset,
@@ -36,6 +38,15 @@ export default function DashboardLayout({
             top. Important flag: the rule it overrides is a peer-data selector. */}
         <SidebarInset className="md:shadow-none!">
           <SiteHeader />
+
+          {/* Renders nothing — starts every module's initial fetch as soon as the
+              dashboard mounts, so switching pages reads from the shared cache
+              instead of beginning a request on arrival. In the layout so it
+              runs before the user picks a page and is not restarted on each
+              navigation; a full refresh remounts it and the flow starts again. */}
+          <Suspense fallback={null}>
+            <DashboardPrefetcher />
+          </Suspense>
 
           <SubscriptionStatusProvider>
             <div className="flex flex-1 flex-col">

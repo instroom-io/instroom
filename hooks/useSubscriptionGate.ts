@@ -27,6 +27,17 @@ export interface SubscriptionGateState {
    *  when there's no subscription at all. Lets a blocked page say "upgrade
    *  from Basic" instead of implying there's no subscription to begin with. */
   planDisplayName: string | null
+  /**
+   * Re-run the check against the server, past the cache.
+   *
+   * A failed check is deliberately treated as "not subscribed" below, so a
+   * transient failure leaves the page showing its locked state until something
+   * asks again. Callers that know the situation just changed — the Inbox after
+   * a mailbox is connected in another tab — can force a real re-validation
+   * instead of waiting for the next stale read. This re-runs the same check; it
+   * does not skip it.
+   */
+  refetch: () => Promise<unknown>
 }
 
 export function useSubscriptionGate(
@@ -57,15 +68,15 @@ export function useSubscriptionGate(
   }, [url])
 
   const enabled = sessionStatus === "authenticated" && Boolean(session?.user?.id)
-  const { data, error, isLoading } = useCachedFetch(enabled ? url : null, fetcher)
+  const { data, error, isLoading, refetch } = useCachedFetch(enabled ? url : null, fetcher)
 
   // A failed check is treated as "not subscribed", exactly as the pages did.
   if (error) {
-    return { isSubscribed: false, status: "inactive", isLoading: false, planDisplayName: null }
+    return { isSubscribed: false, status: "inactive", isLoading: false, planDisplayName: null, refetch }
   }
 
   if (!data) {
-    return { isSubscribed: null, status: undefined, isLoading, planDisplayName: null }
+    return { isSubscribed: null, status: undefined, isLoading, planDisplayName: null, refetch }
   }
 
   const statusOk = (data.status === "active" || data.status === "trialing") && !data.isExpired
@@ -77,5 +88,6 @@ export function useSubscriptionGate(
     status: data.status || "inactive",
     isLoading: false,
     planDisplayName: data.subscription?.plan?.display_name ?? null,
+    refetch,
   }
 }

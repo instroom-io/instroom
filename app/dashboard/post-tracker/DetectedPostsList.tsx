@@ -17,6 +17,13 @@ export type DetectedPost = {
   matchedMention: string | null
   author?: string | null
   detectedAt: string
+  // The API has always returned these (app/api/post-tracker/detection/route.ts);
+  // only this type left them out, so the Post tab could take the URL from a
+  // detected post but not the numbers that came with it.
+  publishedAt?: string | null
+  likeCount?: number | null
+  commentCount?: number | null
+  viewCount?: number | null
 }
 
 export const PAGE_SIZE = 5

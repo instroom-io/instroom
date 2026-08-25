@@ -59,8 +59,10 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({
       enabled: setting?.enabled ?? false,
-      hashtags: setting?.hashtags ?? "",
-      mentions: setting?.mentions ?? "",
+      // Brand-level first — detection is configured once per brand now. The
+      // per-influencer columns are the fallback for brands set up before that.
+      hashtags: addon.hashtags || setting?.hashtags || "",
+      mentions: addon.mentions || setting?.mentions || "",
       lastSyncedAt: setting?.last_synced_at ?? null,
       lastError: setting?.last_error ?? null,
       // Add-on entitlement and today's testing quota travel with the config so
@@ -144,8 +146,33 @@ export async function PATCH(req: NextRequest) {
     }
 
     if (typeof enabled === "boolean") data.enabled = enabled
-    if (typeof hashtags === "string") data.hashtags = hashtags.trim() || null
-    if (typeof mentions === "string") data.mentions = mentions.trim() || null
+
+    // ── Hashtags and mentions are BRAND-level ─────────────────────────────────
+    // Detection is a paid brand feature, so what it matches on is configured
+    // once for the brand and used for every influencer handle it monitors.
+    // Written to PostTrackerAddon, the row that already represents the add-on
+    // for this brand.
+    //
+    // The per-influencer columns are deliberately NOT written any more. They
+    // stay in place as a read-only fallback for brands configured before this,
+    // which the monitor still honours.
+    if (typeof hashtags === "string" || typeof mentions === "string") {
+      await prisma.postTrackerAddon.upsert({
+        where: { brand_id: brandId },
+        create: {
+          brand_id: brandId,
+          // No entitlement is granted here — that is activateAddon's job. This
+          // only carries configuration for a brand that has not bought it yet.
+          status: "inactive",
+          ...(typeof hashtags === "string" ? { detection_hashtags: hashtags.trim() || null } : {}),
+          ...(typeof mentions === "string" ? { detection_mentions: mentions.trim() || null } : {}),
+        },
+        update: {
+          ...(typeof hashtags === "string" ? { detection_hashtags: hashtags.trim() || null } : {}),
+          ...(typeof mentions === "string" ? { detection_mentions: mentions.trim() || null } : {}),
+        },
+      })
+    }
 
     const setting = await prisma.postDetectionSetting.upsert({
       where: { brand_influencer_id: biId },
@@ -153,16 +180,18 @@ export async function PATCH(req: NextRequest) {
         brand_influencer_id: biId,
         brand_id: brandId,
         enabled: data.enabled ?? false,
-        hashtags: data.hashtags,
-        mentions: data.mentions,
       },
       update: data,
     })
 
+    // Read back what the brand now holds, so the client renders the shared
+    // values rather than this influencer's legacy copy.
+    const addonConfig = await getAddonStatus(brandId)
+
     return NextResponse.json({
       enabled: setting.enabled,
-      hashtags: setting.hashtags ?? "",
-      mentions: setting.mentions ?? "",
+      hashtags: addonConfig.hashtags || setting.hashtags || "",
+      mentions: addonConfig.mentions || setting.mentions || "",
     })
   } catch (error) {
     console.error("[PATCH /post-tracker/detection]", error)

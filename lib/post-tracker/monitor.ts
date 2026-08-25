@@ -39,8 +39,9 @@ import {
   type EnsemblePlatform,
   type EnsemblePost,
 } from "@/lib/ensembledata"
-import { isAddonActive } from "./addon"
+import { getAddonStatus } from "./addon"
 import { consumeApiQuota, consumePostQuota, getQuota, remainingPostImports } from "./quota"
+import { mapClosedToPipelineFields } from "@/lib/post-tracker-status"
 
 const LOG = "[post-detection]"
 
@@ -179,16 +180,104 @@ async function resolveInfluencerAccount(brandInfluencerId: string, brandId: stri
  * Poll one influencer. Returns counters; never throws — a provider or DB error
  * is recorded against this influencer and the caller moves on.
  */
-async function pollInfluencer(setting: {
-  id: string
-  brand_id: string
-  brand_influencer_id: string
-  hashtags: string | null
-  mentions: string | null
-  platforms: string | null
-}): Promise<{ apiCalls: number; found: number; imported: number; error?: string }> {
-  const hashtags = parseList(setting.hashtags)
-  const mentions = parseList(setting.mentions)
+/**
+ * Populate the influencer's post fields from a detected post and move the card
+ * to Posted, using the same mapping a manual drag writes.
+ *
+ * Three rules, none of them new:
+ *
+ *   * A MANUAL Post URL is never overwritten. `post_url` already holding
+ *     something means a human typed or dropped it, and the client side already
+ *     refuses to replace it (handleDetectedPost in
+ *     app/dashboard/post-tracker/page.tsx). This mirrors that server-side, so a
+ *     background pass cannot do what the UI forbids.
+ *   * The transition goes through mapClosedToPipelineFields("Posted", …), the
+ *     same function the manual PATCH route and the Shopify sync call, so an
+ *     automatic move and a human move write identical field shapes.
+ *   * `posted_at` prefers the post's own published date over "now", so the
+ *     timeline reflects when the influencer actually posted.
+ *
+ * updateMany, not update: it is a single scoped write with no read-back, and it
+ * lets the `post_url IS NULL` condition do the "don't overwrite" check in the
+ * database rather than in a read-then-write that could race a manual save.
+ */
+async function applyDetectionToInfluencer(
+  brandInfluencerId: string,
+  brandId: string,
+  post: EnsemblePost
+): Promise<void> {
+  const current = await prisma.brandInfluencer.findUnique({
+    where: { id: brandInfluencerId },
+    select: { post_url: true, shipped_at: true, delivered_at: true, posted_at: true, content_posted: true },
+  })
+  if (!current) return
+
+  // Already carries a URL — manual entry, or an earlier detection. Leave it.
+  if (current.post_url && current.post_url.trim()) {
+    console.log(`${LOG} ${brandInfluencerId} already has a post URL — detection not applied`)
+    return
+  }
+
+  const fields = mapClosedToPipelineFields("Posted", {
+    shipped_at:   current.shipped_at,
+    delivered_at: current.delivered_at,
+    // Prefer the post's own timestamp; the mapping falls back to now().
+    posted_at:    post.publishedAt ?? current.posted_at,
+  })
+
+  // The post_url guard is part of the WHERE, so a manual save landing between
+  // the read above and this write wins rather than being clobbered.
+  const result = await prisma.brandInfluencer.updateMany({
+    where: {
+      id: brandInfluencerId,
+      brand_id: brandId,
+      OR: [{ post_url: null }, { post_url: "" }],
+    },
+    data: {
+      ...fields,
+      post_url: post.postUrl,
+      // Only what the provider actually returned — a missing metric is left at
+      // whatever the record already holds rather than being zeroed.
+      ...(post.likeCount    != null ? { likes_count:    post.likeCount } : {}),
+      ...(post.commentCount != null ? { comments_count: post.commentCount } : {}),
+      // engagement_count is interactions, so likes + comments — NOT views.
+      // Written only when the provider returned both, since a sum with a
+      // missing half would understate it and read as a real figure.
+      ...(post.likeCount != null && post.commentCount != null
+        ? { engagement_count: post.likeCount + post.commentCount }
+        : {}),
+    },
+  })
+
+  if (result.count === 0) {
+    console.log(`${LOG} ${brandInfluencerId} gained a post URL mid-write — detection not applied`)
+    return
+  }
+  console.log(`${LOG} ${brandInfluencerId} moved to Posted from detection ${post.postUrl}`)
+}
+
+async function pollInfluencer(
+  setting: {
+    /** Null when this influencer has no bookkeeping row yet. */
+    id: string | null
+    brand_id: string
+    brand_influencer_id: string
+    /** Legacy per-influencer values — fallback only, see `brandConfig`. */
+    hashtags: string | null
+    mentions: string | null
+    platforms: string | null
+  },
+  /**
+   * What the BRAND configured, which is the source of truth now that detection
+   * is a brand-level feature. The same hashtags and mentions are used for every
+   * influencer handle the brand monitors.
+   */
+  brandConfig: { hashtags: string; mentions: string }
+): Promise<{ apiCalls: number; found: number; imported: number; error?: string }> {
+  // Brand config wins; the per-influencer columns are read only when the brand
+  // has none, so brands set up before those columns existed keep working.
+  const hashtags = parseList(brandConfig.hashtags || setting.hashtags)
+  const mentions = parseList(brandConfig.mentions || setting.mentions)
   const platforms = parsePlatforms(setting.platforms)
 
   console.log(
@@ -196,12 +285,32 @@ async function pollInfluencer(setting: {
       `mentions=[${mentions.join(", ") || "none"}] platforms=[${platforms.join(", ")}]`
   )
 
+  /**
+   * Record this pass's outcome against the influencer.
+   *
+   * Upsert by brand_influencer_id (which is @unique), not update by id: the
+   * target list is derived from BrandInfluencer now, so an influencer that has
+   * just reached Delivered has no bookkeeping row yet and one update() would
+   * throw P2025 before its first poll ever ran.
+   */
+  const recordPass = (last_error: string | null) =>
+    prisma.postDetectionSetting
+      .upsert({
+        where: { brand_influencer_id: setting.brand_influencer_id },
+        create: {
+          brand_influencer_id: setting.brand_influencer_id,
+          brand_id: setting.brand_id,
+          last_synced_at: new Date(),
+          last_error,
+        },
+        update: { last_synced_at: new Date(), last_error },
+      })
+      .catch(() => {})
+
   /** Record the reason and stop, without spending a provider request. */
   const abort = async (msg: string) => {
     console.warn(`${LOG} influencer ${setting.brand_influencer_id}: ${msg}`)
-    await prisma.postDetectionSetting
-      .update({ where: { id: setting.id }, data: { last_synced_at: new Date(), last_error: msg } })
-      .catch(() => {})
+    await recordPass(msg)
     return { apiCalls: 0, found: 0, imported: 0, error: msg }
   }
 
@@ -363,6 +472,12 @@ async function pollInfluencer(setting: {
           }))
           imported++
           await consumePostQuota(setting.brand_id, 1)
+          // Carry the detection into the influencer's own record, so the Post
+          // Tracker card actually moves. Recording a DetectedPost row was all
+          // this did before: the post appeared under "Recently detected posts"
+          // but Post URL stayed empty and the card stayed in Delivered until
+          // somebody dragged the post onto the field by hand.
+          await applyDetectionToInfluencer(setting.brand_influencer_id, setting.brand_id, post)
           console.log(`${LOG} IMPORTED published=${post.publishedAt?.toISOString()} ${post.platform} ${post.postUrl} (matched ${match.hashtag ? `#${match.hashtag}` : `@${match.mention}`})`)
         } catch (err) {
           const code = (err as { code?: string })?.code
@@ -406,11 +521,11 @@ async function pollInfluencer(setting: {
           finished_at: new Date(),
         },
       }),
-      prisma.postDetectionSetting.update({
-        where: { id: setting.id },
-        data: { last_synced_at: new Date(), last_error: error },
-      }),
     ])
+    // Outside the transaction: recordPass swallows its own failure (bookkeeping
+    // must never fail a pass), which makes it a plain promise rather than the
+    // PrismaPromise $transaction requires.
+    await recordPass(error ?? null)
 
     return { apiCalls, found, imported, error: error ?? undefined }
   } catch (err) {
@@ -429,9 +544,7 @@ async function pollInfluencer(setting: {
         },
       })
       .catch(() => {})
-    await prisma.postDetectionSetting
-      .update({ where: { id: setting.id }, data: { last_synced_at: new Date(), last_error: message.slice(0, 1000) } })
-      .catch(() => {})
+    await recordPass(message.slice(0, 1000))
     return { apiCalls, found, imported, error: message }
   }
 }
@@ -480,29 +593,81 @@ export async function runMonitoringPass(options?: { brandId?: string; force?: bo
 
   const staleBefore = new Date(Date.now() - MIN_POLL_INTERVAL_MS)
 
-  const settings = await prisma.postDetectionSetting.findMany({
+  // ── Who gets polled ─────────────────────────────────────────────────────
+  // Detection is a PAID BRAND-LEVEL feature, not a per-influencer opt-in. So
+  // the target list is derived, not configured: every influencer a brand has at
+  // Delivered or beyond, for every brand whose add-on is active. Nobody has to
+  // switch anything on per influencer, and nothing is missed because a toggle
+  // was forgotten.
+  //
+  // Stage 7 = Delivered, 8 = Posted (lib/post-tracker-status.ts). Below that —
+  // For Order Creation (5), In-Transit (6) — the product has not arrived, so
+  // there is no post to find and polling would spend the brand's API allowance
+  // proving it.
+  //
+  // PostDetectionSetting is still read, but only for what it is now: per-handle
+  // BOOKKEEPING. `last_synced_at` paces the poll interval and `last_error`
+  // carries the last failure. Its legacy `hashtags`/`mentions` are used as a
+  // fallback so brands configured before the brand-level columns existed keep
+  // working with no data migration.
+  const candidateRows = await prisma.brandInfluencer.findMany({
     where: {
-      enabled: true,
+      stage: { gte: 7 },
       ...(options?.brandId ? { brand_id: options.brandId } : {}),
-      ...(options?.force
-        ? {}
-        : { OR: [{ last_synced_at: null }, { last_synced_at: { lt: staleBefore } }] }),
     },
-    select: {
-      id: true,
-      brand_id: true,
-      brand_influencer_id: true,
-      hashtags: true,
-      mentions: true,
-      platforms: true,
-    },
-    orderBy: { last_synced_at: "asc" },
+    select: { id: true, brand_id: true },
   })
 
+  if (candidateRows.length === 0) {
+    console.log(`${LOG} no influencers at Delivered or beyond — nothing to poll`)
+  }
+
+  // Bookkeeping rows for those influencers, in one query.
+  const bookkeeping = candidateRows.length
+    ? await prisma.postDetectionSetting.findMany({
+        where: { brand_influencer_id: { in: candidateRows.map((r) => r.id) } },
+        select: {
+          id: true,
+          brand_influencer_id: true,
+          hashtags: true,
+          mentions: true,
+          platforms: true,
+          last_synced_at: true,
+        },
+      })
+    : []
+  const bookByInfluencer = new Map(bookkeeping.map((b) => [b.brand_influencer_id, b]))
+
+  // The poll interval still applies: an influencer polled within
+  // MIN_POLL_INTERVAL_MS is skipped unless force=true.
+  const settings = candidateRows
+    .filter((row) => {
+      if (options?.force) return true
+      const last = bookByInfluencer.get(row.id)?.last_synced_at
+      return !last || last < staleBefore
+    })
+    .map((row) => {
+      const book = bookByInfluencer.get(row.id)
+      return {
+        // Null when this influencer has no bookkeeping row yet — pollInfluencer
+        // upserts by brand_influencer_id, so it does not need one to exist.
+        id: book?.id ?? null,
+        brand_id: row.brand_id,
+        brand_influencer_id: row.id,
+        // Legacy per-influencer values, used only as a fallback below.
+        hashtags: book?.hashtags ?? null,
+        mentions: book?.mentions ?? null,
+        platforms: book?.platforms ?? null,
+        last_synced_at: book?.last_synced_at ?? null,
+      }
+    })
+    // Oldest first, so a long backlog is worked through fairly.
+    .sort((a, b) => (a.last_synced_at?.getTime() ?? 0) - (b.last_synced_at?.getTime() ?? 0))
+
   console.log(
-    `${LOG} ${settings.length} enabled setting(s) due for polling` +
-      (settings.length === 0
-        ? ` — nothing to do. Either no influencer has monitoring enabled, or all were polled within the last ` +
+    `${LOG} ${settings.length} influencer(s) due for polling` +
+      (settings.length === 0 && candidateRows.length > 0
+        ? ` — all ${candidateRows.length} at Delivered+ were polled within the last ` +
           `${MIN_POLL_INTERVAL_MS / 60000} minutes (pass force=true to override).`
         : "")
   )
@@ -519,9 +684,24 @@ export async function runMonitoringPass(options?: { brandId?: string; force?: bo
   for (const [brandId, brandSettings] of byBrand) {
     summary.brandsConsidered++
 
-    if (!(await isAddonActive(brandId))) {
+    // getAddonStatus, not isAddonActive: the same row carries the gate AND the
+    // brand's hashtags/mentions, so one read answers both. The add-on being
+    // active is what enables detection for every Delivered influencer of this
+    // brand — there is no per-influencer switch.
+    const addon = await getAddonStatus(brandId)
+    if (!addon.active) {
       summary.skipped.push(`${brandId}: add-on not active`)
       continue
+    }
+
+    // Nothing to match on. Skipped before any provider request, since a pass
+    // with no hashtag and no mention can only ever return nothing.
+    if (!addon.hashtags.trim() && !addon.mentions.trim()) {
+      const anyLegacy = brandSettings.some((x) => (x.hashtags ?? "").trim() || (x.mentions ?? "").trim())
+      if (!anyLegacy) {
+        summary.skipped.push(`${brandId}: no hashtags or mentions configured`)
+        continue
+      }
     }
 
     const quota = await getQuota(brandId)
@@ -535,7 +715,10 @@ export async function runMonitoringPass(options?: { brandId?: string; force?: bo
     }
 
     for (const setting of brandSettings) {
-      const result = await pollInfluencer(setting)
+      const result = await pollInfluencer(setting, {
+        hashtags: addon.hashtags,
+        mentions: addon.mentions,
+      })
       summary.influencersPolled++
       summary.apiCalls += result.apiCalls
       summary.postsFound += result.found

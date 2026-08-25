@@ -110,9 +110,25 @@ export async function GET(
     //   C) content_posted = true                  → Posted column
     //   D) order_status IN shipped/delivered       → In-Transit or Delivered
     //
-    // NOT included (naturally excluded because none of A-D match):
+    //   E) product_details carries closedStatus "No post" → No post column
+    //
+    //      Not derivable from the columns above, and its absence is what made a
+    //      manual Delivered → No post move look like the card had been deleted.
+    //      mapClosedToPipelineFields("No post") writes contact_status =
+    //      "not_interested", stage = 0, content_posted = false and order_status =
+    //      null, which fails A, B, C and D at once — so the row was excluded by
+    //      this WHERE before deriveClosedStatus could classify it. The note below
+    //      always claimed such rows were fetched and then classified; they were
+    //      never fetched.
+    //
+    //      Matched on the saved stage itself, which deriveClosedStatus already
+    //      treats as the source of truth. That keeps it precise: only rows a user
+    //      deliberately parked in No post from THIS board come back, not every
+    //      pipeline "Not Interested" influencer that never reached Post Tracker.
+    //
+    // NOT included (naturally excluded because none of A-E match):
     //   - contacted, negotiating, agreed, etc. → stage 1-4, no for_order_creation
-    //   - not_interested → deriveClosedStatus returns "No post" for these
+    //   - not_interested that never entered Post Tracker → no saved stage
     const rows = await prisma.brandInfluencer.findMany({
       where: {
         brand_id: brandId,
@@ -121,6 +137,9 @@ export async function GET(
           { stage: { gte: 5 } },
           { content_posted: true },
           { order_status: { in: ["shipped", "delivered"] } },
+          // product_details is written with JSON.stringify, so the key and its
+          // value sit adjacent with no whitespace between them.
+          { product_details: { contains: '"closedStatus":"No post"' } },
         ],
       },
       // `select` instead of `include` — only pull the columns this route actually

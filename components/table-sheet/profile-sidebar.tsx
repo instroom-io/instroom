@@ -913,7 +913,7 @@ export default function ProfileSidebar({
 
       <div style={S.overlay} onClick={onClose} />
 
-      <div style={S.panel}>
+      <div data-profile-panel style={S.panel}>
         {/* ── Header ── */}
         <div style={S.header}>
           <div style={{ fontSize: 11, fontWeight: 600, color: "#9ca3af", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 12 }}>Influencer Profile</div>

@@ -8,7 +8,16 @@
 //   5. updatePaidCollab / updateCampaignType: same pattern
 
 import { useCallback, useRef, useState } from "react"
-import { useCachedFetch, getCachedData, setCachedData, markCacheWrite } from "@/lib/data-cache"
+import {
+  useCachedFetch,
+  getCachedData,
+  setCachedData,
+  markCacheWrite,
+  beginExternalRequest,
+  endExternalRequest,
+  beginKeyWrite,
+  endKeyWrite,
+} from "@/lib/data-cache"
 import { invalidateInfluencerDerivedCaches, closedCacheKey } from "@/lib/cache-invalidation"
 
 /** Stable empty reference used before the first payload arrives. */
@@ -142,7 +151,7 @@ interface UseClosedDataReturn {
   updateColumn: (
     id: string,
     newColumn: ClosedColumn,
-    options?: { resetWorkflow?: boolean }
+    options?: { resetWorkflow?: boolean; deferDerivedInvalidation?: boolean }
   ) => Promise<UpdateColumnResult>
   updatePaidCollab: (id: string, paidCollabData: PaidCollabData) => Promise<boolean>
   updateCampaignType: (id: string, campaignType: string) => Promise<boolean>
@@ -306,6 +315,21 @@ function mapItem(inf: any): ClosedInfluencer {
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
+/**
+ * Fetch and shape a brand's Post Tracker rows — the exact value cached under
+ * `/api/brand/{brandId}/closed`. Exported for lib/dashboard-prefetch, so the
+ * prefetch stores the shaped rows rather than the raw response.
+ */
+export async function fetchClosedRows(brandId: string): Promise<ClosedInfluencer[]> {
+  const res = await fetch(`/api/brand/${brandId}/closed`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.error || "Fetch failed")
+  }
+  const json = await res.json()
+  return (json.data || []).map(mapItem)
+}
+
 export function useClosedData(brandId?: string): UseClosedDataReturn {
   // Shared cache key — the tracker re-renders from cache on return visits and
   // revalidates in the background. Keying by brandId also removes the
@@ -324,24 +348,27 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
   const beginWrite = useCallback(() => {
     pendingRef.current += 1
     setPendingWrites((n) => n + 1)
-    if (cacheKey) markCacheWrite(cacheKey)
+    // Counted into inFlightCount() so the background prefetch yields while a
+    // save is in flight. These PATCHes do not go through the cache, so without
+    // this the prefetch saw an idle app and took one of the three pooled
+    // connections mid-write.
+    // Also opens a per-key write window, so the board's freshness indicator
+    // reports "Syncing…" for a SAVE and not only for a page load.
+    beginExternalRequest()
+    if (cacheKey) { markCacheWrite(cacheKey); beginKeyWrite(cacheKey) }
   }, [cacheKey])
-  const endWrite = useCallback(() => {
+  const endWrite = useCallback((succeeded = true) => {
     pendingRef.current = Math.max(0, pendingRef.current - 1)
     setPendingWrites((n) => Math.max(0, n - 1))
-    if (cacheKey) markCacheWrite(cacheKey)
+    endExternalRequest()
+    // `succeeded` is what stops a failed save from stamping a fresh "updated"
+    // time: the rollback writes to the cache too, and without this the
+    // indicator would report a refresh that never happened.
+    if (cacheKey) { markCacheWrite(cacheKey); endKeyWrite(cacheKey, succeeded) }
   }, [cacheKey])
 
   // ── Fetch ─────────────────────────────────────────────────────────────────
-  const fetchClosed = useCallback(async (): Promise<ClosedInfluencer[]> => {
-    const res = await fetch(`/api/brand/${brandId}/closed`)
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
-      throw new Error(err.error || "Fetch failed")
-    }
-    const json = await res.json()
-    return (json.data || []).map(mapItem)
-  }, [brandId])
+  const fetchClosed = useCallback(() => fetchClosedRows(brandId!), [brandId])
 
   const { data: cached, error, isLoading, refetch } = useCachedFetch<ClosedInfluencer[]>(
     cacheKey,
@@ -369,7 +396,17 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
     async (
       id: string,
       newColumn: ClosedColumn,
-      options?: { resetWorkflow?: boolean }
+      options?: {
+        resetWorkflow?: boolean
+        /**
+         * Skip marking the OTHER views stale after this row succeeds.
+         *
+         * A bulk move calls this once per row, and each call invalidated five
+         * derived keys. The caller sets this and invalidates once at the end of
+         * the run instead.
+         */
+        deferDerivedInvalidation?: boolean
+      }
     ): Promise<UpdateColumnResult> => {
       if (!brandId) return { ok: false, error: "No brand selected" }
 
@@ -385,7 +422,12 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         )
       })
 
+      // Flipped by `rollback`, which every failure path calls and no success
+      // path does. `endWrite(writeOk)` then keeps the previous "updated" time
+      // on a failed save instead of stamping a refresh that did not happen.
+      let writeOk = true
       const rollback = () => {
+        writeOk = false
         if (!previous) return
         setDataCached((prev) => prev.map((item) => (item.id === id ? previous! : item)))
       }
@@ -418,13 +460,15 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         // ✅ This tracker's own entry is already correct from the optimistic
         // update; every other view of these rows (Pipeline, Influencer List,
         // Brand Partners, Analytics) is now stale and refreshes on next open.
-        invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId!)])
+        if (!options?.deferDerivedInvalidation) {
+          invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId!)])
+        }
         return { ok: true }
       } catch {
         rollback()
         return { ok: false, error: "Network error" }
       } finally {
-        endWrite()
+        endWrite(writeOk)
       }
     },
     [brandId, setDataCached, beginWrite, endWrite]
@@ -449,11 +493,21 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         )
       })
 
+      // Flipped by `rollback`, which every failure path calls and no success
+      // path does. `endWrite(writeOk)` then keeps the previous "updated" time
+      // on a failed save instead of stamping a refresh that did not happen.
+      let writeOk = true
       const rollback = () => {
+        writeOk = false
         if (!previous) return
         setDataCached((prev) => prev.map((item) => (item.id === id ? previous! : item)))
       }
 
+      // Bracketed like updateColumn. Without it this write never bumped the
+      // cache's write generation, so a background revalidation that started
+      // before it could resolve afterwards and put the old value back — and the
+      // saving indicator never showed for it either.
+      beginWrite()
       try {
         const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
           method:  "PATCH",
@@ -471,9 +525,11 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
       } catch {
         rollback()
         return false
+      } finally {
+        endWrite(writeOk)
       }
     },
-    [brandId, setDataCached]
+    [brandId, setDataCached, beginWrite, endWrite]
   )
 
   // ── Update Campaign Type (optimistic) ─────────────────────────────────────
@@ -491,11 +547,21 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         )
       })
 
+      // Flipped by `rollback`, which every failure path calls and no success
+      // path does. `endWrite(writeOk)` then keeps the previous "updated" time
+      // on a failed save instead of stamping a refresh that did not happen.
+      let writeOk = true
       const rollback = () => {
+        writeOk = false
         if (!previous) return
         setDataCached((prev) => prev.map((item) => (item.id === id ? previous! : item)))
       }
 
+      // Bracketed like updateColumn. Without it this write never bumped the
+      // cache's write generation, so a background revalidation that started
+      // before it could resolve afterwards and put the old value back — and the
+      // saving indicator never showed for it either.
+      beginWrite()
       try {
         const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
           method:  "PATCH",
@@ -513,9 +579,11 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
       } catch {
         rollback()
         return false
+      } finally {
+        endWrite(writeOk)
       }
     },
-    [brandId, setDataCached]
+    [brandId, setDataCached, beginWrite, endWrite]
   )
 
   // ── Update Post URL (optimistic) ──────────────────────────────────────────
@@ -535,11 +603,21 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         )
       })
 
+      // Flipped by `rollback`, which every failure path calls and no success
+      // path does. `endWrite(writeOk)` then keeps the previous "updated" time
+      // on a failed save instead of stamping a refresh that did not happen.
+      let writeOk = true
       const rollback = () => {
+        writeOk = false
         if (!previous) return
         setDataCached((prev) => prev.map((item) => (item.id === id ? previous! : item)))
       }
 
+      // Bracketed like updateColumn. Without it this write never bumped the
+      // cache's write generation, so a background revalidation that started
+      // before it could resolve afterwards and put the old value back — and the
+      // saving indicator never showed for it either.
+      beginWrite()
       try {
         const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
           method:  "PATCH",
@@ -557,9 +635,11 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
       } catch {
         rollback()
         return false
+      } finally {
+        endWrite(writeOk)
       }
     },
-    [brandId, setDataCached]
+    [brandId, setDataCached, beginWrite, endWrite]
   )
 
   // ── Update Order Details (optimistic) ─────────────────────────────────────
@@ -570,10 +650,14 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
     async (id: string, fields: OrderDetailsFields): Promise<boolean> => {
       if (!brandId) return false
 
-      let snapshot: ClosedInfluencer[] = []
+      // Per-row rollback, matching every other mutation in this hook. This one
+      // kept a WHOLE-LIST snapshot and restored it on failure, which also
+      // reverted any other row written while this request was in flight — a
+      // bulk stage move running in the background, for instance.
+      let previous: ClosedInfluencer | undefined
 
       setDataCached((prev) => {
-        snapshot = prev
+        previous = prev.find((item) => item.id === id)
         return prev.map((item) => {
           if (item.id !== id) return item
           return {
@@ -588,6 +672,21 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         })
       })
 
+      // Flipped by `rollback`, which every failure path calls and no success
+      // path does. `endWrite(writeOk)` then keeps the previous "updated" time
+      // on a failed save instead of stamping a refresh that did not happen.
+      let writeOk = true
+      const rollback = () => {
+        writeOk = false
+        if (!previous) return
+        setDataCached((prev) => prev.map((item) => (item.id === id ? previous! : item)))
+      }
+
+      // Bracketed like updateColumn. Without it this write never bumped the
+      // cache's write generation, so a background revalidation that started
+      // before it could resolve afterwards and put the old value back — and the
+      // saving indicator never showed for it either.
+      beginWrite()
       try {
         const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
           method:  "PATCH",
@@ -596,18 +695,20 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         })
 
         if (!res.ok) {
-          setDataCached(snapshot)
+          rollback()
           return false
         }
 
         invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId!)])
         return true
       } catch {
-        setDataCached(snapshot)
+        rollback()
         return false
+      } finally {
+        endWrite(writeOk)
       }
     },
-    [brandId, setDataCached]
+    [brandId, setDataCached, beginWrite, endWrite]
   )
 
   return {
