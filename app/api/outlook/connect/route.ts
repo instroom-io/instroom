@@ -47,6 +47,12 @@ export async function GET(req: NextRequest) {
     response_type: "code",
     scope: OUTLOOK_SCOPES.join(" "),
     response_mode: "query",
+    // Without this Microsoft silently reuses whichever account the browser is
+    // already signed in to, so "Connect another Outlook account" only ever
+    // refreshed the SAME Account row — there was never a second account to
+    // switch to. The Gmail route has passed "consent select_account" all
+    // along; this is the Microsoft equivalent.
+    prompt: "select_account",
     state,
   })
 

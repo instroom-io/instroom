@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo, useRef, Suspense } from "react"
+import { useState, useEffect, useMemo, useRef, useCallback, Suspense } from "react"
 import { useSearchParams } from "next/navigation"
 import { useSession } from "next-auth/react"
 import {
@@ -17,13 +17,14 @@ import {
 } from "@dnd-kit/core"
 import { SubscriptionGate } from "@/components/ui/subscription-gate"
 import { ListSkeleton } from "@/components/shared/skeletons"
-import { fetchCached, getCachedData, useRestoredCache } from "@/lib/data-cache"
+import { fetchCached, getCachedData, invalidateCache, useCachedFetch, useRestoredCache } from "@/lib/data-cache"
 import { useSubscriptionGate } from "@/hooks/useSubscriptionGate"
 import { invalidateInfluencerDerivedCaches } from "@/lib/cache-invalidation"
 import {
   IconMailPlus,
   IconSearch,
   IconX,
+  IconPlus,
   IconSend,
   IconMessageCircle,
   IconInbox,
@@ -87,6 +88,30 @@ type PipelineStage =
   | "REJECTED"
 
 type GmailSyncState = "checking" | "not_connected" | "connecting" | "syncing" | "connected" | "error"
+
+// ── OAuth hand-off between tabs ──────────────────────────────────────────────
+// Both provider flows run entirely in a second tab: /api/{gmail,outlook}/connect
+// 302s to accounts.google.com / login.microsoftonline.com there, the matching
+// callback lands there too, and it finishes on
+// /dashboard/inbox?{gmail,outlook}Connected=1. That tab therefore knows the
+// outcome and the original tab does not. A same-origin BroadcastChannel carries
+// the result back, so the original tab can leave its waiting state on its own
+// rather than the user pressing Back or reloading. Same-origin only — no data
+// crosses to Google's or Microsoft's tab, which are different origins and
+// cannot listen.
+const OAUTH_CHANNEL = "instroom-oauth"
+
+type MailProvider = "gmail" | "outlook"
+type OAuthResult = { provider: MailProvider; ok: boolean; error?: string }
+
+/** Provider names as they already read in the inbox UI. */
+const PROVIDER_LABEL: Record<MailProvider, string> = { gmail: "Gmail", outlook: "Outlook" }
+
+/** One connected mailbox, as /api/mail/accounts reports it. Never carries tokens. */
+type MailAccount = { id: string; provider: MailProvider; email: string | null; isSelected: boolean }
+
+/** Shared-cache key for the connected-mailbox list. */
+const MAIL_ACCOUNTS_KEY = "/api/mail/accounts"
 
 type Email = {
   id: number | string
@@ -382,6 +407,96 @@ function parseQuotedBlock(quoted: string): { attribution: string | null; text: s
 
 // ─── Drag-and-drop: stage tab drop target / message row drag source ──────────
 
+/**
+ * The connected-mailbox menu behind an account chip.
+ *
+ * Lists every account already connected for that provider, switches between
+ * them, offers a Remove action, and links out to the existing OAuth flow for
+ * adding another. Purely presentational — every action is handled by the page.
+ */
+function AccountMenu({
+  provider,
+  accounts,
+  busy,
+  error,
+  onSelect,
+  onRemove,
+  onConnectAnother,
+  onClose,
+}: {
+  provider: MailProvider
+  accounts: MailAccount[]
+  busy: boolean
+  error?: string
+  onSelect: (account: MailAccount) => void
+  onRemove: (account: MailAccount) => void
+  onConnectAnother: () => void
+  onClose: () => void
+}) {
+  return (
+    <>
+      {/* Click-away, matching the pattern the compose and stage modals use. */}
+      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <div className="absolute right-0 top-full mt-1.5 z-50 w-64 bg-white border border-gray-200 rounded-xl shadow-xl py-1.5">
+        <div className="px-3 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+          {PROVIDER_LABEL[provider]} accounts
+        </div>
+
+        {accounts.length === 0 ? (
+          <div className="px-3 py-2 text-xs text-gray-400">No accounts listed yet.</div>
+        ) : (
+          accounts.map(account => (
+            <div
+              key={account.id}
+              className={`group flex items-center gap-2 px-3 py-2 text-xs transition ${
+                account.isSelected ? "bg-gray-50" : "hover:bg-gray-50"
+              }`}
+            >
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => onSelect(account)}
+                className="flex-1 flex items-center gap-2 text-left min-w-0 disabled:opacity-50"
+              >
+                <span className="w-3.5 flex-shrink-0">
+                  {account.isSelected && <IconCheck size={13} className="text-[#1FAE5B]" />}
+                </span>
+                <span className={`truncate ${account.isSelected ? "text-gray-900 font-medium" : "text-gray-600"}`}>
+                  {account.email || "Connected account"}
+                </span>
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => onRemove(account)}
+                title="Remove account"
+                aria-label={`Remove ${account.email || "account"}`}
+                className="p-1 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 transition disabled:opacity-50"
+              >
+                <IconTrash size={13} />
+              </button>
+            </div>
+          ))
+        )}
+
+        {error && <div className="px-3 py-1.5 text-[11px] text-red-500">{error}</div>}
+
+        <div className="border-t border-gray-100 mt-1 pt-1">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => { onClose(); onConnectAnother() }}
+            className="flex items-center gap-2 w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 transition disabled:opacity-50"
+          >
+            <IconPlus size={13} className="text-gray-400" />
+            Connect another {PROVIDER_LABEL[provider]} account
+          </button>
+        </div>
+      </div>
+    </>
+  )
+}
+
 function DroppableStageTab({ id, isExit, children }: { id: string; isExit?: boolean; children: React.ReactNode }) {
   const { setNodeRef, isOver } = useDroppable({ id })
   return (
@@ -420,13 +535,7 @@ function InboxContent() {
   // of gating the inbox behind a skeleton again.
   // Inbox is Solo/Team only per the pricing page — Basic gets no Gmail/Outlook
   // access at all, unlike Pipeline and Post Tracker which Basic does include.
-  const { isSubscribed, status: subscriptionStatus, planDisplayName } = useSubscriptionGate(brandId, ["solo", "team"])
-
-  // Relative URL — some callers run inside a useState lazy initializer, which
-  // React invokes during the server-side render "use client" pages still get
-  // before hydration, where `window` doesn't exist yet.
-  const threadsUrl = (provider: "gmail" | "outlook") =>
-    brandId ? `/api/${provider}/threads?brandId=${encodeURIComponent(brandId)}` : `/api/${provider}/threads`
+  const { isSubscribed, status: subscriptionStatus, planDisplayName, refetch: refetchSubscription } = useSubscriptionGate(brandId, ["solo", "team"])
 
   // Threads already fetched for this brand render immediately; the mount checks
   // below still run and update these silently in the background.
@@ -454,7 +563,7 @@ function InboxContent() {
   // a self-sent verification/test email), instead of treating the latter as
   // an unregistered influencer.
   const [gmailConnectedEmail, setGmailConnectedEmail] = useState<string | null>(
-    () => getCachedData<any>(threadsUrl("gmail"))?.connectedEmail ?? null
+    () => getCachedData<any>(threadsKey("gmail"))?.connectedEmail ?? null
   )
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null)
   const [loadingThreadId, setLoadingThreadId] = useState<string | number | null>(null)
@@ -467,6 +576,31 @@ function InboxContent() {
   const [searchQuery, setSearchQuery] = useState("")
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("")
   const [updateStageModal, setUpdateStageModal] = useState<{ open: boolean; email: Email | null }>({ open: false, email: null })
+
+  // ── Connected mailboxes ───────────────────────────────────────────────────
+  // Read through the shared cache like every other inbox fetch, so the shell
+  // and the chips render from whatever is already known and this list fills in
+  // progressively instead of gating anything.
+  const accountsFetcher = useCallback(async () => {
+    const res = await fetch(MAIL_ACCOUNTS_KEY)
+    const json = await res.json()
+    if (!res.ok) throw new Error(json?.error || "Failed to load connected accounts")
+    return json as { accounts: MailAccount[] }
+  }, [])
+
+  const { data: accountsData, refetch: refetchAccounts, mutate: mutateAccounts } =
+    useCachedFetch<{ accounts: MailAccount[] }>(MAIL_ACCOUNTS_KEY, accountsFetcher)
+  const mailAccounts = accountsData?.accounts ?? []
+  const accountsFor = (provider: MailProvider) => mailAccounts.filter(a => a.provider === provider)
+  const selectedAccount = (provider: MailProvider) =>
+    mailAccounts.find(a => a.provider === provider && a.isSelected) ?? null
+
+  /** Which provider's account menu is open, if any. */
+  const [openAccountMenu, setOpenAccountMenu] = useState<MailProvider | null>(null)
+  /** The account a Remove confirmation is currently about. */
+  const [removeAccount, setRemoveAccount] = useState<MailAccount | null>(null)
+  const [accountBusy, setAccountBusy] = useState(false)
+  const [accountError, setAccountError] = useState<string | undefined>()
   const [stageNotification, setStageNotification] = useState<{ show: boolean; message: string; type: "error" | "success" }>({ show: false, message: "", type: "error" })
   const [showPipelineBar, setShowPipelineBar] = useState(false)
   const [activeDragId, setActiveDragId] = useState<string | null>(null)
@@ -540,6 +674,41 @@ function InboxContent() {
     const params = new URLSearchParams(window.location.search)
     const justConnectedGmail = params.get("gmailConnected") === "1"
     const justConnectedOutlook = params.get("outlookConnected") === "1"
+
+    // ── Are we the OAuth tab? ──────────────────────────────────────────────
+    // Both callbacks finish by redirecting to the inbox with one of these
+    // params, so a tab that was opened by another tab AND is carrying them is
+    // the tab that just ran the flow. Its only remaining job is to tell the tab
+    // that opened it what happened and get out of the way — no inbox load, no
+    // threads fetch, nothing else. The original tab does the reload.
+    const callbackErrors: Record<MailProvider, string | null> = {
+      gmail: params.get("gmailError"),
+      outlook: params.get("outlookError"),
+    }
+    const callbackSuccess: Record<MailProvider, boolean> = {
+      gmail: justConnectedGmail,
+      outlook: justConnectedOutlook,
+    }
+    const callbackProvider = (["gmail", "outlook"] as MailProvider[]).find(
+      pr => callbackSuccess[pr] || callbackErrors[pr]
+    )
+    if (window.opener && callbackProvider) {
+      if (typeof BroadcastChannel !== "undefined") {
+        const channel = new BroadcastChannel(OAUTH_CHANNEL)
+        const result: OAuthResult = callbackSuccess[callbackProvider]
+          ? { provider: callbackProvider, ok: true }
+          : {
+              provider: callbackProvider,
+              ok: false,
+              error: decodeURIComponent(callbackErrors[callbackProvider] || ""),
+            }
+        channel.postMessage(result)
+        channel.close()
+      }
+      window.close()
+      // If the browser refuses to close a tab it did not script-open, fall
+      // through to the normal inbox below rather than leaving a blank page.
+    }
 
     // A fresh connect/reconnect can land on a still-valid client-side cache
     // entry from before the switch (e.g. Change Gmail to a different
@@ -655,39 +824,255 @@ function InboxContent() {
     }
   }
 
-  // The OAuth tab consumes the callback, so this tab never sees
-  // ?gmailConnected=1. Re-check once focus comes back, forcing past the shared
-  // cache since the mailbox that was "not connected" a moment ago now is.
-  const awaitConnection = (provider: "gmail" | "outlook") => {
-    const onFocus = () => {
-      window.removeEventListener("focus", onFocus)
-      void (provider === "gmail" ? loadGmailThreads() : loadOutlookThreads())
-    }
-    window.addEventListener("focus", onFocus)
+
+  // ── Connect a mailbox — one flow, both providers ──────────────────────────
+  // Gmail and Outlook differ only in their route prefix and which slice of state
+  // they own, so the tab handling, the waiting state and the cross-tab hand-off
+  // live here once. Each provider keeps its own existing connect route,
+  // callback, credentials and session handling — untouched.
+
+  const setProviderSyncState = (provider: MailProvider, state: GmailSyncState) => {
+    if (provider === "gmail") setGmailSyncState(state)
+    else setOutlookSyncState(state)
   }
 
-  // ── Connect Gmail — separate OAuth flow, no NextAuth signIn ───────────────
-  // Opens in a new tab so this one stays put: the user lands back on the inbox
-  // they were already looking at instead of having to press Back. The provider
-  // tab still hits the same callback with the same returnTo, so the connection
-  // flow is unchanged — and `awaitConnection` re-checks here when that tab is
-  // done and focus comes back.
-  const handleConnectGmail = () => {
-    setGmailSyncState("connecting")
+  const setProviderError = (provider: MailProvider, message: string) => {
+    if (provider === "gmail") setGmailError(message)
+    else setOutlookError(message)
+  }
+
+  /**
+   * Start the OAuth flow for one provider.
+   *
+   * Everything — the authorization redirect, the account picker, consent and the
+   * provider's callback — happens in the tab this opens. This tab does not
+   * navigate anywhere; it holds on the inbox showing "Waiting for sign-in…"
+   * until the other tab reports back or goes away.
+   */
+  const connectProvider = (provider: MailProvider) => {
     const returnTo = window.location.pathname + window.location.search
+    // NOTE: no "noopener" here, deliberately. With noopener the browser returns
+    // null from window.open even on success, so the old code could not tell a
+    // blocked popup from an opened tab — it always took the fallback branch and
+    // navigated THIS tab to Google / Microsoft. The tab we open is our own
+    // origin, and the handle is what lets us notice it closing.
     const opened = window.open(
-      `/api/gmail/connect?returnTo=${encodeURIComponent(returnTo)}`,
-      "_blank",
-      "noopener,noreferrer"
+      `/api/${provider}/connect?returnTo=${encodeURIComponent(returnTo)}`,
+      "_blank"
     )
-    // Popup/tab blocked — fall back to the previous same-tab navigation rather
-    // than leaving the button stuck on "connecting".
+    // Popup/tab blocked. Don't navigate this tab; surface the existing error
+    // state so the user can allow the popup and retry.
     if (!opened) {
-      window.location.href = `/api/gmail/connect?returnTo=${encodeURIComponent(returnTo)}`
+      setProviderError(provider, "Your browser blocked the sign-in tab. Allow pop-ups for this site and try again.")
+      setProviderSyncState(provider, "error")
       return
     }
-    awaitConnection("gmail")
+    setProviderSyncState(provider, "connecting")
+    awaitOAuthTab(provider, opened)
   }
+
+  /**
+   * Keep this tab waiting while the OAuth tab works, and react once it reports.
+   *
+   * Three ways out, whichever comes first, and only the first one counts:
+   *   1. the OAuth tab broadcasts its outcome — success or a callback error;
+   *   2. the OAuth tab is closed (cancelled, or the message never arrived) — the
+   *      connection is re-checked, since the grant may well have gone through;
+   *   3. focus returns to this tab and that tab has gone — an immediate check
+   *      instead of waiting up to 500ms for the next poll.
+   */
+  const awaitOAuthTab = (provider: MailProvider, oauthTab: Window) => {
+    let settled = false
+    let channel: BroadcastChannel | null = null
+    let closedPoll: ReturnType<typeof setInterval> | null = null
+
+    const cleanup = () => {
+      window.removeEventListener("focus", onFocus)
+      if (closedPoll) clearInterval(closedPoll)
+      channel?.close()
+    }
+
+    const settle = (result: "connected" | "cancelled" | { error: string }) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      if (result === "connected") {
+        // The OAuth tab closes itself once it has broadcast; close it from here
+        // too, for a browser that refuses a script-close of a tab it did not
+        // itself open. We hold the handle because we opened it.
+        if (!oauthTab.closed) {
+          try { oauthTab.close() } catch { /* already gone, or refused */ }
+        }
+        // force:true — the shared cache may still hold the "not connected"
+        // answer from a moment ago, or the previous account's threads.
+        void (provider === "gmail" ? loadGmailThreads() : loadOutlookThreads())
+        // Re-run the gate. A subscription check that happened to fail during the
+        // OAuth transition is cached as "not subscribed" and leaves the locked
+        // overlay sitting over a perfectly good inbox until something asks
+        // again. This asks again — the same check, against the same route; it
+        // does not skip or weaken it, and a genuinely unsubscribed user stays
+        // locked.
+        void refetchSubscription()
+        // A newly connected mailbox has to appear in the account selector.
+        void refetchAccounts()
+      } else if (result === "cancelled") {
+        // The tab went away without a verdict. It may still have completed, so
+        // ask the server rather than assuming either way; the check helpers
+        // already fall back to "not_connected" on a 401/403.
+        void (provider === "gmail" ? checkGmailConnection() : checkOutlookConnection())
+      } else {
+        setProviderError(provider, result.error)
+        setProviderSyncState(provider, "error")
+      }
+    }
+
+    // Focus alone is not a verdict — the user may simply be tabbing back and
+    // forth while the account picker is still open. It settles only if the OAuth
+    // tab has actually gone.
+    const onFocus = () => { if (oauthTab.closed) settle("cancelled") }
+    window.addEventListener("focus", onFocus)
+
+    if (typeof BroadcastChannel !== "undefined") {
+      channel = new BroadcastChannel(OAUTH_CHANNEL)
+      channel.onmessage = (event: MessageEvent<OAuthResult>) => {
+        const data = event.data
+        if (!data || data.provider !== provider) return
+        settle(data.ok ? "connected" : { error: data.error || `${PROVIDER_LABEL[provider]} sign-in failed.` })
+      }
+    }
+
+    closedPoll = setInterval(() => {
+      if (oauthTab.closed) settle("cancelled")
+    }, 500)
+  }
+
+  // ── Switching and removing mailboxes ──────────────────────────────────────
+
+  /** Forget only this provider's cached threads. The other mailbox's cache and
+   *  the rest of the inbox are untouched. */
+  const dropProviderThreadsCache = (provider: MailProvider) => {
+    invalidateCache(threadsKey(provider))
+  }
+
+  /** Remove this provider's conversations from the visible list — used when a
+   *  mailbox goes away, not while switching (see switchAccount). */
+  const clearProviderEmails = (provider: MailProvider) => {
+    setEmails(prev => prev.filter(e => e.source !== provider))
+  }
+
+  /** Move the selected marker within one provider, so the chip label and the
+   *  menu's checkmark update on click instead of after the round trip. */
+  const markAccountSelected = (account: MailAccount) => {
+    const current = accountsData?.accounts
+    if (!current) return
+    mutateAccounts({
+      accounts: current.map(a =>
+        a.provider === account.provider ? { ...a, isSelected: a.id === account.id } : a
+      ),
+    })
+  }
+
+  /**
+   * Switch to another already-connected mailbox of the same provider.
+   *
+   * The server side of this is a touch of `last_selected_at` — the same column
+   * both providers' token resolvers already order by — so the following fetch
+   * returns that account's conversations and only that account's.
+   */
+  const switchAccount = async (account: MailAccount) => {
+    if (accountBusy || account.isSelected) { setOpenAccountMenu(null); return }
+    const previous = accountsData?.accounts
+    setAccountBusy(true)
+    setAccountError(undefined)
+    // Close and re-label immediately. The list itself is deliberately NOT
+    // cleared: emptying it first made every switch flash a blank inbox, so the
+    // outgoing account's threads stay on screen until the incoming ones land
+    // and replace them by `source`.
+    setOpenAccountMenu(null)
+    markAccountSelected(account)
+    try {
+      const res = await fetch(MAIL_ACCOUNTS_KEY, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accountId: account.id }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json?.error || "Failed to switch account")
+
+      // Only the switched provider is invalidated and refetched. The other
+      // provider's threads are left alone, and the two are never merged: each
+      // load replaces just its own `source`.
+      dropProviderThreadsCache(account.provider)
+      await Promise.all([
+        refetchAccounts(),
+        account.provider === "gmail" ? loadGmailThreads() : loadOutlookThreads(),
+      ])
+    } catch (err: any) {
+      // Put the marker back where it was — the switch did not happen.
+      if (previous) mutateAccounts({ accounts: previous })
+      setAccountError(err?.message || "Failed to switch account")
+      setOpenAccountMenu(account.provider)
+    } finally {
+      setAccountBusy(false)
+    }
+  }
+
+  /**
+   * Disconnect a mailbox, then land on a sensible state.
+   *
+   * The route replies with what is still connected, so the fallback is decided
+   * from server truth rather than guessed here: another account of the same
+   * provider becomes current, otherwise that provider drops to its existing
+   * "not connected" state and the connect-email UI appears when neither
+   * provider has anything left.
+   */
+  const confirmRemoveAccount = async () => {
+    const account = removeAccount
+    if (!account || accountBusy) return
+    setAccountBusy(true)
+    setAccountError(undefined)
+    try {
+      const res = await fetch(`${MAIL_ACCOUNTS_KEY}?accountId=${encodeURIComponent(account.id)}`, {
+        method: "DELETE",
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json?.error || "Failed to remove account")
+
+      const remaining: MailAccount[] = json.remaining ?? []
+      const provider = account.provider
+
+      setRemoveAccount(null)
+      setOpenAccountMenu(null)
+      dropProviderThreadsCache(provider)
+      clearProviderEmails(provider)
+
+      if (remaining.some(a => a.provider === provider)) {
+        // Another mailbox of the same provider took over — show its threads.
+        // The list refresh and the thread fetch don't depend on each other.
+        await Promise.all([
+          refetchAccounts(),
+          provider === "gmail" ? loadGmailThreads() : loadOutlookThreads(),
+        ])
+      } else {
+        await refetchAccounts()
+        // None left for this provider: the existing disconnected state, which
+        // is also what drives the connect-email UI once both are empty.
+        setProviderSyncState(provider, "not_connected")
+        if (provider === "gmail") {
+          setGmailConnected(false)
+          setGmailConnectedEmail(null)
+        } else {
+          setOutlookConnected(false)
+        }
+      }
+    } catch (err: any) {
+      setAccountError(err?.message || "Failed to remove account")
+    } finally {
+      setAccountBusy(false)
+    }
+  }
+
+  const handleConnectGmail = () => connectProvider("gmail")
 
   const loadGmailThreads = async () => {
     const requestId = ++gmailRequestIdRef.current
@@ -740,22 +1125,7 @@ function InboxContent() {
     }
   }
 
-  // ── Connect Outlook — Microsoft OAuth flow ────────────────────────────────
-  // New tab, same reasoning as Gmail above.
-  const handleConnectOutlook = () => {
-    setOutlookSyncState("connecting")
-    const returnTo = window.location.pathname + window.location.search
-    const opened = window.open(
-      `/api/outlook/connect?returnTo=${encodeURIComponent(returnTo)}`,
-      "_blank",
-      "noopener,noreferrer"
-    )
-    if (!opened) {
-      window.location.href = `/api/outlook/connect?returnTo=${encodeURIComponent(returnTo)}`
-      return
-    }
-    awaitConnection("outlook")
-  }
+  const handleConnectOutlook = () => connectProvider("outlook")
 
   const loadOutlookThreads = async () => {
     const requestId = ++outlookRequestIdRef.current
@@ -1197,42 +1567,91 @@ function InboxContent() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <div
-                className={`group flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium border transition-all ${
-                  isGmailReady
-                    ? "bg-green-50 border-green-200 text-green-700 cursor-pointer hover:bg-green-100"
-                    : gmailSyncState === "not_connected"
-                    ? "bg-yellow-50 border-yellow-200 text-yellow-700 cursor-pointer hover:bg-yellow-100"
-                    : isGmailLoading
-                    ? "bg-gray-50 border-gray-200 text-gray-400"
-                    : "bg-red-50 border-red-200 text-red-500"
-                }`}
-                onClick={gmailSyncState === "not_connected" || isGmailReady ? handleConnectGmail : undefined}
-              >
-                <IconBrandGmail size={11} />
-                {isGmailReady ? (
-                  <>
-                    <span className="group-hover:hidden">Gmail</span>
-                    <span className="hidden group-hover:inline">Change Gmail</span>
-                  </>
-                ) : (
-                  <span>{gmailSyncState === "not_connected" ? "Connect Gmail" : isGmailLoading ? "Gmail…" : "Gmail error"}</span>
+              <div className="relative">
+                <div
+                  className={`group flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium border transition-all ${
+                    isGmailReady
+                      ? "bg-green-50 border-green-200 text-green-700 cursor-pointer hover:bg-green-100"
+                      : gmailSyncState === "not_connected"
+                      ? "bg-yellow-50 border-yellow-200 text-yellow-700 cursor-pointer hover:bg-yellow-100"
+                      : isGmailLoading
+                      ? "bg-gray-50 border-gray-200 text-gray-400"
+                      : "bg-red-50 border-red-200 text-red-500"
+                  }`}
+                  onClick={
+                    isGmailReady
+                      ? () => setOpenAccountMenu(p => (p === "gmail" ? null : "gmail"))
+                      : gmailSyncState === "not_connected"
+                      ? handleConnectGmail
+                      : undefined
+                  }
+                >
+                  <IconBrandGmail size={11} />
+                  {isGmailReady ? (
+                    <>
+                      {/* The selected address, when we know it — the chip is the
+                          account control, so it should say which account. */}
+                      <span>{selectedAccount("gmail")?.email || "Gmail"}</span>
+                      <IconChevronDown size={10} />
+                    </>
+                  ) : (
+                    <span>{gmailSyncState === "not_connected" ? "Connect Gmail" : gmailSyncState === "connecting" ? "Waiting for sign-in…" : isGmailLoading ? "Gmail…" : "Gmail error"}</span>
+                  )}
+                </div>
+                {openAccountMenu === "gmail" && (
+                  <AccountMenu
+                    provider="gmail"
+                    accounts={accountsFor("gmail")}
+                    busy={accountBusy}
+                    error={accountError}
+                    onSelect={switchAccount}
+                    onRemove={setRemoveAccount}
+                    onConnectAnother={handleConnectGmail}
+                    onClose={() => setOpenAccountMenu(null)}
+                  />
                 )}
               </div>
-              <div
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium border transition-all ${
-                  isOutlookReady
-                    ? "bg-blue-50 border-blue-200 text-blue-700"
-                    : outlookSyncState === "not_connected"
-                    ? "bg-yellow-50 border-yellow-200 text-yellow-700 cursor-pointer hover:bg-yellow-100"
-                    : isOutlookLoading
-                    ? "bg-gray-50 border-gray-200 text-gray-400"
-                    : "bg-red-50 border-red-200 text-red-500"
-                }`}
-                onClick={outlookSyncState === "not_connected" ? handleConnectOutlook : undefined}
-              >
-                <OutlookIcon size={11} />
-                <span>{isOutlookReady ? "Outlook" : outlookSyncState === "not_connected" ? "Connect Outlook" : isOutlookLoading ? "Outlook…" : "Outlook error"}</span>
+              <div className="relative">
+                <div
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium border transition-all ${
+                    isOutlookReady
+                      ? "bg-blue-50 border-blue-200 text-blue-700 cursor-pointer hover:bg-blue-100"
+                      : outlookSyncState === "not_connected"
+                      ? "bg-yellow-50 border-yellow-200 text-yellow-700 cursor-pointer hover:bg-yellow-100"
+                      : isOutlookLoading
+                      ? "bg-gray-50 border-gray-200 text-gray-400"
+                      : "bg-red-50 border-red-200 text-red-500"
+                  }`}
+                  onClick={
+                    isOutlookReady
+                      ? () => setOpenAccountMenu(p => (p === "outlook" ? null : "outlook"))
+                      : outlookSyncState === "not_connected"
+                      ? handleConnectOutlook
+                      : undefined
+                  }
+                >
+                  <OutlookIcon size={11} />
+                  {isOutlookReady ? (
+                    <>
+                      <span>{selectedAccount("outlook")?.email || "Outlook"}</span>
+                      <IconChevronDown size={10} />
+                    </>
+                  ) : (
+                    <span>{outlookSyncState === "not_connected" ? "Connect Outlook" : outlookSyncState === "connecting" ? "Waiting for sign-in…" : isOutlookLoading ? "Outlook…" : "Outlook error"}</span>
+                  )}
+                </div>
+                {openAccountMenu === "outlook" && (
+                  <AccountMenu
+                    provider="outlook"
+                    accounts={accountsFor("outlook")}
+                    busy={accountBusy}
+                    error={accountError}
+                    onSelect={switchAccount}
+                    onRemove={setRemoveAccount}
+                    onConnectAnother={handleConnectOutlook}
+                    onClose={() => setOpenAccountMenu(null)}
+                  />
+                )}
               </div>
               <div className="flex items-center gap-2 text-xs text-gray-500">
                 <span className="hidden sm:inline">Current:</span>
@@ -1260,9 +1679,9 @@ function InboxContent() {
                 <div className="absolute inset-0 rounded-full border-4 border-t-[#1FAE5B] animate-spin" />
               </div>
               <p className="text-sm text-gray-500 font-medium">
-                {gmailSyncState === "connecting" ? "Redirecting to Google…" :
-                 outlookSyncState === "connecting" ? "Redirecting to Microsoft…" :
-                 "Loading your inbox…"}
+                {gmailSyncState === "connecting" || outlookSyncState === "connecting"
+                  ? "Waiting for sign-in…"
+                  : "Loading your inbox…"}
               </p>
             </div>
           ) : needsConnect ? (
@@ -1727,6 +2146,51 @@ function InboxContent() {
           )}
         </div>
       </div>
+
+      {/* ── REMOVE ACCOUNT CONFIRMATION ── */}
+      {/* Same shell as the stage and compose modals in this file. */}
+      {removeAccount && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center animate-fadeIn p-4">
+          <div className="absolute inset-0 bg-black/50" onClick={() => { if (!accountBusy) setRemoveAccount(null) }} />
+          <div className="relative w-full max-w-[400px] bg-white rounded-2xl shadow-2xl p-6 animate-scaleIn">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="font-semibold text-lg text-gray-900">Remove account</h2>
+              <button
+                onClick={() => { if (!accountBusy) setRemoveAccount(null) }}
+                className="p-1 rounded-lg hover:bg-gray-100 transition"
+              >
+                <IconX size={20} />
+              </button>
+            </div>
+            <p className="text-sm text-gray-600">
+              Disconnect{" "}
+              <span className="font-medium text-gray-900">
+                {removeAccount.email || `this ${PROVIDER_LABEL[removeAccount.provider]} account`}
+              </span>{" "}
+              from Instroom? Its conversations will stop appearing in your inbox. Nothing is
+              deleted from {PROVIDER_LABEL[removeAccount.provider]}, and you can connect it again
+              at any time.
+            </p>
+            {accountError && <p className="mt-3 text-xs text-red-500">{accountError}</p>}
+            <div className="flex items-center justify-end gap-2 mt-5">
+              <button
+                onClick={() => setRemoveAccount(null)}
+                disabled={accountBusy}
+                className="h-9 px-4 rounded-lg text-sm border border-gray-200 text-gray-600 hover:bg-gray-50 transition disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmRemoveAccount}
+                disabled={accountBusy}
+                className="h-9 px-4 rounded-lg text-sm font-medium bg-red-600 text-white hover:bg-red-700 transition disabled:opacity-50"
+              >
+                {accountBusy ? "Removing…" : "Remove account"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── UPDATE STAGE MODAL ── */}
       {updateStageModal.open && updateStageModal.email && (

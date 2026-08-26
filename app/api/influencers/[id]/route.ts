@@ -94,13 +94,38 @@ export async function PUT(
     if (data.avg_comments !== undefined) updateData.avg_comments = Number(data.avg_comments)
     if (data.avg_views !== undefined) updateData.avg_views = Number(data.avg_views)
 
-    // Update influencer
-    const influencer = await prisma.influencer.update({
+    // ── Write ────────────────────────────────────────────────────────────────
+    // updateMany, not update().
+    //
+    // MEASURED against this deployment's database (median of 5, ~317ms baseline
+    // round trip to the shared host): raw UPDATE 412ms, updateMany 1430ms,
+    // update({ select }) 1839ms. `update` wraps itself in an implicit
+    // transaction and reads the row back (BEGIN, UPDATE, SELECT, COMMIT) — and
+    // on MyISAM, which every table here uses, the transaction does nothing at
+    // all. There was no `select` either, so the read-back pulled the whole row
+    // including its Text columns.
+    //
+    // This runs after every auto-fetch enrichment in the Influencer List
+    // (components/table-sheet/table-sheet.tsx saveRowToDatabase), and neither
+    // caller reads this body: the table passes its own local row to
+    // onFetchComplete, and the profile sidebar builds `synced` from editedRow.
+    const writeResult = await prisma.influencer.updateMany({
       where: { id },
       data: updateData,
     })
 
-    return NextResponse.json(influencer)
+    // update() threw P2025 for a missing row and the catch below turned that
+    // into a 404. updateMany reports a count, so the same answer is produced
+    // here instead of by an exception.
+    if (writeResult.count === 0) {
+      return NextResponse.json(
+        { error: "Influencer not found", details: "This influencer does not exist or was not saved to the database" },
+        { status: 404 }
+      )
+    }
+
+    // Same shape the callers already ignore, built from what was written.
+    return NextResponse.json({ id, ...updateData })
   } catch (error: any) {
     const errorMessage = error?.message || String(error)
     

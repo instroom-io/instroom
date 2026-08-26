@@ -704,6 +704,19 @@ model PostTrackerAddon {
   amount               Decimal?
   currency             String    @default("USD") @db.VarChar(10)
   activated_by_user_id String?   @db.VarChar(30)
+
+  // ── What to look for, configured once per brand ───────────────────────────
+  // Automatic Post Detection is a brand-level paid feature, so what it matches
+  // on is brand-level too: one set of hashtags and mentions used for every
+  // influencer handle the brand monitors. It lives on this row because this row
+  // IS the feature's brand-scoped record — same lifetime, one lookup.
+  //
+  // PostDetectionSetting keeps its own hashtags/mentions columns for brands
+  // configured before this existed; the monitor prefers these and falls back to
+  // those, so nothing already working stops working.
+  detection_hashtags   String?   @db.VarChar(255)
+  detection_mentions   String?   @db.VarChar(255)
+
   created_at           DateTime  @default(now())
   updated_at           DateTime  @updatedAt
 

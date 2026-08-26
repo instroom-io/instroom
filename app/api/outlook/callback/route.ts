@@ -62,6 +62,7 @@ export async function GET(req: NextRequest) {
   let refreshToken: string | null
   let expiresAt: number | null
   let microsoftAccountId: string
+  let microsoftEmail: string | null
   let scope: string
 
   try {
@@ -102,6 +103,9 @@ export async function GET(req: NextRequest) {
     })
     const profile = await profileRes.json()
     microsoftAccountId = profile.id
+    // Graph returns `mail` for a mailbox-backed account and falls back to
+    // userPrincipalName otherwise. No extra request — same response.
+    microsoftEmail = profile.mail || profile.userPrincipalName || null
   } catch {
     return NextResponse.redirect(
       new URL("/dashboard/inbox?outlookError=network_error", req.url)
@@ -127,6 +131,8 @@ export async function GET(req: NextRequest) {
         token_type: "Bearer",
         scope,
         id_token: null,
+        email: microsoftEmail,
+        last_selected_at: new Date(),
       },
       update: {
         userId,
@@ -134,6 +140,10 @@ export async function GET(req: NextRequest) {
         ...(refreshToken ? { refresh_token: refreshToken } : {}),
         expires_at: expiresAt,
         scope,
+        email: microsoftEmail,
+        // Same rule the Gmail callback documents: a deliberate connect or
+        // reconnect makes THIS account the selected one again.
+        last_selected_at: new Date(),
       },
     })
   } catch {
@@ -142,7 +152,16 @@ export async function GET(req: NextRequest) {
     )
   }
 
-  return NextResponse.redirect(
-    new URL(`${returnTo}?outlookConnected=1`, req.url)
-  )
+  // ── Done — redirect back to inbox ─────────────────────────────────────────
+  // Built via URL/searchParams rather than string concatenation, for the same
+  // reason the Gmail callback documents: returnTo already carries
+  // `?brandId=...` once a workspace is selected, so appending
+  // `?outlookConnected=1` produced a second `?`
+  // (…brandId=X?outlookConnected=1). brandId then parsed as
+  // "X?outlookConnected=1" and there was no outlookConnected param at all —
+  // the page fell back to "no workspace selected", which also fails the
+  // brand-scoped subscription check and renders the locked overlay.
+  const successUrl = new URL(returnTo, req.url)
+  successUrl.searchParams.set("outlookConnected", "1")
+  return NextResponse.redirect(successUrl)
 }

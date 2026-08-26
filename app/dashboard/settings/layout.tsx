@@ -1,4 +1,6 @@
+import { Suspense } from "react"
 import { SettingsSidebar } from "@/components/settings-sidebar"
+import { SettingsPrefetcher } from "@/components/settings-prefetcher"
 
 export default function SettingsLayout({
   children,
@@ -16,6 +18,14 @@ export default function SettingsLayout({
     // On phones it's now ordinary document flow: the page scrolls as one and
     // the nav sticks instead of occupying fixed height.
     <div className="flex min-h-0 flex-col md:absolute md:inset-0 md:top-(--header-height) md:z-[1] md:flex-row">
+      {/* Renders nothing — starts every section's fetch as soon as Settings is
+          opened, so moving between sections reads from the shared cache instead
+          of beginning a request on arrival. In the layout, so it runs whichever
+          section the user landed on and is not restarted on each navigation. */}
+      <Suspense fallback={null}>
+        <SettingsPrefetcher />
+      </Suspense>
+
       <SettingsSidebar />
       <main className="min-w-0 flex-1 bg-[#f7f9f8] pb-[max(1.5rem,env(safe-area-inset-bottom))] md:overflow-y-auto md:pb-0">
         {children}

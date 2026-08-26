@@ -33,6 +33,7 @@ import {
 } from "./modals"
 import { MobileRowCards } from "./mobile-row-cards"
 import { ToastContainer } from "./toast"
+import { DataSyncStatus } from "@/components/data-sync-status"
 import ProfileSidebar from "./profile-sidebar"
 import { useBrandTaxonomy } from "@/hooks/useBrandTaxonomy"
 
@@ -124,7 +125,7 @@ export default function TableSheet({
   initialRows = [], initialCustomColumns = [],
   onRowsChange, onDeleteRow, onFetchComplete, onRegisterIdSwap,
   onCustomColumnsChange, onImportRows, onBulkApprove, readOnly = false, brandId,
-  subscriptionStatus, onShowTrialModal, canApproveInfluencers = true,
+  subscriptionStatus, onShowTrialModal, canApproveInfluencers = true, onNotify,
 }: {
   initialRows?: InfluencerRow[]
   initialCustomColumns?: CustomColumn[]
@@ -141,6 +142,16 @@ export default function TableSheet({
   subscriptionStatus?: { status: string; isExpired: boolean; subscription?: { plan?: { name?: string } } | null } | null
   onShowTrialModal?: () => void
   canApproveInfluencers?: boolean
+  /**
+   * Where this table's notifications should go.
+   *
+   * When the host page owns a notification design (the Influencer List's green
+   * bottom-right toast), pass it here and every message routes there instead of
+   * this component's own stacking top-right container — one design, and only
+   * the latest message visible. Omitted, the local container is used exactly as
+   * before, so any other host keeps its current behaviour.
+   */
+  onNotify?: (type: ToastNotification["type"], message: string) => void
 }) {
   // Import/Export are a Solo & Team feature — Basic (the free plan) doesn't
   // include them, regardless of subscription status.
@@ -153,6 +164,36 @@ export default function TableSheet({
   // (autoFetchInfluencer's credit guards) without taking `rows` as a dependency.
   const rowsRef = useRef<InfluencerRow[]>(rows)
   rowsRef.current = rows
+
+  // ── Auto-fetch input gating ─────────────────────────────────────────────────
+  // A handle commit and a platform commit are two separate edits, so filling in
+  // both fired two provider requests — two credits — for one intent. And the
+  // only guard against re-requesting a handle was "does this row already have a
+  // follower count", so a handle the provider had nothing for was re-requested
+  // on every subsequent commit.
+  //
+  //   pendingFetchRef   — one debounce timer per row, so the handle edit and the
+  //                       platform edit that follows it coalesce into one fetch
+  //                       for the final pair.
+  //   requestedPairsRef — every platform|handle already requested. A repeat
+  //                       commit of the same pair is not a new question, so it
+  //                       is not asked again. The Retry button clears its own
+  //                       key, since that IS a deliberate re-ask.
+  const pendingFetchRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  const requestedPairsRef = useRef<Set<string>>(new Set())
+
+  /** How long to wait after the last handle/platform edit before asking the
+   *  provider. Long enough to absorb "type handle, then pick platform". */
+  const AUTO_FETCH_DEBOUNCE_MS = 600
+
+  const fetchPairKey = (handle: string, platform: string) =>
+    `${platform}|${cleanHandle(handle).trim().toLowerCase()}`
+
+  // Nothing should fire after the table unmounts.
+  useEffect(() => () => {
+    pendingFetchRef.current.forEach(timer => clearTimeout(timer))
+    pendingFetchRef.current.clear()
+  }, [])
 
   const swapIdRef = useRef<(tempId: string, realId: string) => void>(() => {})
   useEffect(() => {
@@ -266,7 +307,14 @@ export default function TableSheet({
   const settingsMenuRef    = useRef<HTMLDivElement>(null)
   const fileInputRef       = useRef<HTMLInputElement>(null)
 
-  const { toasts, addToast, dismissToast } = useToast()
+  const { toasts, addToast: addLocalToast, dismissToast } = useToast()
+
+  // Single entry point for every message this table raises, so the ~15 existing
+  // addToast call sites and their wording stay exactly as they are.
+  const addToast = useCallback((type: ToastNotification["type"], message: string) => {
+    if (onNotify) { onNotify(type, message); return }
+    addLocalToast(type, message)
+  }, [onNotify, addLocalToast])
 
   // Documented profile-lookup endpoints, defined once in constants.ts.
   const INSTROOM_API = INSTROOM_PROFILE_ENDPOINTS
@@ -491,7 +539,29 @@ export default function TableSheet({
   const rowClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => { if (rowClickTimerRef.current) clearTimeout(rowClickTimerRef.current) }, [])
 
+  /**
+   * Set synchronously by `startEdit`, read by `handleRowClick` in the same click.
+   *
+   * A single click on a cell both starts an edit AND bubbles to the row, which
+   * is what checked the row every time someone began typing. Reading `editCell`
+   * in the row handler cannot catch it: `startEdit` has only QUEUED that state,
+   * so the handler still sees null on this click. A ref updates immediately, so
+   * the row handler can tell "this click was meant for a cell" from "this click
+   * was meant for the row".
+   */
+  const editIntentRef = useRef(false)
+
   const handleRowClick = (id: string, e: React.MouseEvent) => {
+    // This click opened a cell editor (or a cell popup). Selecting the row was
+    // not what the user asked for.
+    if (editIntentRef.current) { editIntentRef.current = false; return }
+    // An editor is already open — a click anywhere in the row while typing must
+    // not change what is selected.
+    if (editCell || popupCell) return
+    // Or the click came from a control inside a cell: the editor's own input,
+    // Save, Cancel. Same test the table wrapper's onMouseDown already uses.
+    if ((e.target as HTMLElement).closest("input, select, textarea, button, [tabindex]")) return
+
     if (e.ctrlKey || e.metaKey || e.shiftKey) {
       handleRowSelect(id, e)
       return
@@ -501,7 +571,13 @@ export default function TableSheet({
   }
 
   const handleRowDoubleClick = (id: string) => {
+    // Always cancel the pending single-click selection, even when the profile is
+    // not going to open — otherwise a double-click that lands on a cell still
+    // selects the row 200ms later.
     if (rowClickTimerRef.current) { clearTimeout(rowClickTimerRef.current); rowClickTimerRef.current = null }
+    // A double-click that opened an editor is an edit, not a request to open the
+    // profile panel.
+    if (editIntentRef.current || editCell || popupCell) { editIntentRef.current = false; return }
     setSidebarRowId(id)
   }
 
@@ -675,6 +751,14 @@ export default function TableSheet({
     if (!clean || clean.length < 2) return
     if (platform !== "instagram" && platform !== "tiktok") return
 
+    // This exact pair is asked at most once. Marked as requested at the actual
+    // call site below, not here: the duplicate and already-enriched branches in
+    // between never reach the provider, and marking them would stop the
+    // duplicate warning from reappearing on a later commit — which it did
+    // before this change.
+    const pairKey = `${platform}|${clean}`
+    if (requestedPairsRef.current.has(pairKey)) return
+
     // ── Credit guards ────────────────────────────────────────────────────────
     // These two checks used to live inside a setRows updater, which React runs
     // during the next render — long after the lines below had already fired the
@@ -704,6 +788,9 @@ export default function TableSheet({
     setFetchingRows(prev => { const n = new Set(prev); n.add(rowId); return n })
 
     try {
+      // Recorded immediately before the request, so a pair the provider had
+      // nothing for is not asked again either — that was a credit per commit.
+      requestedPairsRef.current.add(pairKey)
       const data = await fetchInfluencerFromAPI(handle, platform)
       if (!data) { addToast("error", `${clean} not found on ${platform}`); return }
       let enrichedRow: InfluencerRow | null = null
@@ -880,6 +967,42 @@ export default function TableSheet({
     setShowDeclineModal(false); setPendingDeclineRowIdx(null); containerRef.current?.focus()
   }
 
+  /**
+   * Queue an auto-fetch for a row once its handle/platform edits settle.
+   *
+   * Editing the handle and then the platform are two commits; without this each
+   * one fired its own request. The timer is per row and is reset by the later
+   * edit, so the provider is asked once, for the pair the user actually ended
+   * up with. A pair already requested is dropped here as well, so the timer is
+   * not even armed for a repeat.
+   */
+  const scheduleAutoFetch = useCallback((rowId: string, handle: string, platform: string) => {
+    // Both halves must be present and the handle usable before anything is
+    // scheduled — this is what keeps a half-filled row from asking.
+    const clean = cleanHandle(handle).trim().toLowerCase()
+    if (!clean || clean.length < 2) return
+    if (platform !== "instagram" && platform !== "tiktok") return
+    if (requestedPairsRef.current.has(fetchPairKey(handle, platform))) return
+
+    const existing = pendingFetchRef.current.get(rowId)
+    if (existing) clearTimeout(existing)
+
+    pendingFetchRef.current.set(rowId, setTimeout(() => {
+      pendingFetchRef.current.delete(rowId)
+      // Re-read the row at fire time rather than trusting the values captured
+      // when the timer was armed: the user may have corrected either field
+      // during the wait, and the stale pair would spend a credit on a handle
+      // that is no longer in the cell.
+      const row = rowsRef.current.find(r => r.id === rowId)
+      if (!row) return
+      const latestHandle = cleanHandle(row.handle)
+      const latestPlatform = row.platform
+      if (!latestHandle || latestHandle.trim().length < 2) return
+      if (latestPlatform !== "instagram" && latestPlatform !== "tiktok") return
+      autoFetchInfluencer(rowId, latestHandle, latestPlatform)
+    }, AUTO_FETCH_DEBOUNCE_MS))
+  }, [autoFetchInfluencer])
+
   const applyCellValue = useCallback((rowIdx: number, colKey: string, value: string) => {
     const actualRow = filteredRows[rowIdx]; const actualRowIdx = rows.findIndex(r => r.id === actualRow.id); if (actualRowIdx === -1) return
     if (colKey === "approval_status" && !canApproveInfluencers) return
@@ -916,8 +1039,8 @@ export default function TableSheet({
       }
       next[actualRowIdx] = row; onRowsChange?.(next); return next
     })
-    if (shouldFetch) autoFetchInfluencer(fetchRowId, fetchHandle, fetchPlatform)
-  }, [onRowsChange, customCols, filteredRows, rows, isOutreachField, nicheOptions, locationOptions, autoFetchInfluencer, canApproveInfluencers])
+    if (shouldFetch) scheduleAutoFetch(fetchRowId, fetchHandle, fetchPlatform)
+  }, [onRowsChange, customCols, filteredRows, rows, isOutreachField, nicheOptions, locationOptions, scheduleAutoFetch, canApproveInfluencers])
 
   const addOptionToCol = useCallback((fk: string, no: string) => {
     setCustomCols(prev => { const n = prev.map(c => c.field_key !== fk ? c : { ...c, field_options: [...(c.field_options ?? []), no] }); onCustomColumnsChange?.(n); return n })
@@ -928,6 +1051,9 @@ export default function TableSheet({
     const col = allCols[ci]; const row = filteredRows[ri]
     if (col.key === "approval_status" && !canApproveInfluencers) return
     if (row.approval_status === "Declined" && isOutreachField(col.key)) return
+    // Past every refusal, so this click IS an edit. Flagged before any branch
+    // below returns, and consumed by handleRowClick as the click bubbles.
+    editIntentRef.current = true
     if (col.type === "boolean") { applyCellValue(ri, col.key, getCellValue(row, col.key) === "Yes" ? "No" : "Yes"); setActiveCell({ rowIdx: ri, colIdx: ci }); return }
     if (col.key === "platform" || col.key === "niche" || col.key === "location" ||
         col.key === "approval_status" || col.key === "contact_status" || col.key === "gender" ||
@@ -1068,30 +1194,94 @@ export default function TableSheet({
 
     if (col.key === "handle") {
       if (isEditing) return (
-        <td key={col.key} className={`border border-gray-200 p-0 relative ${ringCls}`} style={{ minWidth: col.minWidth }}>
-          <div className="flex items-center gap-2 px-2">
+        // The thin editing box lives on the INNER wrapper, never on the <td>.
+        //
+        // Two earlier attempts on the cell itself came out clipped, for two
+        // different reasons: `ring-2 ring-inset` painted inside the cell's own
+        // grey border, leaving two lines; and a 2px border on a border-collapse
+        // table has its edges merged with the neighbouring cells, so it never
+        // closed. A 1px border on a plain block inside the cell takes part in
+        // neither — it is always a complete rectangle. `ringCls` is not used
+        // either: it is `ring-blue-500`, and this state is neutral.
+        //
+        // The <td> keeps the same grey border as every other cell; p-0.5 leaves
+        // a hairline of cell around the box so the two never touch.
+        //
+        // The click handlers stop here: the <tr> carries onClick (row select)
+        // and onDoubleClick (open profile), and both fired while typing in or
+        // double-clicking this cell. Clicking anywhere in the cell focuses the
+        // input, so the whole cell is the editor, not just the text box.
+        <td
+          key={col.key}
+          className="border border-gray-200 p-0.5 relative"
+          style={{ minWidth: col.minWidth }}
+          onClick={e => { e.stopPropagation(); editInputRef.current?.focus() }}
+          onDoubleClick={e => e.stopPropagation()}
+        >
+          <div className="flex w-full items-center gap-1.5 rounded-[3px] border border-[#1E1E1E] bg-white px-1 py-0.5">
             <ProfilePicture src={row.profile_image_url} socialLink={row.social_link || getProfileUrl(row.platform, row.handle)} name={row.full_name} handle={row.handle} size={24} />
-            <input ref={editInputRef as any} type="text" value={editValue} placeholder="username" onChange={e => setEditValue(e.target.value)} onBlur={handleEditBlur} onKeyDown={handleEditKeyDown} onMouseDown={e => e.stopPropagation()} className="flex-1 h-full py-1.5 text-sm outline-none bg-white min-w-0" />
+            <input ref={editInputRef as any} type="text" value={editValue} placeholder="username" onChange={e => setEditValue(e.target.value)} onBlur={handleEditBlur} onKeyDown={handleEditKeyDown} onMouseDown={e => e.stopPropagation()} className="flex-1 min-w-0 text-sm text-[#1E1E1E] caret-[#1E1E1E] outline-none focus:outline-none focus:ring-0 border-0 bg-transparent" />
+            {/* Save / Cancel, only while editing.
+                onMouseDown preventDefault on both: the input commits on blur, so
+                without it the mousedown would blur-and-commit before the click
+                ever landed — Cancel would have saved. */}
+            <button
+              type="button"
+              title="Save"
+              aria-label="Save handle"
+              onMouseDown={e => e.preventDefault()}
+              onClick={e => { e.stopPropagation(); commitEdit() }}
+              className="flex-shrink-0 p-1 rounded text-[#1E1E1E] hover:bg-gray-100 transition-colors"
+            >
+              <IconCheck size={13} />
+            </button>
+            <button
+              type="button"
+              title="Cancel"
+              aria-label="Cancel editing handle"
+              onMouseDown={e => e.preventDefault()}
+              onClick={e => { e.stopPropagation(); cancelEdit() }}
+              className="flex-shrink-0 p-1 rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors"
+            >
+              <IconX size={13} />
+            </button>
           </div>
         </td>
       )
       const socialLink = row.social_link || getProfileUrl(row.platform, row.handle)
       return (
-        <td key={col.key} className={`group border border-gray-200 px-1.5 py-1 text-xs cursor-cell select-none relative hover:bg-blue-50/20 ${ringCls}`} style={{ minWidth: col.minWidth }} onClick={() => startEdit(rowIdx, colIdx)} onFocus={() => setActiveCell({ rowIdx, colIdx })} title="Click avatar to view profile · click name to edit">
+        // Double-click opens the editor; a single click only focuses the cell.
+        // Both stop here so the row's own onClick (select — the blue row
+        // highlight) and onDoubleClick (open profile) do not also fire: a
+        // double-click on this cell used to do all three at once.
+        //
+        // `select-none` stays, so the double-click does not leave the handle
+        // text highlighted behind the editor that replaces it.
+        <td
+          key={col.key}
+          className={`group border border-gray-200 px-1.5 py-1 text-xs cursor-cell select-none relative hover:bg-gray-50 ${ringCls}`}
+          style={{ minWidth: col.minWidth }}
+          onClick={e => { e.stopPropagation(); setActiveCell({ rowIdx, colIdx }) }}
+          onDoubleClick={e => { e.stopPropagation(); startEdit(rowIdx, colIdx) }}
+          onFocus={() => setActiveCell({ rowIdx, colIdx })}
+          title="Double-click to edit · click the avatar to view profile"
+        >
           <div className="flex items-center gap-2">
             <div
-              className="rounded-full ring-2 ring-transparent group-hover:ring-blue-400 hover:!ring-blue-500 transition cursor-pointer flex-shrink-0"
+              className="rounded-full cursor-pointer flex-shrink-0"
               onClick={e => { e.stopPropagation(); setSidebarRowId(row.id) }}
               title="Click to view profile"
             >
               <ProfilePicture src={row.profile_image_url} socialLink={socialLink} name={row.full_name} handle={row.handle} size={24}
                 onExpired={() => {
                   setRows(prev => prev.map(r => r.id === row.id ? { ...r, profile_image_url: "" } : r))
-                  if (row.handle && (row.platform === "instagram" || row.platform === "tiktok") && !Number(row.follower_count))
+                  if (row.handle && (row.platform === "instagram" || row.platform === "tiktok") && !Number(row.follower_count)) {
+                    requestedPairsRef.current.delete(fetchPairKey(row.handle, row.platform))
                     autoFetchInfluencer(row.id, row.handle, row.platform)
+                  }
                 }} />
             </div>
-            <span className="truncate text-sm text-gray-800 font-medium group-hover:text-blue-700 group-hover:underline decoration-blue-300 underline-offset-2 transition">{cleanHandle(value) || <span className="text-gray-300">Enter username</span>}</span>
+            <span className="truncate text-sm text-gray-800 font-medium">{cleanHandle(value) || <span className="text-gray-300">Enter username</span>}</span>
           </div>
         </td>
       )
@@ -1104,7 +1294,25 @@ export default function TableSheet({
         const inv = editValue !== "" && !isValidUrl(editValue)
         return <td key={col.key} className={`border border-gray-200 p-0 relative ${ringCls}`} style={{ minWidth: col.minWidth }}><input ref={editInputRef as any} type="text" value={editValue} placeholder="https://…" onChange={e => setEditValue(e.target.value)} onBlur={handleEditBlur} onKeyDown={handleEditKeyDown} onMouseDown={e => e.stopPropagation()} className={`w-full h-full px-1.5 py-1 text-xs outline-none bg-white ${inv ? "text-red-500" : "text-blue-600"}`} />{inv && <div className="absolute -bottom-5 left-1 text-[10px] text-red-400 whitespace-nowrap z-50">Invalid URL</div>}</td>
       }
-      return <td key={col.key} className={`border border-gray-200 p-0 relative ${ringCls}`} style={{ minWidth: col.minWidth }}><input ref={editInputRef as any} type={col.type === "number" ? "number" : "text"} value={editValue} onChange={e => setEditValue(e.target.value)} onBlur={handleEditBlur} onKeyDown={handleEditKeyDown} onMouseDown={e => e.stopPropagation()} className="w-full h-full px-1.5 py-1 text-xs outline-none bg-white" /></td>
+      // The plain text / number editor — Followers, Engagement Rate, First Name,
+      // Contact Info, Notes and any custom text or number column all land here.
+      //
+      // No `ringCls`: it is `ring-2 ring-inset ring-blue-500`, the blue box that
+      // appeared around the cell on typing. Same reasoning as the Handle cell —
+      // the input and its caret already show the cell is being edited, and on a
+      // border-collapse table an inset ring never closes cleanly against the
+      // neighbouring cells anyway. The cell keeps the SAME border as every other
+      // cell, and the input's px-1.5 py-1 matches the non-editing padding so the
+      // row does not shift when the editor opens.
+      //
+      // This is one editor, so it is one change: giving those four columns a
+      // different treatment from the others sharing this exact code path would
+      // reintroduce the inconsistency.
+      // The box is the input's OWN 1px border — an input's border is never
+      // subject to border-collapse, so it cannot come out clipped the way a
+      // ring or a heavier cell border did. p-0.5 on the cell keeps a hairline
+      // of gap so the box and the cell edge stay distinct.
+      return <td key={col.key} className="border border-gray-200 p-0.5 relative" style={{ minWidth: col.minWidth }}><input ref={editInputRef as any} type={col.type === "number" ? "number" : "text"} value={editValue} onChange={e => setEditValue(e.target.value)} onBlur={handleEditBlur} onKeyDown={handleEditKeyDown} onMouseDown={e => e.stopPropagation()} className="w-full h-full rounded-[3px] border border-[#1E1E1E] px-1 py-0.5 text-xs text-[#1E1E1E] caret-[#1E1E1E] outline-none focus:outline-none focus:ring-0 bg-white" /></td>
     }
 
     if (isPopup) {
@@ -1197,7 +1405,12 @@ export default function TableSheet({
                 onClick={() => {
                   const { handle, platform, rowId } = apiErrorModal
                   setApiErrorModal({ open: false })
-                  if (handle && platform && rowId) autoFetchInfluencer(rowId, handle, platform)
+                  if (handle && platform && rowId) {
+                    // Deliberate re-ask: drop the "already requested" key so the
+                    // guard in autoFetchInfluencer lets this one through.
+                    requestedPairsRef.current.delete(fetchPairKey(handle, platform))
+                    autoFetchInfluencer(rowId, handle, platform)
+                  }
                 }}>Retry</button>
             </div>
           </div>
@@ -1285,6 +1498,10 @@ export default function TableSheet({
           <span className="text-sm text-gray-500 whitespace-nowrap ml-1">
             {filteredRows.length} of {rows.length} influencer{rows.length !== 1 ? "s" : ""}
           </span>
+
+          {/* Real freshness, from the shared cache entry this view renders
+              from — same component and placement on every board. */}
+          <DataSyncStatus cacheKey={brandId ? `/api/brand/${brandId}/influencers` : null} />
 
           {/* Right-side controls */}
           <div className="flex items-center gap-2 ml-auto">

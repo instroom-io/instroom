@@ -20,7 +20,7 @@ function stripHtml(html: string): string {
     .trim()
 }
 
-async function refreshMicrosoftToken(refresh_token: string, userId: string): Promise<string | null> {
+async function refreshMicrosoftToken(refresh_token: string, accountId: string): Promise<string | null> {
   try {
     // A refresh with client_id=undefined fails as "unauthorized_client", which
     // looks like a revoked grant. Return null instead so the caller's existing
@@ -44,8 +44,11 @@ async function refreshMicrosoftToken(refresh_token: string, userId: string): Pro
     const data = await res.json()
     if (!res.ok || !data.access_token) return null
 
-    await prisma.account.updateMany({
-      where: { userId, provider: "microsoft" },
+    // By id, not by (userId, provider): a user can have several Outlook
+    // accounts linked, and updateMany wrote the newly refreshed token onto all
+    // of them — every other account then authenticated as this one.
+    await prisma.account.update({
+      where: { id: accountId },
       data: {
         access_token: data.access_token,
         expires_at: data.expires_in
@@ -73,9 +76,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "No user session", reauth: true }, { status: 401 })
   }
 
+  // Ordered, not arbitrary: with more than one Outlook account linked,
+  // findFirst without an orderBy returned whichever row the database handed
+  // back, so the inbox could show a different mailbox than the one the user
+  // just picked. Same ordering as lib/gmail.ts's resolver.
   const account = await prisma.account.findFirst({
     where: { userId, provider: "microsoft" },
-    select: { access_token: true, refresh_token: true, expires_at: true },
+    select: { id: true, email: true, access_token: true, refresh_token: true, expires_at: true },
+    orderBy: [{ last_selected_at: "desc" }, { id: "desc" }],
   })
 
   if (!account?.access_token) {
@@ -89,7 +97,7 @@ export async function GET(req: NextRequest) {
   const isExpired = account.expires_at ? Date.now() > account.expires_at * 1000 : false
 
   if (isExpired && account.refresh_token) {
-    const refreshed = await refreshMicrosoftToken(account.refresh_token, userId)
+    const refreshed = await refreshMicrosoftToken(account.refresh_token, account.id)
     if (!refreshed) {
       return NextResponse.json(
         { error: "Outlook session expired. Please reconnect your Outlook account.", reauth: true },

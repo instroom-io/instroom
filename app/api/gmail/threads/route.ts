@@ -37,8 +37,10 @@ export async function GET(req: NextRequest) {
   // many times they reconnected — the correctly-scoped token was never even
   // looked at.
   const userId = session.user?.id
-  const accessToken = await getGmailAccessToken(userId)
-  const connectedEmail = await getGmailAccountEmail(userId)
+  const [accessToken, connectedEmail] = await Promise.all([
+    getGmailAccessToken(userId),
+    getGmailAccountEmail(userId),
+  ])
 
   if (!accessToken) {
     return NextResponse.json(

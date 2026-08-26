@@ -62,6 +62,43 @@ if (process.env.NODE_ENV !== "production") {
 // the database is genuinely down, the original error is rethrown and the route
 // still fails with the real reason.
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Save-path timing
+// ─────────────────────────────────────────────────────────────────────────────
+// Development-only instrumentation for finding which step of a save is slow.
+//
+// This database is remote and shared: a bare `SELECT 1` costs ~317ms, so the
+// cost of a save is dominated by ROUND TRIPS, not by the work itself. That is
+// hard to see from a total, which is why steps are timed individually.
+//
+// Off in production (no logging, no wrapper cost) and off unless explicitly
+// enabled, so it cannot become noise:
+//
+//   DEBUG_SAVE_TIMING=1 npm run dev
+//
+// Then each step prints as, e.g.
+//   [save-timing] pipeline.preflight 614ms
+//   [save-timing] pipeline.write      412ms
+
+const SAVE_TIMING =
+  process.env.NODE_ENV !== "production" && process.env.DEBUG_SAVE_TIMING === "1"
+
+/**
+ * Time one step of a save and log it when instrumentation is on.
+ *
+ * A pass-through otherwise — same value, same rejection, no timing calls — so
+ * leaving these in the request path costs nothing in production.
+ */
+export async function timeStep<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  if (!SAVE_TIMING) return fn()
+  const started = Date.now()
+  try {
+    return await fn()
+  } finally {
+    console.log(`[save-timing] ${label} ${Date.now() - started}ms`)
+  }
+}
+
 /** Prisma codes that mean "no connection", not "bad query". */
 const TRANSIENT_DB_CODES = new Set([
   "P1001", // can't reach database server

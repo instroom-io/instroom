@@ -5,7 +5,17 @@
 //   3. Only refetch (silently) on failure to restore correct server state
 
 import { useCallback, useRef, useState } from "react"
-import { useCachedFetch, getCachedData, setCachedData, markCacheWrite, invalidateCache } from "@/lib/data-cache"
+import {
+  useCachedFetch,
+  getCachedData,
+  setCachedData,
+  markCacheWrite,
+  invalidateCache,
+  beginExternalRequest,
+  endExternalRequest,
+  beginKeyWrite,
+  endKeyWrite,
+} from "@/lib/data-cache"
 import { invalidateInfluencerDerivedCaches, pipelineCacheKey, closedCacheKey } from "@/lib/cache-invalidation"
 import type { ClosedInfluencer } from "@/hooks/useClosedData"
 
@@ -63,7 +73,23 @@ interface UsePipelineDataReturn {
   data: PipelineInfluencer[]
   isLoading: boolean
   error: string | null
-  updateStatus: (id: string, newStatus: string, extra?: { niReason?: string; collaborationType?: string }) => Promise<boolean>
+  updateStatus: (
+    id: string,
+    newStatus: string,
+    extra?: {
+    niReason?: string
+    collaborationType?: string
+    /**
+     * Skip marking the OTHER views stale after this row succeeds.
+     *
+     * A bulk move calls this once per row, and each call invalidated five
+     * derived keys — a 20-row move did that a hundred times, and every one
+     * of them re-marked the Post Tracker entry the same run had just
+     * seeded. The caller sets this and invalidates once when the run ends.
+     */
+    deferDerivedInvalidation?: boolean
+  }
+  ) => Promise<boolean>
   /** True while at least one status write is in flight — drives the saving indicator. */
   isSaving: boolean
   refetch: () => void
@@ -368,6 +394,23 @@ export function unseedPipelineRow(brandId: string, brandInfluencerId: string): v
   markCacheWrite(key)
 }
 
+/**
+ * Fetch and shape a brand's pipeline rows — the exact value cached under
+ * `pipelineCacheKey(brandId)`.
+ *
+ * Exported for lib/dashboard-prefetch: the prefetch must store the SHAPED rows,
+ * not the raw response, or the board would read a payload it cannot render.
+ */
+export async function fetchPipelineRows(brandId: string): Promise<PipelineInfluencer[]> {
+  const res = await fetch(`/api/brand/${brandId}/pipeline`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.error || "Failed to fetch pipeline data")
+  }
+  const json = await res.json()
+  return (json.data || []).map(mapItem)
+}
+
 export function usePipelineData(brandId?: string): UsePipelineDataReturn {
   // Shared cache key — returning to the board renders the cached cards at once
   // and only revalidates in the background.
@@ -386,13 +429,24 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
   const beginWrite = useCallback(() => {
     pendingRef.current += 1
     setPendingWrites((n) => n + 1)
-    if (cacheKey) markCacheWrite(cacheKey)
+    // Counted into inFlightCount() so the background prefetch yields while a
+    // save is in flight. These PATCHes do not go through the cache, so without
+    // this the prefetch saw an idle app and took one of the three pooled
+    // connections mid-write.
+    // Also opens a per-key write window, so the board's freshness indicator
+    // reports "Syncing…" for a SAVE and not only for a page load.
+    beginExternalRequest()
+    if (cacheKey) { markCacheWrite(cacheKey); beginKeyWrite(cacheKey) }
   }, [cacheKey])
 
-  const endWrite = useCallback(() => {
+  const endWrite = useCallback((succeeded = true) => {
     pendingRef.current = Math.max(0, pendingRef.current - 1)
     setPendingWrites((n) => Math.max(0, n - 1))
-    if (cacheKey) markCacheWrite(cacheKey)
+    endExternalRequest()
+    // `succeeded` is what stops a failed save from stamping a fresh "updated"
+    // time: the rollback writes to the cache too, and without this the
+    // indicator would report a refresh that never happened.
+    if (cacheKey) { markCacheWrite(cacheKey); endKeyWrite(cacheKey, succeeded) }
   }, [cacheKey])
 
   // Optimistic writes go straight into the shared cache, which is also what the
@@ -407,15 +461,10 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
     [cacheKey]
   )
 
-  const fetchPipeline = useCallback(async (): Promise<PipelineInfluencer[]> => {
-    const res = await fetch(`/api/brand/${brandId}/pipeline`)
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
-      throw new Error(err.error || "Failed to fetch pipeline data")
-    }
-    const json = await res.json()
-    return (json.data || []).map(mapItem)
-  }, [brandId])
+  const fetchPipeline = useCallback(
+    () => fetchPipelineRows(brandId!),
+    [brandId]
+  )
 
   const { data: cached, error, isLoading, refetch } = useCachedFetch<PipelineInfluencer[]>(
     cacheKey,
@@ -426,7 +475,23 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
 
   // ── Status update — optimistic, no loading flicker ────────────────────────
   const updateStatus = useCallback(
-    async (id: string, newStatus: string, extra?: { niReason?: string; collaborationType?: string }): Promise<boolean> => {
+    async (
+      id: string,
+      newStatus: string,
+      extra?: {
+        niReason?: string
+        collaborationType?: string
+        /**
+         * Skip marking the OTHER views stale after this row succeeds.
+         *
+         * A bulk move calls this once per row, and each call invalidated five
+         * derived keys — a 20-row move did that a hundred times, and every one
+         * of them re-marked the Post Tracker entry the same run had just
+         * seeded. The caller sets this and invalidates once when the run ends.
+         */
+        deferDerivedInvalidation?: boolean
+      }
+    ): Promise<boolean> => {
       if (!brandId) return false
 
       // 1. Save the previous state of THIS row only. Rolling back a full-list
@@ -439,12 +504,14 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
       // 2. Apply optimistic update immediately (no spinner)
       setData((prev) => {
         previous = prev.find((item) => item.id === id)
-        const next = prev.map((item) =>
+        // No setCachedData here: `setData` above already writes what this
+        // updater returns. Writing inside the updater as well meant every
+        // optimistic change hit the cache twice and notified every subscriber
+        // twice, and it put a side effect inside a function whose only job is
+        // to compute the next value.
+        return prev.map((item) =>
           item.id === id ? applyStatusChange(item, newStatus, extra?.niReason, extra?.collaborationType) : item
         )
-        // Mirror into the shared cache so the change survives navigation.
-        if (cacheKey) setCachedData(cacheKey, next)
-        return next
       })
 
       // ── Hand the row to Post Tracker's cache at the same moment ──────────
@@ -468,15 +535,34 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
         if (closedRows && !closedRows.some((row) => row.id === id)) {
           markCacheWrite(closedKey)
           setCachedData(closedKey, [...closedRows, toClosedRow(previous, extra?.collaborationType)])
-          // Kept stale so Post Tracker still revalidates on open, exactly as it
-          // does after any other cross-module write.
-          invalidateCache(closedKey)
+          // NOT invalidated here — that is what made the seeded card disappear.
+          //
+          // invalidateCache sets updatedAt = 0, so the entry read as stale the
+          // instant it was seeded. Opening Post Tracker during the PATCH then
+          // fetched (a closed GET is ~400ms, this PATCH ~1.3s), and that
+          // response — server state from before the write landed — had no such
+          // row, so it replaced the seeded one and the card vanished.
+          //
+          // Left FRESH instead: useCachedFetch skips its mount fetch for a
+          // fresh entry, and revalidateOnFocus checks staleness too, so nothing
+          // starts a fetch for it while the write is out. The invalidation then
+          // happens exactly once, below, after the PATCH settles.
+          //
+          // beginKeyWrite additionally makes fetchCached discard any response
+          // for this key while the write is pending — covering an explicit
+          // refetch(), which forces past freshness.
+          beginKeyWrite(closedKey)
           seededClosed = true
         }
       }
 
       // Restores just this row, leaving concurrent updates to other rows intact.
+      // Flipped by `rollback`, which every failure path calls and no success
+      // path does. `endWrite(writeOk)` then keeps the previous "updated" time
+      // on a failed save instead of stamping a refresh that did not happen.
+      let writeOk = true
       const rollback = () => {
+        writeOk = false
         if (previous) {
           setData((prev) => prev.map((item) => (item.id === id ? previous! : item)))
         }
@@ -484,10 +570,17 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
         if (seededClosed && closedKey) {
           const closedRows = getCachedData<ClosedInfluencer[]>(closedKey)
           if (closedRows) {
+            // Bumped BEFORE the write, matching the seed path above. Bumping
+            // afterwards left a window in which a revalidation that resolved
+            // between the write and the bump was still accepted, putting the
+            // rolled-back card back on the board.
+            markCacheWrite(closedKey)
             setCachedData(closedKey, closedRows.filter((row) => row.id !== id))
-            invalidateCache(closedKey)
+            // No invalidateCache here: the `finally` below does it once, after
+            // the write window closes, whether this succeeded or rolled back.
+          } else {
+            markCacheWrite(closedKey)
           }
-          markCacheWrite(closedKey)
         }
       }
 
@@ -517,21 +610,34 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
         // update, so it is excluded. Every OTHER view of these rows (Influencer
         // List, Post Tracker, Brand Partners, Analytics) is now out of date and
         // is marked stale so opening it shows the new stage without a refresh.
-        invalidateInfluencerDerivedCaches(brandId, [pipelineCacheKey(brandId)])
+        if (!extra?.deferDerivedInvalidation) {
+          invalidateInfluencerDerivedCaches(brandId, [pipelineCacheKey(brandId)])
+        }
         return true
       } catch (err) {
         console.error(`[pipeline] PATCH ${id} → ${newStatus} failed:`, err)
         rollback()
         return false
       } finally {
-        endWrite()
-        // Close the generation window on the Post Tracker entry too, so a
-        // revalidation that started while this write was in flight cannot land
-        // afterwards and drop the seeded card.
-        if (seededClosed && closedKey) markCacheWrite(closedKey)
+        endWrite(writeOk)
+        if (seededClosed && closedKey) {
+          // Close the generation window on the Post Tracker entry too, so a
+          // revalidation that started while this write was in flight cannot
+          // land afterwards and drop the seeded card.
+          markCacheWrite(closedKey)
+          // The write is no longer pending, so responses for this key are
+          // accepted again.
+          endKeyWrite(closedKey)
+          // The one invalidation for this seed, deferred from the seed itself
+          // to here: by now the row is either persisted (success) or removed
+          // again (rollback), so a revalidation can only confirm the truth
+          // rather than race it. Post Tracker still revalidates on open,
+          // exactly as it did before — just not mid-write.
+          invalidateCache(closedKey)
+        }
       }
     },
-    [brandId, cacheKey, setData, beginWrite, endWrite]
+    [brandId, setData, beginWrite, endWrite]
   )
 
   return {

@@ -178,6 +178,20 @@
   --sidebar: var(--sb-bg);
 }
 
+/* The overscroll gutter.
+   ------------------------------------------------------------------------------
+   The shell paints the brand green behind the rail and the content sheet, but it
+   only paints as far as the shell's own box. Above and below that box the browser
+   shows the DOCUMENT canvas — which takes its colour from <body> (bg-background,
+   white). So dragging the page past its top, or letting it rubber-band, exposed a
+   white band above the sheet where the green should continue.
+
+   Scoped with :has() to the shell, so only /dashboard and /admin get the green
+   canvas — the marketing pages and the login screen keep their white one. */
+body:has(.sidebar-shell) {
+  background: var(--sb-bg);
+}
+
 @media (max-width: 1024px) {
   .sidebar-shell { --sidebar-width: 240px; }
 }
@@ -202,3 +216,47 @@
    promotes the overlay to its own compositing layer and it ends up painting
    OVER the drawer, which then renders washed out and unreadable. That rule
    would also apply to every Sheet in the app, not just this one. */
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Save/notification dock
+   ─────────────────────────────────────────────────────────────────────────────
+   The saving pill and outcome notification sit bottom-right on the Influencer
+   List, Pipeline, Post Tracker and Brand Partners. Each of those pages can also
+   open a 520px influencer profile panel on that same edge, and that panel is
+   z-index 500 — so the dock (z-50) was painting underneath it. A save made from
+   inside the panel produced a notification nobody could see.
+
+   Rather than raising the dock on top of the panel, it steps aside: while a
+   panel is open the dock moves to just left of it, which is where there is
+   actually room to read it. `:has()` means no page has to pass an "is the panel
+   open" flag down — the panels are portal-free fixed elements in the same
+   document, so the selector sees them wherever they render.
+
+   Both panels are matched: `.pp` is components/InfluencerProfileSidebar, and
+   [data-profile-panel] is the table-sheet's own inline-styled panel. */
+.notice-dock {
+  position: fixed;
+  bottom: 1rem;
+  right: 1rem;
+  z-index: 550;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
+  transition: right 150ms ease;
+}
+
+body:has(.pp) .notice-dock,
+body:has([data-profile-panel]) .notice-dock {
+  right: calc(520px + 1rem);
+}
+
+/* On a narrow viewport the panel is full width (max-width: 100vw), so there is
+   nowhere to step aside to — the dock stays put and its z-index keeps it
+   readable above the panel. */
+@media (max-width: 600px) {
+  body:has(.pp) .notice-dock,
+  body:has([data-profile-panel]) .notice-dock {
+    right: 1rem;
+  }
+}

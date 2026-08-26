@@ -110,8 +110,13 @@ export async function PUT(
       bi.transferred_date = data.transferred_date ? new Date(data.transferred_date) : null
 
     const updates: Promise<any>[] = []
+    let savedInf: { handle: string; platform: string } | null = null
     if (Object.keys(inf).length > 0) {
-      updates.push(prisma.influencer.update({ where: { id }, data: inf }))
+      updates.push(
+        prisma.influencer
+          .update({ where: { id }, data: inf, select: { handle: true, platform: true } })
+          .then((row) => { savedInf = row })
+      )
     }
     // Kept separate from `updates` so the persisted row can be read back and
     // returned — the client trusts what the DB stored, not what it sent.
@@ -128,6 +133,12 @@ export async function PUT(
       )
     }
     if (updates.length > 0) await Promise.all(updates)
+    if (!savedInf) {
+      savedInf = await prisma.influencer.findUnique({
+        where: { id },
+        select: { handle: true, platform: true },
+      })
+    }
 
     // ── Provision GoAffPro affiliate on first transition into Deal Agreed ────
     if (before && bi.stage !== undefined && before.stage !== 4 && bi.stage === 4) {
@@ -216,6 +227,12 @@ export async function PUT(
 
     return NextResponse.json({
       success: true,
+      ...(savedInf
+        ? {
+            handle:   (savedInf as { handle: string }).handle,
+            platform: (savedInf as { platform: string }).platform,
+          }
+        : {}),
       ...(savedBi
         ? {
             approval_status:   (savedBi as { approval_status: string | null }).approval_status,

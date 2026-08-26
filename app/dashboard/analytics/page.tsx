@@ -4,11 +4,13 @@
 import { useState, useEffect, useMemo, useRef, useCallback, Suspense } from "react"
 // Tabler, not lucide: the other dashboard pages (post-tracker,
 // manage-influencers, table-sheet) all draw their toolbar icons from Tabler.
-import { IconFilter, IconDownload, IconX, IconChevronDown, IconSearch, IconInfoCircle } from "@tabler/icons-react"
+import { IconFilter, IconDownload, IconX, IconChevronDown, IconSearch, IconInfoCircle, IconLoader2, IconCheck, IconAlertTriangle } from "@tabler/icons-react"
 import { useSession } from "next-auth/react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { DashboardSkeleton } from "@/components/shared/skeletons"
 import { useCachedFetch } from "@/lib/data-cache"
+import { toStyledWorkbook, downloadFile, exportStamp, type ExportLine } from "@/lib/analytics-export"
+import { DataSyncStatus } from "@/components/data-sync-status"
 import { PlatformBadge } from "@/components/shared/platform-icon"
 
 // ============================================================
@@ -105,9 +107,38 @@ const NUM = "tabular-nums"
 const VALUE_BRAND = "text-[#1FAE5B]"
 /** Toolbar control geometry, shared by both buttons and every select. */
 const CONTROL = "h-9 rounded-lg text-sm"
-/** Secondary button — post-tracker's neutral toolbar button. */
-const BTN_SECONDARY =
-  `${CONTROL} flex items-center gap-1.5 border border-gray-200 px-3 font-medium text-gray-700 transition-colors hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-1`
+/**
+ * Primary button — geometry, type and interaction only, NO fill.
+ *
+ * The fill is deliberately left to the caller. Two background utilities on one
+ * element do not resolve by the order they appear in `className`; the later CSS
+ * rule wins, which is not something this file controls. So a state that needs a
+ * different colour picks its whole fill from BTN_FILL below rather than trying
+ * to override one from here.
+ *
+ * Built on CONTROL, so height and radius are the toolbar's. focus-visible, not
+ * focus, so a mouse click does not leave a ring behind.
+ */
+const BTN_PRIMARY =
+  `${CONTROL} inline-flex items-center gap-1.5 px-4 font-medium text-white shadow-sm transition-colors ` +
+  `focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 ` +
+  `disabled:cursor-not-allowed disabled:opacity-60`
+
+/**
+ * The fills BTN_PRIMARY can wear. One entry sets every colour for that state —
+ * base, hover, active and focus ring — so no two entries can partially override
+ * each other.
+ *
+ * `active` steps to the brand's deep green (#0F6B3E, the sidebar rail colour)
+ * rather than inventing a pressed shade.
+ */
+const BTN_FILL = {
+  brand:
+    "bg-[#1FAE5B] hover:bg-[#178a48] active:bg-[#0F6B3E] focus-visible:ring-[#1FAE5B]",
+  danger:
+    "bg-red-600 hover:bg-red-700 active:bg-red-800 focus-visible:ring-red-500",
+} as const
+
 /** Field label above a select. */
 const FIELD_LABEL = "text-xs text-gray-500"
 /** Select control, matching the post-tracker filter panel exactly. */
@@ -934,13 +965,56 @@ function AnalyticsPageContent() {
    * The sections mirror the tabs: Campaign Summary, Post Summary, Post Reach &
    * Impression, Conversion & UGC, then the per-influencer detail rows.
    */
+  /**
+   * Export state, for the button's own feedback.
+   *
+   * Building the CSV is synchronous, so on a small brand this passes through
+   * "working" in a frame. It still exists for two reasons: on a large brand the
+   * string building is long enough to be felt, and a failure has to be visible
+   * rather than a click that appears to do nothing.
+   */
+  const [exportState, setExportState] = useState<"idle" | "working" | "done" | "error">("idle")
+  const exportResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => () => { if (exportResetTimer.current) clearTimeout(exportResetTimer.current) }, [])
+
+  /** Show an outcome, then fall back to idle. */
+  const settleExport = (next: "done" | "error") => {
+    setExportState(next)
+    if (exportResetTimer.current) clearTimeout(exportResetTimer.current)
+    exportResetTimer.current = setTimeout(() => setExportState("idle"), 2500)
+  }
+
   const exportCSV = () => {
+    if (exportState === "working") return
+    setExportState("working")
+    try {
+      buildAndDownloadCSV()
+      settleExport("done")
+    } catch (err) {
+      // Not swallowed: the button turns red and says so. Logged too, since the
+      // cause here would be a serialisation or DOM failure worth seeing.
+      console.error("[analytics] CSV export failed:", err)
+      settleExport("error")
+    }
+  }
+
+  /** The export itself, unchanged in what it writes. */
+  const buildAndDownloadCSV = () => {
     const pctOf = (value: number, total: number) => formatPercent(value, total)
     const untracked = 'Not tracked'
 
-    const sections: (string | number)[][] = []
-    const section = (title: string) => { sections.push([], [title]) }
-    const row = (...cells: (string | number)[]) => { sections.push(cells) }
+    // One tagged model, two renderers (lib/analytics-export.ts): the styled
+    // workbook and the plain CSV read the SAME lines, so a section can never
+    // exist in one and be missing from the other.
+    const lines: ExportLine[] = []
+    const section = (title: string) => { lines.push({ kind: 'section', title }) }
+    const header = (...cells: (string | number)[]) => { lines.push({ kind: 'header', cells }) }
+    const row = (...cells: (string | number)[]) => { lines.push({ kind: 'row', cells }) }
+    const cards = () => { lines.push({ kind: 'cards' }) }
+    const card = (label: string, value: string | number, note?: string) => {
+      lines.push({ kind: 'card', label, value, note })
+    }
 
     // ── Context: what this file is a snapshot of ────────────────────────────
     section('EXPORT CONTEXT')
@@ -954,8 +1028,19 @@ function AnalyticsPageContent() {
     row('Influencers in scope', metrics.totalOutreach)
 
     // ── Campaign Summary ───────────────────────────────────────────────────
+    // The five numbers the report is about, read first as cards. They still
+    // appear in CAMPAIGN SUMMARY below with their basis, so nothing here
+    // replaces a tabular row -- this is presentation, not new data.
+    section('AT A GLANCE')
+    cards()
+    card('Total outreach', metrics.totalOutreach, 'influencers contacted')
+    card('Responded', metrics.responded, `of ${metrics.totalOutreach} reached`)
+    card('Response rate', `${Math.round(metrics.responseRate)}%`, 'responded / reached')
+    card('Closed', metrics.closed, 'agreed to work')
+    card('Closing rate', `${Math.round(metrics.closingRate)}%`, 'closed / responded')
+
     section('CAMPAIGN SUMMARY')
-    row('Metric', 'Value', 'Basis')
+    header('Metric', 'Value', 'Basis')
     row('Total outreach', metrics.totalOutreach, 'influencers contacted')
     row('Responded', metrics.responded, `of ${metrics.totalOutreach} reached out`)
     row('Response rate', `${Math.round(metrics.responseRate)}%`, 'responded ÷ reached out')
@@ -963,14 +1048,14 @@ function AnalyticsPageContent() {
     row('Closing rate', `${Math.round(metrics.closingRate)}%`, 'closed ÷ responded')
 
     section('CAMPAIGN FUNNEL')
-    row('Stage', 'Count', 'Percent', 'Basis')
+    header('Stage', 'Count', 'Percent', 'Basis')
     row('1. Reached out', metrics.totalOutreach, pctOf(metrics.totalOutreach, metrics.totalOutreach), 'all influencers in scope')
     row('2. Responded', metrics.responded, pctOf(metrics.responded, metrics.totalOutreach), 'of reached out')
     row('3. Closed collaboration', metrics.closed, pctOf(metrics.closed, metrics.responded), 'of responded')
     row('4. Not interested', metrics.notInterested, pctOf(metrics.notInterested, metrics.totalOutreach), 'of reached out')
 
     section('REASONS NOT INTERESTED')
-    row('Bucket', 'Reason', 'Count', 'Percent of declines')
+    header('Bucket', 'Reason', 'Count', 'Percent of declines')
     hardPassReasonsList.filter(r => (metrics.reasonsBreakdown[r] || 0) > 0).forEach(r =>
       row('Hard pass', r, metrics.reasonsBreakdown[r] || 0, pctOf(metrics.reasonsBreakdown[r] || 0, metrics.notInterested)))
     softPassReasonsList.filter(r => (metrics.reasonsBreakdown[r] || 0) > 0).forEach(r =>
@@ -981,14 +1066,14 @@ function AnalyticsPageContent() {
 
     // ── Post Summary ───────────────────────────────────────────────────────
     section('POST SUMMARY')
-    row('Metric', 'Value', 'Basis')
+    header('Metric', 'Value', 'Basis')
     row('Closed collaborations', metrics.closedCollaborations, 'agreed to work')
     row('Received product', metrics.receivedProduct, `posted (${metrics.posted}) + no post (${metrics.noPost})`)
     row('Posted', metrics.posted, `of ${metrics.receivedProduct} who received`)
     row('Post rate', `${Math.round(metrics.postRate)}%`, 'posted ÷ received product')
 
     section('PIPELINE STATUS BREAKDOWN')
-    row('Status', 'Count', 'Percent of influencers in scope')
+    header('Status', 'Count', 'Percent of influencers in scope')
     row('No Order Yet', metrics.noOrderYet, pctOf(metrics.noOrderYet, metrics.totalOutreach))
     row('In Transit', metrics.inTransit, pctOf(metrics.inTransit, metrics.totalOutreach))
     row('Delivery Problem', metrics.deliveryProblem, pctOf(metrics.deliveryProblem, metrics.totalOutreach))
@@ -996,12 +1081,12 @@ function AnalyticsPageContent() {
     row('Posted', metrics.posted, pctOf(metrics.posted, metrics.totalOutreach))
 
     section('NO-POST AGEING (since delivery)')
-    row('Bucket', 'Count', 'Percent')
+    header('Bucket', 'Count', 'Percent')
     metrics.agingData.forEach(b => row(b.label, b.count, b.percent))
 
     // ── Post Reach & Impression ────────────────────────────────────────────
     section('REACH & ENGAGEMENT TOTALS')
-    row('Metric', 'Value', 'Basis')
+    header('Metric', 'Value', 'Basis')
     row('Total views', metrics.totalViews, 'detected posts')
     row('Total likes', metrics.totalLikes, '')
     row('Total comments', metrics.totalComments, '')
@@ -1010,7 +1095,7 @@ function AnalyticsPageContent() {
     row('Total EMV', Math.round(metrics.totalEMV), 'all platforms combined')
 
     section('PLATFORM METRICS')
-    row('Platform', 'Posted', 'Received', 'Post rate', 'Views', 'Likes', 'Comments', 'EMV ($)', 'EMV rate ($/1k views)')
+    header('Platform', 'Posted', 'Received', 'Post rate', 'Views', 'Likes', 'Comments', 'EMV ($)', 'EMV rate ($/1k views)')
     Object.entries(metrics.platformStats).forEach(([platform, stats]) => {
       const emv = metrics.platformEMV[platform as keyof typeof metrics.platformEMV]
       row(
@@ -1023,7 +1108,7 @@ function AnalyticsPageContent() {
 
     // ── Conversion & UGC ───────────────────────────────────────────────────
     section('CONVERSION')
-    row('Metric', 'Value', 'Basis')
+    header('Metric', 'Value', 'Basis')
     row('Web clicks', metrics.totalClicks, 'affiliate attribution')
     row('Total sales (units)', metrics.totalSalesQty, '')
     row('Total revenue ($)', metrics.totalRevenue, 'influencer-driven sales')
@@ -1033,7 +1118,7 @@ function AnalyticsPageContent() {
     row('Influencers with sales', metrics.influencersWithSales, pctOf(metrics.influencersWithSales, metrics.posted) + ' of those who posted')
 
     section('CAMPAIGN SPEND & RETURN')
-    row('Metric', 'Value', 'Basis')
+    header('Metric', 'Value', 'Basis')
     row('Total revenue ($)', metrics.totalRevenue, 'from influencer-driven sales')
     row('Product cost / COGS ($)', metrics.totalProductCost, 'per-partner product cost')
     row('Creator fees paid ($)', metrics.totalFeesPaid, 'per-partner fees paid')
@@ -1045,7 +1130,7 @@ function AnalyticsPageContent() {
     row('Break-even ($)', metrics.totalSpend, 'min revenue needed')
 
     section('UGC')
-    row('Metric', 'Value', 'Basis')
+    header('Metric', 'Value', 'Basis')
     // Mirrors the UI: these have no backing column yet, so the export says so
     // rather than writing a 0 that reads as a real measurement.
     row('Usage rights granted', metrics.ugcTracked ? metrics.usageRights : untracked,
@@ -1057,7 +1142,7 @@ function AnalyticsPageContent() {
 
     // ── Per-influencer detail (the original export, unchanged in meaning) ───
     section('INFLUENCER DETAIL')
-    row('Name', 'Handle', 'Platform', 'Niche', 'Location', 'Date Added', 'Pipeline Status',
+    header('Name', 'Handle', 'Platform', 'Niche', 'Location', 'Date Added', 'Pipeline Status',
       'Rejection Reason', 'Views', 'Likes', 'Comments', 'Web Clicks', 'Sales (Units)',
       'Revenue ($)', 'Product Cost ($)', 'Fees Paid ($)', 'Commission Paid ($)',
       'Usage Rights', 'Content Saved', 'Ad Code Given')
@@ -1070,23 +1155,30 @@ function AnalyticsPageContent() {
       flag(i.usageRights), flag(i.contentSaved), flag(i.adCode)
     ))
 
-    // Proper RFC-4180 quoting. The previous export joined raw values with
-    // commas, so any reason, niche or location containing a comma silently
-    // shifted every later column in that row.
-    const escape = (cell: string | number) => {
-      const text = String(cell ?? '')
-      return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+    // Two files from one model. The styled workbook is what the user opens;
+    // the CSV remains available for anything that parses it.
+    const at = new Date()
+    const stamp = exportStamp(at)
+    const meta = {
+      brandId: brandId ?? '',
+      generatedAt: at,
+      filters: {
+        search,
+        platform: filters.platform,
+        niche: filters.niche,
+        location: filters.location,
+        dateRange: filters.dateRange,
+      },
+      scopeCount: metrics.totalOutreach,
     }
-    const csvContent = sections.map(r => r.map(escape).join(',')).join('\n')
 
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'instroom_analytics.csv'
-    a.click()
-    URL.revokeObjectURL(url)
+    downloadFile(
+      `instroom_analytics_${stamp}.xls`,
+      toStyledWorkbook(lines, meta),
+      'application/vnd.ms-excel;charset=utf-8'
+    )
   }
+
 
   const platformOptions = [
     { value: "all", label: "All platforms" },
@@ -1253,9 +1345,54 @@ function AnalyticsPageContent() {
             {metrics.totalOutreach} of {totalOutreachInfluencers} influencer{totalOutreachInfluencers !== 1 ? 's' : ''}
           </p>
 
-          <button onClick={exportCSV} data-tour="analytics-export" className={`${BTN_SECONDARY} ml-auto`}>
-            <IconDownload size={16} className="text-[#1FAE5B]" />
-            Export CSV
+          {/* Real freshness, from the shared cache entry this view renders
+              from — same component and placement on every board. */}
+          <DataSyncStatus cacheKey={session?.user?.id && brandId ? `/api/analytics?${analyticsQuery}` : null} />
+
+          {/* The page's one export action, so it carries the primary treatment
+              rather than the neutral toolbar border — BTN_PRIMARY is the same
+              green the page's "Try Again" uses, on CONTROL's height and radius.
+              min-w is sized for the longest label ("Export failed"), and every
+              state keeps the same geometry, so an outcome never reflows the
+              toolbar. Only the fill, icon and label change. */}
+          <button
+            onClick={exportCSV}
+            disabled={exportState === "working" || isLoading}
+            data-tour="analytics-export"
+            aria-live="polite"
+            aria-busy={exportState === "working"}
+            title={
+              exportState === "error"
+                ? "Something went wrong building the file — try again"
+                : `Export the ${metrics.totalOutreach} influencer${metrics.totalOutreach !== 1 ? "s" : ""} currently in scope`
+            }
+            className={`${BTN_PRIMARY} ${
+              exportState === "error" ? BTN_FILL.danger : BTN_FILL.brand
+            } ml-auto min-w-[140px] justify-center ${
+              exportState === "working" ? "cursor-wait" : ""
+            }`}
+          >
+            {exportState === "working" ? (
+              <>
+                <IconLoader2 size={16} className="animate-spin text-white/80" />
+                Exporting…
+              </>
+            ) : exportState === "done" ? (
+              <>
+                <IconCheck size={16} className="text-white" />
+                Exported
+              </>
+            ) : exportState === "error" ? (
+              <>
+                <IconAlertTriangle size={16} className="text-white" />
+                Export failed
+              </>
+            ) : (
+              <>
+                <IconDownload size={16} className="text-white" />
+                Export CSV
+              </>
+            )}
           </button>
         </div>
 

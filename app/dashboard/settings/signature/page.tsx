@@ -12,6 +12,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { PenLine } from "lucide-react"
 import { toast } from "sonner"
 import { SettingsSkeleton } from "@/components/shared/skeletons"
+import { fetchCached, invalidateCache } from "@/lib/data-cache"
 
 type SocialKey = "facebook" | "instagram" | "tiktok" | "twitter" | "linkedin"
 
@@ -51,8 +52,11 @@ export default function SignaturePage() {
     }
     if (status !== "authenticated") return
 
-    fetch("/api/settings/signature")
-      .then((r) => r.json())
+    fetchCached<any>("/api/settings/signature", async () => {
+      const r = await fetch("/api/settings/signature")
+      if (!r.ok) throw new Error(`signature failed (${r.status})`)
+      return await r.json()
+    })
       .then((data) => {
         setIsEnabled(data.is_enabled ?? true)
         setFullName(data.full_name ?? "")
@@ -85,6 +89,7 @@ export default function SignaturePage() {
         }),
       })
       if (!res.ok) throw new Error("Failed to save signature")
+      invalidateCache("/api/settings/signature")
       toast.success("Signature saved")
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Something went wrong")

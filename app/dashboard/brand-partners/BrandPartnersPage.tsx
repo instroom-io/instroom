@@ -1,18 +1,19 @@
 "use client"
 
-import { useState, useEffect, useCallback, useMemo } from "react"
+import { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import TierSettingsModal from "./TierSettingsModal"
 import AddPartnerModal from "./AddPartnerModal"
 import NewCampaignModal from "./NewCampaignModal"
 import InfluencerProfileSidebar from "./InfluencerProfileSidebar"
-import { IconSearch, IconFilter, IconBuildingStore } from "@tabler/icons-react"
+import { IconSearch, IconFilter, IconBuildingStore, IconLoader2 } from "@tabler/icons-react"
 import { ReactNode } from "react"
 import { useBrandTaxonomy } from "@/hooks/useBrandTaxonomy"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { TableSkeleton } from "@/components/shared/skeletons"
 
-import { getCachedData, setCachedData, hasCachedData, useRestoredCache } from "@/lib/data-cache"
+import { getCachedData, setCachedData, hasCachedData, isStale, useRestoredCache, beginKeyWrite, endKeyWrite } from "@/lib/data-cache"
 import { invalidateInfluencerDerivedCaches } from "@/lib/cache-invalidation"
+import { DataSyncStatus } from "@/components/data-sync-status"
 
 import {
   partnersApi,
@@ -206,6 +207,54 @@ export default function BrandPartnersPage({ brandId }: Props) {
   const [pickerSelectedIds, setPickerSelectedIds] = useState<string[]>([])
   const [addingToCampaign, setAddingToCampaign] = useState(false)
 
+  // ── Save state and notifications ──────────────────────────────────────────
+  // The same two-part dock the Influencer List, Pipeline and Post Tracker use:
+  // a dark "Saving" pill while a request is in flight, then the outcome below
+  // it. This page had neither — every failure was a native `alert()` (a modal
+  // the user has to dismiss) and a success said nothing at all.
+  const [isSaving, setIsSaving] = useState(false)
+  const [notice, setNotice] = useState<{ message: string; type: "success" | "error" } | null>(null)
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  /** One notification, replacing rather than stacking — one value, not a list. */
+  const notify = useCallback((type: "success" | "error", message: string) => {
+    if (noticeTimer.current) { clearTimeout(noticeTimer.current); noticeTimer.current = null }
+    setNotice({ message, type })
+    noticeTimer.current = setTimeout(() => setNotice(null), 3000)
+  }, [])
+
+  useEffect(() => () => { if (noticeTimer.current) clearTimeout(noticeTimer.current) }, [])
+
+  /**
+   * Brackets one save so the pill reflects the request actually in flight, then
+   * reports the outcome. `onOk` names what was saved; a throw is re-thrown after
+   * the failure is reported, so existing callers keep their own behaviour.
+   */
+  const trackSave = useCallback(async <T,>(op: () => Promise<T>, onOk: string): Promise<T> => {
+    if (noticeTimer.current) { clearTimeout(noticeTimer.current); noticeTimer.current = null }
+    setNotice(null)
+    setIsSaving(true)
+    // Opens a write window on the entry this page renders from, so the freshness
+    // indicator reports "Syncing…" for a save and not only for a page load.
+    const writeKey = brandId ? `brand-partners:${brandId}` : null
+    if (writeKey) beginKeyWrite(writeKey)
+    let writeOk = false
+    try {
+      const result = await op()
+      writeOk = true
+      setIsSaving(false)
+      notify("success", onOk)
+      return result
+    } catch (err) {
+      setIsSaving(false)
+      throw err
+    } finally {
+      // writeOk stays false when `op` throws, so a failed save keeps the
+      // previous "updated" time rather than stamping one it did not earn.
+      if (writeKey) endKeyWrite(writeKey, writeOk)
+    }
+  }, [notify, brandId])
+
   // ── Tier thresholds ──────────────────────────────────────────────────────
   const [tierThresholds, setTierThresholds] = useState(
     () => cached?.tierThresholds ?? { bronzeMax: 2000, silverMax: 10000 }
@@ -361,6 +410,17 @@ export default function BrandPartnersPage({ brandId }: Props) {
       return
     }
 
+    // This page loads through local state rather than useCachedFetch, so the
+    // cache cannot skip the request for it automatically the way it does on the
+    // other pages. Checking here is what stops a second, duplicate load when
+    // the entry has just been filled — by the dashboard prefetch, or by a visit
+    // moments ago. A stale entry still revalidates in the background, exactly as
+    // before.
+    if (hasCachedData(cacheKey) && !isStale(cacheKey)) {
+      setLoading(false)
+      return
+    }
+
     async function loadData() {
       try {
         // Only a first-ever load blanks the page; a revalidation keeps the
@@ -422,10 +482,10 @@ export default function BrandPartnersPage({ brandId }: Props) {
 
   const handleTierSave = async (settings: TierSettings) => {
     try {
-      await tierSettingsApi.save(brandId, {
+      await trackSave(() => tierSettingsApi.save(brandId, {
         bronzeMax: settings.bronzeMax,
         silverMax: settings.silverMax,
-      })
+      }), "Tier settings saved")
       setTierThresholds({ bronzeMax: settings.bronzeMax, silverMax: settings.silverMax })
       setPartners((prev) =>
         prev.map((p) => ({
@@ -437,38 +497,42 @@ export default function BrandPartnersPage({ brandId }: Props) {
         }))
       )
     } catch (e: any) {
-      alert("Failed to save tier settings: " + (e.message || "Unknown error"))
+      notify("error", "Failed to save tier settings: " + (e.message || "Unknown error"))
     }
   }
 
   // ── Manual tier override ─────────────────────────────────────────────────
   const handleTierOverride = async (partnerId: string, tier: string | null) => {
     try {
-      const updated = await partnersApi.updateFinancials(brandId, partnerId, {
-        tier_override: tier,
-      })
+      const updated = await trackSave(
+        () => partnersApi.updateFinancials(brandId, partnerId, { tier_override: tier }),
+        tier ? `Tier set to ${tier}` : "Tier override cleared"
+      )
       setPartners((prev) =>
         prev.map((p) => (p.id === partnerId ? dbToPartner(updated) : p))
       )
     } catch (e: any) {
-      alert("Failed to update tier: " + (e.message || "Unknown error"))
+      notify("error", "Failed to update tier: " + (e.message || "Unknown error"))
     }
   }
 
   // ── Campaign status update ───────────────────────────────────────────────
   const handleCampaignStatusUpdate = async (campaignId: string, status: string) => {
     try {
-      await fetch(`/api/brands/${brandId}/campaigns/${campaignId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
-      })
+      await trackSave(async () => {
+        const res = await fetch(`/api/brands/${brandId}/campaigns/${campaignId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status }),
+        })
+        if (!res.ok) throw new Error(`Server error ${res.status}`)
+      }, `Campaign status set to ${status}`)
       setSelectedCampaign((prev) => prev ? { ...prev, status } : prev)
       setCampaigns((prev) =>
         prev.map((c) => c.id === campaignId ? { ...c, status } : c)
       )
     } catch (e: any) {
-      alert("Failed to update campaign status: " + (e.message || "Unknown error"))
+      notify("error", "Failed to update campaign status: " + (e.message || "Unknown error"))
     }
   }
 
@@ -492,8 +556,9 @@ export default function BrandPartnersPage({ brandId }: Props) {
       )
       setShowAddToCampaign(false)
       setPickerSelectedIds([])
+      notify("success", `${influencerIds.length} creator${influencerIds.length !== 1 ? "s" : ""} added to campaign`)
     } catch (e: any) {
-      alert("Failed to add creators to campaign: " + (e.message || "Unknown error"))
+      notify("error", "Failed to add creators to campaign: " + (e.message || "Unknown error"))
     } finally {
       setAddingToCampaign(false)
     }
@@ -513,8 +578,9 @@ export default function BrandPartnersPage({ brandId }: Props) {
       setPartners((prev) =>
         prev.map((p) => (p.id === influencerId ? { ...p, campaign_id: null } : p))
       )
+      notify("success", "Creator removed from campaign")
     } catch (e: any) {
-      alert("Failed to remove creator from campaign: " + (e.message || "Unknown error"))
+      notify("error", "Failed to remove creator from campaign: " + (e.message || "Unknown error"))
     }
   }
 
@@ -572,7 +638,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
       const json = await res.json()
 
       if (res.status === 403) {
-        alert(json.message || "Influencer limit reached. Please upgrade your plan.")
+        notify("error", json.message || "Influencer limit reached. Please upgrade your plan.")
         return
       }
 
@@ -587,7 +653,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
             invalidateInfluencerDerivedCaches(brandId, [cacheKey])
           } catch (linkErr: any) {
             if (linkErr.message?.includes("already added")) {
-              alert("This influencer is already in your brand partner list.")
+              notify("error", "This influencer is already in your brand partner list.")
             } else {
               throw linkErr
             }
@@ -607,19 +673,22 @@ export default function BrandPartnersPage({ brandId }: Props) {
         invalidateInfluencerDerivedCaches(brandId, [cacheKey])
       }
     } catch (e: any) {
-      alert("Failed to add partner: " + (e.message || "Unknown error"))
+      notify("error", "Failed to add partner: " + (e.message || "Unknown error"))
     }
   }
 
   // ── Update partner ───────────────────────────────────────────────────────
   const handleUpdatePartner = async (partnerId: string, updates: Partial<BrandInfluencerRecord>) => {
     try {
-      const updated = await partnersApi.update(brandId, partnerId, updates)
+      const updated = await trackSave(
+        () => partnersApi.update(brandId, partnerId, updates),
+        "Partner details updated"
+      )
       setPartners((prev) =>
         prev.map((p) => (p.id === partnerId ? dbToPartner(updated) : p))
       )
     } catch (e: any) {
-      alert("Failed to update: " + e.message)
+      notify("error", "Failed to update: " + e.message)
     }
   }
 
@@ -629,12 +698,15 @@ export default function BrandPartnersPage({ brandId }: Props) {
     updates: Parameters<typeof partnersApi.updateFinancials>[2]
   ) => {
     try {
-      const updated = await partnersApi.updateFinancials(brandId, partnerId, updates)
+      const updated = await trackSave(
+        () => partnersApi.updateFinancials(brandId, partnerId, updates),
+        "Financials updated"
+      )
       setPartners((prev) =>
         prev.map((p) => (p.id === partnerId ? dbToPartner(updated) : p))
       )
     } catch (e: any) {
-      alert("Failed to update financials: " + e.message)
+      notify("error", "Failed to update financials: " + e.message)
     }
   }
 
@@ -642,10 +714,10 @@ export default function BrandPartnersPage({ brandId }: Props) {
   const handleRemovePartner = async (partnerId: string) => {
     if (!confirm("Remove this partner from the brand?")) return
     try {
-      await partnersApi.remove(brandId, partnerId)
+      await trackSave(() => partnersApi.remove(brandId, partnerId), "Partner removed")
       setPartners((prev) => prev.filter((p) => p.id !== partnerId))
     } catch (e: any) {
-      alert("Failed to remove partner: " + e.message)
+      notify("error", "Failed to remove partner: " + e.message)
     }
   }
 
@@ -755,60 +827,31 @@ export default function BrandPartnersPage({ brandId }: Props) {
   return (
     <div style={{ fontFamily: "'Inter', sans-serif", background: "#f7f9f8", minHeight: "100vh" }}>
 
-      {/* ── Top Bar ── */}
-      <div className="topbar">
-        <div>
-          {/* The page title lives in the app header — repeating it here showed
-              "Brand Partners" twice on the same screen. */}
-          <div className="topbar-sub">
-            {partners.length} total · {goldCount} Gold · {silverCount} Silver · {bronzeCount} Bronze
-          </div>
-        </div>
-        <div className="topbar-actions">
-          <button
-            className="btn-outline"
-            data-tour="brand-partners-tier-settings"
-            onClick={() => setShowTierModal(true)}
-            disabled={!isOwner}
-            title={!isOwner ? "Only the workspace owner can manage tier settings" : undefined}
-          >
-            ⚙ Tier Settings
-          </button>
-          <button
-            className="btn-outline"
-            onClick={() => setShowCampaignModal(true)}
-            disabled={!canManageCampaigns}
-            title={!canManageCampaigns ? "Only Owners and Managers can create campaigns" : undefined}
-          >
-            + New Campaign
-          </button>
-          <button
-            className="btn-primary"
-            data-tour="brand-partners-add-partner"
-            onClick={() => setShowAddPartnerModal(true)}
-            disabled={!canManageCampaigns}
-            title={!canManageCampaigns ? "Only Owners and Managers can add partners" : undefined}
-          >
-            + Add Partner
-          </button>
-        </div>
-      </div>
+      {/* ── Toolbar ──────────────────────────────────────────────────────────
+          One row in the Post Tracker's order: search, Filters, count and
+          status, then the actions on the right — and the same geometry, so the
+          two pages read as one product. The Partner List / Campaigns tabs move
+          to their own row below.
 
-      {/* ── Tab Bar + Search ── */}
-      {!showCampaignDetail && (
-        <div className="tab-search-row">
-          <div className="sfg">
-            <div className="sw relative">
+          The row itself always renders: the three actions were previously in a
+          separate top bar that showed on the campaign detail view too, and
+          folding them in here must not take them away. Only the search, filters
+          and count are hidden there, exactly as before. */}
+      <div className="tab-search-row">
+        {!showCampaignDetail && (
+          <>
+            {/* Search — same field as the Post Tracker's. */}
+            <div className="relative flex-1 min-w-[200px] max-w-xs">
               <IconSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
-                className="sb"
+                className="w-full pl-9 pr-3 h-9 border border-[#0F6B3E]/20 rounded-lg outline-none focus:ring-2 focus:ring-[#1FAE5B] text-sm"
                 data-tour="brand-partners-search"
                 placeholder="Search creators…"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
             </div>
-            <div className="fw">
+            <div className="relative">
               <button onClick={() => setShowFilterPanel(!showFilterPanel)} data-tour="brand-partners-filters" className="h-9 px-3 rounded-lg text-sm flex items-center gap-1.5 border border-[#0F6B3E]/20 hover:border-[#0F6B3E]/40 transition-colors">
                 <IconFilter size={15} /> Filters
               </button>
@@ -844,8 +887,53 @@ export default function BrandPartnersPage({ brandId }: Props) {
                 </div>
               )}
             </div>
-          </div>
-          <div className="row-spacer" />
+
+            {/* Count and freshness — the Post Tracker's slot and styling. */}
+            <span className="text-sm text-gray-500 whitespace-nowrap ml-1">
+              {partners.length} total · {goldCount} Gold · {silverCount} Silver · {bronzeCount} Bronze
+            </span>
+            <DataSyncStatus cacheKey={brandId ? `brand-partners:${brandId}` : null} />
+          </>
+        )}
+
+        {/* Spacer */}
+        <div className="flex-1" />
+
+            <div className="flex items-center gap-2">
+              <button
+                className="hdr-btn"
+                data-tour="brand-partners-tier-settings"
+                onClick={() => setShowTierModal(true)}
+                disabled={!isOwner}
+                title={!isOwner ? "Only the workspace owner can manage tier settings" : undefined}
+              >
+                ⚙ Tier Settings
+              </button>
+              <button
+                className="hdr-btn"
+                onClick={() => setShowCampaignModal(true)}
+                disabled={!canManageCampaigns}
+                title={!canManageCampaigns ? "Only Owners and Managers can create campaigns" : undefined}
+              >
+                + New Campaign
+              </button>
+              <button
+                className="hdr-btn-primary"
+                data-tour="brand-partners-add-partner"
+                onClick={() => setShowAddPartnerModal(true)}
+                disabled={!canManageCampaigns}
+                title={!canManageCampaigns ? "Only Owners and Managers can add partners" : undefined}
+              >
+                + Add Partner
+              </button>
+            </div>
+      </div>
+
+      {/* ── Partner List / Campaigns ──────────────────────────────────────────
+          Its own row below the toolbar, as the requirement asks — it is
+          navigation, not a toolbar control. */}
+      {!showCampaignDetail && (
+        <div className="tab-row">
           <div className="tab-bar">
             {["Partner List", "Campaigns"].map((tab, idx) => (
               <div key={idx} className={`tab ${activeTab === idx ? "active" : ""}`} onClick={() => setActiveTab(idx)}>
@@ -1034,22 +1122,17 @@ export default function BrandPartnersPage({ brandId }: Props) {
       ══════════════════════════════════════════════════════════════════════ */}
       {activeTab === 1 && !showCampaignDetail && (
         <div className="content">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          {/* No "+ New Campaign" here: the header already carries it, and two
+              buttons for one action on the same screen is one too many. */}
+          <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 11, fontWeight: 600, color: "#888", textTransform: "uppercase", letterSpacing: "0.07em" }}>All campaigns</div>
-            <button
-              className="btn-primary"
-              onClick={() => setShowCampaignModal(true)}
-              disabled={!canManageCampaigns}
-              title={!canManageCampaigns ? "Only Owners and Managers can create campaigns" : undefined}
-            >
-              + New Campaign
-            </button>
           </div>
           {campaigns.length === 0 ? (
+            /* No decorative glyph — the words carry it, as the Post Tracker's
+               own empty states do. */
             <div style={{ textAlign: "center", padding: "60px 20px", color: "#888" }}>
-              <div style={{ fontSize: 32, marginBottom: 8 }}>📋</div>
               <div style={{ fontWeight: 600 }}>No campaigns yet</div>
-              <div style={{ fontSize: 12 }}>Click "+ New Campaign" to get started</div>
+              <div style={{ fontSize: 13 }}>Use &ldquo;+ New Campaign&rdquo; in the header to get started</div>
             </div>
           ) : (
             campaigns.map((c) => (
@@ -1114,7 +1197,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
                         background: isProfitable ? "#e6f9ee" : "#fdecea",
                         color: isProfitable ? "#0F6B3E" : "#a32d2d",
                       }}>
-                        {isProfitable ? "✓ Profitable" : "✗ Loss"}
+                        {isProfitable ? "Profitable" : "Loss"}
                       </span>
                     )}
                   </div>
@@ -1506,28 +1589,44 @@ export default function BrandPartnersPage({ brandId }: Props) {
       )}
 
       <style jsx>{`
-        .topbar { background: #fff; border-bottom: 0.5px solid rgba(0,0,0,0.08); padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
-        .topbar-sub { font-size: 11px; color: #888; }
-        .topbar-actions { display: flex; gap: 8px; }
         .btn-primary { background: #1FAE5B; color: #fff; border: none; padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 11px; font-weight: 500; font-family: 'Inter', sans-serif; }
         .btn-primary:hover { background: #0F6B3E; }
         .btn-outline { background: transparent; border: 0.5px solid rgba(0,0,0,0.2); padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 11px; font-weight: 500; color: #555; font-family: 'Inter', sans-serif; }
-        .tab-search-row { background: #fff; border-bottom: 0.5px solid rgba(0,0,0,0.08); padding: 8px 20px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        /* The toolbar. 12px 20px and gap 8 match the Post Tracker's p-6/gap-2
+           rhythm once the page gutter is accounted for, and the row no longer
+           carries the tabs. */
+        .tab-search-row { background: #fff; padding: 12px 20px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        /* Partner List / Campaigns, on their own row under the toolbar. The
+           bottom border moved here, so there is one rule under the header block
+           rather than one between its two rows. */
+        .tab-row { background: #fff; border-bottom: 0.5px solid rgba(0,0,0,0.08); padding: 0 20px; }
         .row-spacer { flex: 1 1 auto; }
-        .sb { max-width: 100%; }
+
+        /* Header action buttons.
+           Deliberately NOT .btn-outline / .btn-primary: those are 11px with 6px
+           padding and are used by the modals on this page too, so raising them
+           to the toolbar's height would resize buttons that have nothing to do
+           with this row. These two carry the Post Tracker's geometry (h-9,
+           px-3, 14px text) and are used only here. */
+        .hdr-btn, .hdr-btn-primary {
+          height: 36px; padding: 0 12px; border-radius: 8px; cursor: pointer;
+          font-size: 14px; font-weight: 500; font-family: 'Inter', sans-serif;
+          display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+          transition: background 120ms, border-color 120ms;
+        }
+        .hdr-btn { background: #fff; border: 1px solid rgba(15,107,62,0.2); color: #555; }
+        .hdr-btn:hover:not(:disabled) { border-color: rgba(15,107,62,0.4); }
+        .hdr-btn-primary { background: #1FAE5B; border: 1px solid #1FAE5B; color: #fff; }
+        .hdr-btn-primary:hover:not(:disabled) { background: #178a48; border-color: #178a48; }
+        .hdr-btn:disabled, .hdr-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
         .tab-bar { display: flex; }
-        .tab { padding: 10px 16px; cursor: pointer; font-size: 12px; font-weight: 500; color: #888; border-bottom: 2px solid transparent; }
+        .tab { padding: 10px 16px; cursor: pointer; font-size: 14px; font-weight: 500; color: #888; border-bottom: 2px solid transparent; }
         .tab.active { color: #1FAE5B; border-bottom-color: #1FAE5B; }
-        .sfg { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
-        .sw { position: relative; flex: 1 1 200px; min-width: 200px; max-width: 20rem; }
-        .sb { font-size: 14px; height: 36px; padding: 0 12px 0 36px; border-radius: 8px; border: 1px solid rgba(15,107,62,0.2); background: #fff; width: 100%; font-family: 'Inter', sans-serif; outline: none; }
-        .sb:focus { box-shadow: 0 0 0 2px #1FAE5B; }
-        .fw { position: relative; }
         .fp { position: absolute; top: calc(100% + 6px); left: 0; z-index: 200; background: #fff; border: 0.5px solid rgba(0,0,0,0.12); border-radius: 10px; padding: 14px; box-shadow: 0 4px 16px rgba(0,0,0,0.1); width: 360px; max-width: 90vw; }
-        .fp-title { font-size: 11px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; }
+        .fp-title { font-size: 12px; font-weight: 700; color: #1f2937; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 12px; }
         .fg { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-        .fg label { font-size: 11px; color: #888; display: block; margin-bottom: 4px; }
-        .fg select { width: 100%; font-size: 12px; padding: 5px 8px; border-radius: 7px; border: 0.5px solid rgba(0,0,0,0.15); background: #f7f9f8; font-family: 'Inter', sans-serif; }
+        .fg label { font-size: 12px; color: #6b7280; display: block; margin-bottom: 4px; }
+        .fg select { width: 100%; font-size: 14px; padding: 8px 12px; border-radius: 8px; border: 1px solid #e5e7eb; background: #f9fafb; font-family: 'Inter', sans-serif; }
         .fa { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 0.5px solid rgba(0,0,0,0.06); }
         .fc-btn { font-size: 11px; padding: 5px 10px; border-radius: 7px; border: 0.5px solid rgba(0,0,0,0.15); background: transparent; color: #888; cursor: pointer; }
         .fa-btn { font-size: 11px; padding: 5px 12px; border-radius: 7px; border: none; background: #1FAE5B; color: #fff; cursor: pointer; }
@@ -1583,12 +1682,30 @@ export default function BrandPartnersPage({ brandId }: Props) {
         .cd-section { background: #fff; border: 0.5px solid rgba(0,0,0,0.08); border-radius: 10px; padding: 14px 16px; }
         .cd-section-title { font-size: 11px; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; }
         .kpi-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; }
-        @media (max-width: 640px) { .kpi-grid { grid-template-columns: repeat(2,1fr); } .sw { max-width: 100%; } }
+        @media (max-width: 640px) { .kpi-grid { grid-template-columns: repeat(2,1fr); } }
         .kpi-card { background: #fff; border: 0.5px solid rgba(0,0,0,0.08); border-radius: 10px; padding: 12px 14px; }
         .kpi-l { font-size: 10px; color: #888; }
         .kpi-v { font-size: 17px; font-weight: 600; color: #1E1E1E; margin-top: 2px; }
         .kpi-v.g { color: #1FAE5B; }
       `}</style>
+
+      {/* Save status — the same dock the Influencer List, Pipeline and Post
+          Tracker use. `.notice-dock` (app/globals.css) also steps aside when
+          the influencer profile panel is open, so a save made from inside it
+          is still readable. */}
+      <div className="notice-dock">
+        {isSaving && (
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-900/90 text-white text-xs font-medium shadow-lg animate-in fade-in">
+            <IconLoader2 size={12} className="animate-spin" />
+            Saving
+          </div>
+        )}
+        {notice && (
+          <div className={`px-4 py-2 rounded-lg shadow-lg text-white animate-in slide-in-from-bottom-2 ${notice.type === "error" ? "bg-red-600" : "bg-green-500"}`}>
+            {notice.message}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

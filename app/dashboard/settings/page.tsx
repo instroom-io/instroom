@@ -24,6 +24,7 @@ import {
 import { User, CreditCard } from "lucide-react"
 import { toast } from "sonner" // swap for your shadcn toast hook if you use a different one
 import { SettingsSkeleton } from "@/components/shared/skeletons"
+import { fetchCached, invalidateCache } from "@/lib/data-cache"
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
@@ -72,8 +73,11 @@ export default function ProfilePage() {
     }
     if (status !== "authenticated") return
 
-    fetch("/api/settings/profile")
-      .then((r) => r.json())
+    fetchCached<any>("/api/settings/profile", async () => {
+      const r = await fetch("/api/settings/profile")
+      if (!r.ok) throw new Error(`profile failed (${r.status})`)
+      return await r.json()
+    })
       .then((data) => {
         if (data.name) {
           const parts = data.name.split(" ")
@@ -95,8 +99,11 @@ export default function ProfilePage() {
       })
       .finally(() => setProfileLoaded(true))
 
-    fetch("/api/settings/preferences")
-      .then((r) => r.json())
+    fetchCached<any>("/api/settings/preferences", async () => {
+      const r = await fetch("/api/settings/preferences")
+      if (!r.ok) throw new Error(`preferences failed (${r.status})`)
+      return await r.json()
+    })
       .then((data) => {
         if (data.timezone) setTimezone(data.timezone)
         if (data.currency) setCurrency(data.currency)
@@ -136,6 +143,7 @@ export default function ProfilePage() {
       const data = await res.json()
       setAvatarUrl(data.avatarUrl)
       updateSession({ image: data.avatarUrl })
+      invalidateCache("/api/settings/profile")
       toast.success("Photo updated")
     } catch {
       toast.error("Upload failed. Please try again.")
@@ -156,6 +164,7 @@ export default function ProfilePage() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "Failed to save profile")
+      invalidateCache("/api/settings/profile")
       toast.success("Profile saved successfully")
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Something went wrong")
@@ -174,6 +183,7 @@ export default function ProfilePage() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "Failed to save preferences")
+      invalidateCache("/api/settings/preferences")
       toast.success("Preferences saved")
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Something went wrong")

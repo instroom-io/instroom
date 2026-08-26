@@ -167,9 +167,9 @@ export function SettingsSidebar() {
           <p
             className="hidden md:block"
             style={{
-              fontSize: 9,
-              fontWeight: 700,
-              letterSpacing: "0.1em",
+              fontSize: "var(--sb-label-size)",
+              fontWeight: 600,
+              letterSpacing: "0.16em",
               textTransform: "uppercase",
               color: "#aaa",
               padding: "8px 20px 4px",
@@ -193,7 +193,7 @@ export function SettingsSidebar() {
                 tabIndex={0}
                 onKeyDown={(e) => e.key === "Enter" && router.push(item.href)}
                 data-active={isActive}
-                className="flex items-center gap-2.5 whitespace-nowrap flex-shrink-0 px-4 min-h-11 md:min-h-0 md:px-5 md:py-[9px] text-[13px] md:text-xs"
+                className="flex items-center gap-2.5 whitespace-nowrap flex-shrink-0 px-4 min-h-11 md:min-h-0 md:px-5 md:py-[9px] text-[13px] md:text-[length:var(--sb-font-size)] md:leading-[var(--sb-line-height)]"
                 style={{
                   cursor: "pointer",
                   fontWeight: isActive ? 600 : 500,
