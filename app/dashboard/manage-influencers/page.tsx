@@ -215,7 +215,7 @@ function InfluencersContent() {
   const rawBrandId = searchParams.get("brandId")
   const brandId = rawBrandId?.trim() || null
 
-  const { rows, customColumns, isLoading, error, setCustomColumns } =
+  const { rows, customColumns, isLoading, error, refetch, setCustomColumns } =
     useInfluencerData(brandId)
   const { canManageInfluencers, canApproveInfluencers } = useBrandCapabilities(brandId)
 
@@ -1037,11 +1037,21 @@ function InfluencersContent() {
       )
     }
 
+    // A Retry button, matching the Post Tracker's error state. Without it this
+    // screen was a dead end for a failure that is usually transient — the
+    // database refusing another connection, which the route now reports as a
+    // retryable 503 — and the only way out was a full page reload.
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
           <p className="text-red-600 mb-2 font-medium">Failed to load influencers</p>
           <p className="text-sm text-gray-500">{error}</p>
+          <button
+            onClick={refetch}
+            className="mt-4 text-[13px] px-4 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 transition"
+          >
+            Retry
+          </button>
         </div>
       </div>
     )
