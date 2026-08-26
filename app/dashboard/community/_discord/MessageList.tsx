@@ -18,7 +18,7 @@ import {
   IconFile, IconDownload, IconX, IconCopy, IconPlayerPlayFilled, IconBolt,
 } from "@tabler/icons-react"
 import { RichText, type MentionResolver } from "./markdown"
-import { EmojiPicker, QUICK_REACTIONS, rememberEmoji } from "./EmojiPicker"
+import { EmojiPicker, QUICK_REACTIONS, rememberEmoji } from "@/components/shared/emoji-picker"
 import type { Message, Attachment, MessageGroup } from "./types"
 import { Skeleton } from "./ui"
 

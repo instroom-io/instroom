@@ -60,9 +60,11 @@ import {
   IconRefresh,
   IconAlertCircle,
   IconTemplate,
+  IconDeviceFloppy,
 } from "@tabler/icons-react"
 import { EmailTemplatesModal } from "@/components/shared/email-templates-modal"
 import { UseTemplatePicker } from "@/components/shared/use-template-picker"
+import { RichComposeEditor, type RichComposeEditorHandle, type PendingAttachment } from "@/components/shared/rich-compose-editor"
 
 function OutlookIcon({ size = 28 }: { size?: number }) {
   return (
@@ -573,6 +575,8 @@ function InboxContent() {
   const [reply, setReply] = useState("")
   const [isSending, setIsSending] = useState(false)
   const [sendError, setSendError] = useState<string | undefined>()
+  const [replyAttachments, setReplyAttachments] = useState<PendingAttachment[]>([])
+  const replyEditorRef = useRef<RichComposeEditorHandle>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("")
   const [updateStageModal, setUpdateStageModal] = useState<{ open: boolean; email: Email | null }>({ open: false, email: null })
@@ -635,8 +639,88 @@ function InboxContent() {
   const [isComposeSending, setIsComposeSending] = useState(false)
   const [composeSent, setComposeSent] = useState(false)
 
+  // Save-current-draft-as-template popover (compose modal only — replies have no subject field)
+  const [savingComposeAsTemplate, setSavingComposeAsTemplate] = useState(false)
+  const [composeTemplateName, setComposeTemplateName] = useState("")
+  const [isSavingComposeTemplate, setIsSavingComposeTemplate] = useState(false)
+  const [saveComposeTemplateError, setSaveComposeTemplateError] = useState<string | undefined>()
+
+  // Rich compose: attachments + formatting, sent via both Gmail and Outlook
+  // (see sendCompose below — each provider's send route accepts the same
+  // multipart request and builds whatever format its own API needs).
+  const [composeAttachments, setComposeAttachments] = useState<PendingAttachment[]>([])
+  const composeEditorRef = useRef<RichComposeEditorHandle>(null)
+  const MAX_TOTAL_ATTACHMENT_BYTES = 4 * 1024 * 1024
+
+  const handleAddComposeFiles = (newFiles: File[]) => {
+    const built: PendingAttachment[] = newFiles.map((file) => ({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      file,
+      previewUrl: file.type.startsWith("image/") ? URL.createObjectURL(file) : null,
+    }))
+    setComposeAttachments((prev) => [...prev, ...built])
+  }
+
+  const handleRemoveComposeFile = (id: string) => {
+    setComposeAttachments((prev) => {
+      const removed = prev.find((f) => f.id === id)
+      if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl)
+      return prev.filter((f) => f.id !== id)
+    })
+  }
+
+  const clearComposeAttachments = () => {
+    setComposeAttachments((prev) => {
+      prev.forEach((f) => { if (f.previewUrl) URL.revokeObjectURL(f.previewUrl) })
+      return []
+    })
+  }
+
+  const handleAddReplyFiles = (newFiles: File[]) => {
+    const built: PendingAttachment[] = newFiles.map((file) => ({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      file,
+      previewUrl: file.type.startsWith("image/") ? URL.createObjectURL(file) : null,
+    }))
+    setReplyAttachments((prev) => [...prev, ...built])
+  }
+
+  const handleRemoveReplyFile = (id: string) => {
+    setReplyAttachments((prev) => {
+      const removed = prev.find((f) => f.id === id)
+      if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl)
+      return prev.filter((f) => f.id !== id)
+    })
+  }
+
+  const clearReplyAttachments = () => {
+    setReplyAttachments((prev) => {
+      prev.forEach((f) => { if (f.previewUrl) URL.revokeObjectURL(f.previewUrl) })
+      return []
+    })
+  }
+
+  /** Strips a rich-compose HTML string down to plain text — used wherever
+   *  the HTML body needs to become plain text (Outlook send, the optimistic
+   *  sent-thread placeholder, and saving a template). */
+  const htmlToPlainText = (html: string): string => {
+    if (typeof document === "undefined") return html
+    const el = document.createElement("div")
+    el.innerHTML = html
+    return (el.textContent || "").trim()
+  }
+
+  /** Inverse of the above, for applying a plain-text template into the rich
+   *  compose box — escapes the text and turns newlines into <br>. Kept local
+   *  (not imported from lib/signature.ts) since that module is server-only. */
+  const plainTextToComposeHtml = (text: string): string =>
+    text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\n/g, "<br>")
+
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const replyTextareaRef = useRef<HTMLTextAreaElement>(null)
 
   // Monotonically increasing request ids so a slow/stale gmail or outlook
   // fetch (e.g. issued for a previous brandId) can't overwrite state with
@@ -1149,21 +1233,40 @@ function InboxContent() {
   }
 
   const sendCompose = async () => {
-    if (!composeTo.trim() || !composeBody.trim() || isComposeSending) return
+    const bodyIsEmpty = htmlToPlainText(composeBody).trim().length === 0
+    if (!composeTo.trim() || (bodyIsEmpty && composeAttachments.length === 0) || isComposeSending) return
     setComposeError(undefined)
     setIsComposeSending(true)
     try {
       const sendApi = composeSource === "outlook" ? "/api/outlook/send" : "/api/gmail/send"
-      const res = await fetch(sendApi, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          to: composeTo.trim(),
-          subject: composeSubject.trim() || "(No subject)",
-          body: composeBody.trim(),
-          brandId,
-        }),
-      })
+      let res: Response
+      // Both providers accept attachments now — Gmail via a multipart
+      // request that gets built into a real MIME message server-side,
+      // Outlook via the same multipart request but converted to Graph's
+      // plain JSON attachments array server-side (see the two send routes).
+      if (composeAttachments.length > 0) {
+        const form = new FormData()
+        form.append("to", composeTo.trim())
+        form.append("subject", composeSubject.trim() || "(No subject)")
+        form.append("body", composeBody)
+        form.append("isHtmlBody", "true")
+        if (brandId) form.append("brandId", brandId)
+        composeAttachments.forEach((a) => form.append("attachments", a.file, a.file.name))
+        // No Content-Type header — fetch generates the multipart boundary itself.
+        res = await fetch(sendApi, { method: "POST", body: form })
+      } else {
+        res = await fetch(sendApi, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            to: composeTo.trim(),
+            subject: composeSubject.trim() || "(No subject)",
+            body: composeBody,
+            brandId,
+            isHtmlBody: true,
+          }),
+        })
+      }
       const data = await res.json()
       if (!res.ok) {
         setComposeError(data?.error || "Failed to send email.")
@@ -1180,7 +1283,7 @@ function InboxContent() {
               id: `local-sent-${Date.now()}`,
               recipientEmail: composeTo.trim(),
               subject: composeSubject.trim() || "(No subject)",
-              snippet: composeBody.trim(),
+              snippet: htmlToPlainText(composeBody).slice(0, 140),
               date: new Date().toISOString(),
             },
             0
@@ -1193,14 +1296,50 @@ function InboxContent() {
           setComposeTo("")
           setComposeSubject("")
           setComposeBody("")
+          clearComposeAttachments()
           setComposeSent(false)
           setComposeError(undefined)
+          setSavingComposeAsTemplate(false)
+          setComposeTemplateName("")
+          setSaveComposeTemplateError(undefined)
         }, 1500)
       }
     } catch {
       setComposeError("Network error. Please try again.")
     } finally {
       setIsComposeSending(false)
+    }
+  }
+
+  const saveComposeAsTemplate = async () => {
+    const plainBody = htmlToPlainText(composeBody)
+    if (!brandId || !composeTemplateName.trim() || !composeSubject.trim() || !plainBody) {
+      setSaveComposeTemplateError("Name, subject, and message are all required")
+      return
+    }
+    setIsSavingComposeTemplate(true)
+    setSaveComposeTemplateError(undefined)
+    try {
+      // Templates are shared with the still-plain-text reply box and
+      // EmailModal, so the saved body must stay plain text — never the rich
+      // editor's raw HTML.
+      const res = await fetch(`/api/brand/${brandId}/templates`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: composeTemplateName.trim(),
+          subject: composeSubject.trim(),
+          body: plainBody,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error || "Failed to save template")
+      setSavingComposeAsTemplate(false)
+      setComposeTemplateName("")
+    } catch (err) {
+      setSaveComposeTemplateError(err instanceof Error ? err.message : "Failed to save template")
+    } finally {
+      setIsSavingComposeTemplate(false)
     }
   }
 
@@ -1350,18 +1489,22 @@ function InboxContent() {
   }
 
   const sendReply = async () => {
-    if (!reply.trim() || !selectedEmail || isSending) return
+    const plainReply = htmlToPlainText(reply)
+    if ((plainReply.length === 0 && replyAttachments.length === 0) || !selectedEmail || isSending) return
 
-    const messageText = reply.trim()
+    const isOutlookThread = selectedEmail.source === "outlook"
+    const htmlBody = reply
+    const attachmentsToSend = replyAttachments
     setSendError(undefined)
     setIsSending(true)
 
     const sentAt = new Date().toISOString()
     const newReply = {
       sender: "You",
-      message: messageText,
+      message: htmlBody,
       timestamp: sentAt,
       isUser: true,
+      isHtml: true,
     }
     // Also update preview/timestamp — otherwise the list row keeps showing
     // whatever Gmail last returned, looking untouched even though a reply
@@ -1369,30 +1512,50 @@ function InboxContent() {
     setEmails((prev) =>
       prev.map((email) =>
         email.id === selectedEmail.id
-          ? { ...email, replies: [...(email.replies || []), newReply], preview: messageText, timestamp: sentAt }
+          ? { ...email, replies: [...(email.replies || []), newReply], preview: plainReply, timestamp: sentAt }
           : email
       )
     )
     setSelectedEmail((prev) =>
-      prev ? { ...prev, replies: [...(prev.replies || []), newReply], preview: messageText, timestamp: sentAt } : null
+      prev ? { ...prev, replies: [...(prev.replies || []), newReply], preview: plainReply, timestamp: sentAt } : null
     )
-    setReply("")
+    // Reply's editor stays mounted after sending (unlike compose, which swaps
+    // to a "Message sent!" screen), so it must be cleared via the imperative
+    // ref — setReply("") alone would update state but leave the visible
+    // contentEditable content untouched.
+    replyEditorRef.current?.setHtml("")
+    clearReplyAttachments()
 
     try {
-      const replyApi = selectedEmail.source === "outlook" ? "/api/outlook/send" : "/api/gmail/send"
-      const replyPayload: any = {
-        to: selectedEmail.fromEmail || selectedEmail.handle,
-        subject: selectedEmail.subject,
-        body: messageText,
-        brandId,
-      }
-      if (selectedEmail.source === "gmail") replyPayload.threadId = selectedEmail.gmailThreadId
+      const replyApi = isOutlookThread ? "/api/outlook/send" : "/api/gmail/send"
+      let res: Response
+      // Both providers accept attachments now — see sendCompose for the same pattern.
+      if (attachmentsToSend.length > 0) {
+        const form = new FormData()
+        form.append("to", selectedEmail.fromEmail || selectedEmail.handle)
+        form.append("subject", selectedEmail.subject)
+        form.append("body", htmlBody)
+        form.append("isHtmlBody", "true")
+        if (brandId) form.append("brandId", brandId)
+        if (!isOutlookThread && selectedEmail.gmailThreadId) form.append("threadId", selectedEmail.gmailThreadId)
+        attachmentsToSend.forEach((a) => form.append("attachments", a.file, a.file.name))
+        res = await fetch(replyApi, { method: "POST", body: form })
+      } else {
+        const replyPayload: any = {
+          to: selectedEmail.fromEmail || selectedEmail.handle,
+          subject: selectedEmail.subject,
+          body: htmlBody,
+          brandId,
+          isHtmlBody: true,
+        }
+        if (!isOutlookThread) replyPayload.threadId = selectedEmail.gmailThreadId
 
-      const res = await fetch(replyApi, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(replyPayload),
-      })
+        res = await fetch(replyApi, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(replyPayload),
+        })
+      }
 
       if (!res.ok) {
         const data = await res.json()
@@ -1402,7 +1565,7 @@ function InboxContent() {
       setSendError("Network error. Message may not have been delivered.")
     } finally {
       setIsSending(false)
-      setTimeout(() => replyTextareaRef.current?.focus(), 100)
+      setTimeout(() => replyEditorRef.current?.focus(), 100)
     }
   }
 
@@ -1781,7 +1944,7 @@ function InboxContent() {
                     <button
                       onClick={() => setOpenTemplates(true)}
                       title="Email Templates"
-                      className="flex h-11 w-11 sm:h-9 sm:w-9 items-center justify-center rounded-xl hover:bg-gray-100 active:bg-gray-200 transition-colors text-gray-500"
+                      className="flex h-11 w-11 sm:h-9 sm:w-9 shrink-0 items-center justify-center rounded-xl bg-[#1FAE5B] text-white hover:bg-[#0F6B3E] active:bg-[#0F6B3E] transition-colors shadow-sm"
                     >
                       <IconTemplate size={16} />
                     </button>
@@ -2098,40 +2261,43 @@ function InboxContent() {
                   <UseTemplatePicker
                     brandId={brandId}
                     recipientEmail={selectedEmail.fromEmail || selectedEmail.handle}
-                    onApply={(_subject, body) => setReply(body)}
+                    onApply={(_subject, body) => replyEditorRef.current?.setHtml(plainTextToComposeHtml(body))}
                   />
                 </div>
-                <div className="flex gap-3 items-end">
-                  <div className="w-8 h-8 rounded-full bg-[#1FAE5B] flex items-center justify-center text-white text-xs font-medium shadow-sm flex-shrink-0">ME</div>
-                  <div className="flex-1 relative">
-                    <textarea
-                      ref={replyTextareaRef}
-                      value={reply}
-                      onChange={(e) => setReply(e.target.value)}
-                      onKeyDown={handleKeyDown}
+                <div className="flex gap-3 items-start">
+                  <div className="w-8 h-8 rounded-full bg-[#1FAE5B] flex items-center justify-center text-white text-xs font-medium shadow-sm flex-shrink-0 mt-1">ME</div>
+                  <div className="flex-1 min-w-0">
+                    <RichComposeEditor
+                      ref={replyEditorRef}
+                      html={reply}
+                      onHtmlChange={setReply}
+                      files={replyAttachments}
+                      onAddFiles={handleAddReplyFiles}
+                      onRemoveFile={handleRemoveReplyFile}
+                      maxTotalBytes={MAX_TOTAL_ATTACHMENT_BYTES}
                       placeholder={`Reply to ${selectedEmail.name.split(" ")[0]}…`}
-                      rows={1}
-                      className="w-full border border-gray-200 rounded-2xl px-4 py-3 pr-12 outline-none focus:ring-2 focus:ring-[#1FAE5B]/20 focus:border-[#1FAE5B] resize-none text-sm bg-gray-50"
-                      style={{ minHeight: "44px", maxHeight: "120px" }}
+                      onKeyDown={handleKeyDown}
+                      minHeightPx={44}
+                      maxHeightPx={160}
+                      emojiPickerSide="top"
                     />
-                    <button
-                      onClick={sendReply}
-                      disabled={!reply.trim() || isSending}
-                      className="absolute right-2 bottom-2 p-1.5 rounded-full bg-[#1FAE5B] text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[#0F6B3E] transition-all duration-200"
-                    >
-                      {isSending
-                        ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                        : <IconSend size={16} />
+                    <div className="flex items-center justify-between mt-2">
+                      {sendError
+                        ? <span className="text-xs text-red-500 flex items-center gap-1"><IconAlertCircle size={12} />{sendError}</span>
+                        : <span className="text-xs text-gray-400 hidden sm:inline">Press Enter to send • Shift+Enter for new line</span>
                       }
-                    </button>
+                      <button
+                        onClick={sendReply}
+                        disabled={(htmlToPlainText(reply).length === 0 && replyAttachments.length === 0) || isSending}
+                        className="flex-shrink-0 flex items-center justify-center w-8 h-8 rounded-full bg-[#1FAE5B] text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[#0F6B3E] transition-all duration-200"
+                      >
+                        {isSending
+                          ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          : <IconSend size={16} />
+                        }
+                      </button>
+                    </div>
                   </div>
-                </div>
-                <div className="flex items-center justify-between mt-2">
-                  {sendError
-                    ? <span className="text-xs text-red-500 flex items-center gap-1"><IconAlertCircle size={12} />{sendError}</span>
-                    : <span />
-                  }
-                  <span className="text-xs text-gray-400 hidden sm:inline">Press Enter to send • Shift+Enter for new line</span>
                 </div>
               </div>
             </div>
@@ -2242,11 +2408,62 @@ function InboxContent() {
               </div>
             ) : (
               <>
-                <div className="flex justify-end mb-1">
+                <div className="flex justify-end items-center gap-2 mb-1">
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => { setSavingComposeAsTemplate((v) => !v); setSaveComposeTemplateError(undefined) }}
+                      disabled={!composeSubject.trim() || htmlToPlainText(composeBody).length === 0}
+                      title="Save this message as a template"
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                    >
+                      <IconDeviceFloppy size={14} /> Save as template
+                    </button>
+                    {savingComposeAsTemplate && (
+                      <div className="absolute right-0 z-20 mt-1 w-64 bg-white border border-gray-100 rounded-lg shadow-lg p-3">
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Template name</label>
+                        <input
+                          autoFocus
+                          type="text"
+                          value={composeTemplateName}
+                          onChange={(e) => setComposeTemplateName(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") saveComposeAsTemplate() }}
+                          placeholder="e.g. Initial Outreach 1"
+                          className="w-full px-2.5 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-400 focus:border-green-400 outline-none transition mb-2"
+                        />
+                        {saveComposeTemplateError && (
+                          <p className="text-[11px] text-red-500 mb-2">{saveComposeTemplateError}</p>
+                        )}
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => { setSavingComposeAsTemplate(false); setComposeTemplateName(""); setSaveComposeTemplateError(undefined) }}
+                            className="flex-1 px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={saveComposeAsTemplate}
+                            disabled={isSavingComposeTemplate || !composeTemplateName.trim()}
+                            className="flex-1 px-2.5 py-1.5 rounded-lg bg-green-600 text-white text-xs font-medium hover:bg-green-700 disabled:opacity-50 transition"
+                          >
+                            {isSavingComposeTemplate ? "Saving…" : "Save"}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                   <UseTemplatePicker
                     brandId={brandId}
                     recipientEmail={composeTo}
-                    onApply={(subject, body) => { setComposeSubject(subject); setComposeBody(body) }}
+                    onApply={(subject, body) => {
+                      setComposeSubject(subject)
+                      // Templates are plain text — imperatively push the
+                      // converted HTML into the mounted editor (setHtml also
+                      // updates composeBody state itself; see rich-compose-editor.tsx).
+                      composeEditorRef.current?.setHtml(plainTextToComposeHtml(body))
+                    }}
                   />
                 </div>
                 <div className="space-y-1">
@@ -2294,13 +2511,17 @@ function InboxContent() {
                   </div>
                 </div>
 
-                <textarea
-                  value={composeBody}
-                  onChange={(e) => setComposeBody(e.target.value)}
-                  placeholder="Write your message…"
-                  rows={6}
-                  className="w-full mt-4 outline-none resize-none text-sm text-gray-800 placeholder:text-gray-300 p-0 border-0"
-                />
+                <div className="mt-4">
+                  <RichComposeEditor
+                    ref={composeEditorRef}
+                    html={composeBody}
+                    onHtmlChange={setComposeBody}
+                    files={composeAttachments}
+                    onAddFiles={handleAddComposeFiles}
+                    onRemoveFile={handleRemoveComposeFile}
+                    maxTotalBytes={MAX_TOTAL_ATTACHMENT_BYTES}
+                  />
+                </div>
 
                 {composeError && (
                   <div className="flex items-center gap-2 text-xs text-red-500 mt-2 bg-red-50 px-3 py-2 rounded-lg">
@@ -2311,14 +2532,14 @@ function InboxContent() {
 
                 <div className="flex justify-between items-center mt-4 pt-4 border-t border-gray-100">
                   <button
-                    onClick={() => { setOpenCompose(false); setComposeTo(""); setComposeSubject(""); setComposeBody(""); setComposeError(undefined) }}
+                    onClick={() => { setOpenCompose(false); setComposeTo(""); setComposeSubject(""); setComposeBody(""); clearComposeAttachments(); setComposeError(undefined); setSavingComposeAsTemplate(false); setComposeTemplateName(""); setSaveComposeTemplateError(undefined) }}
                     className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 transition"
                   >
                     Discard
                   </button>
                   <button
                     onClick={sendCompose}
-                    disabled={!composeTo.trim() || !composeBody.trim() || isComposeSending}
+                    disabled={!composeTo.trim() || (htmlToPlainText(composeBody).length === 0 && composeAttachments.length === 0) || isComposeSending}
                     className="bg-[#1FAE5B] text-white px-5 py-2 rounded-xl hover:bg-[#0F6B3E] transition-all duration-200 flex items-center gap-2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
                   >
                     {isComposeSending

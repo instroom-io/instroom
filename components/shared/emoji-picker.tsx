@@ -4,10 +4,11 @@
 // Hand-rolled rather than pulled in as a dependency: the popular pickers ship a
 // few hundred KB of emoji metadata and their own virtualised grid, which is a
 // lot of bundle for a composer accessory. This covers the emoji people actually
-// reach for in a team chat, with keyword search, and adds nothing to the
-// dependency tree.
+// reach for, with keyword search, and adds nothing to the dependency tree.
 //
-// Reactions and the composer share it, so the same shortcut set appears in both.
+// Shared by the Discord-style community composer and the inbox's email
+// compose editor, so the same shortcut set and "recently used" list appear in
+// both.
 
 import { memo, useEffect, useMemo, useRef, useState } from "react"
 import { motion } from "framer-motion"
@@ -81,7 +82,7 @@ const GROUPS: Group[] = [
   },
 ]
 
-const RECENT_KEY = "instroom:discord:recent-emoji"
+const RECENT_KEY = "instroom:recent-emoji"
 const MAX_RECENT = 16
 
 function loadRecent(): string[] {
@@ -108,11 +109,17 @@ export const EmojiPicker = memo(function EmojiPicker({
   onPick,
   onClose,
   align = "right",
+  side = "top",
 }: {
   onPick: (emoji: string) => void
   onClose: () => void
   /** Which edge the popover hangs from, so it can't open off-screen. */
   align?: "left" | "right"
+  /** Which side of the trigger the picker opens toward. "top" suits a
+   *  composer pinned to the bottom of the screen (Discord); "bottom" suits
+   *  a toolbar near the top of a modal (inbox compose), where opening
+   *  upward would cover the modal's own header/fields instead. */
+  side?: "top" | "bottom"
 }) {
   const [query, setQuery] = useState("")
   // Read lazily on mount rather than in an effect. Safe here because the picker
@@ -164,13 +171,13 @@ export const EmojiPicker = memo(function EmojiPicker({
       ref={ref}
       role="dialog"
       aria-label="Pick an emoji"
-      initial={{ opacity: 0, y: 6, scale: 0.97 }}
+      initial={{ opacity: 0, y: side === "top" ? 6 : -6, scale: 0.97 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: 6, scale: 0.97 }}
+      exit={{ opacity: 0, y: side === "top" ? 6 : -6, scale: 0.97 }}
       transition={{ duration: 0.13, ease: "easeOut" }}
-      className={`absolute bottom-full z-40 mb-2 w-[min(292px,calc(100vw-1.5rem))] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl ${
-        align === "right" ? "right-0" : "left-0"
-      }`}
+      className={`absolute z-40 w-[min(292px,calc(100vw-1.5rem))] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl ${
+        side === "top" ? "bottom-full mb-2" : "top-full mt-2"
+      } ${align === "right" ? "right-0" : "left-0"}`}
     >
       <div className="border-b border-gray-100 p-2">
         <div className="relative">
