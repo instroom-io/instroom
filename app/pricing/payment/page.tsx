@@ -4,7 +4,7 @@ import { Logo } from "@/components/brand/logo"
 import { useState, useEffect, Suspense } from "react";
 import { useSession } from "next-auth/react";
 import Script from "next/script";
-import { PLAN_TAGLINES, getPlanFeatures, formatPrice, formatPriceSub, Check } from "@/lib/pricing-plans";
+import { PLAN_TAGLINES, getPlanFeatures, formatPrice, formatPriceSub, Check, LEMON_SQUEEZY_VARIANTS } from "@/lib/pricing-plans";
 
 declare global {
   interface Window {
@@ -12,17 +12,6 @@ declare global {
     LemonSqueezy?: { Url: { Open: (url: string) => void } }
   }
 }
-
-const lemonSqueezyVariants: Record<string, Record<string, string>> = {
-  solo: {
-    monthly: process.env.NEXT_PUBLIC_LEMON_SQUEEZY_SOLO_MONTHLY || "1532578",
-    yearly: process.env.NEXT_PUBLIC_LEMON_SQUEEZY_SOLO_YEARLY || "1532542",
-  },
-  team: {
-    monthly: process.env.NEXT_PUBLIC_LEMON_SQUEEZY_TEAM_MONTHLY || "1532585",
-    yearly: process.env.NEXT_PUBLIC_LEMON_SQUEEZY_TEAM_YEARLY || "1532588",
-  },
-};
 
 function PaymentPageInner() {
   const searchParams = useSearchParams();
@@ -94,7 +83,7 @@ function PaymentPageInner() {
     try {
       setLoading(true);
 
-      const variantId = lemonSqueezyVariants[planKey]?.[cycle];
+      const variantId = LEMON_SQUEEZY_VARIANTS[planKey]?.[cycle];
       if (!variantId) return;
 
       const response = await fetch("/api/lemon-squeezy/create-checkout-plan", {

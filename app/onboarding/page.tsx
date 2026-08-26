@@ -5,6 +5,7 @@ import { Logo } from "@/components/brand/logo"
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useSession } from 'next-auth/react'
 import { OnboardingForm } from '@/components/onboarding-form'
+import { LEMON_SQUEEZY_VARIANTS } from '@/lib/pricing-plans'
 
 function OnboardingPageInner() {
   const router = useRouter()
@@ -93,7 +94,35 @@ function OnboardingPageInner() {
     ? `/pricing/payment?plan=${preselectedPlan}${preselectedCycle ? `&cycle=${preselectedCycle}` : ""}`
     : '/pricing'
 
+  // A paid plan chosen on the public pricing page has nothing left to confirm
+  // by the time onboarding is done, so create the Lemon Squeezy checkout
+  // directly and send the user straight to it — /pricing/payment (checkoutUrl
+  // above) is kept only as a fallback if checkout creation itself fails.
+  const goDirectlyToPaidCheckout = async (planKey: string, cycle: "monthly" | "yearly") => {
+    const variantId = LEMON_SQUEEZY_VARIANTS[planKey]?.[cycle]
+    if (!variantId) {
+      router.push(checkoutUrl)
+      return
+    }
+    try {
+      const response = await fetch('/api/lemon-squeezy/create-checkout-plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ variantId, planKey, cycle, userId: (session?.user as any)?.id }),
+      })
+      const data = await response.json()
+      if (!response.ok || !data.url) {
+        router.push(checkoutUrl)
+        return
+      }
+      window.location.href = data.url
+    } catch {
+      router.push(checkoutUrl)
+    }
+  }
+
   const redirectAfterOnboarding = async () => {
+    const paidCycle: "monthly" | "yearly" = preselectedCycle === 'monthly' ? 'monthly' : 'yearly'
     try {
       const userId = (session?.user as any)?.id
       const res = await fetch('/api/subscription/check', {
@@ -110,13 +139,21 @@ function OnboardingPageInner() {
         await startBasicTrialAndGoToDashboard()
         return
       }
-      router.push(checkoutUrl)
+      if (preselectedPlan) {
+        await goDirectlyToPaidCheckout(preselectedPlan, paidCycle)
+        return
+      }
+      router.push('/pricing')
     } catch {
       if (preselectedPlan === 'basic') {
         await startBasicTrialAndGoToDashboard()
         return
       }
-      router.push(checkoutUrl)
+      if (preselectedPlan) {
+        await goDirectlyToPaidCheckout(preselectedPlan, paidCycle)
+        return
+      }
+      router.push('/pricing')
     }
   }
 

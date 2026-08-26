@@ -6,7 +6,7 @@ import {
   IconSend, IconLoader2, IconPlus, IconMoodSmile, IconX, IconFile,
   IconCornerUpLeft, IconLock,
 } from "@tabler/icons-react"
-import { EmojiPicker } from "./EmojiPicker"
+import { EmojiPicker } from "@/components/shared/emoji-picker"
 import type { Message } from "./types"
 
 /** Discord's own hard limit; the attribution prefix eats into it server-side. */

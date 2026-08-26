@@ -10,6 +10,10 @@ import {
 import { getUserSignatureHtml, plainTextBodyToHtml } from "@/lib/signature"
 import { autoMarkContactedOnSend } from "@/lib/pipeline"
 
+// Same platform-driven cap as the Gmail send route (Vercel Serverless
+// Functions' request body limit, well under either provider's own ceiling).
+const MAX_TOTAL_ATTACHMENT_BYTES = 4 * 1024 * 1024
+
 async function getMicrosoftToken(userId: string): Promise<string | null> {
   const account = await prisma.account.findFirst({
     where: { userId, provider: "microsoft" },
@@ -79,7 +83,42 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  const { to, subject, body, brandId } = await req.json()
+  let to: string, subject: string | undefined, body: string, brandId: string | undefined
+  let isHtmlBody = false
+  const attachments: { name: string; mimeType: string; data: Buffer }[] = []
+
+  const contentType = req.headers.get("content-type") || ""
+  if (contentType.includes("multipart/form-data")) {
+    const form = await req.formData()
+    to = String(form.get("to") || "")
+    subject = form.get("subject") ? String(form.get("subject")) : undefined
+    body = String(form.get("body") || "")
+    brandId = form.get("brandId") ? String(form.get("brandId")) : undefined
+    isHtmlBody = form.get("isHtmlBody") === "true"
+
+    const files = form.getAll("attachments").filter((v): v is File => v instanceof File)
+    const totalBytes = files.reduce((sum, f) => sum + f.size, 0)
+    if (totalBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
+      return NextResponse.json(
+        { error: `Attachments must total under ${Math.round(MAX_TOTAL_ATTACHMENT_BYTES / (1024 * 1024))}MB` },
+        { status: 400 }
+      )
+    }
+    for (const file of files) {
+      attachments.push({
+        name: file.name,
+        mimeType: file.type || "application/octet-stream",
+        data: Buffer.from(await file.arrayBuffer()),
+      })
+    }
+  } else {
+    const jsonBody = await req.json()
+    to = jsonBody.to
+    subject = jsonBody.subject
+    body = jsonBody.body
+    brandId = jsonBody.brandId
+    isHtmlBody = Boolean(jsonBody.isHtmlBody)
+  }
 
   if (!to || !body) {
     return NextResponse.json({ error: "Missing required fields: to, body" }, { status: 400 })
@@ -89,9 +128,27 @@ export async function POST(req: NextRequest) {
 
   try {
     const signatureHtml = await getUserSignatureHtml(userId)
-    const messageBody = signatureHtml
-      ? { contentType: "HTML", content: plainTextBodyToHtml(body) + signatureHtml }
-      : { contentType: "Text", content: body }
+    // The body itself already has real HTML when it came from the rich
+    // compose editor (isHtmlBody) — running it through plainTextBodyToHtml
+    // would double-escape it.
+    let messageBody: { contentType: string; content: string }
+    if (isHtmlBody) {
+      messageBody = { contentType: "HTML", content: body + (signatureHtml ?? "") }
+    } else if (signatureHtml) {
+      messageBody = { contentType: "HTML", content: plainTextBodyToHtml(body) + signatureHtml }
+    } else {
+      messageBody = { contentType: "Text", content: body }
+    }
+
+    // Graph's sendMail takes attachments as a plain JSON array with the
+    // content already base64-encoded — no manual MIME building needed here,
+    // unlike Gmail's raw-message approach.
+    const graphAttachments = attachments.map((att) => ({
+      "@odata.type": "#microsoft.graph.fileAttachment",
+      name: att.name,
+      contentType: att.mimeType,
+      contentBytes: att.data.toString("base64"),
+    }))
 
     const sendRes = await fetch("https://graph.microsoft.com/v1.0/me/sendMail", {
       method: "POST",
@@ -104,6 +161,7 @@ export async function POST(req: NextRequest) {
           subject: replySubject,
           body: messageBody,
           toRecipients: [{ emailAddress: { address: to } }],
+          ...(graphAttachments.length > 0 ? { attachments: graphAttachments } : {}),
         },
         saveToSentItems: true,
       }),

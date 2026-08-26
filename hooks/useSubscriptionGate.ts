@@ -27,15 +27,15 @@ export interface SubscriptionGateState {
    *  when there's no subscription at all. Lets a blocked page say "upgrade
    *  from Basic" instead of implying there's no subscription to begin with. */
   planDisplayName: string | null
+  /** True when the check itself failed (network/DB error) rather than
+   *  resolving to a real answer — see the `error` branch below for why this
+   *  must never be conflated with a confirmed "not subscribed". */
+  checkFailed: boolean
   /**
-   * Re-run the check against the server, past the cache.
-   *
-   * A failed check is deliberately treated as "not subscribed" below, so a
-   * transient failure leaves the page showing its locked state until something
-   * asks again. Callers that know the situation just changed — the Inbox after
-   * a mailbox is connected in another tab — can force a real re-validation
-   * instead of waiting for the next stale read. This re-runs the same check; it
-   * does not skip it.
+   * Re-run the check against the server, past the cache. Callers that know
+   * the situation just changed — the Inbox after a mailbox is connected in
+   * another tab — can force a real re-validation instead of waiting for the
+   * next stale read. This re-runs the same check; it does not skip it.
    */
   refetch: () => Promise<unknown>
 }
@@ -70,13 +70,19 @@ export function useSubscriptionGate(
   const enabled = sessionStatus === "authenticated" && Boolean(session?.user?.id)
   const { data, error, isLoading, refetch } = useCachedFetch(enabled ? url : null, fetcher)
 
-  // A failed check is treated as "not subscribed", exactly as the pages did.
+  // A failed check (DB down, network blip, ...) is NOT the same as a
+  // confirmed "not subscribed" — it's answered `null`, same as still-loading,
+  // so SubscriptionGate renders the real page instead of a false "upgrade
+  // your plan" wall in front of what may well be a paying customer. This
+  // mirrors middleware.ts's own page-level gate, which fails open for the
+  // same reason: blocking someone over an infrastructure blip they had no
+  // part in fixes nothing, since they'd hit the same failure on retry.
   if (error) {
-    return { isSubscribed: false, status: "inactive", isLoading: false, planDisplayName: null, refetch }
+    return { isSubscribed: null, status: undefined, isLoading: false, planDisplayName: null, checkFailed: true, refetch }
   }
 
   if (!data) {
-    return { isSubscribed: null, status: undefined, isLoading, planDisplayName: null, refetch }
+    return { isSubscribed: null, status: undefined, isLoading, planDisplayName: null, checkFailed: false, refetch }
   }
 
   const statusOk = (data.status === "active" || data.status === "trialing") && !data.isExpired
@@ -88,6 +94,7 @@ export function useSubscriptionGate(
     status: data.status || "inactive",
     isLoading: false,
     planDisplayName: data.subscription?.plan?.display_name ?? null,
+    checkFailed: false,
     refetch,
   }
 }

@@ -537,7 +537,7 @@ export default function BillingPage() {
                         {p.eligibleForRefund && !p.refundRequestStatus && (
                           <button
                             onClick={() => { setRefundDialogPayment(p); setRefundReason("") }}
-                            className="text-xs font-medium text-emerald-700 hover:underline"
+                            className="rounded-md border border-emerald-200 px-2 py-1 text-xs font-medium bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:border-emerald-300 transition-colors"
                           >
                             Request refund
                           </button>
