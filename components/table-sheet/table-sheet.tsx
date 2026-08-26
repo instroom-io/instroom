@@ -125,7 +125,7 @@ export default function TableSheet({
   initialRows = [], initialCustomColumns = [],
   onRowsChange, onDeleteRow, onFetchComplete, onRegisterIdSwap,
   onCustomColumnsChange, onImportRows, onBulkApprove, readOnly = false, brandId,
-  subscriptionStatus, onShowTrialModal, canApproveInfluencers = true, onNotify,
+  subscriptionStatus, onShowTrialModal, canApproveInfluencers = true, onNotify, onLookupFailed,
 }: {
   initialRows?: InfluencerRow[]
   initialCustomColumns?: CustomColumn[]
@@ -152,6 +152,20 @@ export default function TableSheet({
    * before, so any other host keeps its current behaviour.
    */
   onNotify?: (type: ToastNotification["type"], message: string) => void
+  /**
+   * A lookup for this row ended WITHOUT data — not found, an API error, or the
+   * API not configured. The counterpart to onFetchComplete, which reports the
+   * success case.
+   *
+   * The host page needs this because those two outcomes must save differently.
+   * A successful lookup is written here, by saveRowToDatabase, with the profile
+   * it just fetched. An unsuccessful one leaves a row the API cannot vouch for,
+   * so it must NOT be written on its own — but the user is invited to fill it in
+   * by hand (the "continue adding the influencer manually" modal), and that
+   * hand-entered row does have to save. This is how the page learns the row has
+   * become the user's to complete, without polling or a timer.
+   */
+  onLookupFailed?: (rowId: string) => void
 }) {
   // Import/Export are a Solo & Team feature — Basic (the free plan) doesn't
   // include them, regardless of subscription status.
@@ -792,7 +806,16 @@ export default function TableSheet({
       // nothing for is not asked again either — that was a credit per commit.
       requestedPairsRef.current.add(pairKey)
       const data = await fetchInfluencerFromAPI(handle, platform)
-      if (!data) { addToast("error", `${clean} not found on ${platform}`); return }
+      // Nothing came back: not found, an API error, or no API host configured
+      // (fetchInfluencerFromAPI has already raised the modal or the toast for
+      // each). Hand the row to the page as manually-completable — see
+      // onLookupFailed. Nothing is saved by this; the row is written only once
+      // the user actually edits it.
+      if (!data) {
+        addToast("error", `${clean} not found on ${platform}`)
+        onLookupFailed?.(rowId)
+        return
+      }
       let enrichedRow: InfluencerRow | null = null
       setRows(prev => {
         if (data.email) {
@@ -829,7 +852,7 @@ export default function TableSheet({
       if (enrichedRow) setTimeout(() => saveRowToDatabase(enrichedRow!), 0)
     } catch (err) { console.error("Auto-fetch failed:", err) }
     finally { setFetchingRows(prev => { const n = new Set(prev); n.delete(rowId); return n }) }
-  }, [onRowsChange, addToast, saveRowToDatabase, fetchInfluencerFromAPI])
+  }, [onRowsChange, addToast, saveRowToDatabase, fetchInfluencerFromAPI, onLookupFailed])
 
   const addRow = () => {
     const r = newEmptyRow(customCols)

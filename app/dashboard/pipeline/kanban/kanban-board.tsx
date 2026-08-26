@@ -1500,9 +1500,9 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
         />
       )}
 
-      {/* Save state lives in the bottom-right corner, out of the way of the
-          board: a subtle "Saving" pill while a status write is actually in
-          flight, and the outcome message in the same spot once it lands. */}
+      {/* A subtle "Saving" pill in the bottom-right corner while a status write
+          is actually in flight, out of the way of the board. The outcome message
+          lands in the top dock below. */}
       <div className="notice-dock">
         {isSaving && (
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-900/90 text-white text-xs font-medium shadow-lg animate-in fade-in">
@@ -1510,9 +1510,18 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
             Saving
           </div>
         )}
+      </div>
+
+      {/* Outcome floating at the top right (`.notice-dock-top`,
+          app/globals.css) — the answer the user was waiting for, where they
+          are actually looking. h-9 is the toolbar Search field's height, so
+          the two match without forcing the message to a fixed width. Slides
+          in from the top to match the edge it now enters from; timing,
+          wording and dismissal are untouched. */}
+      <div className="notice-dock-top">
         {showSuccessMessage && (
-          <div className={`px-4 py-2 rounded-lg shadow-lg text-white animate-in slide-in-from-bottom-2 ${toastType === "error" ? "bg-red-600" : "bg-green-500"}`}>
-            {showSuccessMessage}
+          <div className={`flex h-9 max-w-full items-center rounded-lg px-3 shadow-lg text-white text-sm font-medium whitespace-nowrap animate-in slide-in-from-top-2 ${toastType === "error" ? "bg-red-600" : "bg-[#1FAE5B]"}`}>
+            <span className="truncate">{showSuccessMessage}</span>
           </div>
         )}
       </div>
