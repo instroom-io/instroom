@@ -27,6 +27,34 @@ import bcrypt from "bcryptjs"
  */
 const SEVEN_DAYS_SECONDS = 7 * 24 * 60 * 60
 
+/**
+ * The session cookie's name, defined ONCE and exported.
+ *
+ * It has to be shared because two different pieces of code need to agree on it,
+ * and they were each deriving it from a different variable:
+ *
+ *   this file           writes the cookie, keyed on NODE_ENV
+ *   next-auth/jwt's
+ *   getToken()          reads it, keyed on whether NEXTAUTH_URL starts with
+ *                       "https://" (falling back to !!process.env.VERCEL)
+ *
+ * Those two conditions are not the same condition. A production deployment
+ * whose NEXTAUTH_URL is http:// — a value copied from a local .env, say — writes
+ * "__Secure-next-auth.session-token" and then looks for
+ * "next-auth.session-token". getToken finds nothing, reports no session, and
+ * proxy.ts redirects a perfectly signed-in user to /login. It shows up as
+ * "opening a new tab logs me out", because a new tab is a full document load
+ * and therefore the first thing the proxy actually gates.
+ *
+ * Exported so proxy.ts can pass it to getToken explicitly and the two can no
+ * longer drift. The VALUE is unchanged, so existing sessions keep working.
+ */
+export const SESSION_COOKIE_NAME =
+  process.env.NODE_ENV === "production"
+    ? "__Secure-next-auth.session-token"
+    : "next-auth.session-token"
+
+
 declare module "next-auth" {
   interface Session {
     user: {
@@ -174,10 +202,7 @@ const nextAuthConfig = {
   cookies: {
     sessionToken: {
       // Names match NextAuth's own defaults so existing sessions keep working.
-      name:
-        process.env.NODE_ENV === "production"
-          ? "__Secure-next-auth.session-token"
-          : "next-auth.session-token",
+      name: SESSION_COOKIE_NAME,
       options: {
         // Not readable from JavaScript — the session token is never exposed to
         // XSS, and nothing about the session is mirrored into localStorage.

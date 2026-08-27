@@ -4,6 +4,8 @@ import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import {
   MICROSOFT_TOKEN_URL,
+  isAccessTokenExpired,
+  logMicrosoftRefreshFailure,
   logMissingMicrosoftConfig,
   readMicrosoftOAuthConfig,
 } from "@/lib/microsoft-oauth"
@@ -11,16 +13,25 @@ import { getUserSignatureHtml, plainTextBodyToHtml } from "@/lib/signature"
 import { autoMarkContactedOnSend } from "@/lib/pipeline"
 
 async function getMicrosoftToken(userId: string): Promise<string | null> {
+  // Ordered, and `id` selected — both for the reasons the threads route already
+  // documents, which had not been applied here:
+  //
+  //   orderBy  findFirst with no ordering returns whichever row the database
+  //            hands back. With two Outlook accounts linked, a send could go
+  //            out from a DIFFERENT mailbox than the one the inbox is showing.
+  //            Same [last_selected_at desc, id desc] rule as the threads route
+  //            and lib/gmail.ts, so all three resolve the same account.
+  //
+  //   id       needed below so the refreshed token is written to THIS row only.
   const account = await prisma.account.findFirst({
     where: { userId, provider: "microsoft" },
-    select: { access_token: true, refresh_token: true, expires_at: true },
+    select: { id: true, access_token: true, refresh_token: true, expires_at: true },
+    orderBy: [{ last_selected_at: "desc" }, { id: "desc" }],
   })
 
   if (!account?.access_token) return null
 
-  const isExpired = account.expires_at ? Date.now() > account.expires_at * 1000 : false
-
-  if (isExpired && account.refresh_token) {
+  if (isAccessTokenExpired(account.expires_at) && account.refresh_token) {
     // A refresh with client_id=undefined fails as "unauthorized_client", which
     // looks like a revoked grant. Return null instead so the caller's existing
     // "reconnect required" path runs, and say why in the log.
@@ -41,10 +52,20 @@ async function getMicrosoftToken(userId: string): Promise<string | null> {
       }),
     })
     const data = await res.json()
-    if (!res.ok || !data.access_token) return null
+    if (!res.ok || !data.access_token) {
+      // Why Microsoft refused, instead of a silent null. See
+      // logMicrosoftRefreshFailure — this is what made a restriction on the
+      // user's Microsoft account indistinguishable from a revoked grant.
+      logMicrosoftRefreshFailure("send token refresh", res.status, data)
+      return null
+    }
 
-    await prisma.account.updateMany({
-      where: { userId, provider: "microsoft" },
+    // By id, not by (userId, provider). updateMany wrote the newly refreshed
+    // token onto EVERY linked Outlook account, so all of them then
+    // authenticated as this one. The threads route fixed this; this copy had
+    // not been.
+    await prisma.account.update({
+      where: { id: account.id },
       data: {
         access_token: data.access_token,
         expires_at: data.expires_in
