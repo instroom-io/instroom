@@ -218,13 +218,14 @@ body:has(.sidebar-shell) {
    would also apply to every Sheet in the app, not just this one. */
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   Save/notification dock
+   Saving dock (bottom)
    ─────────────────────────────────────────────────────────────────────────────
-   The saving pill and outcome notification sit bottom-right on the Influencer
-   List, Pipeline, Post Tracker and Brand Partners. Each of those pages can also
-   open a 520px influencer profile panel on that same edge, and that panel is
-   z-index 500 — so the dock (z-50) was painting underneath it. A save made from
-   inside the panel produced a notification nobody could see.
+   The transient "Saving" pill sits bottom-right on the Influencer List,
+   Pipeline, Post Tracker and Brand Partners. The success/error outcome used to
+   sit here too and now renders in `.notice-dock-top` below. Each of those pages
+   can also open a 520px influencer profile panel on that same edge, and that
+   panel is z-index 500 — so the dock (z-50) was painting underneath it. A save
+   made from inside the panel produced feedback nobody could see.
 
    Rather than raising the dock on top of the panel, it steps aside: while a
    panel is open the dock moves to just left of it, which is where there is
@@ -257,6 +258,58 @@ body:has([data-profile-panel]) .notice-dock {
 @media (max-width: 600px) {
   body:has(.pp) .notice-dock,
   body:has([data-profile-panel]) .notice-dock {
+    right: 1rem;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Outcome dock (top right)
+   ─────────────────────────────────────────────────────────────────────────────
+   Success and error messages float at the top-right of the content area; only
+   the transient "Saving" pill stays in the bottom-right dock above. The two
+   carry different weight and so belong in different places: "Saving" is
+   progress the user can ignore, while the outcome is the answer they were
+   waiting for, and at the bottom-right of a tall board it was landing outside
+   where they were looking.
+
+   Offset by --header-height rather than pinned to top: 0. The dashboard header
+   is not sticky, so at scroll-top a message at the true viewport edge would
+   cover the workspace switcher and the breadcrumb. --header-height is set
+   inline on the SidebarProvider in app/dashboard/layout.tsx and inherits down
+   to every page; the fallback covers any other mount point.
+
+   Width is left to the message — only the HEIGHT is matched to the toolbar
+   Search field (h-9, on the toast itself), so a short message stays short
+   instead of being padded out to a fixed box. `flex-end` is what lets the
+   children size to their own content; the max-width is the only cap, and keeps
+   a long message on screen rather than running off the edge.
+
+   The step-aside from the influencer profile panel is kept, and is the reason
+   this is a class and not a Tailwind `fixed top-4 right-4`. That panel is
+   full-height on the right edge at z-index 500, so it covers the top-right
+   corner exactly as it covered the bottom-right one. Same `:has()` rules as
+   the dock above, for the same two panels. */
+.notice-dock-top {
+  position: fixed;
+  top: calc(var(--header-height, 3rem) + 1rem);
+  right: 1rem;
+  z-index: 550;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  max-width: calc(100vw - 2rem);
+  gap: 0.5rem;
+  transition: right 150ms ease;
+}
+
+body:has(.pp) .notice-dock-top,
+body:has([data-profile-panel]) .notice-dock-top {
+  right: calc(520px + 1rem);
+}
+
+@media (max-width: 600px) {
+  body:has(.pp) .notice-dock-top,
+  body:has([data-profile-panel]) .notice-dock-top {
     right: 1rem;
   }
 }

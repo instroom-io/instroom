@@ -82,6 +82,31 @@ function upstreamStatusFrom(detail: string | undefined): number | null {
   return m ? Number(m[1]) : null
 }
 
+/**
+ * The TikTok path reports a nonexistent username WITHOUT a status code in the
+ * body, so `upstreamStatusFrom` cannot see it:
+ *
+ *   502 {"message":"Failed to fetch data from TikTok API."}
+ *
+ * Verified against the live API: charlidamelio, khaby.lame and zippit_nl all
+ * return 200, while two fabricated handles both return exactly this 502 body. So
+ * the endpoint is healthy and this message is how it says "no such user" — but
+ * because no status could be parsed out of it, every mistyped TikTok handle fell
+ * through to the generic 502 branch and raised the "Influencer API unavailable"
+ * modal instead of the ordinary not-found toast.
+ *
+ * The honest limitation: a REAL TikTok outage produces the same body, and one
+ * response cannot distinguish "this user does not exist" from "the provider is
+ * down". Not-found is the right default because it is overwhelmingly the common
+ * case — a typo or the wrong platform picked — and the alternative blames the
+ * API on every typo. The full body is still logged by the caller, so a genuine
+ * outage remains visible in the console rather than being swallowed.
+ */
+function isProviderMissTold(detail: string | undefined): boolean {
+  if (!detail) return false
+  return /failed to fetch data from .+ api/i.test(detail)
+}
+
 export function describeLookupFailure(
   status: number,
   platform: string,
@@ -117,6 +142,12 @@ export function describeLookupFailure(
     // Treated exactly like a direct 404 so the existing not-found toast is used
     // instead of an "API is broken" modal the user can do nothing about.
     if (upstream === 404) {
+      return { notFound: true, reason: "", retryable: false }
+    }
+
+    // Same conclusion, reached from a body with no status code in it at all —
+    // how the TikTok path reports a nonexistent handle. See isProviderMissTold.
+    if (upstream === null && isProviderMissTold(detail)) {
       return { notFound: true, reason: "", retryable: false }
     }
 
@@ -266,11 +297,37 @@ export function handleApprovalChange(
 
 // ── Row factory ───────────────────────────────────────────────────────────────
 
+/**
+ * A blank row.
+ *
+ * `platform` is deliberately EMPTY rather than "instagram". A default platform
+ * meant a handle typed into a fresh row was immediately a complete
+ * handle+platform pair, so the lookup fired — and saved — against Instagram
+ * whether or not that was the platform the user meant. Someone adding a TikTok
+ * creator got an Instagram lookup on the first commit, and switching the
+ * platform afterwards could not undo the row that had already been written.
+ *
+ * With no platform, every gate downstream holds on its own and no new gate was
+ * needed:
+ *
+ *   scheduleAutoFetch   returns early unless platform is instagram or tiktok,
+ *                       so no request is scheduled and no debounce armed
+ *   rowHasHandle        (manage-influencers/page.tsx) requires a truthy
+ *                       platform, so no create, update or fallback-save path
+ *                       runs either
+ *
+ * So the row sits in the grid, fully editable, until the user picks a platform —
+ * and the lookup then runs against the platform they actually chose.
+ *
+ * NOTE for CSV import: parseCSV builds its rows on top of this one and used to
+ * inherit "instagram" as its fallback for a file with no platform column. That
+ * fallback is now explicit there instead, so import behaviour is unchanged.
+ */
 export function newEmptyRow(customCols: CustomColumn[]): InfluencerRow {
   const custom: Record<string, string> = {}
   customCols.forEach((c) => { custom[c.field_key] = c.field_type === "boolean" ? "No" : "" })
   return {
-    id: `temp-${crypto.randomUUID()}`, handle: "", platform: "instagram", full_name: "", email: "",
+    id: `temp-${crypto.randomUUID()}`, handle: "", platform: "", full_name: "", email: "",
     follower_count: "", engagement_rate: "", niche: "", contact_status: "not_contacted",
     stage: "1", agreed_rate: "", notes: "", custom, gender: "", location: "",
     social_link: "", first_name: "", contact_info: "", approval_status: "Pending",
@@ -426,8 +483,14 @@ export function importFromCSV(
     if (!row.handle && dmHandle) row.handle = cleanHandle(dmHandle)
     else row.handle = cleanHandle(row.handle)
 
-    if (row.platform) {
-      const pl = row.platform.toLowerCase()
+    // Import has no interactive "pick a platform" step — the file either states
+    // one or it does not — so an absent platform still falls back to Instagram,
+    // exactly as it did when newEmptyRow supplied that default. Without this the
+    // change to newEmptyRow would leave every row of a platform-less CSV with an
+    // empty platform, which rowHasHandle rejects, and the whole import would
+    // silently never save.
+    {
+      const pl = (row.platform || "instagram").toLowerCase()
       const map: Record<string, string> = {
         instagram: "instagram", tiktok: "tiktok", youtube: "youtube",
         "x (twitter)": "twitter", twitter: "twitter", facebook: "other", other: "other",

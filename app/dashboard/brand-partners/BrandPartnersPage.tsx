@@ -1689,10 +1689,10 @@ export default function BrandPartnersPage({ brandId }: Props) {
         .kpi-v.g { color: #1FAE5B; }
       `}</style>
 
-      {/* Save status — the same dock the Influencer List, Pipeline and Post
-          Tracker use. `.notice-dock` (app/globals.css) also steps aside when
-          the influencer profile panel is open, so a save made from inside it
-          is still readable. */}
+      {/* The saving pill only — the same dock the Influencer List, Pipeline and
+          Post Tracker use. `.notice-dock` (app/globals.css) also steps aside
+          when the influencer profile panel is open, so progress from a save made
+          inside it is still readable. */}
       <div className="notice-dock">
         {isSaving && (
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-900/90 text-white text-xs font-medium shadow-lg animate-in fade-in">
@@ -1700,9 +1700,18 @@ export default function BrandPartnersPage({ brandId }: Props) {
             Saving
           </div>
         )}
+      </div>
+
+      {/* Outcome floating at the top right (`.notice-dock-top`,
+          app/globals.css) — the answer the user was waiting for, where they
+          are actually looking. h-9 is the toolbar Search field's height, so
+          the two match without forcing the message to a fixed width. Slides
+          in from the top to match the edge it now enters from; timing,
+          wording and dismissal are untouched. */}
+      <div className="notice-dock-top">
         {notice && (
-          <div className={`px-4 py-2 rounded-lg shadow-lg text-white animate-in slide-in-from-bottom-2 ${notice.type === "error" ? "bg-red-600" : "bg-green-500"}`}>
-            {notice.message}
+          <div className={`flex h-9 max-w-full items-center rounded-lg px-3 shadow-lg text-white text-sm font-medium whitespace-nowrap animate-in slide-in-from-top-2 ${notice.type === "error" ? "bg-red-600" : "bg-[#1FAE5B]"}`}>
+            <span className="truncate">{notice.message}</span>
           </div>
         )}
       </div>

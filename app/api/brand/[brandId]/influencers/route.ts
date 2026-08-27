@@ -82,55 +82,58 @@ export async function GET(
             }
           : {}),
       },
-      include: { attribution: true },
+      // The influencer is read through the relation rather than by a second
+      // findMany over the collected ids. Same tight field list as before — only
+      // what the response below reads — but one fewer database round trip, and
+      // so one fewer connection acquisition per request. That matters here: the
+      // MySQL user has a max_user_connections ceiling, and this is the heaviest
+      // route in the app, so it is the one that trips the ceiling first and
+      // surfaces as "Failed to load influencers".
+      //
+      // A missing influencer still comes back as null and is still filtered out
+      // below — the tables are MyISAM, so there is no foreign key to guarantee
+      // the row exists.
+      include: {
+        attribution: true,
+        influencer: {
+          select: {
+            id: true,
+            handle: true,
+            platform: true,
+            full_name: true,
+            email: true,
+            gender: true,
+            niche: true,
+            location: true,
+            bio: true,
+            profile_image_url: true,
+            social_link: true,
+            follower_count: true,
+            engagement_rate: true,
+            avg_likes: true,
+            avg_comments: true,
+            avg_views: true,
+            created_at: true,
+            updated_at: true,
+          },
+        },
+      },
       orderBy: { created_at: "desc" },
     })
 
-    const influencerIds = [...new Set(brandInfluencers.map((bi) => bi.influencer_id))]
-
-    // Neither query depends on the other's result — both only depend on data
-    // already fetched above — so issue them concurrently instead of awaiting
-    // the partner lookup before starting the influencer lookup.
-    const [partnerRows, influencers] = await Promise.all([
-      unpartneredOnly
-        ? prisma.brandPartner.findMany({
-            where: { brand_id: brandId },
-            select: { brand_influencer_id: true },
-          })
-        : Promise.resolve([]),
-      // Fetch influencers so orphaned brand_influencer rows can be skipped safely.
-      // Tight select: only the fields the response below actually reads
-      // (skips e.g. verification_status/is_suspended, which aren't used here).
-      prisma.influencer.findMany({
-        where: { id: { in: influencerIds } },
-        select: {
-          id: true,
-          handle: true,
-          platform: true,
-          full_name: true,
-          email: true,
-          gender: true,
-          niche: true,
-          location: true,
-          bio: true,
-          profile_image_url: true,
-          social_link: true,
-          follower_count: true,
-          engagement_rate: true,
-          avg_likes: true,
-          avg_comments: true,
-          avg_views: true,
-          created_at: true,
-          updated_at: true,
-        },
-      }),
-    ])
+    // Only asked for when the caller wants it; previously this sat in a
+    // Promise.all whose other branch was an already-resolved literal.
+    const partnerRows = unpartneredOnly
+      ? await prisma.brandPartner.findMany({
+          where: { brand_id: brandId },
+          select: { brand_influencer_id: true },
+        })
+      : []
 
     const partnerIds = new Set(partnerRows.map((partner) => partner.brand_influencer_id))
-    const influencerMap = new Map(influencers.map((i) => [i.id, i]))
 
     const filteredBrandInfluencers = brandInfluencers.filter((bi) => {
-      const inf = influencerMap.get(bi.influencer_id)
+      const inf = bi.influencer
       if (!inf) return false
       if (unpartneredOnly && partnerIds.has(bi.id)) return false
 
@@ -180,9 +183,9 @@ export async function GET(
     }
 
     const combined = filteredBrandInfluencers
-      .filter((bi) => influencerMap.has(bi.influencer_id))
+      .filter((bi) => bi.influencer !== null)
       .map((bi) => {
-        const inf = influencerMap.get(bi.influencer_id)!
+        const inf = bi.influencer!
         const addedLog = addedByMap.get(bi.id)
         const addedUser = addedLog ? userMap.get(addedLog.user_id) : null
 
@@ -257,12 +260,52 @@ export async function GET(
 
     return NextResponse.json({ influencers: combined }, { status: 200 })
   } catch (error) {
-    console.error(
-      "GET /api/brand/[brandId]/influencers:",
-      error instanceof Error ? error.message : String(error)
-    )
+    const message = error instanceof Error ? error.message : String(error)
+    console.error("GET /api/brand/[brandId]/influencers:", message)
+
+    // A database that is out of connections is a CAPACITY problem, not a broken
+    // request, and it clears on its own. Reporting it as 500 made the page show
+    // a dead-end "Failed to load influencers" for something a retry a moment
+    // later would have served.
+    //
+    // Two shapes reach here, from two different limits:
+    //   MySQL 1203  "User ... already has more than 'max_user_connections'
+    //               active connections" — the server-side ceiling on the DB
+    //               user, hit when a NEW connection is opened. Existing pooled
+    //               connections keep working, which is why this comes and goes.
+    //   Prisma P2024 pool timeout — DATABASE_URL's own connection_limit.
+    //
+    // 503 with Retry-After is what the client needs to tell "try again" from
+    // "this will never work"; the page renders a Retry button on this.
+    if (isDatabaseCapacityError(message)) {
+      return NextResponse.json(
+        {
+          error: "The database is temporarily out of connections. Please retry in a moment.",
+          retryable: true,
+        },
+        { status: 503, headers: { "Retry-After": "5" } }
+      )
+    }
+
     return NextResponse.json({ error: "Failed to fetch influencers" }, { status: 500 })
   }
+}
+
+/**
+ * Is this failure the database refusing another connection, rather than a fault
+ * in the request?
+ *
+ * Matched on the message because neither shape arrives as a usable code: the
+ * MySQL 1203 comes through as a PrismaClientInitializationError whose `errorCode`
+ * is undefined (confirmed against this database), so the text is the only signal.
+ */
+function isDatabaseCapacityError(message: string): boolean {
+  return (
+    message.includes("max_user_connections") ||
+    message.includes("Too many database connections") ||
+    message.includes("P2024") ||
+    message.includes("Timed out fetching a new connection")
+  )
 }
 
 export async function POST(

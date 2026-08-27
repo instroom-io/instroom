@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, Suspense } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { useSession } from "next-auth/react"
 import { ChevronDown, Search, Plus, Loader2, CheckCircle2, AlertCircle, X, Users, UserPlus, Check } from "lucide-react"
-import { INSTROOM_PROFILE_ENDPOINTS } from "@/components/table-sheet/constants"
+import { INSTROOM_PROFILE_ENDPOINTS, isInstroomApiConfigured } from "@/components/table-sheet/constants"
 
 // ─── Skeleton preview config (static, non-functional) ───────────────────────
 const DISCOVERY_FILTER_LABELS = ["Platform", "Niche", "Location", "Audience size", "Engagement rate", "Sort"]
@@ -338,6 +338,20 @@ function InfluencerDiscoveryContent() {
     // Only Instagram & TikTok have endpoints
     if (platformKey !== "instagram" && platformKey !== "tiktok") {
       setQuickError(`${selectedPlatform} lookup is not supported yet. Only Instagram and TikTok are available.`)
+      setQuickLoading(false)
+      return
+    }
+
+    // No API host configured — say so instead of sending the request. The
+    // endpoint builders produce a RELATIVE path when the base URL is blank
+    // ("/v2/name/instagram"), which the browser resolves against this app and
+    // the Next router answers with its 404 page. That surfaced as
+    // "API error (404). Try again." — indistinguishable from a username that
+    // does not exist, and the most misleading symptom of a missing variable.
+    if (!isInstroomApiConfigured()) {
+      setQuickError(
+        "Influencer API is not configured, so no lookup was sent. Set INSTROOM_API_BASE_URL for this environment and redeploy."
+      )
       setQuickLoading(false)
       return
     }

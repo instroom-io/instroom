@@ -215,7 +215,7 @@ function InfluencersContent() {
   const rawBrandId = searchParams.get("brandId")
   const brandId = rawBrandId?.trim() || null
 
-  const { rows, customColumns, isLoading, error, setCustomColumns } =
+  const { rows, customColumns, isLoading, error, refetch, setCustomColumns } =
     useInfluencerData(brandId)
   const { canManageInfluencers, canApproveInfluencers } = useBrandCapabilities(brandId)
 
@@ -402,8 +402,8 @@ function InfluencersContent() {
   /**
    * The one notification on this page.
    *
-   * `reportSave` already owns the green bottom-right toast for every save path.
-   * The table had a SECOND system of its own — a stacking top-right container
+   * `reportSave` already owns the green toast for every save path. The table
+   * had a SECOND system of its own — a stacking top-right container
    * with pale backgrounds and its own icons (components/table-sheet/toast.tsx) —
    * so Approve, Import and fetch messages looked nothing like "… moved to For
    * Outreach". This routes those through the same single `notice`, which
@@ -439,8 +439,16 @@ function InfluencersContent() {
   // ── tempToReal: maps temp row ID → real DB ID after createRow resolves ────
   const tempToReal = useRef<Map<string, string>>(new Map())
 
-  // ── fetchFallbackTimers: safety net if Instroom API never calls back ───────
-  const fetchFallbackTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  // ── manualRows: rows the API could not fill in, so the user is filling them ─
+  // An Instagram/TikTok row is normally written by TableSheet once its lookup
+  // succeeds. When the lookup comes back with nothing, that never happens — and
+  // the row would be unsaveable no matter what the user typed into it. Its id
+  // lands here instead (via onLookupFailed), which tells handleRowsChange to
+  // treat it like any manually entered row from here on.
+  //
+  // Membership alone saves nothing: the create still waits for a real edit, so a
+  // failed lookup the user walks away from is not persisted.
+  const manualRows = useRef<Set<string>>(new Set())
 
   const idSwapCallback = useRef<((tempId: string, realId: string) => void) | null>(null)
 
@@ -599,13 +607,6 @@ function InfluencersContent() {
       if (savedHandles.current.has(key)) return null
       savedHandles.current.add(key)
 
-      // Cancel fallback timer — we're creating now
-      const fallback = fetchFallbackTimers.current.get(row.id)
-      if (fallback) {
-        clearTimeout(fallback)
-        fetchFallbackTimers.current.delete(row.id)
-      }
-
       try {
         reportSave("start")
         const res = await fetch("/api/influencers/create", {
@@ -685,8 +686,11 @@ function InfluencersContent() {
   //   B) Row is new + createRow already resolved → tempToReal has realId → PUT
   //   C) Row is new + createRow hasn't been called yet → createRow(enrichedRow)
   //   D) createRow is in-flight (savedHandles set, tempToReal not yet) → do
-  //      nothing; createRow will land with the pre-enrichment data shortly.
-  //      The enriched fields will be saved on the next user edit via scheduleUpdate.
+  //      nothing; the POST already on its way carries this same enriched row.
+  //      Reachable only when two completions land for one row before the first
+  //      POST resolves — createRow is no longer called from anywhere that runs
+  //      before a lookup succeeds, so there is no pre-enrichment POST to
+  //      out-race any more.
   const handleFetchComplete = useCallback(
     async (row: InfluencerRow) => {
       if (!brandId || !rowHasHandle(row)) return
@@ -721,10 +725,9 @@ function InfluencersContent() {
         return
       }
 
-      // Case D — createRow is in-flight; nothing to do right now.
-      // The POST is already on its way with the pre-enrichment data.
-      // Once it resolves the row will have a real ID and any subsequent
-      // user edit will trigger scheduleUpdate with the latest data.
+      // Case D — createRow is in-flight; nothing to do right now. The POST
+      // already carries this enriched row, and once it resolves the row has a
+      // real ID, so any later edit goes through scheduleUpdate.
     },
     [brandId, createRow]
   )
@@ -772,12 +775,34 @@ function InfluencersContent() {
     [brandId, trackSave, rows, notify]
   )
 
+  // ── handleLookupFailed ────────────────────────────────────────────────────
+  // TableSheet reports a lookup that returned no data. The row stays exactly as
+  // it is and nothing is saved here; it simply becomes eligible to save the way
+  // a YouTube or Twitter row already is, on the user's next edit.
+  const handleLookupFailed = useCallback((rowId: string) => {
+    manualRows.current.add(rowId)
+  }, [])
+
   // ── handleRowsChange ──────────────────────────────────────────────────────
   // Called on every table edit (keystroke, dropdown change, etc.)
   //
-  // For Instagram/TikTok rows we DO NOT create here — we wait for
-  // handleFetchComplete (which carries enriched stats). A 5-second fallback
-  // timer ensures we save even if the Instroom API never responds.
+  // For Instagram/TikTok rows this creates NOTHING. The row is written by
+  // TableSheet's own saveRowToDatabase, which runs only after
+  // autoFetchInfluencer has a profile in hand, and reaches this file as
+  // handleFetchComplete.
+  //
+  // There used to be a 5-second fallback timer here that called createRow if no
+  // enriched row had arrived by then. It was a safety net for "the API never
+  // answered", but it could not tell that case apart from the two ordinary ones
+  // — the lookup is still running, or it came back not-found — so it saved in
+  // all three. Typing a handle and picking a platform was enough to persist a
+  // row whose lookup had failed or had not finished, and the save indicator
+  // appeared while the fetch was still in flight. Waiting for a successful
+  // lookup is now the only path.
+  //
+  // The trade-off, stated plainly: if a lookup neither succeeds nor fails, the
+  // row stays unsaved and is lost on refresh. That is the intended behaviour
+  // here — an influencer with no verified profile data is not written.
   const handleRowsChange = useCallback(
     (updatedRows: InfluencerRow[]) => {
       if (!readyToSave.current) return
@@ -805,19 +830,17 @@ function InfluencersContent() {
           return
         }
 
-        // Instagram / TikTok — reset the fallback timer on each keystroke.
-        // handleFetchComplete should fire and cancel this before it triggers.
-        const existing = fetchFallbackTimers.current.get(row.id)
-        if (existing) clearTimeout(existing)
+        // Instagram / TikTok — the lookup owns the create, EXCEPT for a row the
+        // lookup already gave up on. That one is the user's to complete, so an
+        // edit to it saves like any manual row.
+        if (manualRows.current.has(row.id)) {
+          createRow(row)
+          return
+        }
 
-        const timer = setTimeout(() => {
-          fetchFallbackTimers.current.delete(row.id)
-          if (!savedHandles.current.has(key) && !dbIds.current.has(row.id)) {
-            createRow(row)
-          }
-        }, 5000)
-
-        fetchFallbackTimers.current.set(row.id, timer)
+        // Otherwise nothing: the lookup has not run, is still running, or is
+        // about to write this row itself through handleFetchComplete. Editing
+        // the handle or switching the platform must not write anything.
       })
     },
     [scheduleUpdate, createRow]
@@ -862,9 +885,9 @@ function InfluencersContent() {
     async (rowId: string) => {
       if (!brandId) return
 
-      // Cancel all pending timers for this row
-      const fallback = fetchFallbackTimers.current.get(rowId)
-      if (fallback) { clearTimeout(fallback); fetchFallbackTimers.current.delete(rowId) }
+      manualRows.current.delete(rowId)
+
+      // Cancel any pending update for this row
       const update = updateTimers.current.get(rowId)
       if (update) { clearTimeout(update); updateTimers.current.delete(rowId) }
 
@@ -1014,11 +1037,21 @@ function InfluencersContent() {
       )
     }
 
+    // A Retry button, matching the Post Tracker's error state. Without it this
+    // screen was a dead end for a failure that is usually transient — the
+    // database refusing another connection, which the route now reports as a
+    // retryable 503 — and the only way out was a full page reload.
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
           <p className="text-red-600 mb-2 font-medium">Failed to load influencers</p>
           <p className="text-sm text-gray-500">{error}</p>
+          <button
+            onClick={refetch}
+            className="mt-4 text-[13px] px-4 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 transition"
+          >
+            Retry
+          </button>
         </div>
       </div>
     )
@@ -1046,13 +1079,14 @@ function InfluencersContent() {
           onShowTrialModal={() => setShowTrialLimitModal(true)}
           // Every message the table raises lands in this page's single toast.
           onNotify={notify}
+          onLookupFailed={handleLookupFailed}
           readOnly={!canManageInfluencers}
           canApproveInfluencers={canApproveInfluencers}
         />
       )}
 
-      {/* Save status — bottom-right, identical to the Pipeline board and Post
-          Tracker: the saving pill, then the outcome notification below it. */}
+      {/* The saving pill only — bottom-right, identical to the Pipeline board
+          and Post Tracker. The outcome moved to the top dock below. */}
       <div className="notice-dock">
         {isSaving && (
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-900/90 text-white text-xs font-medium shadow-lg animate-in fade-in">
@@ -1060,9 +1094,18 @@ function InfluencersContent() {
             Saving
           </div>
         )}
+      </div>
+
+      {/* Outcome floating at the top right (`.notice-dock-top`,
+          app/globals.css) — the answer the user was waiting for, where they
+          are actually looking. h-9 is the toolbar Search field's height, so
+          the two match without forcing the message to a fixed width. Slides
+          in from the top to match the edge it now enters from; timing,
+          wording and dismissal are untouched. */}
+      <div className="notice-dock-top">
         {notice && (
-          <div className={`px-4 py-2 rounded-lg shadow-lg text-white animate-in slide-in-from-bottom-2 ${notice.type === "error" ? "bg-red-600" : "bg-green-500"}`}>
-            {notice.message}
+          <div className={`flex h-9 max-w-full items-center rounded-lg px-3 shadow-lg text-white text-sm font-medium whitespace-nowrap animate-in slide-in-from-top-2 ${notice.type === "error" ? "bg-red-600" : "bg-[#1FAE5B]"}`}>
+            <span className="truncate">{notice.message}</span>
           </div>
         )}
       </div>

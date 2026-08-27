@@ -574,7 +574,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
    * panel, so every message it raised was anchored to the panel rather than to
    * the dashboard — it sat over the panel's own content and read as part of it.
    * Handing the message up means it lands in the one dock every other module
-   * uses, which also steps aside from this panel (`.notice-dock` in
+   * uses, which also steps aside from this panel (`.notice-dock-top` in
    * app/globals.css).
    */
   onNotify: (msg: string, type?: "success" | "error") => void
@@ -1629,8 +1629,8 @@ function PostTrackerContent() {
   return (
     <SubscriptionGate isSubscribed={isSubscribed} status={subscriptionStatus} featureName="Post Tracker">
       <div className="flex flex-col gap-4 p-6">
-      {/* Save state and outcome live in the bottom-right corner, clear of the
-          board columns and the bulk action bar — same pattern as the Pipeline. */}
+      {/* Save state lives in the bottom-right corner, clear of the board columns
+          and the bulk action bar — same pattern as the Pipeline. */}
       <div className="notice-dock">
         {isSaving && (
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-900/90 text-white text-xs font-medium shadow-lg animate-in fade-in">
@@ -1638,9 +1638,18 @@ function PostTrackerContent() {
             Saving
           </div>
         )}
+      </div>
+
+      {/* Outcome floating at the top right (`.notice-dock-top`,
+          app/globals.css) — the answer the user was waiting for, where they
+          are actually looking. h-9 is the toolbar Search field's height, so
+          the two match without forcing the message to a fixed width. Slides
+          in from the top to match the edge it now enters from; timing,
+          wording and dismissal are untouched. */}
+      <div className="notice-dock-top">
         {toastMsg && (
-          <div className={`px-4 py-2 rounded-lg shadow-lg text-white animate-in slide-in-from-bottom-2 ${toastType === "error" ? "bg-red-600" : "bg-green-500"}`}>
-            {toastMsg}
+          <div className={`flex h-9 max-w-full items-center rounded-lg px-3 shadow-lg text-white text-sm font-medium whitespace-nowrap animate-in slide-in-from-top-2 ${toastType === "error" ? "bg-red-600" : "bg-[#1FAE5B]"}`}>
+            <span className="truncate">{toastMsg}</span>
           </div>
         )}
       </div>
