@@ -3,11 +3,9 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import {
-  MICROSOFT_TOKEN_URL,
-  isAccessTokenExpired,
-  logMicrosoftRefreshFailure,
-  logMissingMicrosoftConfig,
-  readMicrosoftOAuthConfig,
+  forceRefreshOutlookAccessToken,
+  getOutlookAccessToken,
+  outlookTokenErrorMessage,
 } from "@/lib/microsoft-oauth"
 import { getUserSignatureHtml, plainTextBodyToHtml } from "@/lib/signature"
 import { autoMarkContactedOnSend } from "@/lib/pipeline"
@@ -15,73 +13,6 @@ import { autoMarkContactedOnSend } from "@/lib/pipeline"
 // Same platform-driven cap as the Gmail send route (Vercel Serverless
 // Functions' request body limit, well under either provider's own ceiling).
 const MAX_TOTAL_ATTACHMENT_BYTES = 4 * 1024 * 1024
-
-async function getMicrosoftToken(userId: string): Promise<string | null> {
-  // Ordered, and `id` selected — both for the reasons the threads route already
-  // documents, which had not been applied here:
-  //
-  //   orderBy  findFirst with no ordering returns whichever row the database
-  //            hands back. With two Outlook accounts linked, a send could go
-  //            out from a DIFFERENT mailbox than the one the inbox is showing.
-  //            Same [last_selected_at desc, id desc] rule as the threads route
-  //            and lib/gmail.ts, so all three resolve the same account.
-  //
-  //   id       needed below so the refreshed token is written to THIS row only.
-  const account = await prisma.account.findFirst({
-    where: { userId, provider: "microsoft" },
-    select: { id: true, access_token: true, refresh_token: true, expires_at: true },
-    orderBy: [{ last_selected_at: "desc" }, { id: "desc" }],
-  })
-
-  if (!account?.access_token) return null
-
-  if (isAccessTokenExpired(account.expires_at) && account.refresh_token) {
-    // A refresh with client_id=undefined fails as "unauthorized_client", which
-    // looks like a revoked grant. Return null instead so the caller's existing
-    // "reconnect required" path runs, and say why in the log.
-    const configResult = readMicrosoftOAuthConfig()
-    if (!configResult.ok) {
-      logMissingMicrosoftConfig("send token refresh", configResult.missing)
-      return null
-    }
-
-    const res = await fetch(MICROSOFT_TOKEN_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: configResult.config.clientId,
-        client_secret: configResult.config.clientSecret,
-        grant_type: "refresh_token",
-        refresh_token: account.refresh_token,
-      }),
-    })
-    const data = await res.json()
-    if (!res.ok || !data.access_token) {
-      // Why Microsoft refused, instead of a silent null. See
-      // logMicrosoftRefreshFailure — this is what made a restriction on the
-      // user's Microsoft account indistinguishable from a revoked grant.
-      logMicrosoftRefreshFailure("send token refresh", res.status, data)
-      return null
-    }
-
-    // By id, not by (userId, provider). updateMany wrote the newly refreshed
-    // token onto EVERY linked Outlook account, so all of them then
-    // authenticated as this one. The threads route fixed this; this copy had
-    // not been.
-    await prisma.account.update({
-      where: { id: account.id },
-      data: {
-        access_token: data.access_token,
-        expires_at: data.expires_in
-          ? Math.floor(Date.now() / 1000) + data.expires_in
-          : null,
-      },
-    })
-    return data.access_token
-  }
-
-  return account.access_token
-}
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions) as any
@@ -95,14 +26,26 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "No user session" }, { status: 401 })
   }
 
-  const accessToken = await getMicrosoftToken(userId)
+  // Same shared token path as /api/outlook/threads, so both routes resolve the
+  // same mailbox and refresh it the same way. This route used to keep its own
+  // copy, which had not received the ordering or update-by-id fixes.
+  // Read before the token is resolved so a reply always goes out from the
+  // mailbox the inbox was showing, not from whichever row is newest by
+  // last_selected_at at the moment the request lands.
+  const requestedAccountId =
+    req.nextUrl.searchParams.get("accountId") || null
 
-  if (!accessToken) {
+  const tokenResult = await getOutlookAccessToken(userId, "send", requestedAccountId)
+
+  if (!tokenResult.ok) {
     return NextResponse.json(
-      { error: "No Outlook account linked. Please connect your Outlook account.", reauth: true },
-      { status: 403 }
+      { error: outlookTokenErrorMessage(tokenResult.reason), reauth: true },
+      { status: tokenResult.reason === "not_configured" ? 503 : 403 }
     )
   }
+
+  let accessToken = tokenResult.accessToken
+  const accountId = tokenResult.accountId
 
   let to: string, subject: string | undefined, body: string, brandId: string | undefined
   let isHtmlBody = false
@@ -171,26 +114,56 @@ export async function POST(req: NextRequest) {
       contentBytes: att.data.toString("base64"),
     }))
 
-    const sendRes = await fetch("https://graph.microsoft.com/v1.0/me/sendMail", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    const graphBody = JSON.stringify({
+      message: {
+        subject: replySubject,
+        body: messageBody,
+        toRecipients: [{ emailAddress: { address: to } }],
+        ...(graphAttachments.length > 0 ? { attachments: graphAttachments } : {}),
       },
-      body: JSON.stringify({
-        message: {
-          subject: replySubject,
-          body: messageBody,
-          toRecipients: [{ emailAddress: { address: to } }],
-          ...(graphAttachments.length > 0 ? { attachments: graphAttachments } : {}),
-        },
-        saveToSentItems: true,
-      }),
+      saveToSentItems: true,
     })
 
+    const sendMail = (token: string) =>
+      fetch("https://graph.microsoft.com/v1.0/me/sendMail", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: graphBody,
+      })
+
+    let sendRes = await sendMail(accessToken)
+
+    // One forced refresh and retry when Graph rejects a token we believed was
+    // valid — the same recovery the threads route does. Safe to retry: a 401 is
+    // refused at the authentication layer, so no mail was sent.
+    if (sendRes.status === 401) {
+      console.warn(
+        `[outlook] send: Graph returned 401 for a token still marked valid (account ${accountId}) — forcing a refresh and retrying once.`
+      )
+      const retried = await forceRefreshOutlookAccessToken(userId, accountId, "send")
+      if (retried) {
+        accessToken = retried
+        sendRes = await sendMail(retried)
+      }
+    }
+
     if (!sendRes.ok) {
-      const err = await sendRes.json()
-      throw new Error(err?.error?.message || "Failed to send email")
+      const err = await sendRes.json().catch(() => ({}))
+      const message: string = err?.error?.message || "Failed to send email"
+      console.error(
+        `[outlook] send: Graph /me/sendMail failed (HTTP ${sendRes.status}) — ` +
+          `${err?.error?.code ?? "unknown_code"}: ${String(message).slice(0, 300)}`
+      )
+      if (sendRes.status === 401 || sendRes.status === 403) {
+        return NextResponse.json(
+          { error: "Outlook authentication failed. Please reconnect your Outlook account.", reauth: true },
+          { status: 403 }
+        )
+      }
+      throw new Error(message)
     }
 
     try {
@@ -201,7 +174,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true })
   } catch (err: any) {
-    console.error("Outlook send error:", err)
+    console.error("[outlook] send: unhandled failure —", err?.message || err)
     return NextResponse.json({ error: err.message || "Failed to send email" }, { status: 500 })
   }
 }

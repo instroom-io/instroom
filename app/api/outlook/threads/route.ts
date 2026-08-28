@@ -3,11 +3,9 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import {
-  MICROSOFT_TOKEN_URL,
-  isAccessTokenExpired,
-  logMicrosoftRefreshFailure,
-  logMissingMicrosoftConfig,
-  readMicrosoftOAuthConfig,
+  forceRefreshOutlookAccessToken,
+  getOutlookAccessToken,
+  outlookTokenErrorMessage,
 } from "@/lib/microsoft-oauth"
 import { autoAdvanceRepliedToInConversation } from "@/lib/pipeline"
 
@@ -22,57 +20,13 @@ function stripHtml(html: string): string {
     .trim()
 }
 
-async function refreshMicrosoftToken(refresh_token: string, accountId: string): Promise<string | null> {
-  try {
-    // A refresh with client_id=undefined fails as "unauthorized_client", which
-    // looks like a revoked grant. Return null instead so the caller's existing
-    // "reconnect required" path runs, and say why in the log.
-    const configResult = readMicrosoftOAuthConfig()
-    if (!configResult.ok) {
-      logMissingMicrosoftConfig("threads token refresh", configResult.missing)
-      return null
-    }
-
-    const res = await fetch(MICROSOFT_TOKEN_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: configResult.config.clientId,
-        client_secret: configResult.config.clientSecret,
-        grant_type: "refresh_token",
-        refresh_token,
-      }),
-    })
-    const data = await res.json()
-    if (!res.ok || !data.access_token) {
-      // Why Microsoft refused, rather than a silent null that the caller turns
-      // into a generic "please reconnect". See logMicrosoftRefreshFailure.
-      logMicrosoftRefreshFailure("threads token refresh", res.status, data)
-      return null
-    }
-
-    // By id, not by (userId, provider): a user can have several Outlook
-    // accounts linked, and updateMany wrote the newly refreshed token onto all
-    // of them — every other account then authenticated as this one.
-    await prisma.account.update({
-      where: { id: accountId },
-      data: {
-        access_token: data.access_token,
-        expires_at: data.expires_in
-          ? Math.floor(Date.now() / 1000) + data.expires_in
-          : null,
-      },
-    })
-    return data.access_token
-  } catch {
-    return null
-  }
-}
-
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions) as any
   const { searchParams } = new URL(req.url)
   const brandId = searchParams.get("brandId")
+  // Which connected Outlook mailbox to read. Sent by the inbox account
+  // switcher; absent for older clients, which keeps the previous behaviour.
+  const requestedAccountId = searchParams.get("accountId")
 
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
@@ -83,35 +37,27 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "No user session", reauth: true }, { status: 401 })
   }
 
-  // Ordered, not arbitrary: with more than one Outlook account linked,
-  // findFirst without an orderBy returned whichever row the database handed
-  // back, so the inbox could show a different mailbox than the one the user
-  // just picked. Same ordering as lib/gmail.ts's resolver.
-  const account = await prisma.account.findFirst({
-    where: { userId, provider: "microsoft" },
-    select: { id: true, email: true, access_token: true, refresh_token: true, expires_at: true },
-    orderBy: [{ last_selected_at: "desc" }, { id: "desc" }],
-  })
+  // One shared token path, in lib/microsoft-oauth.ts. This route and
+  // /api/outlook/send each used to resolve and refresh the account themselves;
+  // the two copies drifted, so a send could go out from a different mailbox
+  // than the inbox was displaying.
+  const tokenResult = await getOutlookAccessToken(userId, "threads", requestedAccountId)
 
-  if (!account?.access_token) {
+  if (!tokenResult.ok) {
     return NextResponse.json(
-      { error: "No Outlook account linked. Please connect your Outlook account.", reauth: true },
-      { status: 403 }
+      { error: outlookTokenErrorMessage(tokenResult.reason), reauth: true },
+      // A misconfigured deployment is not the user's session being expired, so
+      // it must not present as one — reconnecting cannot fix it.
+      { status: tokenResult.reason === "not_configured" ? 503 : 403 }
     )
   }
 
-  let accessToken = account.access_token
-
-  if (isAccessTokenExpired(account.expires_at) && account.refresh_token) {
-    const refreshed = await refreshMicrosoftToken(account.refresh_token, account.id)
-    if (!refreshed) {
-      return NextResponse.json(
-        { error: "Outlook session expired. Please reconnect your Outlook account.", reauth: true },
-        { status: 403 }
-      )
-    }
-    accessToken = refreshed
-  }
+  let accessToken = tokenResult.accessToken
+  const accountId = tokenResult.accountId
+  // Echoed on every response below so the client can prove which mailbox the
+  // threads came from and discard a reply that arrived after a switch. Just the
+  // row id and the address — never a token.
+  const connectedEmail = tokenResult.email
 
   try {
     // ── Two changes here, both about the ~7s this request took ──────────────
@@ -129,17 +75,20 @@ export async function GET(req: NextRequest) {
     //
     // 2. Started BEFORE the brand-context query rather than after it — see the
     //    Promise.all below. The two do not depend on each other.
-    const messagesPromise = fetch(
-      "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages" +
-        "?$top=200&$select=id,subject,from,toRecipients,body,bodyPreview,receivedDateTime,isRead,conversationId" +
-        "&$orderby=receivedDateTime+desc",
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          Prefer: 'outlook.body-content-type="text"',
-        },
-      }
-    )
+    const fetchInbox = (token: string) =>
+      fetch(
+        "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages" +
+          "?$top=200&$select=id,subject,from,toRecipients,body,bodyPreview,receivedDateTime,isRead,conversationId" +
+          "&$orderby=receivedDateTime+desc",
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Prefer: 'outlook.body-content-type="text"',
+          },
+        }
+      )
+
+    const messagesPromise = fetchInbox(accessToken)
 
     // Resolve the brand while Graph works. This query only needs `userId`, which
     // we have had since the top of the request, so waiting for the mailbox first
@@ -157,13 +106,37 @@ export async function GET(req: NextRequest) {
             .then((bm) => bm?.brand_id ?? null)
         : Promise.resolve(null)
 
-    const [msgRes, resolvedBrandId] = await Promise.all([messagesPromise, brandPromise])
+    let [msgRes, resolvedBrandId] = await Promise.all([messagesPromise, brandPromise])
+
+    // Graph can reject a token that `expires_at` still considers valid — it was
+    // revoked server-side, or this host's clock is behind Microsoft's. One
+    // forced refresh and retry is far cheaper than telling the user to
+    // reconnect a mailbox whose grant is perfectly good.
+    if (msgRes.status === 401) {
+      console.warn(
+        `[outlook] threads: Graph returned 401 for a token still marked valid (account ${accountId}) — forcing a refresh and retrying once.`
+      )
+      const retried = await forceRefreshOutlookAccessToken(userId, accountId, "threads")
+      if (retried) {
+        accessToken = retried
+        msgRes = await fetchInbox(retried)
+      }
+    }
 
     if (!msgRes.ok) {
-      const err = await msgRes.json()
+      const err = await msgRes.json().catch(() => ({}))
       const message: string = err?.error?.message || "Failed to fetch messages"
+      // Server-side so the Graph error code and request id are recoverable. The
+      // body is Graph's own error object — it carries no token and no secret.
+      console.error(
+        `[outlook] threads: Graph /mailFolders/inbox/messages failed (HTTP ${msgRes.status}) — ` +
+          `${err?.error?.code ?? "unknown_code"}: ${String(message).slice(0, 300)}`
+      )
       if (msgRes.status === 401 || msgRes.status === 403) {
-        return NextResponse.json({ error: message, reauth: true }, { status: 403 })
+        return NextResponse.json(
+          { error: "Outlook authentication failed. Please reconnect your Outlook account.", reauth: true },
+          { status: 403 }
+        )
       }
       throw new Error(message)
     }
@@ -221,6 +194,8 @@ export async function GET(req: NextRequest) {
 
     if (!brand_id) {
       return NextResponse.json({
+        accountId,
+        connectedEmail,
         threads: shapedThreads.map(({ senderEmail, senderName, ...t }) => ({
           ...t,
           brandInfluencer: null,
@@ -266,8 +241,12 @@ export async function GET(req: NextRequest) {
       console.error("Auto-advance to In Conversation failed:", err)
     )
 
-    return NextResponse.json({ threads })
+    return NextResponse.json({ accountId, connectedEmail, threads })
   } catch (err: any) {
-    return NextResponse.json({ error: err.message || "Failed to fetch Outlook messages" }, { status: 500 })
+    console.error("[outlook] threads: unhandled failure —", err?.message || err)
+    return NextResponse.json(
+      { error: err?.message || "Failed to fetch Outlook messages" },
+      { status: 500 }
+    )
   }
 }
