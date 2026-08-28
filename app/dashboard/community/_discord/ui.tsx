@@ -10,7 +10,7 @@
 // Anything used by two or more components in this folder belongs here. Anything
 // used once should stay where it is used.
 
-import type { CSSProperties, MouseEvent, ReactNode } from "react"
+import type { CSSProperties, ReactNode } from "react"
 import { motion } from "framer-motion"
 
 /** Shared easing for panels and dialogs, so they feel like one system. */
@@ -148,8 +148,6 @@ export function DiscordCta({
   children,
   className = "",
   dataTour,
-  onClick,
-  disabled = false,
 }: {
   href: string
   size?: "lg" | "md"
@@ -157,15 +155,6 @@ export function DiscordCta({
   children: ReactNode
   className?: string
   dataTour?: string
-  /**
-   * Intercept the navigation — used by the setup flow to run the authorization
-   * in a second tab instead of this one, the same way the inbox's mailbox
-   * connect does. `href` stays a real URL so middle-click, "open in new tab"
-   * and keyboard activation all still work if the handler is absent.
-   */
-  onClick?: (event: MouseEvent<HTMLAnchorElement>) => void
-  /** Greys the CTA out while an authorization tab is already open. */
-  disabled?: boolean
 }) {
   const sizing =
     size === "lg" ? "h-11 rounded-xl px-5 text-[14px]" : "h-10 rounded-lg px-4 text-[13px]"
@@ -174,11 +163,7 @@ export function DiscordCta({
     <a
       href={href}
       data-tour={dataTour}
-      onClick={disabled ? (e) => e.preventDefault() : onClick}
-      aria-disabled={disabled || undefined}
-      className={`inline-flex items-center gap-2 bg-[#0F6B3E] font-medium text-white transition-colors hover:bg-[#166534] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0F6B3E] ${sizing} ${className} ${
-        disabled ? "pointer-events-none opacity-60" : ""
-      }`}
+      className={`inline-flex items-center gap-2 bg-[#0F6B3E] font-medium text-white transition-colors hover:bg-[#166534] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0F6B3E] ${sizing} ${className}`}
     >
       {icon}
       {children}
