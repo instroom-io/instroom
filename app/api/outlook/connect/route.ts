@@ -9,6 +9,7 @@ import {
   outlookRedirectUri,
   readMicrosoftOAuthConfig,
 } from "@/lib/microsoft-oauth"
+import { appBaseUrlSource } from "@/lib/app-url"
 
 // Required env vars: MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET
 // App registration: https://portal.azure.com → App registrations
@@ -41,9 +42,17 @@ export async function GET(req: NextRequest) {
     })
   ).toString("base64url")
 
+  // Logged so the exact string Microsoft must have registered is recoverable
+  // from any deployment's logs, instead of being inferred. No secret in it.
+  const redirectUri = outlookRedirectUri(req)
+  console.log(
+    `[outlook] connect: redirect_uri=${redirectUri} (origin resolved from ${appBaseUrlSource(req)}). ` +
+      `This exact URI must be registered in Microsoft Entra → App registrations → Authentication → Redirect URIs (Web).`
+  )
+
   const params = new URLSearchParams({
     client_id: configResult.config.clientId,
-    redirect_uri: outlookRedirectUri(req),
+    redirect_uri: redirectUri,
     response_type: "code",
     scope: OUTLOOK_SCOPES.join(" "),
     response_mode: "query",

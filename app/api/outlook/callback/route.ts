@@ -17,6 +17,10 @@ export async function GET(req: NextRequest) {
   const error = searchParams.get("error")
 
   if (error) {
+    console.error(
+      `[outlook] callback: Microsoft returned an error — ${error}: ` +
+        `${(searchParams.get("error_description") || "").slice(0, 300)}`
+    )
     return NextResponse.redirect(
       new URL(`/dashboard/inbox?outlookError=${encodeURIComponent(error)}`, req.url)
     )
@@ -65,6 +69,10 @@ export async function GET(req: NextRequest) {
   let microsoftEmail: string | null
   let scope: string
 
+  // Must be byte-identical to the one /connect sent, or Microsoft refuses the
+  // exchange with redirect_uri_mismatch. Both come from the same helper.
+  const redirectUri = outlookRedirectUri(req)
+
   try {
     const tokenRes = await fetch(MICROSOFT_TOKEN_URL, {
       method: "POST",
@@ -75,7 +83,7 @@ export async function GET(req: NextRequest) {
         client_secret: configResult.config.clientSecret,
         // Built by the same helper /connect used, so the two strings are
         // identical — Microsoft rejects the exchange if they differ at all.
-        redirect_uri: outlookRedirectUri(req),
+        redirect_uri: redirectUri,
         grant_type: "authorization_code",
       }),
     })
@@ -83,6 +91,16 @@ export async function GET(req: NextRequest) {
     const tokenData = await tokenRes.json()
 
     if (!tokenRes.ok || !tokenData.access_token) {
+      // Server-side detail: the AADSTS code names the actual cause
+      // (redirect_uri_mismatch, invalid_client after a secret rotation, …),
+      // which the redirect below cannot usefully carry. No secret is logged.
+      console.error(
+        `[outlook] callback: authorization_code exchange rejected (HTTP ${tokenRes.status}) — ` +
+          `${tokenData?.error ?? "unknown_error"}` +
+          `${tokenData?.error_codes?.length ? ` codes=[${tokenData.error_codes.join(",")}]` : ""} — ` +
+          `${String(tokenData?.error_description ?? "").slice(0, 400)}. ` +
+          `redirect_uri sent was ${redirectUri} (must be registered verbatim in Microsoft Entra).`
+      )
       return NextResponse.redirect(
         new URL(
           `/dashboard/inbox?outlookError=${encodeURIComponent(tokenData.error_description || "token_exchange_failed")}`,
@@ -94,6 +112,15 @@ export async function GET(req: NextRequest) {
     accessToken = tokenData.access_token
     refreshToken = tokenData.refresh_token || null
     scope = tokenData.scope || ""
+    if (!refreshToken) {
+      // Without one the mailbox dies as soon as the access token expires and
+      // only a manual reconnect revives it. Means offline_access was not
+      // granted — usually removed from the app registration's permissions.
+      console.error(
+        "[outlook] callback: Microsoft returned no refresh_token — check that the " +
+          "offline_access scope is granted for this app registration."
+      )
+    }
     expiresAt = tokenData.expires_in
       ? Math.floor(Date.now() / 1000) + tokenData.expires_in
       : null
@@ -106,7 +133,11 @@ export async function GET(req: NextRequest) {
     // Graph returns `mail` for a mailbox-backed account and falls back to
     // userPrincipalName otherwise. No extra request — same response.
     microsoftEmail = profile.mail || profile.userPrincipalName || null
-  } catch {
+  } catch (err) {
+    console.error(
+      "[outlook] callback: network error contacting Microsoft/Graph —",
+      err instanceof Error ? err.message : err
+    )
     return NextResponse.redirect(
       new URL("/dashboard/inbox?outlookError=network_error", req.url)
     )
@@ -146,7 +177,11 @@ export async function GET(req: NextRequest) {
         last_selected_at: new Date(),
       },
     })
-  } catch {
+  } catch (err) {
+    console.error(
+      "[outlook] callback: failed to persist the Outlook account —",
+      err instanceof Error ? err.message : err
+    )
     return NextResponse.redirect(
       new URL("/dashboard/inbox?outlookError=db_error", req.url)
     )

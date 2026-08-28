@@ -21,6 +21,7 @@
 // from the original implementation — only how the values are read changed.
 
 import { appUrl } from "@/lib/app-url"
+import { prisma } from "@/lib/prisma"
 
 /** Azure AD v2 endpoints. `common` = the multi-tenant authority, as before. */
 export const MICROSOFT_AUTHORIZE_URL =
@@ -173,3 +174,207 @@ export function logMicrosoftRefreshFailure(
 
 /** The error code carried back to the inbox UI. Matches the existing style. */
 export const OUTLOOK_NOT_CONFIGURED = "outlook_not_configured"
+
+// ── One shared token path ────────────────────────────────────────────────────
+// /api/outlook/threads and /api/outlook/send each carried their own copy of the
+// same refresh-and-persist logic. The copies drifted (the ordering fix and the
+// update-by-id fix landed in one and not the other), so the two routes could
+// resolve different mailboxes for the same user. Both now call through here, so
+// there is exactly one place where an Outlook access token is obtained.
+//
+// The route-facing shape is a discriminated result rather than `string | null`,
+// so a missing account, an expired grant and a misconfigured deployment stay
+// distinguishable — each route already responds differently to those.
+
+
+export type OutlookTokenResult =
+  | { ok: true; accessToken: string; accountId: string; email: string | null }
+  | { ok: false; reason: "no_account" | "refresh_failed" | "not_configured" }
+
+/**
+ * Exchange a refresh token and persist the new access token.
+ *
+ * Written to the single account row by `id` — never updateMany over
+ * (userId, provider), which wrote one account's token onto every linked Outlook
+ * account so all of them then authenticated as that one.
+ */
+export async function refreshOutlookAccessToken(
+  refreshToken: string,
+  accountId: string,
+  route: string
+): Promise<{ ok: true; accessToken: string } | { ok: false; reason: "refresh_failed" | "not_configured" }> {
+  const configResult = readMicrosoftOAuthConfig()
+  if (!configResult.ok) {
+    logMissingMicrosoftConfig(`${route} token refresh`, configResult.missing)
+    return { ok: false, reason: "not_configured" }
+  }
+
+  try {
+    const res = await fetch(MICROSOFT_TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: configResult.config.clientId,
+        client_secret: configResult.config.clientSecret,
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+      }),
+    })
+    const data = await res.json().catch(() => ({}))
+
+    if (!res.ok || !data.access_token) {
+      logMicrosoftRefreshFailure(`${route} token refresh`, res.status, data)
+      return { ok: false, reason: "refresh_failed" }
+    }
+
+    await prisma.account.update({
+      where: { id: accountId },
+      data: {
+        access_token: data.access_token,
+        expires_at: data.expires_in
+          ? Math.floor(Date.now() / 1000) + data.expires_in
+          : null,
+        // Microsoft rotates the refresh token on most exchanges. The previous
+        // code discarded it and kept writing the original, so once Microsoft
+        // retired that one the mailbox went dead and only a full reconnect
+        // brought it back. Only overwritten when one is actually returned.
+        ...(data.refresh_token ? { refresh_token: data.refresh_token } : {}),
+      },
+    })
+
+    return { ok: true, accessToken: data.access_token }
+  } catch (err) {
+    console.error(
+      `[outlook] ${route} token refresh: network error contacting Microsoft —`,
+      err instanceof Error ? err.message : err
+    )
+    return { ok: false, reason: "refresh_failed" }
+  }
+}
+
+/**
+ * Resolve the access token for this user's currently selected Outlook account,
+ * refreshing it first if it has expired.
+ *
+ * Ordering is [last_selected_at desc, id desc] — the same rule lib/gmail.ts
+ * uses — so the threads route, the send route and the account switcher all
+ * agree on which mailbox is "the" mailbox.
+ */
+export async function getOutlookAccessToken(
+  userId: string,
+  route: string,
+  // Explicit account, as sent by the inbox's account switcher.
+  //
+  // Without this the route inferred the mailbox from [last_selected_at desc],
+  // which is correct only if no other request is racing it. With two Outlook
+  // accounts connected, a thread fetch already in flight when the user switched
+  // — or a reply composed in a second tab — resolved whichever row happened to
+  // be newest at that instant, so the inbox could render or send from the
+  // account the user had just switched away from.
+  //
+  // Always scoped to `userId` and `provider: "microsoft"`, so a caller cannot
+  // name someone else's mailbox or a NextAuth login row. An id that does not
+  // match is `no_account` rather than a silent fall back to a different
+  // mailbox: quietly reading the wrong inbox is worse than an error.
+  //
+  // Omitted (Gmail-style callers, older clients) keeps the previous ordering
+  // behaviour exactly.
+  accountId?: string | null
+): Promise<OutlookTokenResult> {
+  const account = accountId
+    ? await prisma.account.findFirst({
+        where: { id: accountId, userId, provider: "microsoft" },
+        select: {
+          id: true,
+          email: true,
+          access_token: true,
+          refresh_token: true,
+          expires_at: true,
+        },
+      })
+    : await prisma.account.findFirst({
+        where: { userId, provider: "microsoft" },
+        select: {
+          id: true,
+          email: true,
+          access_token: true,
+          refresh_token: true,
+          expires_at: true,
+        },
+        orderBy: [{ last_selected_at: "desc" }, { id: "desc" }],
+      })
+
+  if (accountId && !account) {
+    console.error(
+      `[outlook] ${route}: requested account ${accountId} is not a Microsoft mailbox belonging to this user.`
+    )
+    return { ok: false, reason: "no_account" }
+  }
+
+  if (!account?.access_token) return { ok: false, reason: "no_account" }
+
+  if (isAccessTokenExpired(account.expires_at)) {
+    if (!account.refresh_token) {
+      console.error(
+        `[outlook] ${route}: access token for account ${account.id} has expired and no ` +
+          `refresh_token is stored — the grant was created without offline_access. Reconnect required.`
+      )
+      return { ok: false, reason: "refresh_failed" }
+    }
+    const refreshed = await refreshOutlookAccessToken(account.refresh_token, account.id, route)
+    if (!refreshed.ok) return { ok: false, reason: refreshed.reason }
+    return {
+      ok: true,
+      accessToken: refreshed.accessToken,
+      accountId: account.id,
+      email: account.email,
+    }
+  }
+
+  return {
+    ok: true,
+    accessToken: account.access_token,
+    accountId: account.id,
+    email: account.email,
+  }
+}
+
+/**
+ * Force a refresh for an account whose token Graph rejected with 401 even
+ * though `expires_at` said it was still valid — which happens when the token
+ * was revoked server-side, or when this host's clock is behind Microsoft's.
+ * Without this the user was told to reconnect a mailbox that only needed a new
+ * access token.
+ */
+export async function forceRefreshOutlookAccessToken(
+  userId: string,
+  accountId: string,
+  route: string
+): Promise<string | null> {
+  const account = await prisma.account.findFirst({
+    where: { id: accountId, userId, provider: "microsoft" },
+    select: { id: true, refresh_token: true },
+  })
+  if (!account?.refresh_token) return null
+  const refreshed = await refreshOutlookAccessToken(account.refresh_token, account.id, route)
+  return refreshed.ok ? refreshed.accessToken : null
+}
+
+/**
+ * The user-facing message for a failed token resolution. Deliberately says
+ * nothing about our configuration state — a browser has no business learning
+ * which environment variable a deployment is missing — while the matching
+ * server log (above) names it precisely.
+ */
+export function outlookTokenErrorMessage(
+  reason: "no_account" | "refresh_failed" | "not_configured"
+): string {
+  switch (reason) {
+    case "no_account":
+      return "No Outlook account linked. Please connect your Outlook account."
+    case "not_configured":
+      return "Outlook is not available on this deployment. Please contact support."
+    case "refresh_failed":
+      return "Outlook session expired. Please reconnect your Outlook account."
+  }
+}
