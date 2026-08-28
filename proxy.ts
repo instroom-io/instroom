@@ -1,13 +1,25 @@
 // NOTE: this file must live at the project root (or src/ root) for Next.js
-// to actually run it as middleware. It previously lived at app/middleware.ts,
-// a location Next.js does not recognize — meaning the /dashboard and
-// /onboarding protection below was never executing. Moved here as part of
-// wiring up /admin protection, since both rely on the same mechanism.
+// to actually run it. It previously lived at app/middleware.ts, a location
+// Next.js does not recognize — meaning the /dashboard and /onboarding
+// protection below was never executing. Moved here as part of wiring up /admin
+// protection, since both rely on the same mechanism.
+//
+// It is `proxy.ts` exporting `proxy()`, not `middleware.ts` exporting
+// `middleware()`: Next 16 renamed the convention and warns on the old one
+// ("The \"middleware\" file convention is deprecated"). The resolution is
+// literal — next/dist/build/templates/middleware.js does
+//
+//     const isProxy = page === '/proxy' || page === '/src/proxy'
+//     const handlerUserland = (isProxy ? mod.proxy : mod.middleware) || mod.default
+//
+// so the file name and the export name have to change together. The matcher,
+// the runtime and every routing and auth decision below are unchanged.
 
 import { NextResponse } from "next/server"
 import type { NextRequest } from "next/server"
 import { getToken } from "next-auth/jwt"
 import { prisma } from "@/lib/prisma"
+import { SESSION_COOKIE_NAME } from "@/lib/auth"
 
 const ADMIN_EMAIL = "admin@instroom.io"
 
@@ -127,7 +139,7 @@ function redirectToLogin(req: NextRequest) {
   return NextResponse.redirect(login);
 }
 
-export async function middleware(req: any) {
+export async function proxy(req: any) {
   const { pathname, searchParams } = req.nextUrl;
 
   // ─── Admin Dashboard — gated to the mock admin account only ──────────────
@@ -135,7 +147,16 @@ export async function middleware(req: any) {
   // admin account has no brand/subscription of its own and must never be
   // routed through that check.
   if (pathname.startsWith("/admin")) {
-    const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
+    const token = await getToken({
+      req,
+      secret: process.env.NEXTAUTH_SECRET,
+      // Explicit, because getToken otherwise derives the cookie name from
+      // NEXTAUTH_URL while lib/auth.ts writes it from NODE_ENV. When those two
+      // disagree it looks for a cookie that does not exist and reports no
+      // session — which sent a signed-in user to /login on any full document
+      // load, i.e. every new tab. See SESSION_COOKIE_NAME.
+      cookieName: SESSION_COOKIE_NAME,
+    });
     const isAdmin = !!token && (token.platform_role === "admin" || token.email === ADMIN_EMAIL);
     if (!isAdmin) {
       // Signed in but not an admin is a permissions answer, not a login
@@ -155,7 +176,16 @@ export async function middleware(req: any) {
   ) {
     // getToken verifies the JWT signature AND its exp claim, so a session past
     // the 7-day deadline fails here with no extra check needed.
-    const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
+    const token = await getToken({
+      req,
+      secret: process.env.NEXTAUTH_SECRET,
+      // Explicit, because getToken otherwise derives the cookie name from
+      // NEXTAUTH_URL while lib/auth.ts writes it from NODE_ENV. When those two
+      // disagree it looks for a cookie that does not exist and reports no
+      // session — which sent a signed-in user to /login on any full document
+      // load, i.e. every new tab. See SESSION_COOKIE_NAME.
+      cookieName: SESSION_COOKIE_NAME,
+    });
     if (!token || !token.sub) {
       return redirectToLogin(req);
     }
@@ -207,7 +237,11 @@ export async function middleware(req: any) {
   return NextResponse.next();
 }
 
+// `runtime` is gone, not changed: Next 16 rejects route segment config in a
+// Proxy file ("Route segment config is not allowed in Proxy file") because a
+// Proxy ALWAYS runs on the Node.js runtime. The old middleware needed the
+// explicit opt-in to reach prisma and getToken; the proxy gets it by default,
+// so removing the line keeps the behaviour identical. The matcher is unchanged.
 export const config = {
   matcher: ["/onboarding/:path*", "/dashboard/:path*", "/admin/:path*", "/settings/:path*"],
-  runtime: "nodejs",
 };

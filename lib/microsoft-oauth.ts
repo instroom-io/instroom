@@ -102,5 +102,74 @@ export function logMissingMicrosoftConfig(route: string, missing: string[]): voi
   )
 }
 
+/**
+ * Seconds of headroom before `expires_at` at which a token counts as expired.
+ *
+ * The check used to be `Date.now() > expires_at * 1000` — no margin at all. A
+ * token with two seconds left therefore passed as valid, and by the time the
+ * request reached Graph it had expired: Graph answered 401, the route reported
+ * `reauth: true`, and the user was told to reconnect a mailbox whose grant was
+ * perfectly good. Refreshing slightly early costs one token request and removes
+ * that whole class of spurious disconnect. It also absorbs modest clock skew
+ * between this host and Microsoft.
+ */
+export const TOKEN_EXPIRY_MARGIN_SECONDS = 60
+
+/**
+ * Has this token expired, counting the margin above? `null` means Microsoft did
+ * not tell us, in which case it is treated as expired: attempting a refresh is
+ * cheap and recoverable, whereas assuming validity guarantees a 401.
+ */
+export function isAccessTokenExpired(expiresAt: number | null | undefined): boolean {
+  if (!expiresAt) return true
+  return Math.floor(Date.now() / 1000) + TOKEN_EXPIRY_MARGIN_SECONDS >= expiresAt
+}
+
+/**
+ * Report WHY Microsoft refused a refresh.
+ *
+ * This existed nowhere. Both routes did `if (!res.ok || !data.access_token)
+ * return null`, so every failure — a revoked grant, a rotated client secret, a
+ * restriction on the user's Microsoft account — collapsed into the same silent
+ * null and the same "Outlook session expired. Please reconnect your Outlook
+ * account." The user reconnects, it fails again for the same unstated reason,
+ * and nothing anywhere says what it is.
+ *
+ * A real example from this project's own data: the refresh was failing with
+ *
+ *   invalid_grant / error_codes [70000]
+ *   AADSTS70000: User account is found to be in service abuse mode
+ *
+ * which is a restriction Microsoft placed on the END USER's account. No amount
+ * of reconnecting fixes that, and no code change can either — but it is
+ * actionable the moment somebody can read it.
+ *
+ * Server-side only; the AADSTS text can name the account and is not for the
+ * browser. The user-facing message is unchanged.
+ */
+export function logMicrosoftRefreshFailure(
+  route: string,
+  status: number,
+  data: unknown
+): void {
+  const body = (data ?? {}) as {
+    error?: string
+    error_codes?: number[]
+    error_description?: string
+  }
+  // Kept whole rather than split at the first line break: Microsoft puts the
+  // AADSTS code first and the Trace/Correlation IDs immediately after, and those
+  // IDs are exactly what Microsoft support asks for. Truncated only so a long
+  // response cannot dominate the log.
+  const description = (body.error_description ?? "").trim().slice(0, 400)
+
+  console.error(
+    `[outlook] ${route}: refresh_token exchange rejected (HTTP ${status}) — ` +
+      `${body.error ?? "unknown_error"}` +
+      `${body.error_codes?.length ? ` codes=[${body.error_codes.join(",")}]` : ""}` +
+      `${description ? ` — ${description}` : ""}`
+  )
+}
+
 /** The error code carried back to the inbox UI. Matches the existing style. */
 export const OUTLOOK_NOT_CONFIGURED = "outlook_not_configured"
