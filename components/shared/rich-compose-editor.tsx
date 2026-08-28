@@ -30,7 +30,7 @@ export interface RichComposeEditorHandle {
   focus: () => void
 }
 
-function formatBytes(bytes: number): string {
+export function formatAttachmentSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)}KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
 }
@@ -96,6 +96,43 @@ function AttachmentChip({ pending, onRemove }: { pending: PendingAttachment; onR
         <IconX size={11} />
       </button>
     </div>
+  )
+}
+
+/** Read-only sibling of AttachmentChip, for an attachment that's already been
+ *  sent/received (inbox thread view) rather than one still pending upload.
+ *  Deliberately no image thumbnail — see rich-compose feature plan: fetching
+ *  bytes just to preview an image in a thread list would defeat the point of
+ *  fetching attachment bytes lazily, only on click. */
+export function AttachmentChipReadOnly({
+  filename,
+  size,
+  onOpen,
+  loading,
+}: {
+  filename: string
+  size: number
+  onOpen: () => void
+  loading?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      disabled={loading}
+      title={filename}
+      className="relative flex-shrink-0 overflow-hidden rounded-lg border border-gray-200 bg-white text-left transition-colors hover:bg-gray-50 disabled:opacity-60"
+    >
+      <div className="flex h-16 w-[104px] flex-col justify-center gap-0.5 px-2">
+        {loading ? (
+          <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-gray-200 border-t-gray-400" aria-hidden />
+        ) : (
+          <IconFile size={15} className="text-gray-400" aria-hidden />
+        )}
+        <span className="truncate text-[10.5px] font-medium text-gray-600">{filename}</span>
+        <span className="text-[9.5px] text-gray-400">{formatAttachmentSize(size)}</span>
+      </div>
+    </button>
   )
 }
 
@@ -290,7 +327,7 @@ export const RichComposeEditor = forwardRef<RichComposeEditorHandle, {
     const currentTotal = files.reduce((sum, f) => sum + f.file.size, 0)
     const newTotal = newFiles.reduce((sum, f) => sum + f.size, 0)
     if (currentTotal + newTotal > maxTotalBytes) {
-      setSizeError(`Attachments must total under ${formatBytes(maxTotalBytes)}.`)
+      setSizeError(`Attachments must total under ${formatAttachmentSize(maxTotalBytes)}.`)
       return
     }
     setSizeError(null)
