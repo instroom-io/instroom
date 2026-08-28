@@ -318,6 +318,7 @@ export function ServerSwitcher({
   onDisconnectServer,
   onReconnectAccount,
   onLogoutAccount,
+  onLogoutAll,
 }: {
   brandId: string
   guildName: string | null
@@ -334,6 +335,7 @@ export function ServerSwitcher({
   onReconnectAccount: () => void
   /** Opens the log-out confirmation. The parent owns the request. */
   onLogoutAccount: () => void
+  onLogoutAll: () => void
 }) {
   const [menu, setMenu] = useState<OpenMenu>(null)
   const [switching, setSwitching] = useState<string | null>(null)
@@ -483,6 +485,18 @@ export function ServerSwitcher({
               hint="Keeps the server connected"
               danger
               onClick={() => { setMenu(null); onLogoutAccount() }}
+            />
+
+            <div className="my-1 h-px bg-gray-100" />
+
+            {/* Last, and separated: it is the widest-reaching action in this
+                menu — both connections at once, back to first-run setup. */}
+            <MenuItem
+              icon={<IconLogout size={15} />}
+              label="Log Out All"
+              hint="Disconnects the account and the server"
+              danger
+              onClick={() => { setMenu(null); onLogoutAll() }}
             />
           </DropdownPanel>
         )}
