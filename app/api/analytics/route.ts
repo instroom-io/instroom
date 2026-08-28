@@ -175,7 +175,14 @@ export async function GET(req: Request) {
 
         // Outreach activity — the source of truth for Total Outreach.
         outreachCount:    outreachCountById.get(r.id) ?? 0,
-        hasOutreach:      (outreachCountById.get(r.id) ?? 0) > 0 || wasContacted(r),
+        // Stage-derived, and deliberately NOT OR-ed with `outreachCount > 0` any
+        // more. An OutreachLog row for an influencer the Pipeline still shows
+        // under "For Outreach" would put that influencer back into the outreach
+        // population, which is the very contradiction this metric had: the board
+        // says "not yet contacted", the funnel counted them as reached. The
+        // stage is what the brand manages and sees, so the stage decides.
+        // `outreachCount` is still reported above, unchanged.
+        hasOutreach:      wasContacted(r),
         // A response is only ever a RECORDED one: an OutreachLog entry flagged
         // response_received, or a contact_status the app writes when a reply
         // actually lands (the inbox sets "responded"/"replied" off a real
@@ -292,9 +299,9 @@ function buildDateFilter(dateRange: string): Record<string, Date> | null {
 const CLOSED_COLUMNS = ["For Order Creation", "In-Transit", "Delivered", "Posted", "No post"]
 
 /**
- * Statuses the app only ever writes AFTER a real contact action. Rows created by
- * import/approval start as "not_contacted"/"pending" at stage 1 and stay there
- * until someone actually reaches out, so those are excluded.
+ * Statuses the app only ever writes AFTER a real contact action.
+ *
+ * Kept for reference; no longer used to decide `hasOutreach` — see wasContacted.
  */
 const NOT_CONTACTED_STATUSES = new Set(["not_contacted", "pending", ""])
 
@@ -305,17 +312,47 @@ const NOT_CONTACTED_STATUSES = new Set(["not_contacted", "pending", ""])
  */
 const RESPONDED_CONTACT_STATUSES = new Set(["responded", "replied"])
 
+/**
+ * Has this influencer actually been reached out to?
+ *
+ * Derived from the SAME stage resolution the Pipeline board renders from, rather
+ * than from a second, parallel reading of the raw columns.
+ *
+ * ── Why this changed ────────────────────────────────────────────────────────
+ * The previous version inspected `contact_status` directly: anything outside
+ * NOT_CONTACTED_STATUSES counted as contacted. But `derivePipelineStatus` gives
+ * `stage` PRECEDENCE over `contact_status` — stage 1 is "For Outreach" whatever
+ * the status column says. The two therefore disagreed, and this deployment's own
+ * data is full of the disagreement: 87 rows carry
+ *
+ *     contact_status = "contacted", stage = 1
+ *
+ * which the Pipeline renders under "For Outreach" (correctly — nobody has been
+ * contacted yet; the status column is stale) while Total Outreach counted every
+ * one of them. That is the reported symptom: influencers sitting in For Outreach
+ * inflating the outreach total.
+ *
+ * "For Outreach" is the only pre-contact stage, so the rule is simply: any other
+ * resolved stage means an outreach action is on the record. Because the funnel's
+ * population and the board's columns now come from one function, they cannot
+ * drift apart again, and
+ *
+ *     Total Outreach === (all influencers) − (those in For Outreach)
+ *
+ * holds by construction rather than by coincidence.
+ *
+ * Note "Not Interested" still counts as outreach: it is a verdict the brand
+ * records about someone it engaged, and the funnel already reports it as a
+ * terminal step out of the outreach population.
+ */
 function wasContacted(r: {
   contact_status: string
   stage: number | null
   order_status: string | null
   content_posted: boolean
+  approval_status: string | null
 }): boolean {
-  if (!NOT_CONTACTED_STATUSES.has(r.contact_status ?? "")) return true
-  if (r.stage !== null && r.stage >= 2) return true
-  // A shipped/delivered order or a posted collab cannot exist without outreach.
-  if (r.order_status || r.content_posted) return true
-  return false
+  return derivePipelineStatus(r.contact_status, r.stage, r.approval_status) !== "For Outreach"
 }
 
 function derivePipelineStatus(
