@@ -83,9 +83,25 @@ export function prefetchSettings(
 
   if (userId) {
     // Billing keys its subscription entry by user, so this one cannot be built
-    // without the session (app/dashboard/settings/billing/page.tsx).
+    // without the session (app/dashboard/settings/billing/page.tsx). Unlike
+    // every other task here, this endpoint takes POST + a body, not GET —
+    // using getJson() (a plain GET) always 405s. Because fetchCached dedupes
+    // by key, a real page-load racing this in-flight (failing) request would
+    // join it and inherit the 405 instead of firing its own correct POST, so
+    // this one MUST mirror the exact request the billing page itself makes.
     const key = `/api/subscription/check?user=${userId}`
-    tasks.push({ key, run: () => getJson("/api/subscription/check") })
+    tasks.push({
+      key,
+      run: async () => {
+        const res = await fetch("/api/subscription/check", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: userId }),
+        })
+        if (!res.ok) throw new Error(`/api/subscription/check failed (${res.status})`)
+        return res.json()
+      },
+    })
   }
 
   if (brandId) {

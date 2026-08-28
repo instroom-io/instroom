@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { getUserSignatureHtml, plainTextBodyToHtml } from "@/lib/signature"
 import { autoMarkContactedOnSend } from "@/lib/pipeline"
-import { getGmailAccessToken } from "@/lib/gmail"
+import { getGmailAccessToken, sanitizeFilename } from "@/lib/gmail"
 
 // Vercel Serverless Functions cap request bodies well under Gmail's own
 // ~25MB attachment limit, so that's the real binding constraint here.
@@ -12,13 +12,6 @@ const MAX_TOTAL_ATTACHMENT_BYTES = 4 * 1024 * 1024
 type Attachment = { filename: string; mimeType: string; data: Buffer }
 
 // ─── Build RFC 2822 email message ─────────────────────────────────────────────
-
-/** Strip anything that isn't safe as a bare (non-encoded) MIME filename —
- *  full RFC 2231 filename* encoding for non-ASCII names is skipped for v1. */
-function sanitizeFilename(name: string): string {
-  const safe = name.replace(/[^\x20-\x7E]/g, "").replace(/"/g, "")
-  return safe.trim() || "attachment"
-}
 
 function wrapBase64(base64: string): string {
   return base64.replace(/.{1,76}/g, "$&\r\n").trim()

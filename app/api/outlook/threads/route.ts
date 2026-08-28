@@ -165,6 +165,19 @@ export async function GET(req: NextRequest) {
             ? stripHtml(msg.body.content)
             : msg.body?.content || msg.bodyPreview || ""
 
+        // Only real, user-attached files — never inline images (e.g. a logo
+        // embedded in an HTML signature) or item/reference attachments (a
+        // forwarded email/contact/event, or a OneDrive link), which aren't
+        // downloadable the same way and are out of scope for v1.
+        const attachments = (msg.hasAttachments ? msg.attachments || [] : [])
+          .filter((a: any) => !a.isInline && (!a["@odata.type"] || a["@odata.type"] === "#microsoft.graph.fileAttachment"))
+          .map((a: any) => ({
+            id: a.id,
+            filename: a.name || "attachment",
+            mimeType: a.contentType || "application/octet-stream",
+            size: a.size ?? 0,
+          }))
+
         return {
           id: msg.id,
           from: fromName ? `${fromName} <${fromAddr}>` : fromAddr,
@@ -173,6 +186,7 @@ export async function GET(req: NextRequest) {
           snippet: msg.bodyPreview || "",
           body: bodyText,
           isUser: false,
+          attachments,
         }
       })
 

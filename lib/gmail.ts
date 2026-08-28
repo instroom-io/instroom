@@ -150,6 +150,50 @@ function extractBody(payload: any): { body: string; isHtml: boolean } {
   return { body: "", isHtml: false }
 }
 
+export type GmailAttachmentMeta = {
+  attachmentId: string
+  filename: string
+  mimeType: string
+  size: number
+}
+
+// Gmail marks inline parts (e.g. a logo embedded in an HTML signature via a
+// cid: reference) with Content-Disposition: inline — without filtering these
+// out, every signature-bearing email would show a bogus "attachment".
+function isInlinePart(part: any): boolean {
+  const headers: { name: string; value: string }[] = part.headers || []
+  return getHeader(headers, "Content-Disposition").toLowerCase().startsWith("inline")
+}
+
+// Mirrors extractPart's recursive walk over payload.parts, but collects ALL
+// matches instead of returning the first — a message can have any number of
+// real attachments, unlike extractPart's single-result body lookup.
+function extractAttachments(payload: any): GmailAttachmentMeta[] {
+  if (!payload) return []
+  const results: GmailAttachmentMeta[] = []
+  if (payload.body?.attachmentId && payload.filename && !isInlinePart(payload)) {
+    results.push({
+      attachmentId: payload.body.attachmentId,
+      filename: payload.filename,
+      mimeType: payload.mimeType || "application/octet-stream",
+      size: payload.body.size ?? 0,
+    })
+  }
+  if (payload.parts) {
+    for (const part of payload.parts) results.push(...extractAttachments(part))
+  }
+  return results
+}
+
+/** Strip anything that isn't safe as a bare (non-encoded) MIME/download
+ *  filename — full RFC 2231 filename* encoding for non-ASCII names is
+ *  skipped for v1. Shared by the outgoing (gmail/send) and incoming
+ *  (gmail/attachment) attachment paths so there's one implementation. */
+export function sanitizeFilename(name: string): string {
+  const safe = name.replace(/[^\x20-\x7E]/g, "").replace(/"/g, "")
+  return safe.trim() || "attachment"
+}
+
 export type ShapedGmailThread = {
   id: string
   subject: string
@@ -165,6 +209,7 @@ export type ShapedGmailThread = {
     body: string
     isHtml: boolean
     labelIds: string[]
+    attachments: GmailAttachmentMeta[]
   }[]
   senderEmail: string
   hasReply: boolean
@@ -174,6 +219,7 @@ export function shapeGmailThread(thread: any): ShapedGmailThread {
   const messages = (thread.messages || []).map((msg: any) => {
     const headers = msg.payload?.headers || []
     const { body, isHtml } = extractBody(msg.payload)
+    const attachments = extractAttachments(msg.payload)
     return {
       id: msg.id,
       from: getHeader(headers, "From"),
@@ -184,6 +230,7 @@ export function shapeGmailThread(thread: any): ShapedGmailThread {
       body,
       isHtml,
       labelIds: msg.labelIds || [],
+      attachments,
     }
   })
 

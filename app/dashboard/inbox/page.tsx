@@ -64,7 +64,7 @@ import {
 } from "@tabler/icons-react"
 import { EmailTemplatesModal } from "@/components/shared/email-templates-modal"
 import { UseTemplatePicker } from "@/components/shared/use-template-picker"
-import { RichComposeEditor, type RichComposeEditorHandle, type PendingAttachment } from "@/components/shared/rich-compose-editor"
+import { RichComposeEditor, type RichComposeEditorHandle, type PendingAttachment, AttachmentChipReadOnly } from "@/components/shared/rich-compose-editor"
 
 function OutlookIcon({ size = 28 }: { size?: number }) {
   return (
@@ -115,6 +115,18 @@ type MailAccount = { id: string; provider: MailProvider; email: string | null; i
 /** Shared-cache key for the connected-mailbox list. */
 const MAIL_ACCOUNTS_KEY = "/api/mail/accounts"
 
+/** Normalized attachment metadata, independent of provider — messageId +
+ *  attachmentId + provider is everything openAttachment() needs to hit the
+ *  right bytes-endpoint. Metadata only; bytes are fetched lazily on click. */
+type EmailAttachment = {
+  id: string
+  messageId: string
+  filename: string
+  mimeType: string
+  size: number
+  provider: "gmail" | "outlook"
+}
+
 type Email = {
   id: number | string
 
@@ -161,7 +173,7 @@ type Email = {
   trackingNumber?: string
   postedLink?: string
   rejectionReason?: string
-  replies?: { sender: string; message: string; timestamp: string; isUser?: boolean; isHtml?: boolean }[]
+  replies?: { sender: string; message: string; timestamp: string; isUser?: boolean; isHtml?: boolean; attachments?: EmailAttachment[] }[]
   // Gmail-specific
   gmailThreadId?: string
   from?: string
@@ -276,6 +288,14 @@ function mapGmailThreadToEmail(thread: any, index: number, accountId?: string | 
       timestamp: msg.date || new Date().toISOString(),
       isUser,
       isHtml: hasRealBody && Boolean(msg.isHtml),
+      attachments: (msg.attachments || []).map((a: any) => ({
+        id: a.attachmentId,
+        messageId: msg.id,
+        filename: a.filename,
+        mimeType: a.mimeType,
+        size: a.size,
+        provider: "gmail" as const,
+      })),
     }
   })
 
@@ -357,6 +377,14 @@ function mapOutlookThreadToEmail(thread: any, index: number, accountId?: string 
       message: msg.body || msg.snippet || "",
       timestamp: msg.date || new Date().toISOString(),
       isUser: false,
+      attachments: (msg.attachments || []).map((a: any) => ({
+        id: a.id,
+        messageId: msg.id,
+        filename: a.filename,
+        mimeType: a.mimeType,
+        size: a.size,
+        provider: "outlook" as const,
+      })),
     }
   })
 
@@ -670,6 +698,47 @@ function InboxContent() {
   const [sendError, setSendError] = useState<string | undefined>()
   const [replyAttachments, setReplyAttachments] = useState<PendingAttachment[]>([])
   const replyEditorRef = useRef<RichComposeEditorHandle>(null)
+
+  // Received/sent attachments (as opposed to composeAttachments/replyAttachments,
+  // which are files pending upload) — fetched lazily, only when clicked.
+  const [downloadingAttachmentId, setDownloadingAttachmentId] = useState<string | null>(null)
+
+  const openAttachment = async (att: EmailAttachment) => {
+    setDownloadingAttachmentId(att.id)
+    try {
+      const url =
+        att.provider === "gmail"
+          ? `/api/gmail/attachment/${att.messageId}/${att.id}?filename=${encodeURIComponent(att.filename)}&mimeType=${encodeURIComponent(att.mimeType)}`
+          : `/api/outlook/attachment/${att.messageId}/${att.id}`
+
+      const res = await fetch(url)
+      if (!res.ok) throw new Error("Failed to load attachment")
+      const blob = await res.blob()
+      const objectUrl = URL.createObjectURL(blob)
+
+      const isViewableInline = att.mimeType.startsWith("image/") || att.mimeType === "application/pdf"
+      if (isViewableInline) {
+        // Not revoked immediately — the new tab needs the blob URL to stay
+        // valid while it's open.
+        window.open(objectUrl, "_blank")
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000)
+      } else {
+        const a = document.createElement("a")
+        a.href = objectUrl
+        a.download = att.filename
+        a.style.display = "none"
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
+      }
+    } catch {
+      // Silent — this is a secondary action off an already-loaded thread;
+      // nothing in this view is left in a broken state if it fails.
+    } finally {
+      setDownloadingAttachmentId(null)
+    }
+  }
   const [searchQuery, setSearchQuery] = useState("")
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("")
   const [updateStageModal, setUpdateStageModal] = useState<{ open: boolean; email: Email | null }>({ open: false, email: null })
@@ -2336,6 +2405,19 @@ function InboxContent() {
                                     className={`rounded-2xl px-4 md:px-5 py-3 shadow-sm overflow-hidden ${group.isUser ? "bg-gray-100 border border-gray-200 rounded-tr-none" : "bg-white border border-gray-100 rounded-tl-none"}`}
                                   >
                                     <HtmlMessageFrame html={msg.message} />
+                                    {msg.attachments && msg.attachments.length > 0 && (
+                                      <div className="mt-2 flex flex-wrap gap-2">
+                                        {msg.attachments.map((att) => (
+                                          <AttachmentChipReadOnly
+                                            key={att.id}
+                                            filename={att.filename}
+                                            size={att.size}
+                                            loading={downloadingAttachmentId === att.id}
+                                            onOpen={() => openAttachment(att)}
+                                          />
+                                        ))}
+                                      </div>
+                                    )}
                                   </div>
                                 )
                               }
@@ -2383,6 +2465,19 @@ function InboxContent() {
                                           </div>
                                         )
                                       })()}
+                                    </div>
+                                  )}
+                                  {msg.attachments && msg.attachments.length > 0 && (
+                                    <div className="mt-2 flex flex-wrap gap-2">
+                                      {msg.attachments.map((att) => (
+                                        <AttachmentChipReadOnly
+                                          key={att.id}
+                                          filename={att.filename}
+                                          size={att.size}
+                                          loading={downloadingAttachmentId === att.id}
+                                          onOpen={() => openAttachment(att)}
+                                        />
+                                      ))}
                                     </div>
                                   )}
                                 </div>
