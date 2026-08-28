@@ -67,6 +67,8 @@ export function BrandSelector() {
   const [unavailableModalOpen, setUnavailableModalOpen] = useState(false)
   const [unavailableBrand, setUnavailableBrand] = useState<Brand | null>(null)
 
+  const [planInfo, setPlanInfo] = useState<{ name: string; displayName: string } | null>(null)
+
   const handleUnavailableModalClose = () => {
     setUnavailableModalOpen(false)
     setDropdownOpen(false)
@@ -123,6 +125,29 @@ export function BrandSelector() {
 
     fetchBrands()
   }, [pathname, router])
+
+  // Current plan, shown at the top of the dropdown with an upgrade shortcut —
+  // same endpoint/cache key the Billing page and its Settings prefetch use
+  // (lib/settings-prefetch.ts), so whichever loads first primes it for both.
+  useEffect(() => {
+    const userId = session?.user?.id
+    if (!userId) return
+    fetchCached<any>(`/api/subscription/check?user=${userId}`, async () => {
+      const res = await fetch("/api/subscription/check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: userId }),
+      })
+      if (!res.ok) throw new Error(`Failed to check subscription (${res.status})`)
+      return res.json()
+    })
+      .then((d: any) => {
+        if (d?.subscription?.plan) {
+          setPlanInfo({ name: d.subscription.plan.name, displayName: d.subscription.plan.display_name })
+        }
+      })
+      .catch(() => {})
+  }, [session?.user?.id])
 
   // Close on outside click
   useEffect(() => {
@@ -273,6 +298,24 @@ export function BrandSelector() {
       }}
       className="bg-white rounded-xl shadow-2xl border border-gray-100 overflow-hidden"
     >
+      {/* Current plan + upgrade shortcut */}
+      {planInfo && (
+        <>
+          <div className="px-6 py-2.5 flex items-center justify-between">
+            <span className="text-sm font-medium text-gray-700">{planInfo.displayName} Plan</span>
+            {planInfo.name !== "team" && (
+              <button
+                onClick={() => { router.push("/pricing"); setDropdownOpen(false) }}
+                className="text-xs font-semibold text-[#0F6B3E] bg-[#0F6B3E]/10 hover:bg-[#0F6B3E]/15 px-2.5 py-1 rounded-full transition-colors"
+              >
+                Upgrade
+              </button>
+            )}
+          </div>
+          <div className="h-px bg-gray-100 mx-3" />
+        </>
+      )}
+
       {/* Team */}
       <div className="px-3 py-2">
         <button
