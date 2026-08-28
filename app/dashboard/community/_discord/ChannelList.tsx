@@ -178,6 +178,7 @@ export function ChannelList({
   onDisconnectServer,
   onReconnectAccount,
   onLogoutAccount,
+  onLogoutAll,
 }: {
   channels: Channel[] | null
   activeId: string | null
@@ -193,6 +194,7 @@ export function ChannelList({
   onDisconnectServer: () => void
   onReconnectAccount: () => void
   onLogoutAccount: () => void
+  onLogoutAll: () => void
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
 
@@ -224,6 +226,7 @@ export function ChannelList({
         onDisconnectServer={onDisconnectServer}
         onReconnectAccount={onReconnectAccount}
         onLogoutAccount={onLogoutAccount}
+        onLogoutAll={onLogoutAll}
       />
 
       <nav aria-label="Channels" className="min-h-0 flex-1 overflow-y-auto px-2 py-2">

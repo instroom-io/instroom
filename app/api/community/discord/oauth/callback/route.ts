@@ -110,7 +110,23 @@ export async function GET(req: NextRequest) {
   console.log(`${LOG} linked Instroom user ${session.user.id} → Discord ${me.id}`)
 
   const base = appBaseUrl(req)
-  const res = NextResponse.redirect(`${base}${returnTo}?discordLinked=1`)
+  // `?` only when returnTo carries no query of its own, otherwise `&` — the
+  // same join the install callback's backTo() already uses.
+  //
+  // This used to hardcode `?`. That was harmless only while returnTo was always
+  // the bare "/dashboard/community"; once it started carrying the page's own
+  // query (?brandId=...), the redirect became
+  //
+  //     /dashboard/community?brandId=cmt3tvtr4...?discordLinked=1
+  //
+  // and a second "?" is not a delimiter — it is part of the PRECEDING value. So
+  // searchParams.get("brandId") returned "cmt3tvtr4...?discordLinked=1", which
+  // the community page then encoded straight into the status path as
+  // /api/brands/cmt3tvtr4...%3FdiscordLinked%3D1/integrations/discord/status —
+  // a brand id that matches nothing, answered with 403. Exactly the failure the
+  // Outlook callback documents for the same reason.
+  const separator = returnTo.includes("?") ? "&" : "?"
+  const res = NextResponse.redirect(`${base}${returnTo}${separator}discordLinked=1`)
   res.cookies.delete(STATE_COOKIE)
   return res
 }

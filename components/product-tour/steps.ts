@@ -315,9 +315,11 @@ export const SCENES: TourScene[] = [
         matchesRoute: isCommunityRoute,
       },
       {
+        // Anchored on whichever setup step is showing: the account link comes
+        // first, and the server step replaces it once the account is connected.
         target: "community-connect-server",
-        title: "Connect your server",
-        body: "Link your team's Discord server so conversations with other brands live in one place.",
+        title: "Start here",
+        body: "Link your Discord account first, then connect your team's server — this button walks you through whichever step is next.",
         placement: "top",
         matchesRoute: isCommunityRoute,
       },
