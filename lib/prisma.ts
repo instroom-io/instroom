@@ -55,7 +55,29 @@ declare global {
   var __directPrisma: PrismaClient | undefined
 }
 
+// Accelerate is only used when the deployment actually has an Accelerate
+// connection string. Locally, only DATABASE_URL (a direct mysql:// URL) is
+// set — passing `undefined` here threw PrismaClientConstructorValidationError,
+// and the edge client can't speak mysql:// anyway. So when
+// PRISMA_ACCELERATE_URL is absent we fall back to the ordinary client on
+// DATABASE_URL; production keeps its Accelerate path unchanged.
+const accelerateUrl = process.env.PRISMA_ACCELERATE_URL
+
 function createAcceleratedClient() {
+  if (!accelerateUrl) {
+    return new PrismaClient({
+      log:
+        process.env.NODE_ENV === "development"
+          ? ["error", "warn"]
+          : ["error"],
+      datasources: {
+        db: {
+          url: process.env.DATABASE_URL,
+        },
+      },
+    }).$extends(withAccelerate())
+  }
+
   return new PrismaClientEdge({
     log:
       process.env.NODE_ENV === "development"
@@ -68,7 +90,7 @@ function createAcceleratedClient() {
     // is the datasource override below, same shape as any other client.
     datasources: {
       db: {
-        url: process.env.PRISMA_ACCELERATE_URL,
+        url: accelerateUrl,
       },
     },
   }).$extends(withAccelerate())
@@ -87,7 +109,7 @@ function createDirectPrismaClient(): PrismaClient {
     // Accelerate-backed `prisma` export above).
     datasources: {
       db: {
-        url: process.env.DIRECT_DATABASE_URL,
+        url: process.env.DIRECT_DATABASE_URL ?? process.env.DATABASE_URL,
       },
     },
   })

@@ -131,10 +131,11 @@ export function prefetchDashboard(brandId: string | null | undefined): () => voi
     {
       key: `/api/brand/${brandId}/taxonomy`,
       run: async () => {
-        const [nichesData, locationsData] = await Promise.all([
-          fetch(`/api/brand/${brandId}/niches`).then((r) => r.json()),
-          fetch(`/api/brand/${brandId}/locations`).then((r) => r.json()),
-        ])
+        // One after the other, not together: this queue exists to hold the
+        // prefetch to a single pooled connection at a time (see
+        // runProgressively), and this was the one task that took two.
+        const nichesData = await fetch(`/api/brand/${brandId}/niches`).then((r) => r.json())
+        const locationsData = await fetch(`/api/brand/${brandId}/locations`).then((r) => r.json())
         return {
           niches: nichesData.niches ?? [],
           locations: locationsData.locations ?? [],

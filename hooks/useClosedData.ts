@@ -17,6 +17,8 @@ import {
   endExternalRequest,
   beginKeyWrite,
   endKeyWrite,
+  beginRowWrite,
+  isLatestRowWrite,
 } from "@/lib/data-cache"
 import { invalidateInfluencerDerivedCaches, closedCacheKey } from "@/lib/cache-invalidation"
 
@@ -159,6 +161,10 @@ interface UseClosedDataReturn {
   updateOrderDetails: (id: string, fields: OrderDetailsFields) => Promise<boolean>
   /** True while at least one write is in flight — drives the saving indicator. */
   isSaving: boolean
+  /** True when the write that just finished failed, so the pill skips "Saved". */
+  saveFailed: boolean
+  /** Processing wording for the write in flight; null takes "Saving changes…". */
+  saveMessage: string | null
   refetch: () => void
 }
 
@@ -340,14 +346,26 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
   // Mirrored into state so the board can show a saving indicator while a write
   // is actually in flight (a ref alone never triggers a render).
   const [pendingWrites, setPendingWrites] = useState(0)
+  // Whether the write that finished most recently failed. Read by the shared
+  // SaveStatusPill so a failed save shows nothing instead of "Saved" — the
+  // failure itself is still reported by the page's own notification.
+  const [saveFailed, setSaveFailed] = useState(false)
+  // What the shared SaveStatusPill says while a write is out. Null takes the
+  // standard "Saving changes…"; a stage/status move names itself "Updating…"
+  // so the wording matches the operation, as it does on every other screen.
+  const [saveMessage, setSaveMessage] = useState<string | null>(null)
 
   // Bracketing the write bumps the cache's write generation, so a revalidation
   // that started before this mutation cannot overwrite the newer state when it
   // resolves. Both edges are marked — a rollback is also newer than that
   // in-flight response.
-  const beginWrite = useCallback(() => {
+  const beginWrite = useCallback((message?: string) => {
+    // Only the first write of a batch names it — a later one joining the same
+    // in-flight window must not relabel what is already on screen.
+    if (pendingRef.current === 0) setSaveMessage(message ?? null)
     pendingRef.current += 1
     setPendingWrites((n) => n + 1)
+    setSaveFailed(false)
     // Counted into inFlightCount() so the background prefetch yields while a
     // save is in flight. These PATCHes do not go through the cache, so without
     // this the prefetch saw an idle app and took one of the three pooled
@@ -360,6 +378,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
   const endWrite = useCallback((succeeded = true) => {
     pendingRef.current = Math.max(0, pendingRef.current - 1)
     setPendingWrites((n) => Math.max(0, n - 1))
+    if (!succeeded) setSaveFailed(true)
     endExternalRequest()
     // `succeeded` is what stops a failed save from stamping a fresh "updated"
     // time: the rollback writes to the cache too, and without this the
@@ -410,6 +429,11 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
     ): Promise<UpdateColumnResult> => {
       if (!brandId) return { ok: false, error: "No brand selected" }
 
+      // Claim this row's newest write and open the write window BEFORE the
+      // optimistic change — see the note in usePipelineData.updateStatus.
+      const writeSeq = cacheKey ? beginRowWrite(cacheKey, id) : 0
+      beginWrite("Updating…")
+
       // Only THIS row is remembered for rollback. Restoring a whole-list
       // snapshot also reverted every other card moved since this call started,
       // so one failed move undid its neighbours' successful ones.
@@ -428,11 +452,14 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
       let writeOk = true
       const rollback = () => {
         writeOk = false
+        // A later change to this row has already been applied, so this
+        // snapshot is out of date: restoring it would undo the newer value.
+        // See beginRowWrite in lib/data-cache.
+        if (cacheKey && !isLatestRowWrite(cacheKey, id, writeSeq)) return
         if (!previous) return
         setDataCached((prev) => prev.map((item) => (item.id === id ? previous! : item)))
       }
 
-      beginWrite()
 
       try {
         const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
@@ -471,13 +498,18 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         endWrite(writeOk)
       }
     },
-    [brandId, setDataCached, beginWrite, endWrite]
+    [brandId, cacheKey, setDataCached, beginWrite, endWrite]
   )
 
   // ── Update Paid Collab (optimistic) ───────────────────────────────────────
   const updatePaidCollab = useCallback(
     async (id: string, paidCollabData: PaidCollabData): Promise<boolean> => {
       if (!brandId) return false
+
+      // Claim this row's newest write and open the write window BEFORE the
+      // optimistic change — see the note in usePipelineData.updateStatus.
+      const writeSeq = cacheKey ? beginRowWrite(cacheKey, id) : 0
+      beginWrite()
 
       // Per-row rollback — see updateColumn.
       let previous: ClosedInfluencer | undefined
@@ -499,6 +531,10 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
       let writeOk = true
       const rollback = () => {
         writeOk = false
+        // A later change to this row has already been applied, so this
+        // snapshot is out of date: restoring it would undo the newer value.
+        // See beginRowWrite in lib/data-cache.
+        if (cacheKey && !isLatestRowWrite(cacheKey, id, writeSeq)) return
         if (!previous) return
         setDataCached((prev) => prev.map((item) => (item.id === id ? previous! : item)))
       }
@@ -507,7 +543,6 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
       // cache's write generation, so a background revalidation that started
       // before it could resolve afterwards and put the old value back — and the
       // saving indicator never showed for it either.
-      beginWrite()
       try {
         const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
           method:  "PATCH",
@@ -529,13 +564,18 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         endWrite(writeOk)
       }
     },
-    [brandId, setDataCached, beginWrite, endWrite]
+    [brandId, cacheKey, setDataCached, beginWrite, endWrite]
   )
 
   // ── Update Campaign Type (optimistic) ─────────────────────────────────────
   const updateCampaignType = useCallback(
     async (id: string, campaignType: string): Promise<boolean> => {
       if (!brandId) return false
+
+      // Claim this row's newest write and open the write window BEFORE the
+      // optimistic change — see the note in usePipelineData.updateStatus.
+      const writeSeq = cacheKey ? beginRowWrite(cacheKey, id) : 0
+      beginWrite()
 
       // Per-row rollback — see updateColumn.
       let previous: ClosedInfluencer | undefined
@@ -553,6 +593,10 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
       let writeOk = true
       const rollback = () => {
         writeOk = false
+        // A later change to this row has already been applied, so this
+        // snapshot is out of date: restoring it would undo the newer value.
+        // See beginRowWrite in lib/data-cache.
+        if (cacheKey && !isLatestRowWrite(cacheKey, id, writeSeq)) return
         if (!previous) return
         setDataCached((prev) => prev.map((item) => (item.id === id ? previous! : item)))
       }
@@ -561,7 +605,6 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
       // cache's write generation, so a background revalidation that started
       // before it could resolve afterwards and put the old value back — and the
       // saving indicator never showed for it either.
-      beginWrite()
       try {
         const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
           method:  "PATCH",
@@ -583,7 +626,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         endWrite(writeOk)
       }
     },
-    [brandId, setDataCached, beginWrite, endWrite]
+    [brandId, cacheKey, setDataCached, beginWrite, endWrite]
   )
 
   // ── Update Post URL (optimistic) ──────────────────────────────────────────
@@ -593,6 +636,11 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
       if (!brandId) return false
 
       const trimmed = postUrl.trim()
+      // Claim this row's newest write and open the write window BEFORE the
+      // optimistic change — see the note in usePipelineData.updateStatus.
+      const writeSeq = cacheKey ? beginRowWrite(cacheKey, id) : 0
+      beginWrite()
+
       // Per-row rollback — see updateColumn.
       let previous: ClosedInfluencer | undefined
 
@@ -609,6 +657,10 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
       let writeOk = true
       const rollback = () => {
         writeOk = false
+        // A later change to this row has already been applied, so this
+        // snapshot is out of date: restoring it would undo the newer value.
+        // See beginRowWrite in lib/data-cache.
+        if (cacheKey && !isLatestRowWrite(cacheKey, id, writeSeq)) return
         if (!previous) return
         setDataCached((prev) => prev.map((item) => (item.id === id ? previous! : item)))
       }
@@ -617,7 +669,6 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
       // cache's write generation, so a background revalidation that started
       // before it could resolve afterwards and put the old value back — and the
       // saving indicator never showed for it either.
-      beginWrite()
       try {
         const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
           method:  "PATCH",
@@ -639,7 +690,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         endWrite(writeOk)
       }
     },
-    [brandId, setDataCached, beginWrite, endWrite]
+    [brandId, cacheKey, setDataCached, beginWrite, endWrite]
   )
 
   // ── Update Order Details (optimistic) ─────────────────────────────────────
@@ -649,6 +700,11 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
   const updateOrderDetails = useCallback(
     async (id: string, fields: OrderDetailsFields): Promise<boolean> => {
       if (!brandId) return false
+
+      // Claim this row's newest write and open the write window BEFORE the
+      // optimistic change — see the note in usePipelineData.updateStatus.
+      const writeSeq = cacheKey ? beginRowWrite(cacheKey, id) : 0
+      beginWrite()
 
       // Per-row rollback, matching every other mutation in this hook. This one
       // kept a WHOLE-LIST snapshot and restored it on failure, which also
@@ -678,6 +734,10 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
       let writeOk = true
       const rollback = () => {
         writeOk = false
+        // A later change to this row has already been applied, so this
+        // snapshot is out of date: restoring it would undo the newer value.
+        // See beginRowWrite in lib/data-cache.
+        if (cacheKey && !isLatestRowWrite(cacheKey, id, writeSeq)) return
         if (!previous) return
         setDataCached((prev) => prev.map((item) => (item.id === id ? previous! : item)))
       }
@@ -686,7 +746,6 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
       // cache's write generation, so a background revalidation that started
       // before it could resolve afterwards and put the old value back — and the
       // saving indicator never showed for it either.
-      beginWrite()
       try {
         const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
           method:  "PATCH",
@@ -708,7 +767,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         endWrite(writeOk)
       }
     },
-    [brandId, setDataCached, beginWrite, endWrite]
+    [brandId, cacheKey, setDataCached, beginWrite, endWrite]
   )
 
   return {
@@ -721,6 +780,8 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
     updatePostUrl,
     updateOrderDetails,
     isSaving: pendingWrites > 0,
+    saveFailed,
+    saveMessage,
     // Skipped while a write is in flight: its response would predate the
     // mutation, which is what pendingRef is here to prevent.
     refetch: () => { if (pendingRef.current === 0) void refetch() }, // background sync, no spinner

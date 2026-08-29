@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { logActivity } from "@/lib/activity-log"
 import { NextRequest, NextResponse } from "next/server"
+import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 
 export async function GET(
   req: NextRequest,
@@ -278,35 +279,13 @@ export async function GET(
     // 503 with Retry-After is what the client needs to tell "try again" from
     // "this will never work"; the page renders a Retry button on this.
     if (isDatabaseCapacityError(message)) {
-      return NextResponse.json(
-        {
-          error: "The database is temporarily out of connections. Please retry in a moment.",
-          retryable: true,
-        },
-        { status: 503, headers: { "Retry-After": "5" } }
-      )
+      return databaseCapacityResponse()
     }
 
     return NextResponse.json({ error: "Failed to fetch influencers" }, { status: 500 })
   }
 }
 
-/**
- * Is this failure the database refusing another connection, rather than a fault
- * in the request?
- *
- * Matched on the message because neither shape arrives as a usable code: the
- * MySQL 1203 comes through as a PrismaClientInitializationError whose `errorCode`
- * is undefined (confirmed against this database), so the text is the only signal.
- */
-function isDatabaseCapacityError(message: string): boolean {
-  return (
-    message.includes("max_user_connections") ||
-    message.includes("Too many database connections") ||
-    message.includes("P2024") ||
-    message.includes("Timed out fetching a new connection")
-  )
-}
 
 export async function POST(
   req: NextRequest,

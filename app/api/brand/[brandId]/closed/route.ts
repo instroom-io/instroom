@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
+import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 
 type ClosedColumn =
   | "For Order Creation"
@@ -306,6 +307,8 @@ export async function GET(
     return NextResponse.json({ success: true, data })
   } catch (error: any) {
     console.error("GET closed error:", error)
+    // Same capacity handling as the influencer list and the Pipeline board.
+    if (isDatabaseCapacityError(error)) return databaseCapacityResponse()
     return NextResponse.json(
       { error: "Failed to fetch data", detail: error?.message },
       { status: 500 }

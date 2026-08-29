@@ -1,7 +1,7 @@
 "use client"
 // table-sheet/profile-sidebar.tsx
 
-import React, { useState, useEffect } from "react"
+import React, { useState, useEffect, useRef } from "react"
 import type { InfluencerRow, CustomColumn } from "./types"
 import { platforms } from "./constants"
 import { STATUS_LABEL, JOURNEY_STATUSES, getJourneyStatus, journeyStatusToFields, type JourneyStatus } from "./constants"
@@ -709,12 +709,38 @@ export default function ProfileSidebar({
     setPostData({ postLink: "", likes: "", sales: "", driveLink: "", comments: "", amount: "", usageRights: "", views: "", clicks: "" })
   }
 
+  // Keyed on the row's IDENTITY, not the row object.
+  //
+  // Every edit below now flows straight back out through `onUpdate`, so the
+  // `row` prop changes on each keystroke. Resetting on that would have wiped
+  // the Order and Post tab fields — which are local, unsaved form state — while
+  // the user was typing. Switching to a different influencer still resets, so
+  // the panel always shows (and saves) the record it is actually pointed at.
   useEffect(() => {
     if (row) {
       resetFormToRow()
       setProfileTab(0)
     }
-  }, [row])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [row?.id])
+
+  // ── Autosave ──────────────────────────────────────────────────────────────
+  // The sidebar has no save of its own. An edit is handed to the table, which
+  // is the ONE save pipeline in this feature (TableSheet → onRowsChange → the
+  // Influencer List page's debounced, serialised PUT queue). That is what makes
+  // an edit survive closing the panel, switching influencer or navigating away,
+  // collapses a burst of edits into a single write of the latest state, and
+  // keeps a second, competing request from racing the first.
+  const lastPropagated = useRef<string | null>(null)
+  useEffect(() => {
+    if (!row || !editedRow || editedRow.id !== row.id) return
+    const next = JSON.stringify(editedRow)
+    // Nothing edited (or the table has already caught up) — nothing to send.
+    if (next === JSON.stringify(row)) { lastPropagated.current = next; return }
+    if (next === lastPropagated.current) return
+    lastPropagated.current = next
+    onUpdate(editedRow)
+  }, [editedRow, row, onUpdate])
 
   const handleCancel = () => resetFormToRow()
 
@@ -787,66 +813,52 @@ export default function ProfileSidebar({
     }
   }
 
+  // The influencer fields are already persisted by the autosave above — this
+  // does NOT issue a second PUT for them, which is what used to race the
+  // table's own save and write the same row twice per click.
+  //
+  // What is left here is the attribution record (coupon, affiliate link, spark
+  // ads), which lives on its own endpoint and has no autosave of its own. The
+  // in-flight guard makes a double-click a no-op rather than a second request.
   const handleSave = async () => {
-    if (!editedRow || !row?.id) return
+    if (!editedRow || !row?.id || isSaving) return
     if (row.id.trim() === "") { onToast?.("error", "Cannot save: Influencer ID is missing."); return }
     setIsSaving(true)
     try {
-      const url = brandId ? `/api/brand/${brandId}/influencers/${row.id}` : `/api/influencers/${row.id}`
       const existingLastName = editedRow.full_name ? editedRow.full_name.split(" ").slice(1).join(" ") : ""
       const rebuiltFullName = editedRow.first_name
         ? existingLastName ? `${editedRow.first_name} ${existingLastName}` : editedRow.first_name
         : editedRow.full_name || null
 
-      const payload = {
-        handle: editedRow.handle, platform: editedRow.platform, full_name: rebuiltFullName,
-        email: editedRow.contact_info || editedRow.email || null,
-        gender: editedRow.gender || null, niche: editedRow.niche || null,
-        location: editedRow.location || null, bio: editedRow.bio || null,
-        profile_image_url: editedRow.profile_image_url || null, social_link: editedRow.social_link || null,
-        follower_count: parseInt(String(editedRow.follower_count)) || 0,
-        engagement_rate: parseFloat(String(editedRow.engagement_rate)) || 0,
-        avg_likes: parseInt(String(editedRow.avg_likes)) || 0,
-        avg_comments: parseInt(String(editedRow.avg_comments)) || 0,
-        avg_views: parseInt(String(editedRow.avg_views)) || 0,
-        approval_status: editedRow.approval_status, approval_notes: editedRow.approval_notes || null,
-        contact_status: editedRow.contact_status, agreed_rate: editedRow.agreed_rate || null,
-        notes: editedRow.notes || null, stage: editedRow.stage, transferred_date: editedRow.transferred_date || null,
-      }
+      // Flushed through the same single pipeline every other edit takes.
+      const synced = { ...editedRow, full_name: rebuiltFullName || editedRow.full_name }
+      setEditedRow(synced)
 
-      const response = await fetch(url, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
-      if (response.ok) {
-        const synced = { ...editedRow, full_name: rebuiltFullName || editedRow.full_name }
-
-        setAttributionSaveMessage(null)
-        if (brandId && row.brand_influencer_id) {
-          try {
-            const attrRes = await fetch(`/api/brand/${brandId}/attribution/${row.brand_influencer_id}`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                coupon: orderData.discountCode || null,
-                affiliateLink: orderData.affiliateLink || null,
-                sparkAds: orderData.sparkAds || null,
-              }),
-            })
-            if (attrRes.ok) {
-              const attrJson = await attrRes.json()
-              if (attrJson.goAffPro?.synced === false && attrJson.goAffPro?.reason) {
-                setAttributionSaveMessage(`GoAffPro sync skipped: ${attrJson.goAffPro.reason}`)
-              }
+      setAttributionSaveMessage(null)
+      if (brandId && row.brand_influencer_id) {
+        try {
+          const attrRes = await fetch(`/api/brand/${brandId}/attribution/${row.brand_influencer_id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              coupon: orderData.discountCode || null,
+              affiliateLink: orderData.affiliateLink || null,
+              sparkAds: orderData.sparkAds || null,
+            }),
+          })
+          if (attrRes.ok) {
+            const attrJson = await attrRes.json()
+            if (attrJson.goAffPro?.synced === false && attrJson.goAffPro?.reason) {
+              setAttributionSaveMessage(`GoAffPro sync skipped: ${attrJson.goAffPro.reason}`)
             }
-          } catch { /* non-critical — main influencer save already succeeded */ }
+          } else {
+            onToast?.("error", "Could not save the attribution details")
+          }
+        } catch {
+          onToast?.("error", "Could not save the attribution details")
         }
-
-        setEditedRow(synced); onUpdate(synced); onToast?.("success", "Saved successfully")
-      } else if (response.status === 404) {
-        onToast?.("error", "Influencer not found. Try refreshing.")
-      } else {
-        const error = await response.json(); onToast?.("error", error.error || "Failed to save")
       }
-    } catch { onToast?.("error", "Failed to save. Check your connection.") }
-    finally { setIsSaving(false) }
+    } finally { setIsSaving(false) }
   }
 
   const S = {

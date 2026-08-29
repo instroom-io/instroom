@@ -9,7 +9,7 @@ import {
   IconTrash, IconPlus, IconX, IconExternalLink, IconCheck, IconCalendar,
   IconGripVertical, IconSearch, IconFilter, IconTags, IconMapPin,
   IconChecklist, IconCopy, IconAlertTriangle, IconDownload, IconUpload,
-  IconSettings, IconChevronDown, IconLoader2, IconArrowsSort, IconDots, IconDotsVertical, IconEye,
+  IconSettings, IconChevronDown, IconLoader2, IconArrowsSort, IconDots, IconDotsVertical,
 } from "@tabler/icons-react"
 
 import type { InfluencerRow, CustomColumn, AnyColDef, CustomColDef, CellAddress, FilterState, ToastNotification, BulkApprovalResult } from "./types"
@@ -23,6 +23,7 @@ import {
   handleApprovalChange, isValidUrl, normalizeUrl, formatFollowers,
   exportToCSV, downloadTemplate, importFromCSV,
   normalizeApiUsername, isValidApiUsername, describeLookupFailure,
+  isUsableEmail, normalizeEmail, normalizeContactInfo,
 } from "./utils"
 import { useToast } from "./hooks"
 import { ProfilePicture, PlatformIcon, StatusBadge, ApprovalBadge, MultiSelectDisplay } from "./ui-atoms"
@@ -278,6 +279,16 @@ export default function TableSheet({
   const [selectedRowId, setSelectedRowId]   = useState<string | null>(null)
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set())
   const [sidebarRowId, setSidebarRowId]     = useState<string | null>(null)
+  /**
+   * Pending "open the profile" from a click on the handle name.
+   *
+   * Same 200ms split `handleRowClick` uses: a single click on the name opens
+   * the profile panel, a double click on it edits the handle instead, and the
+   * timer is what lets the second click cancel the first one's intent rather
+   * than the panel flashing open and shut.
+   */
+  const nameClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (nameClickTimerRef.current) clearTimeout(nameClickTimerRef.current) }, [])
 
   const {
     niches: dbNiches,
@@ -592,6 +603,10 @@ export default function TableSheet({
     // A double-click that opened an editor is an edit, not a request to open the
     // profile panel.
     if (editIntentRef.current || editCell || popupCell) { editIntentRef.current = false; return }
+    // A row with no handle yet is a blank row the user has just added. There is
+    // no influencer to show, so the panel stays shut and the row is theirs to
+    // fill in — the same rule the handle cell's name applies.
+    if (!cleanHandle(rowsRef.current.find(r => r.id === id)?.handle ?? "")) return
     setSidebarRowId(id)
   }
 
@@ -816,40 +831,66 @@ export default function TableSheet({
         onLookupFailed?.(rowId)
         return
       }
-      let enrichedRow: InfluencerRow | null = null
-      setRows(prev => {
-        if (data.email) {
-          const emailLower = data.email.toLowerCase()
-          const emailDuplicate = prev.find(r =>
+      // ── Merge OUTSIDE the state updater ──────────────────────────────────
+      // All of this used to run inside `setRows(prev => …)`, which React
+      // invokes while rendering. Three things there were state updates
+      // belonging to other components — the duplicate-email `addToast`, the
+      // `onRowsChange` handed to the parent page, and the `enrichedRow`
+      // assignment feeding the save — so React raised "Cannot update a
+      // component while rendering a different component", and in Strict Mode
+      // the updater could run twice and toast twice.
+      //
+      // The rows mirror is already the established way round this here (see the
+      // credit guards above): this is an async callback, not render, so it can
+      // read the current rows, build the next ones, and then do each of those
+      // three things as an ordinary post-render call.
+      const prev = rowsRef.current
+      const incomingEmail = normalizeEmail(data.email)
+      const incomingContact = normalizeContactInfo(data.contact_info)
+
+      // Only a REAL address can collide with another row's. "Email not
+      // available" is what the provider sends when it has none, and every row
+      // lacking an email used to "share" it with every other.
+      const emailDuplicate = incomingEmail
+        ? prev.find(r =>
             r.id !== rowId &&
-            ((r.email || "").toLowerCase() === emailLower || (r.contact_info || "").toLowerCase() === emailLower)
+            (normalizeEmail(r.email).toLowerCase() === incomingEmail.toLowerCase() ||
+             normalizeContactInfo(r.contact_info).toLowerCase() === incomingEmail.toLowerCase())
           )
-          if (emailDuplicate) addToast("warning", `@${clean} shares an email with @${emailDuplicate.handle} — possible duplicate`)
-        }
-        const next = prev.map(row => {
-          if (row.id !== rowId) return row
-          const u = { ...row }
-          if (!u.full_name && data.full_name)         u.full_name = data.full_name
-          if (!u.email && data.email)                 u.email = data.email
-          if (!u.contact_info && data.contact_info)   u.contact_info = data.contact_info
-          if (!u.social_link && data.social_link)     u.social_link = data.social_link
-          if (!u.location && data.location)           u.location = data.location
-          if (!u.niche && data.niche)                 u.niche = data.niche
-          if (!u.gender && data.gender)               u.gender = data.gender
-          if (data.profile_image_url)                 u.profile_image_url = data.profile_image_url
-          if (data.first_name)                        u.first_name = data.first_name
-          if (data.follower_count && data.follower_count !== "0") u.follower_count = data.follower_count
-          if (data.engagement_rate && data.engagement_rate !== "0") u.engagement_rate = data.engagement_rate
-          if (data.avg_likes !== undefined)           u.avg_likes = data.avg_likes
-          if (data.avg_comments !== undefined)        u.avg_comments = data.avg_comments
-          if (data.avg_views !== undefined)           u.avg_views = data.avg_views
-          return u
-        })
-        onRowsChange?.(next)
-        enrichedRow = next.find(r => r.id === rowId) ?? null
-        return next
+        : undefined
+
+      const next = prev.map(row => {
+        if (row.id !== rowId) return row
+        const u = { ...row }
+        if (!u.full_name && data.full_name)         u.full_name = data.full_name
+        // A real address already on the row is never replaced, and the
+        // provider's stand-in is never written: `incomingEmail` is empty
+        // unless there is something usable to store.
+        if (!isUsableEmail(u.email) && incomingEmail)             u.email = incomingEmail
+        if (!normalizeContactInfo(u.contact_info) && incomingContact) u.contact_info = incomingContact
+        if (!u.social_link && data.social_link)     u.social_link = data.social_link
+        if (!u.location && data.location)           u.location = data.location
+        if (!u.niche && data.niche)                 u.niche = data.niche
+        if (!u.gender && data.gender)               u.gender = data.gender
+        if (data.profile_image_url)                 u.profile_image_url = data.profile_image_url
+        if (data.first_name)                        u.first_name = data.first_name
+        if (data.follower_count && data.follower_count !== "0") u.follower_count = data.follower_count
+        if (data.engagement_rate && data.engagement_rate !== "0") u.engagement_rate = data.engagement_rate
+        if (data.avg_likes !== undefined)           u.avg_likes = data.avg_likes
+        if (data.avg_comments !== undefined)        u.avg_comments = data.avg_comments
+        if (data.avg_views !== undefined)           u.avg_views = data.avg_views
+        return u
       })
-      if (enrichedRow) setTimeout(() => saveRowToDatabase(enrichedRow!), 0)
+
+      setRows(next)
+      onRowsChange?.(next)
+      // Same wording and same trigger as before, just raised after the render
+      // rather than during it.
+      if (emailDuplicate) {
+        addToast("warning", `@${clean} shares an email with @${emailDuplicate.handle} — possible duplicate`)
+      }
+      const enrichedRow = next.find(r => r.id === rowId) ?? null
+      if (enrichedRow) setTimeout(() => saveRowToDatabase(enrichedRow), 0)
     } catch (err) { console.error("Auto-fetch failed:", err) }
     finally { setFetchingRows(prev => { const n = new Set(prev); n.delete(rowId); return n }) }
   }, [onRowsChange, addToast, saveRowToDatabase, fetchInfluencerFromAPI, onLookupFailed])
@@ -1096,6 +1137,104 @@ export default function TableSheet({
     setTimeout(() => { commitGuardRef.current = false }, 50)
   }, [editCell, editValue, allCols, applyCellValue])
 
+  /**
+   * Spreadsheet-style paste into the handle editor.
+   *
+   * Copying a column of usernames out of Sheets or Excel puts one value per
+   * line on the clipboard. Pasted into a single cell that used to land as one
+   * long run-together string, so the only way in was to add a row and type each
+   * handle by hand.
+   *
+   * A paste with no line break is left entirely alone — that is the ordinary
+   * single-handle paste and the browser still handles it. A multi-line paste
+   * fills THIS row with the first handle through the normal edit path
+   * (applyCellValue), which is what arms the existing lookup, the duplicate
+   * check and the page's autosave gate, and appends one row per remaining
+   * handle right below it, each armed the same way. Nothing is written to the
+   * database here: an appended row is a temporary row like any other and is
+   * only created once its lookup succeeds or the user fills in details.
+   */
+  const handleHandlePaste = useCallback((e: React.ClipboardEvent<HTMLInputElement>, rowIdx: number) => {
+    const text = e.clipboardData.getData("text/plain")
+    // No line break — one value into one cell. Untouched.
+    if (!/\r|\n/.test(text.trim())) return
+
+    const handles = text
+      .split(/\r?\n/)
+      // A multi-column copy still fills the handle column: take the first
+      // field, and drop the quoting a spreadsheet adds around a value.
+      .map((line) => cleanHandle(line.split("\t")[0].trim().replace(/^"|"$/g, "")))
+      .filter(Boolean)
+    if (!handles.length) return
+
+    e.preventDefault()
+
+    const target = filteredRows[rowIdx]
+    if (!target) return
+    const platform = target.platform
+
+    // The same duplicate protection a typed handle gets, applied before any row
+    // exists: a handle already in the table for this platform, or repeated
+    // within the paste itself, does not get one.
+    const seen = new Set(
+      rowsRef.current
+        .filter((r) => r.id !== target.id)
+        .map((r) => `${cleanHandle(r.handle).toLowerCase()}|${r.platform}`)
+    )
+    const unique: string[] = []
+    for (const h of handles) {
+      const key = `${h.toLowerCase()}|${platform}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      unique.push(h)
+    }
+    const skipped = handles.length - unique.length
+
+    // Closed before anything is applied, so the editor's blur cannot commit the
+    // pre-paste value over what this writes (commitEdit no-ops without it).
+    setEditCell(null)
+
+    if (!unique.length) {
+      addToast("warning", "Already in the list — nothing pasted")
+      return
+    }
+
+    const [first, ...rest] = unique
+    applyCellValue(rowIdx, "handle", first)
+
+    if (rest.length) {
+      // Deferred one tick so the commit above has landed: the rows mirror is
+      // then current, which is what lets the insert be built and handed to the
+      // parent outside any state updater rather than during a render.
+      setTimeout(() => {
+        const prev = rowsRef.current
+        const at = prev.findIndex((r) => r.id === target.id)
+        const insertAt = at === -1 ? prev.length : at + 1
+        const urlCols = customCols.filter((c) => c.field_type === "url").map((c) => c.field_key)
+        const created = rest.map((h) => {
+          const row = newEmptyRow(customCols)
+          row.handle = h
+          row.platform = platform
+          const profileUrl = getProfileUrl(platform, h)
+          row.social_link = profileUrl
+          urlCols.forEach((fk) => { row.custom[fk] = profileUrl })
+          return row
+        })
+        const next = [...prev.slice(0, insertAt), ...created, ...prev.slice(insertAt)]
+        setRows(next)
+        onRowsChange?.(next)
+        // Each new row enters the existing enrichment flow, with its existing
+        // per-row debounce and already-requested guard.
+        created.forEach((r) => scheduleAutoFetch(r.id, r.handle, r.platform))
+      }, 0)
+    }
+
+    addToast(
+      "success",
+      `${unique.length} handle${unique.length === 1 ? "" : "s"} pasted${skipped ? ` · ${skipped} already in the list` : ""}`
+    )
+  }, [filteredRows, applyCellValue, customCols, onRowsChange, scheduleAutoFetch, addToast])
+
   const cancelEdit = useCallback(() => { setEditCell(null); setPopupCell(null) }, [])
 
   useEffect(() => {
@@ -1227,8 +1366,9 @@ export default function TableSheet({
         // neither — it is always a complete rectangle. `ringCls` is not used
         // either: it is `ring-blue-500`, and this state is neutral.
         //
-        // The <td> keeps the same grey border as every other cell; p-0.5 leaves
-        // a hairline of cell around the box so the two never touch.
+        // The box FILLS the cell (p-0 on the <td>, h-full on the wrapper) and is
+        // the brand green, matching the text editor below — the whole cell is
+        // the editor, so there is no small inset box to aim at.
         //
         // The click handlers stop here: the <tr> carries onClick (row select)
         // and onDoubleClick (open profile), and both fired while typing in or
@@ -1236,14 +1376,14 @@ export default function TableSheet({
         // input, so the whole cell is the editor, not just the text box.
         <td
           key={col.key}
-          className="border border-gray-200 p-0.5 relative"
+          className="border border-gray-200 p-0 relative"
           style={{ minWidth: col.minWidth }}
           onClick={e => { e.stopPropagation(); editInputRef.current?.focus() }}
           onDoubleClick={e => e.stopPropagation()}
         >
-          <div className="flex w-full items-center gap-1.5 rounded-[3px] border border-[#1E1E1E] bg-white px-1 py-0.5">
+          <div className="flex h-full w-full items-center gap-1.5 border-2 border-[#1FAE5B] bg-white px-1.5 py-1">
             <ProfilePicture src={row.profile_image_url} socialLink={row.social_link || getProfileUrl(row.platform, row.handle)} name={row.full_name} handle={row.handle} size={24} />
-            <input ref={editInputRef as any} type="text" value={editValue} placeholder="username" onChange={e => setEditValue(e.target.value)} onBlur={handleEditBlur} onKeyDown={handleEditKeyDown} onMouseDown={e => e.stopPropagation()} className="flex-1 min-w-0 text-sm text-[#1E1E1E] caret-[#1E1E1E] outline-none focus:outline-none focus:ring-0 border-0 bg-transparent" />
+            <input ref={editInputRef as any} type="text" value={editValue} placeholder="username" onChange={e => setEditValue(e.target.value)} onBlur={handleEditBlur} onKeyDown={handleEditKeyDown} onPaste={e => handleHandlePaste(e, rowIdx)} onMouseDown={e => e.stopPropagation()} className="flex-1 min-w-0 text-sm text-[#1E1E1E] caret-[#1FAE5B] outline-none focus:outline-none focus:ring-0 border-0 bg-transparent" />
             {/* The Save / Cancel icon buttons that sat here are gone. Committing
                 and cancelling are unchanged and still fully reachable: the input
                 commits on blur and on Enter/Tab (handleEditBlur /
@@ -1253,26 +1393,30 @@ export default function TableSheet({
       )
       const socialLink = row.social_link || getProfileUrl(row.platform, row.handle)
       return (
-        // Double-click opens the editor; a single click only focuses the cell.
-        // Both stop here so the row's own onClick (select — the blue row
-        // highlight) and onDoubleClick (open profile) do not also fire: a
-        // double-click on this cell used to do all three at once.
+        // A single click opens the editor — this is the column people type and
+        // paste into, and requiring a double-click there was a step with no
+        // purpose. Double-click still opens it too, so nothing that worked
+        // before stopped working. Both stop here so the row's own onClick
+        // (select — the blue row highlight) and onDoubleClick (open profile) do
+        // not also fire: a double-click on this cell used to do all three at
+        // once. The avatar's own onClick stops propagation before this, so
+        // clicking it still opens the profile rather than the editor.
         //
-        // `select-none` stays, so the double-click does not leave the handle
-        // text highlighted behind the editor that replaces it.
+        // `select-none` stays, so the click does not leave the handle text
+        // highlighted behind the editor that replaces it.
         <td
           key={col.key}
           className={`group border border-gray-200 px-1.5 py-1 text-xs cursor-cell select-none relative hover:bg-gray-50 ${ringCls}`}
           style={{ minWidth: col.minWidth }}
-          onClick={e => { e.stopPropagation(); setActiveCell({ rowIdx, colIdx }) }}
+          onClick={e => { e.stopPropagation(); startEdit(rowIdx, colIdx) }}
           onDoubleClick={e => { e.stopPropagation(); startEdit(rowIdx, colIdx) }}
           onFocus={() => setActiveCell({ rowIdx, colIdx })}
-          title="Double-click to edit · click the avatar to view profile"
+          title="Click the name to view the profile · click the cell to edit"
         >
           <div className="flex items-center gap-2">
             <div
               className="rounded-full cursor-pointer flex-shrink-0"
-              onClick={e => { e.stopPropagation(); setSidebarRowId(row.id) }}
+              onClick={e => { e.stopPropagation(); if (cleanHandle(row.handle)) setSidebarRowId(row.id) }}
               title="Click to view profile"
             >
               <ProfilePicture src={row.profile_image_url} socialLink={socialLink} name={row.full_name} handle={row.handle} size={24}
@@ -1289,7 +1433,43 @@ export default function TableSheet({
                 handle refuses to compress and pushes the sibling below out of
                 the cell instead. The editing branch's input already carries it
                 for the same reason. */}
-            <span className="min-w-0 truncate text-sm text-gray-800 font-medium">{cleanHandle(value) || <span className="text-gray-300">Enter username</span>}</span>
+            {/* The name IS the way into the profile panel — the one obvious
+                target in the row, and the same `setSidebarRowId` flow the phone
+                row cards use. The avatar beside it is left exactly as it was:
+                where a row has a social_link, ProfilePicture renders it as a
+                link out to Instagram/TikTok, and that is not changed here.
+                A double click edits the handle instead, so the cell stays
+                editable from its own text.
+                
+                A row with NO handle yet is the "Enter username" placeholder of
+                a blank row just added — there is no influencer to show a
+                profile for, so it stays plain text and the cell's own click
+                opens the editor, which is what the user needs next. */}
+            {cleanHandle(value) ? (
+              <span
+                role="button"
+                tabIndex={-1}
+                onClick={e => {
+                  e.stopPropagation()
+                  if (nameClickTimerRef.current) clearTimeout(nameClickTimerRef.current)
+                  nameClickTimerRef.current = setTimeout(() => {
+                    nameClickTimerRef.current = null
+                    setSidebarRowId(row.id)
+                  }, 200)
+                }}
+                onDoubleClick={e => {
+                  e.stopPropagation()
+                  if (nameClickTimerRef.current) { clearTimeout(nameClickTimerRef.current); nameClickTimerRef.current = null }
+                  startEdit(rowIdx, colIdx)
+                }}
+                title="Click to view profile · double-click to edit"
+                className="min-w-0 truncate text-sm text-gray-800 font-medium cursor-pointer hover:text-[#0F6B3E] hover:underline underline-offset-2"
+              >
+                {cleanHandle(value)}
+              </span>
+            ) : (
+              <span className="min-w-0 truncate text-sm text-gray-300">Enter username</span>
+            )}
           </div>
         </td>
       )
@@ -1316,11 +1496,14 @@ export default function TableSheet({
       // This is one editor, so it is one change: giving those four columns a
       // different treatment from the others sharing this exact code path would
       // reintroduce the inconsistency.
-      // The box is the input's OWN 1px border — an input's border is never
-      // subject to border-collapse, so it cannot come out clipped the way a
-      // ring or a heavier cell border did. p-0.5 on the cell keeps a hairline
-      // of gap so the box and the cell edge stay distinct.
-      return <td key={col.key} className="border border-gray-200 p-0.5 relative" style={{ minWidth: col.minWidth }}><input ref={editInputRef as any} type={col.type === "number" ? "number" : "text"} value={editValue} onChange={e => setEditValue(e.target.value)} onBlur={handleEditBlur} onKeyDown={handleEditKeyDown} onMouseDown={e => e.stopPropagation()} className="w-full h-full rounded-[3px] border border-[#1E1E1E] px-1 py-0.5 text-xs text-[#1E1E1E] caret-[#1E1E1E] outline-none focus:outline-none focus:ring-0 bg-white" /></td>
+      // The box is the input's OWN border — an input's border is never subject
+      // to border-collapse, so it cannot come out clipped the way a ring or a
+      // heavier cell border did. It now FILLS the cell (p-0 on the td, w-full
+      // h-full on the input) instead of sitting as a small inset box, so the
+      // whole cell reads as the editor, and it is the brand green rather than
+      // near-black. px-1.5 py-1 matches the non-editing padding, so the row
+      // does not shift when the editor opens.
+      return <td key={col.key} className="border border-gray-200 p-0 relative" style={{ minWidth: col.minWidth }}><input ref={editInputRef as any} type={col.type === "number" ? "number" : "text"} value={editValue} onChange={e => setEditValue(e.target.value)} onBlur={handleEditBlur} onKeyDown={handleEditKeyDown} onMouseDown={e => e.stopPropagation()} className="w-full h-full border-2 border-[#1FAE5B] px-1.5 py-1 text-xs text-[#1E1E1E] caret-[#1FAE5B] outline-none focus:outline-none focus:ring-0 bg-white" /></td>
     }
 
     if (isPopup) {
@@ -1746,9 +1929,13 @@ export default function TableSheet({
                     {allCols.map((col, ci) => renderCell(row, ri, col, ci))}
                     {!readOnly && <td className="border border-gray-200 bg-gray-50/40" />}
                     <td className="border border-gray-200 text-center bg-gray-50/40">
+                      {/* Delete only. The "view profile" eye that sat here was a
+                          second way in to the panel the handle cell's avatar
+                          already opens, so the row-end actions are just the
+                          destructive one now. Nothing else about opening the
+                          profile changed — setSidebarRowId is still reached from
+                          the avatar and from the phone row cards. */}
                       <div className="flex items-center justify-center gap-0.5">
-                        <button onClick={e => { e.stopPropagation(); setSidebarRowId(row.id) }} title="View profile"
-                          className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-blue-600 transition"><IconEye size={13} /></button>
                         {!readOnly && <button onClick={e => { e.stopPropagation(); deleteRow(row.id) }} title="Delete row"
                           className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-500 transition"><IconTrash size={12} /></button>}
                       </div>

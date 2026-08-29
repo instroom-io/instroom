@@ -33,10 +33,13 @@ export function useBrandTaxonomy(brandId: string | null) {
 
   // ── Fetch both, once, shared across every modal that mounts this hook ────
   const fetchTaxonomy = useCallback(async () => {
-    const [nichesData, locationsData] = await Promise.all([
-      fetch(`/api/brand/${brandId}/niches`).then((r) => r.json()),
-      fetch(`/api/brand/${brandId}/locations`).then((r) => r.json()),
-    ])
+    // One after the other, not together. Every modal that manages niches or
+    // locations mounts this hook, and two simultaneous route handlers took two
+    // of the three pooled connections at the moment a page was also loading its
+    // own data. The shared cache entry means this pair is fetched once per
+    // brand either way, so the only thing serialising costs is one round trip.
+    const nichesData = await fetch(`/api/brand/${brandId}/niches`).then((r) => r.json())
+    const locationsData = await fetch(`/api/brand/${brandId}/locations`).then((r) => r.json())
     return {
       niches: (nichesData.niches ?? []) as BrandNiche[],
       locations: (locationsData.locations ?? []) as BrandLocation[],

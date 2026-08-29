@@ -5,7 +5,7 @@ import TierSettingsModal from "./TierSettingsModal"
 import AddPartnerModal from "./AddPartnerModal"
 import NewCampaignModal from "./NewCampaignModal"
 import InfluencerProfileSidebar from "./InfluencerProfileSidebar"
-import { IconSearch, IconFilter, IconBuildingStore, IconLoader2 } from "@tabler/icons-react"
+import { IconSearch, IconFilter, IconBuildingStore } from "@tabler/icons-react"
 import { ReactNode } from "react"
 import { useBrandTaxonomy } from "@/hooks/useBrandTaxonomy"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
@@ -14,6 +14,7 @@ import { TableSkeleton } from "@/components/shared/skeletons"
 import { getCachedData, setCachedData, hasCachedData, isStale, useRestoredCache, beginKeyWrite, endKeyWrite } from "@/lib/data-cache"
 import { invalidateInfluencerDerivedCaches } from "@/lib/cache-invalidation"
 import { DataSyncStatus } from "@/components/data-sync-status"
+import { SaveStatusPill } from "@/components/save-status-pill"
 
 import {
   partnersApi,
@@ -209,10 +210,14 @@ export default function BrandPartnersPage({ brandId }: Props) {
 
   // ── Save state and notifications ──────────────────────────────────────────
   // The same two-part dock the Influencer List, Pipeline and Post Tracker use:
-  // a dark "Saving" pill while a request is in flight, then the outcome below
-  // it. This page had neither — every failure was a native `alert()` (a modal
-  // the user has to dismiss) and a success said nothing at all.
+  // the shared SaveStatusPill while a request is in flight, then the outcome
+  // below it. This page had neither — every failure was a native `alert()` (a
+  // modal the user has to dismiss) and a success said nothing at all.
   const [isSaving, setIsSaving] = useState(false)
+  /** Whether the write that just finished failed, so the pill skips "Saved". */
+  const [saveFailed, setSaveFailed] = useState(false)
+  /** Processing wording for the write in flight; null takes "Saving changes…". */
+  const [processingMessage, setProcessingMessage] = useState<string | null>(null)
   const [notice, setNotice] = useState<{ message: string; type: "success" | "error" } | null>(null)
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -230,9 +235,16 @@ export default function BrandPartnersPage({ brandId }: Props) {
    * reports the outcome. `onOk` names what was saved; a throw is re-thrown after
    * the failure is reported, so existing callers keep their own behaviour.
    */
-  const trackSave = useCallback(async <T,>(op: () => Promise<T>, onOk: string): Promise<T> => {
+  const trackSave = useCallback(async <T,>(
+    op: () => Promise<T>,
+    onOk: string,
+    /** Processing wording; omitted takes the standard "Saving changes…". */
+    processing?: string
+  ): Promise<T> => {
     if (noticeTimer.current) { clearTimeout(noticeTimer.current); noticeTimer.current = null }
     setNotice(null)
+    setSaveFailed(false)
+    setProcessingMessage(processing ?? null)
     setIsSaving(true)
     // Opens a write window on the entry this page renders from, so the freshness
     // indicator reports "Syncing…" for a save and not only for a page load.
@@ -243,10 +255,13 @@ export default function BrandPartnersPage({ brandId }: Props) {
       const result = await op()
       writeOk = true
       setIsSaving(false)
+      setProcessingMessage(null)
       notify("success", onOk)
       return result
     } catch (err) {
+      setSaveFailed(true)
       setIsSaving(false)
+      setProcessingMessage(null)
       throw err
     } finally {
       // writeOk stays false when `op` throws, so a failed save keeps the
@@ -428,11 +443,16 @@ export default function BrandPartnersPage({ brandId }: Props) {
         if (!hasCachedData(cacheKey)) setLoading(true)
         setError(null)
 
-        const [camps, partnerRecords, tierSettings] = await Promise.all([
-          campaignsApi.list(brandId),
-          partnersApi.list(brandId),
-          tierSettingsApi.get(brandId),
-        ])
+        // One at a time. These three fired together on every mount of this
+        // page, which is three route handlers against a pool of three — the
+        // whole pool, taken by one page load, while the dashboard prefetch and
+        // whatever the user was already looking at needed it too. The page
+        // renders from all three at once regardless, so the only cost is
+        // latency on a first load; a revalidation keeps the current rows on
+        // screen throughout.
+        const camps = await campaignsApi.list(brandId)
+        const partnerRecords = await partnersApi.list(brandId)
+        const tierSettings = await tierSettingsApi.get(brandId)
 
         setTierThresholds({
           bronzeMax: Number(tierSettings.bronze_max),
@@ -588,14 +608,25 @@ export default function BrandPartnersPage({ brandId }: Props) {
   const handleAddPartner = async (formData: any) => {
     try {
       if (formData.type === "search") {
-        const results = await Promise.allSettled(
-          formData.influencers.map((inf: any) =>
-            partnersApi.add(brandId, {
-              influencer_id: inf.id,
-              notes: formData.notes || null,
-            })
+        // Two at a time, matching the Pipeline board and the Post Tracker's
+        // own bulk limit: adding a selection of creators fired one request per
+        // creator at once, and a selection of any size queued against three
+        // connections until the pool timed out.
+        const ADD_CONCURRENCY = 2
+        const results: PromiseSettledResult<Awaited<ReturnType<typeof partnersApi.add>>>[] = []
+        for (let i = 0; i < formData.influencers.length; i += ADD_CONCURRENCY) {
+          const batch = formData.influencers.slice(i, i + ADD_CONCURRENCY)
+          results.push(
+            ...(await Promise.allSettled(
+              batch.map((inf: any) =>
+                partnersApi.add(brandId, {
+                  influencer_id: inf.id,
+                  notes: formData.notes || null,
+                })
+              )
+            ))
           )
-        )
+        }
 
         const added: Partner[] = []
         let firstFailure: any = null
@@ -714,7 +745,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
   const handleRemovePartner = async (partnerId: string) => {
     if (!confirm("Remove this partner from the brand?")) return
     try {
-      await trackSave(() => partnersApi.remove(brandId, partnerId), "Partner removed")
+      await trackSave(() => partnersApi.remove(brandId, partnerId), "Partner removed", "Removing…")
       setPartners((prev) => prev.filter((p) => p.id !== partnerId))
     } catch (e: any) {
       notify("error", "Failed to remove partner: " + e.message)
@@ -1689,17 +1720,12 @@ export default function BrandPartnersPage({ brandId }: Props) {
         .kpi-v.g { color: #1FAE5B; }
       `}</style>
 
-      {/* The saving pill only — the same dock the Influencer List, Pipeline and
+      {/* The shared saving pill — the same dock the Influencer List, Pipeline and
           Post Tracker use. `.notice-dock` (app/globals.css) also steps aside
           when the influencer profile panel is open, so progress from a save made
           inside it is still readable. */}
       <div className="notice-dock">
-        {isSaving && (
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-900/90 text-white text-xs font-medium shadow-lg animate-in fade-in">
-            <IconLoader2 size={12} className="animate-spin" />
-            Saving
-          </div>
-        )}
+        <SaveStatusPill saving={isSaving} failed={saveFailed} message={processingMessage ?? undefined} />
       </div>
 
       {/* Outcome floating at the top right (`.notice-dock-top`,

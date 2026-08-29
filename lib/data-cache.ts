@@ -130,6 +130,55 @@ export function hasPendingWrite(key: string): boolean {
   return (pendingWrites.get(key) ?? 0) > 0
 }
 
+/**
+ * Per-ROW write sequence, within a key.
+ *
+ * The generation counter and the pending-write map above protect a cache entry
+ * from a stale FETCH. Neither protects a row from a stale ROLLBACK, which is a
+ * different race and the one that made a stage change appear to revert:
+ *
+ *   1. a card is moved      → optimistic value B written, request A sent
+ *   2. it is moved again    → optimistic value C written, request B sent
+ *   3. request A fails      → its rollback restores the snapshot it took,
+ *                             which is the value from BEFORE step 1
+ *
+ * The user's newest, still-valid change is replaced by the oldest value on the
+ * board. Every optimistic writer in the app has this shape, so the counter
+ * lives here rather than in one of them: a writer takes a sequence number when
+ * it starts, and only rolls back if it is still the newest write for that row.
+ *
+ * A plain counter, like `writeGenerations`: nothing is held, so an abandoned
+ * request cannot block a row, and rows are independent of each other.
+ */
+const rowWriteSequences = new Map<string, number>()
+
+/**
+ * Row id first, then "@", then the cache key. A row id is a cuid and never
+ * contains "@", so the first one is always the separator and two different
+ * (key, row) pairs cannot produce the same string.
+ */
+function rowSequenceKey(key: string, rowId: string): string {
+  return `${rowId}@${key}`
+}
+
+/** Take the next write sequence for a row. Pair with `isLatestRowWrite`. */
+export function beginRowWrite(key: string, rowId: string): number {
+  const seqKey = rowSequenceKey(key, rowId)
+  const next = (rowWriteSequences.get(seqKey) ?? 0) + 1
+  rowWriteSequences.set(seqKey, next)
+  return next
+}
+
+/**
+ * Is `seq` still the newest write for this row?
+ *
+ * False means a later change to the same row has already been applied, so this
+ * writer's snapshot is out of date and restoring it would undo that change.
+ */
+export function isLatestRowWrite(key: string, rowId: string, seq: number): boolean {
+  return rowWriteSequences.get(rowSequenceKey(key, rowId)) === seq
+}
+
 export function markCacheWrite(key: string): void {
   writeGenerations.set(key, (writeGenerations.get(key) ?? 0) + 1)
 }

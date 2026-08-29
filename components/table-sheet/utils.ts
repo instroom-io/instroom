@@ -198,6 +198,29 @@ export function describeLookupFailure(
   }
 }
 
+/**
+ * The display name for a stored platform value.
+ *
+ * Platforms are PERSISTED lowercase (`instagram`, `tiktok`, `youtube`,
+ * `twitter` — the create route lowercases them, and PLATFORM_URL_MAP is keyed
+ * the same way), while the label people read is capitalised. That mapping was
+ * being done inline in a few places and, on the Pipeline board, against a table
+ * keyed by the CAPITALISED name — so a stored "tiktok" matched nothing.
+ *
+ * Unknown-but-present values are returned as they are rather than replaced, so
+ * a platform this build does not know about still shows itself. An absent
+ * platform returns "", and the caller decides what an empty cell looks like.
+ */
+export function getPlatformLabel(platform?: string | null): string {
+  const value = platform?.trim()
+  if (!value) return ""
+  // Case-insensitive for the same reason as PlatformIcon: the Pipeline and Post
+  // Tracker routes serve the value capitalised, so a strict match returned the
+  // raw string and the boards read "Tiktok" instead of "TikTok".
+  const key = value.toLowerCase()
+  return platforms.find((p) => p.value === key)?.name ?? value
+}
+
 export function getProfileUrl(platform: string, handle: string): string {
   if (!handle || handle === "@" || handle === "") return ""
   const fn = PLATFORM_URL_MAP[platform]
@@ -255,6 +278,63 @@ export function parseFormattedNumber(val: string | number | undefined): string {
 }
 
 // ── URL helpers ───────────────────────────────────────────────────────────────
+
+// ── Email placeholders ────────────────────────────────────────────────────────
+// The enrichment providers do not omit a missing address, they send a stand-in
+// for it — "Email not available" is the common one. Stored as-is it looked like
+// a real value everywhere it mattered: two influencers who both lacked an email
+// were flagged as sharing one, a row carrying nothing but the stand-in counted
+// as having contact details and was written to the database, and a later fetch
+// overwrote a real address with it.
+//
+// So the stand-ins are named once, here, and every place that asks "is there an
+// email?" asks through these.
+
+const UNAVAILABLE_VALUES = new Set([
+  "email not available",
+  "not available",
+  "unavailable",
+  "no email",
+  "none",
+  "n/a",
+  "na",
+  "-",
+  "—",
+])
+
+/** Is this one of the provider's "there is nothing here" stand-ins? */
+export function isUnavailablePlaceholder(value?: string | null): boolean {
+  const v = value?.trim().toLowerCase()
+  return !!v && UNAVAILABLE_VALUES.has(v)
+}
+
+/**
+ * Is this an address worth keeping?
+ *
+ * Requires an "@" as well as not being a stand-in — the same rule the influencer
+ * PUT route applies before it stores an email, so the client and the database
+ * agree on what counts rather than the field silently emptying on next reload.
+ */
+export function isUsableEmail(value?: string | null): boolean {
+  const v = value?.trim()
+  if (!v || isUnavailablePlaceholder(v)) return false
+  return v.includes("@")
+}
+
+/** The address if it is usable, an empty string otherwise. */
+export function normalizeEmail(value?: string | null): string {
+  return isUsableEmail(value) ? value!.trim() : ""
+}
+
+/**
+ * `contact_info` is not strictly an address — the CSV importer maps an
+ * "email address/handlename" column into it — so this only strips the
+ * stand-ins and leaves anything else alone.
+ */
+export function normalizeContactInfo(value?: string | null): string {
+  const v = value?.trim()
+  return !v || isUnavailablePlaceholder(v) ? "" : v
+}
 
 export function isValidUrl(str: string): boolean {
   if (!str) return false
@@ -513,8 +593,10 @@ export function importFromCSV(
     if (row.niche?.trim()) discoveredNiches.add(row.niche.trim())
     if (row.location?.trim()) discoveredLocations.add(row.location.trim())
 
+    if (isUnavailablePlaceholder(row.email)) row.email = ""
+    if (isUnavailablePlaceholder(row.contact_info)) row.contact_info = ""
     if (row.email && !row.contact_info) row.contact_info = row.email
-    if (row.contact_info && !row.email) row.email = row.contact_info
+    if (row.contact_info && !row.email && isUsableEmail(row.contact_info)) row.email = row.contact_info
     if (!row.first_name && row.full_name) row.first_name = row.full_name.split(" ")[0]
     if (!row.handle) continue
     rows.push(row)
@@ -525,7 +607,9 @@ export function importFromCSV(
   const deduped: InfluencerRow[] = []
   rows.forEach((row, idx) => {
     const hk = `${row.handle.toLowerCase()}@${row.platform}`
-    const em = (row.contact_info || row.email || "").toLowerCase().trim()
+    // Placeholders excluded: two imported rows that both lack an email do not
+    // share one, and the second must not be dropped as a duplicate.
+    const em = (normalizeEmail(row.email) || normalizeContactInfo(row.contact_info)).toLowerCase().trim()
     let isDupe = false
     if (seenHandles.has(hk)) isDupe = true
     else seenHandles.set(hk, idx)
