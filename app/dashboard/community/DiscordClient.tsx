@@ -54,32 +54,16 @@ const ACCOUNT_LINK_URL = `/api/community/discord/oauth/start?returnTo=${RETURN_T
  * Where the authorization tab should come back to — the CURRENT url, query and
  * all, exactly as the inbox builds it (`pathname + search`).
  *
- * RETURN_TO above is the bare "/dashboard/community" with no brandId, and that
- * is fine for a same-tab navigation (the page re-picks the last brand). It is
- * NOT fine for the authorization tab: /dashboard/community with no brandId does
- * not mount DiscordClient at all, so the tab could never report its outcome or
- * close itself — it just sat there as a second Community tab while the original
- * waited for a verdict that could not arrive.
+ * RETURN_TO above is the bare "/dashboard/community" with no brandId, which
+ * lands the user on a page that has to re-pick a brand before it can mount
+ * DiscordClient — so the workspace they started in is not necessarily the one
+ * they come back to, and the ?discordLinked=1 verdict is dropped by that
+ * redirect. Carrying the current query through means Discord returns them to
+ * exactly the page they left.
  */
 function currentReturnTo(): string {
   return encodeURIComponent(window.location.pathname + window.location.search)
 }
-
-// ── OAuth hand-off between tabs ──────────────────────────────────────────────
-// Same shape as the inbox's mailbox connect (app/dashboard/inbox/page.tsx): the
-// whole authorization runs in a SECOND tab — /api/community/discord/{oauth/start,
-// install} 302s to discord.com there, the matching callback lands there too and
-// finishes back on /dashboard/community?discordLinked=1 / ?discordConnected=1.
-// That tab therefore knows the outcome and this one does not, so a same-origin
-// BroadcastChannel carries the result back and this tab leaves its waiting state
-// on its own. Same-origin only — nothing crosses to discord.com, which is a
-// different origin and cannot listen.
-const DISCORD_OAUTH_CHANNEL = "instroom-discord-oauth"
-
-/** What the authorization tab reports back. */
-type DiscordOAuthResult =
-  | { kind: "account" | "server"; ok: true }
-  | { kind: "account" | "server"; ok: false; error: string }
 
 /* ── Setup progress ───────────────────────────────────────────────────────── */
 // Shows both steps at once — done, current, or pending — so the user can see
@@ -288,17 +272,6 @@ export function DiscordClient({ brandId }: { brandId: string }) {
   }, [base])
 
   // Both requirements must be met before any Discord data is requested.
-  /** Which authorization tab is currently open, if any. */
-  const [pendingAuth, setPendingAuth] = useState<"account" | "server" | null>(null)
-
-  /**
-   * True in the AUTHORIZATION tab once it has reported its outcome and asked to
-   * close. Set from an effect rather than read during render: `window.opener`
-   * does not exist on the server, so deciding this while rendering would make
-   * the server's markup and the client's first paint disagree.
-   */
-  const [handoffComplete, setHandoffComplete] = useState<null | "ok" | "failed">(null)
-
   const setupComplete = Boolean(status?.connected && status?.discordLinked)
 
   useEffect(() => { loadStatus() }, [loadStatus])
@@ -324,46 +297,6 @@ export function DiscordClient({ brandId }: { brandId: string }) {
     const cancelled = params.get("discordCancelled")
     if (!connected && !linked && !error && !cancelled) return
 
-    // ── Are we the authorization tab? ──────────────────────────────────────
-    // Both Discord callbacks finish by redirecting back here with one of these
-    // params, so a tab that was opened by another tab AND is carrying them is
-    // the tab that just ran the flow. Its only remaining job is to report the
-    // outcome and get out of the way — the tab that opened it reloads the
-    // status. Mirrors the inbox's mailbox hand-off exactly.
-    if (window.opener) {
-      if (typeof BroadcastChannel !== "undefined") {
-        const kind: "account" | "server" = linked ? "account" : "server"
-        const result: DiscordOAuthResult = connected || linked
-          ? { kind, ok: true }
-          : {
-              kind,
-              ok: false,
-              error: error ? decodeURIComponent(error) : "Discord connection cancelled",
-            }
-        const channel = new BroadcastChannel(DISCORD_OAUTH_CHANNEL)
-        channel.postMessage(result)
-        channel.close()
-      }
-
-      // Hand the user back to the tab they started in, BEFORE trying to close
-      // this one: if the close is refused, focus has still moved to where the
-      // result actually is, so the flow completes either way rather than
-      // stranding the user on a tab that has nothing left to show.
-      try { window.opener?.focus?.() } catch { /* opener gone, or refused */ }
-
-      // Closes in the normal case — this tab was script-opened, which is the
-      // condition browsers require. When it is refused, the notice below is what
-      // the user sees instead of the full Community UI reloading pointlessly.
-      window.close()
-      setHandoffComplete(connected || linked ? "ok" : "failed")
-
-      // Nothing else belongs to this tab: the toast, the param strip and the
-      // status re-read are the ORIGINAL tab's job, and it is already doing them
-      // off the broadcast. Returning here also spares a status request (and its
-      // database round trip) from a tab that is on its way out.
-      return
-    }
-
     if (connected) { showToast("Discord server connected"); loadStatus() }
     else if (linked) { showToast("Discord account connected"); loadStatus() }
     else if (error) showToast(error)
@@ -376,98 +309,6 @@ export function DiscordClient({ brandId }: { brandId: string }) {
     window.history.replaceState({}, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  /* ── Authorization in a second tab ───────────────────────────────────────── */
-  // Reuses the inbox's pattern verbatim: this tab never navigates to Discord.
-  // It opens the flow in a new tab and holds on the setup screen showing
-  // "Waiting for Discord…" until that tab reports back or goes away.
-
-  /**
-   * Open one Discord authorization flow in a new tab and wait for its verdict.
-   *
-   * Three ways out, whichever comes first, and only the first counts:
-   *   1. the authorization tab broadcasts its outcome;
-   *   2. that tab closes without a verdict — the status is re-read anyway, since
-   *      the grant may well have gone through;
-   *   3. focus returns here and that tab has gone — an immediate check instead
-   *      of waiting for the next poll.
-   */
-  const openAuthTab = (kind: "account" | "server", url: string) => {
-    // NOTE: no "noopener", deliberately — the same reason the inbox documents.
-    // With it the browser returns null even on success, so a blocked pop-up
-    // becomes indistinguishable from an opened tab, and the handle is what lets
-    // us notice the tab closing. The tab we open is our own origin.
-    const authTab = window.open(url, "_blank")
-    if (!authTab) {
-      showToast("Your browser blocked the Discord tab. Allow pop-ups for this site and try again.")
-      return
-    }
-    setPendingAuth(kind)
-
-    let settled = false
-    let channel: BroadcastChannel | null = null
-    let closedPoll: ReturnType<typeof setInterval> | null = null
-
-    const cleanup = () => {
-      window.removeEventListener("focus", onFocus)
-      if (closedPoll) clearInterval(closedPoll)
-      channel?.close()
-    }
-
-    const settle = (result: "done" | "cancelled" | { error: string }) => {
-      if (settled) return
-      settled = true
-      cleanup()
-      setPendingAuth(null)
-
-      if (result === "done" || result === "cancelled") {
-        // The authorization tab closes itself once it has broadcast; close it
-        // from here too, for a browser that refuses a script-close of a tab it
-        // did not itself open. We hold the handle because we opened it.
-        if (!authTab.closed) {
-          try { authTab.close() } catch { /* already gone, or refused */ }
-        }
-        // Ask the server either way. "cancelled" only means no verdict arrived,
-        // not that nothing happened.
-        void loadStatus()
-      } else {
-        showToast(result.error)
-      }
-    }
-
-    // Focus alone is not a verdict — the user may be tabbing back and forth
-    // while Discord's consent screen is still open. It settles only once the
-    // authorization tab has actually gone.
-    const onFocus = () => { if (authTab.closed) settle("cancelled") }
-    window.addEventListener("focus", onFocus)
-
-    if (typeof BroadcastChannel !== "undefined") {
-      channel = new BroadcastChannel(DISCORD_OAUTH_CHANNEL)
-      channel.onmessage = (event: MessageEvent<DiscordOAuthResult>) => {
-        const data = event.data
-        if (!data) return
-        // A failure redirect carries neither discordLinked nor discordConnected,
-        // so the reporting tab cannot tell which of the two flows it was — it
-        // guesses. Only SUCCESS is matched on `kind`; a failure is accepted
-        // whatever it claims, which is sound because just one authorization tab
-        // can be open at a time (the CTA disables itself while one is).
-        if (data.ok && data.kind !== kind) return
-        settle(data.ok ? "done" : { error: data.error })
-      }
-    }
-
-    closedPoll = setInterval(() => { if (authTab.closed) settle("cancelled") }, 500)
-  }
-
-  /** Intercept a CTA's navigation and run it in a second tab instead. */
-  const authTabHandler =
-    (kind: "account" | "server", url: string) =>
-    (event: ReactMouseEvent<HTMLAnchorElement>) => {
-      // Leave the browser's own "open in new tab" gestures alone.
-      if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return
-      event.preventDefault()
-      openAuthTab(kind, url)
-    }
 
   /* ── Channels ───────────────────────────────────────────────────────────── */
   const loadChannels = useCallback(async () => {
@@ -1058,33 +899,6 @@ export function DiscordClient({ brandId }: { brandId: string }) {
     </AnimatePresence>
   )
 
-  /* ── Authorization tab, close refused ───────────────────────────────────── */
-  // This tab has already told the original tab what happened; the connection is
-  // complete and the updated UI is over there. Some browsers refuse to
-  // script-close a tab even when they opened it, so rather than reloading the
-  // whole Community screen in a tab nobody is going to use, say the one thing
-  // that is still true. Placed before every other branch, including the
-  // skeleton, so it cannot be pre-empted by a status check that is still
-  // running — this tab deliberately never starts one.
-  if (handoffComplete) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-gray-50 px-6 text-center">
-        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#5865F2]">
-          <IconBrandDiscord size={24} className="text-white" aria-hidden />
-        </div>
-        <p className="text-[14px] font-semibold text-gray-900">
-          {handoffComplete === "ok" ? "Discord connected" : "Discord not connected"}
-        </p>
-        <p className="max-w-xs text-[12px] leading-relaxed text-gray-500">
-          You can close this tab —{" "}
-          {handoffComplete === "ok"
-            ? "Instroom has already been updated in the tab you started from."
-            : "the tab you started from has the details."}
-        </p>
-      </div>
-    )
-  }
-
   /* ── First paint ────────────────────────────────────────────────────────── */
   // The full layout as a skeleton, never a spinner and never a blank frame. The
   // status check has to finish before we know whether to show the client or the
@@ -1142,10 +956,8 @@ export function DiscordClient({ brandId }: { brandId: string }) {
                 href={accountLinkUrl}
                 icon={<IconLink size={16} />}
                 dataTour="community-connect-server"
-                onClick={authTabHandler("account", accountLinkUrl)}
-                disabled={pendingAuth === "account"}
               >
-                {pendingAuth === "account" ? "Waiting for Discord…" : "Connect Discord Account"}
+                Connect Discord Account
               </DiscordCta>
             ) : (
               <p className="rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
@@ -1172,14 +984,8 @@ export function DiscordClient({ brandId }: { brandId: string }) {
               <DiscordCta
                 href={serverInstallUrl}
                 dataTour="community-connect-server"
-                onClick={authTabHandler("server", serverInstallUrl)}
-                disabled={pendingAuth === "server"}
               >
-                {pendingAuth === "server"
-                  ? "Waiting for Discord…"
-                  : botMissing
-                    ? "Authorize Instroom Bot"
-                    : "Connect Discord Server"}
+                {botMissing ? "Authorize Instroom Bot" : "Connect Discord Server"}
               </DiscordCta>
             ) : (
               <p className="rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-800">

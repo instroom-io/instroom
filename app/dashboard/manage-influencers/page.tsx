@@ -115,6 +115,19 @@ function approvalSeed(row: InfluencerRow): ApprovedRowSeed | null {
   }
 }
 
+/**
+ * How long after the last edit a typed change is saved.
+ *
+ * Long enough that a field is still typed as one edit rather than per keystroke,
+ * short enough that the row confirms while the user is still looking at it. Only
+ * applies to typed fields — LIFECYCLE_FIELDS below bypass it entirely.
+ *
+ * Lowering this does not increase requests per edit: the row's pending timer is
+ * cleared and re-armed on every change and the payload is the whole row's latest
+ * values, so any burst of edits still collapses into exactly one PUT.
+ */
+const AUTOSAVE_DEBOUNCE_MS = 800
+
 /** Discrete lifecycle fields — a change to one of these is saved immediately. */
 const LIFECYCLE_FIELDS = ["approval_status", "contact_status", "stage", "transferred_date"] as const
 
@@ -123,7 +136,13 @@ const LIFECYCLE_FIELDS = ["approval_status", "contact_status", "stage", "transfe
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** What the PUT route reports back about the row it persisted. */
-type SavedInfluencer = { handle?: string | null; platform?: string | null }
+type SavedInfluencer = {
+  handle?: string | null
+  platform?: string | null
+  /** What the route actually STORED for the two fields it normalises. */
+  email?: string | null
+  profile_image_url?: string | null
+}
 
 type QueueItem = {
   url: string
@@ -138,7 +157,8 @@ type QueueItem = {
   messageFromSaved?: (saved: SavedInfluencer) => string | null
   onError?: (status: number) => void
   /** Runs after the row was persisted — used to refresh the views derived from it. */
-  onSuccess?: () => void
+  /** Runs after the row was persisted, with what the server reported storing. */
+  onSuccess?: (saved: SavedInfluencer) => void
 }
 
 /**
@@ -179,13 +199,28 @@ function createPutQueue(
         })
         if (res.ok) {
           const saved = (await res.json().catch(() => ({}))) as SavedInfluencer
-          item.onSuccess?.()
+          item.onSuccess?.(saved)
           onRequest?.("ok", item.message ?? item.messageFromSaved?.(saved) ?? null)
           writeOk = true
         }
-        else { item.onError?.(res.status); onRequest?.("fail") }
+        else {
+          item.onError?.(res.status)
+          // Carry the route's own message through instead of discarding it. The
+          // PUT route returns a user-safe line (the raw MySQL/Prisma text stays
+          // in the server log), so this is what the person editing can act on —
+          // previously every failure collapsed into a bare "Failed to save"
+          // with no indication of what went wrong or whether retrying would
+          // help. Local edits are deliberately left untouched, so the value is
+          // still on screen to retry.
+          const body = (await res.json().catch(() => ({}))) as { error?: string }
+          onRequest?.("fail", typeof body.error === "string" ? body.error : null)
+        }
       } catch {
-        // Network error — silent
+        // Status 0 = the request never reached the server (offline, DNS, abort).
+        // This used to skip item.onError entirely, so a row's per-row indicator
+        // stayed on "Saving…" for good and an optimistically seeded Pipeline
+        // card was never rolled back — the two things onError exists to do.
+        item.onError?.(0)
         onRequest?.("fail")
       } finally {
         endExternalRequest()
@@ -200,8 +235,22 @@ function createPutQueue(
   return {
     enqueue(item: QueueItem) {
       const existing = queue.findIndex((q) => q.url === item.url)
-      if (existing >= 0) queue[existing] = item
-      else queue.push(item)
+      if (existing >= 0) {
+        // Merging must not silently drop the superseded item's onError. That
+        // callback owns a rollback the replacement knows nothing about — an
+        // approval seeds a card into the Pipeline cache BEFORE its PUT is
+        // enqueued, so if that item is replaced and the surviving save then
+        // fails, the seeded card stayed on the board for an approval that never
+        // persisted. Both handlers now run, superseded first.
+        const superseded = queue[existing]
+        queue[existing] = {
+          ...item,
+          onError: (status) => {
+            try { superseded.onError?.(status) } catch { /* still run the newer one */ }
+            item.onError?.(status)
+          },
+        }
+      } else queue.push(item)
       run()
     },
   }
@@ -338,6 +387,8 @@ function InfluencersContent() {
   const [notice, setNotice] = useState<{ message: string; type: "success" | "error" } | null>(null)
   const savingCount = useRef(0)
   const failedSinceIdle = useRef(false)
+  /** The last failure's user-safe message, as the route reported it. */
+  const failureMessage = useRef<string | null>(null)
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const pendingMessage = useRef<string | null>(null)
@@ -356,12 +407,20 @@ function InfluencersContent() {
     // handle the database reported, which is only known once the response is
     // back. It supersedes whatever `start` guessed.
     if (phase === "ok" && message) pendingMessage.current = message
-    if (phase === "fail") failedSinceIdle.current = true
+    if (phase === "fail") {
+      failedSinceIdle.current = true
+      // Kept separately from pendingMessage, which holds the SUCCESS
+      // confirmation: a batch can contain both, and the failure is what the
+      // user needs to see.
+      if (message) failureMessage.current = message
+    }
     savingCount.current = Math.max(0, savingCount.current - 1)
     if (savingCount.current > 0) return
 
     const failed = failedSinceIdle.current
     failedSinceIdle.current = false
+    const failureText = failureMessage.current
+    failureMessage.current = null
     // The pill goes the moment the request is done — no lingering saving state.
     setIsSaving(false)
     // Same wording as the Pipeline board and Post Tracker: "<influencer> moved
@@ -376,7 +435,9 @@ function InfluencersContent() {
     // generic line was a second, vaguer toast on top of it.
     if (!failed && !confirmation) return
     setNotice({
-      message: failed ? "Failed to save" : confirmation!,
+      // The route's own wording when it gave one, the previous generic line
+      // otherwise (network errors, which have no response body to read).
+      message: failed ? failureText ?? "Failed to save" : confirmation!,
       type: failed ? "error" : "success",
     })
     noticeTimer.current = setTimeout(() => setNotice(null), 3000)
@@ -431,6 +492,20 @@ function InfluencersContent() {
     )
   )
   const updateTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  /**
+   * How to fire a row's pending debounced save RIGHT NOW, by row id.
+   *
+   * Registered next to its timer rather than replacing it, so the existing
+   * clearTimeout call sites keep working unchanged. Its only job is to let a
+   * navigation or tab close flush what the 1500ms debounce is still holding —
+   * a best-effort safety net, never the primary persistence path.
+   */
+  const pendingFlush = useRef<Map<string, () => void>>(new Map())
+  /** The most recent rows handed to handleRowsChange, by reference. */
+  const latestRows = useRef<InfluencerRow[]>([])
+  /** scheduleUpdate, reachable from its own callbacks. */
+  const scheduleUpdateRef = useRef<(row: InfluencerRow) => void>(() => {})
+
 
   // ── savedHandles: "handle@platform" keys already saved or in-flight ───────
   // This is the ONLY dedup guard. Once set, we never POST again for this handle.
@@ -543,8 +618,9 @@ function InfluencersContent() {
       const seed = row.approval_status === "Approved" ? approvalSeed(row) : null
       const seedsPipeline = Boolean(seed) && discrete && prevApprovalStatus !== "Approved"
 
-      const timer = setTimeout(() => {
+      const fire = () => {
         updateTimers.current.delete(row.id)
+        pendingFlush.current.delete(row.id)
         if (!dbIds.current.has(row.id)) return
         const seeded = seedsPipeline && brandId ? seedPipelineFromApproval(brandId, seed!) : false
         putQueue.current.enqueue({
@@ -564,17 +640,62 @@ function InfluencersContent() {
           // Brand Partners and Analytics should show. Their cached entries are
           // marked stale so those pages pick the change up on open — this
           // page's own entry is already correct from the inline edit.
-          onSuccess() {
-            // This payload is now what the database holds, so it becomes the
-            // baseline the next edit is compared against.
-            lastSentPayloads.current.set(row.id, payload)
+          onSuccess(saved) {
+            // ── 1. Did the route rewrite anything? ──────────────────────────
+            // It nulls an email without "@" and an expiring CDN image url. The
+            // client used to keep showing the value it SENT, its diff saw no
+            // change, and the field silently emptied on the next reload.
+            const sentPayload = JSON.parse(payload) as Record<string, unknown>
+            const normalised: Record<string, unknown> = {}
+            for (const field of ["email", "profile_image_url"] as const) {
+              if (saved[field] === undefined) continue
+              if (saved[field] !== sentPayload[field]) normalised[field] = saved[field]
+            }
+            const wasNormalised = Object.keys(normalised).length > 0
+
+            // ── 2. The baseline the next edit is diffed against ─────────────
+            // Reconciled to what the DATABASE holds when the route rewrote a
+            // field, so the snapshot and the row cannot disagree.
+            lastSentPayloads.current.set(
+              row.id,
+              wasNormalised ? JSON.stringify({ ...sentPayload, ...normalised }) : payload
+            )
+
             // Every derived view is stale now — and so is this page's own entry,
             // because the row it holds was written locally. Marking it stale too
             // (data is kept, so nothing blanks out) means the next read comes
             // from the database rather than from the optimistic edit.
             invalidateInfluencerDerivedCaches(brandId)
+
+            if (wasNormalised) {
+              // Pull the row from the database so the grid shows what was
+              // actually stored. Deliberately NOT followed by the re-diff below:
+              // the on-screen row still holds the rejected value, so diffing it
+              // against the reconciled snapshot would send that same value
+              // straight back and the route would reject it again — forever.
+              void refetch()
+              return
+            }
+
+            // ── 3. Did the row move while this request was in flight? ───────
+            // The diff gate compares against lastSentPayloads, which only
+            // advances here. So an edit made during the request — including a
+            // revert BACK to the previous value, which matched the not-yet-
+            // advanced snapshot — was skipped as "unchanged" and never saved.
+            // The UI then showed one value and the database another.
+            //
+            // Re-diffing against the row as it stands now closes that window:
+            // if it differs from what was just persisted, it is scheduled like
+            // any other change (same debounce, same queue, same dedup).
+            const current = latestRows.current.find((r) => r.id === row.id)
+            if (!current) return
+            if (JSON.stringify(buildUpdatePayload(current)) === payload) return
+            scheduleUpdateRef.current(current)
           },
           onError(status) {
+            // The edited values stay on screen and lastSentPayloads is NOT
+            // advanced, so the next detected change retries this row. The
+            // outcome itself is reported by the page's global notice.
             // The approval did not persist, so take the seeded card back off the
             // board — same rollback rule the Pipeline's own writes follow.
             if (seeded && brandId && row.brand_influencer_id) {
@@ -583,17 +704,46 @@ function InfluencersContent() {
             if (status === 404) {
               dbIds.current.delete(row.id)
               notify("error", `Could not save @${handle} — not found. Try refreshing.`)
+            } else if (status === 0) {
+              // Never reached the server — "(0)" would mean nothing to the user.
+              notify("error", `Could not save @${handle} — you appear to be offline.`)
             } else if (status !== 503) {
               notify("error", `Save failed (${status})`)
             }
           },
         })
-      }, discrete ? 0 : 1500)
+      }
 
+      const timer = setTimeout(fire, discrete ? 0 : AUTOSAVE_DEBOUNCE_MS)
       updateTimers.current.set(row.id, timer)
+      pendingFlush.current.set(row.id, () => { clearTimeout(timer); fire() })
     },
-    [brandId, notify]
+    [brandId, notify, refetch]
   )
+  // Assigned after definition so onSuccess can reschedule through the ref
+  // without scheduleUpdate having to reference itself during construction.
+  scheduleUpdateRef.current = scheduleUpdate
+
+  // ── Flush pending debounced saves on the way out ──────────────────────────
+  // Covers both exits: `pagehide` for a real unload (reload, tab close, external
+  // link) and the unmount cleanup for a client-side navigation away from this
+  // page, which `pagehide` does not fire for.
+  //
+  // Best effort by design. A request started this late may not complete, which
+  // is why the debounce stays short enough that there is rarely anything
+  // pending — this is a net, not the mechanism.
+  useEffect(() => {
+    const flushAll = () => {
+      const flushes = Array.from(pendingFlush.current.values())
+      pendingFlush.current.clear()
+      flushes.forEach((f) => { try { f() } catch { /* keep flushing the rest */ } })
+    }
+    window.addEventListener("pagehide", flushAll)
+    return () => {
+      window.removeEventListener("pagehide", flushAll)
+      flushAll()
+    }
+  }, [])
 
   // ── createRow: POST to create influencer + swap temp ID → real ID ─────────
   const createRow = useCallback(
@@ -702,6 +852,9 @@ function InfluencersContent() {
       if (dbIds.current.has(row.id)) {
         const existing = updateTimers.current.get(row.id)
         if (existing) clearTimeout(existing)
+        // Dropped with the timer, or an unload flush would re-send the payload
+        // this enqueue already supersedes.
+        pendingFlush.current.delete(row.id)
         putQueue.current.enqueue({
           url: `/api/brand/${brandId}/influencers/${row.id}`,
           payload: JSON.stringify(buildUpdatePayload(row)),
@@ -807,6 +960,11 @@ function InfluencersContent() {
     (updatedRows: InfluencerRow[]) => {
       if (!readyToSave.current) return
 
+      // The table owns the live rows; this is the page's view of them. Needed so
+      // a save that has just landed can re-diff against what the row looks like
+      // NOW rather than against the snapshot the request was built from.
+      latestRows.current = updatedRows
+
       updatedRows.forEach((row) => {
         if (!rowHasHandle(row)) return
 
@@ -890,6 +1048,11 @@ function InfluencersContent() {
       // Cancel any pending update for this row
       const update = updateTimers.current.get(rowId)
       if (update) { clearTimeout(update); updateTimers.current.delete(rowId) }
+      // The flush closure has to go with it. Left registered, a pagehide or an
+      // unmount would fire the cancelled save — and since dbIds is only cleared
+      // once the DELETE succeeds, a failed or still-in-flight delete would have
+      // PUT the row straight back.
+      pendingFlush.current.delete(rowId)
 
       // If the row was never saved to DB (still temp), just clean up refs
       if (!dbIds.current.has(rowId)) {

@@ -1,4 +1,4 @@
-﻿import { prisma } from "@/lib/prisma"
+﻿import { prisma, withUtf8mb4 } from "@/lib/prisma"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { logActivity } from "@/lib/activity-log"
@@ -109,34 +109,91 @@ export async function PUT(
     if (data.transferred_date !== undefined)
       bi.transferred_date = data.transferred_date ? new Date(data.transferred_date) : null
 
-    const updates: Promise<any>[] = []
-    let savedInf: { handle: string; platform: string } | null = null
-    if (Object.keys(inf).length > 0) {
-      updates.push(
-        prisma.influencer
-          .update({ where: { id }, data: inf, select: { handle: true, platform: true } })
-          .then((row) => { savedInf = row })
-      )
-    }
-    // Kept separate from `updates` so the persisted row can be read back and
-    // returned — the client trusts what the DB stored, not what it sent.
+    // ── Writes go through withUtf8mb4 ───────────────────────────────────────
+    // `bio` is @db.Text and its content comes from Instagram, so it routinely
+    // contains emoji. This host forces `SET NAMES utf8` (= utf8mb3) on every new
+    // connection via init_connect, and MySQL then refuses to convert a 4-byte
+    // parameter into the utf8mb4_unicode_ci column:
+    //
+    //   Error 3988: Conversion from collation utf8mb3_general_ci into
+    //               utf8mb4_unicode_ci impossible for parameter
+    //
+    // Verified against this deployment: an ASCII bio saves, the same bio with an
+    // emoji fails, and the same write inside withUtf8mb4 succeeds. Unhandled,
+    // that surfaced as an HTTP 500 and the edit was silently never persisted.
+    //
+    // withUtf8mb4 is the existing helper for exactly this (lib/prisma.ts) — it
+    // pins ONE connection so the `SET NAMES utf8mb4` and the write provably
+    // share a session. Both writes therefore run sequentially on `tx`, not in
+    // parallel on the global client: a statement issued on `prisma` in here
+    // would take a different pooled connection and land back on utf8mb3.
+    //
+    // Nothing is sanitised, stripped or re-encoded — the bio is stored exactly
+    // as received.
+    let savedInf: {
+      handle: string
+      platform: string
+      email: string | null
+      profile_image_url: string | null
+    } | null = null
+    // Read back rather than echoed, so the client trusts what the DB stored.
     let savedBi: { approval_status: string | null; transferred_date: Date | null } | null = null
-    if (Object.keys(bi).length > 0) {
-      updates.push(
-        prisma.brandInfluencer
-          .update({
-            where: { brand_id_influencer_id: { brand_id: brandId, influencer_id: id } },
-            data: bi,
-            select: { approval_status: true, transferred_date: true },
-          })
-          .then((row) => { savedBi = row })
-      )
+
+    // Only a 4-BYTE UTF-8 character needs the utf8mb4 session, and only those
+    // fail: verified against this deployment, "\u2728" and "\u2615" save on the
+    // plain path because they are 3-byte, while "\u{1F60A}" is 4-byte and raises
+    // MySQL 3988. So the test is "is there a code point above the BMP", which is
+    // what the /u surrogate-pair-aware range below matches.
+    //
+    // Worth branching on: withUtf8mb4 is an interactive transaction plus a
+    // SET NAMES, i.e. two extra round trips, and a bare `SELECT 1` against this
+    // remote shared host costs ~317ms (see lib/prisma.ts). Wrapping every save
+    // made the ordinary ASCII edit about three times slower than it needs to be
+    // for a problem it does not have.
+    const needsUtf8mb4 = /[\u{10000}-\u{10FFFF}]/u.test(JSON.stringify(inf))
+
+    type WriteClient = Parameters<Parameters<typeof withUtf8mb4>[0]>[0]
+
+    const runInfluencerUpdate = (client: WriteClient) =>
+      client.influencer.update({
+        where: { id },
+        data: inf,
+        // email and profile_image_url are read back because the route NORMALISES
+        // them (an address without "@" and an expiring CDN url both become null).
+        // The client needs what was stored, not what it sent.
+        select: { handle: true, platform: true, email: true, profile_image_url: true },
+      })
+
+    const runBrandInfluencerUpdate = (client: WriteClient) =>
+      client.brandInfluencer.update({
+        where: { brand_id_influencer_id: { brand_id: brandId, influencer_id: id } },
+        data: bi,
+        select: { approval_status: true, transferred_date: true },
+      })
+
+    if (Object.keys(inf).length > 0 || Object.keys(bi).length > 0) {
+      if (needsUtf8mb4) {
+        // One pinned connection, so the SET NAMES and the write provably share a
+        // session — statements must go through `tx`, never the global client.
+        await withUtf8mb4(async (tx) => {
+          if (Object.keys(inf).length > 0) savedInf = await runInfluencerUpdate(tx)
+          if (Object.keys(bi).length > 0) savedBi = await runBrandInfluencerUpdate(tx)
+        })
+      } else {
+        // Fast path: no transaction. The two writes are independent, so they go
+        // out together exactly as they did before withUtf8mb4 was introduced.
+        const [infRow, biRow] = await Promise.all([
+          Object.keys(inf).length > 0 ? runInfluencerUpdate(prisma) : Promise.resolve(null),
+          Object.keys(bi).length > 0 ? runBrandInfluencerUpdate(prisma) : Promise.resolve(null),
+        ])
+        if (infRow) savedInf = infRow
+        if (biRow) savedBi = biRow
+      }
     }
-    if (updates.length > 0) await Promise.all(updates)
     if (!savedInf) {
       savedInf = await prisma.influencer.findUnique({
         where: { id },
-        select: { handle: true, platform: true },
+        select: { handle: true, platform: true, email: true, profile_image_url: true },
       })
     }
 
@@ -231,6 +288,12 @@ export async function PUT(
         ? {
             handle:   (savedInf as { handle: string }).handle,
             platform: (savedInf as { platform: string }).platform,
+            // Returned so the client can reconcile the two fields this route
+            // rewrites. Without them the client kept showing an address it had
+            // sent and the route had discarded, its diff saw no change, and the
+            // value silently vanished on the next reload.
+            email:             (savedInf as { email: string | null }).email,
+            profile_image_url: (savedInf as { profile_image_url: string | null }).profile_image_url,
           }
         : {}),
       ...(savedBi
@@ -244,9 +307,22 @@ export async function PUT(
     if (err?.code === "P2025") {
       return NextResponse.json({ error: "Not found", code: err.code }, { status: 404 })
     }
+
+    // The full driver text — collation names, the parameter, the raw SQL error —
+    // is for the log, not for the browser. It is unreadable to the person
+    // editing an influencer and it describes our storage internals.
     console.error("PUT /influencers/[id]:", err?.code, err?.message)
+
+    // Length overflow is the one remaining failure a user can act on.
+    if (err?.code === "P2000") {
+      return NextResponse.json(
+        { error: "One of the fields is too long to save. Please shorten it and try again." },
+        { status: 400 }
+      )
+    }
+
     return NextResponse.json(
-      { error: err?.message ?? "error", code: err?.code },
+      { error: "Couldn't save this influencer. Please try again." },
       { status: 500 }
     )
   }

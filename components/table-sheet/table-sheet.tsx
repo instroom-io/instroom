@@ -1244,30 +1244,10 @@ export default function TableSheet({
           <div className="flex w-full items-center gap-1.5 rounded-[3px] border border-[#1E1E1E] bg-white px-1 py-0.5">
             <ProfilePicture src={row.profile_image_url} socialLink={row.social_link || getProfileUrl(row.platform, row.handle)} name={row.full_name} handle={row.handle} size={24} />
             <input ref={editInputRef as any} type="text" value={editValue} placeholder="username" onChange={e => setEditValue(e.target.value)} onBlur={handleEditBlur} onKeyDown={handleEditKeyDown} onMouseDown={e => e.stopPropagation()} className="flex-1 min-w-0 text-sm text-[#1E1E1E] caret-[#1E1E1E] outline-none focus:outline-none focus:ring-0 border-0 bg-transparent" />
-            {/* Save / Cancel, only while editing.
-                onMouseDown preventDefault on both: the input commits on blur, so
-                without it the mousedown would blur-and-commit before the click
-                ever landed — Cancel would have saved. */}
-            <button
-              type="button"
-              title="Save"
-              aria-label="Save handle"
-              onMouseDown={e => e.preventDefault()}
-              onClick={e => { e.stopPropagation(); commitEdit() }}
-              className="flex-shrink-0 p-1 rounded text-[#1E1E1E] hover:bg-gray-100 transition-colors"
-            >
-              <IconCheck size={13} />
-            </button>
-            <button
-              type="button"
-              title="Cancel"
-              aria-label="Cancel editing handle"
-              onMouseDown={e => e.preventDefault()}
-              onClick={e => { e.stopPropagation(); cancelEdit() }}
-              className="flex-shrink-0 p-1 rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors"
-            >
-              <IconX size={13} />
-            </button>
+            {/* The Save / Cancel icon buttons that sat here are gone. Committing
+                and cancelling are unchanged and still fully reachable: the input
+                commits on blur and on Enter/Tab (handleEditBlur /
+                handleEditKeyDown) and cancels on Escape. */}
           </div>
         </td>
       )
@@ -1304,7 +1284,12 @@ export default function TableSheet({
                   }
                 }} />
             </div>
-            <span className="truncate text-sm text-gray-800 font-medium">{cleanHandle(value) || <span className="text-gray-300">Enter username</span>}</span>
+            {/* min-w-0 is what lets `truncate` actually shrink this item: a flex
+                child's min-width defaults to its content, so without it the
+                handle refuses to compress and pushes the sibling below out of
+                the cell instead. The editing branch's input already carries it
+                for the same reason. */}
+            <span className="min-w-0 truncate text-sm text-gray-800 font-medium">{cleanHandle(value) || <span className="text-gray-300">Enter username</span>}</span>
           </div>
         </td>
       )
