@@ -5,6 +5,7 @@ import { authOptions } from "@/lib/auth"
 import { logActivity } from "@/lib/activity-log"
 import { NextRequest, NextResponse } from "next/server"
 import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
+import { publicHandle } from "@/lib/influencer-draft"
 
 export async function GET(
   req: NextRequest,
@@ -20,6 +21,11 @@ export async function GET(
     const { searchParams } = new URL(req.url)
     const search = searchParams.get("search") || ""
     const unpartneredOnly = searchParams.get("unpartnered_only") === "true"
+    // Drafts are blank rows the user added in the Influencer List and has not
+    // filled in. Only that sheet has any use for them, and it is the only
+    // caller that opts in — every other consumer of this route (the Add Partner
+    // picker, the card list view) gets the default and never sees one.
+    const includeDrafts = searchParams.get("include_drafts") === "true"
 
     const brand = await prisma.brand.findUnique({ where: { id: brandId } })
     if (!brand) {
@@ -65,6 +71,7 @@ export async function GET(
     const brandInfluencers = await prisma.brandInfluencer.findMany({
       where: {
         brand_id: brandId,
+        ...(includeDrafts ? {} : { influencer: { is_draft: false } }),
         // Push the search filter down to the DB via the influencer relation
         // when a caller supplies one, instead of always loading every row
         // for the brand and filtering the full set in JS. No current caller
@@ -108,6 +115,7 @@ export async function GET(
             location: true,
             bio: true,
             profile_image_url: true,
+            is_draft: true,
             social_link: true,
             follower_count: true,
             engagement_rate: true,
@@ -238,7 +246,11 @@ export async function GET(
             : null,
           influencer: {
             id: inf.id,
-            handle: inf.handle,
+            // A draft's stored handle is a generated placeholder that keeps it
+            // unique on @@unique([handle, platform]); the sheet must see the
+            // empty row the user actually added.
+            handle: publicHandle(inf.handle),
+            is_draft: inf.is_draft,
             platform: inf.platform,
             full_name: inf.full_name,
             email: inf.email,

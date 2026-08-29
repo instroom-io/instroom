@@ -40,6 +40,7 @@ export function SaveStatusPill({
   saving,
   failed = false,
   message = DEFAULT_SAVING_MESSAGE,
+  confirmsElsewhere = false,
 }: {
   /** True while a write is in flight. */
   saving: boolean
@@ -55,13 +56,31 @@ export function SaveStatusPill({
    * error flag can leave it set afterwards without pinning the pill open.
    */
   failed?: boolean
+  /**
+   * Suppress the trailing "Saved" for an operation whose success is reported
+   * some other way.
+   *
+   * Adding an influencer confirms with "@handle added to Influencer List", so a
+   * "Saved" after it would be a second, vaguer confirmation of the same thing.
+   * Distinct from `failed`, which means the write did not happen at all.
+   */
+  confirmsElsewhere?: boolean
 }) {
   const [showSaved, setShowSaved] = useState(false)
   const wasSaving = useRef(false)
-  // Read inside the effect below rather than listed as a dependency, so a page
-  // clearing its error flag later cannot re-trigger a "Saved".
+  // Read inside the outcome effect below rather than listed as a dependency, so
+  // a page clearing its error flag later cannot re-trigger a "Saved".
+  //
+  // Kept in step from an effect, not assigned during render: writing to a ref
+  // while rendering is a side effect in the render phase, which React may run
+  // more than once or discard. The values are only ever read at the moment
+  // `saving` flips, which is after this has committed.
   const failedRef = useRef(failed)
-  failedRef.current = failed
+  const confirmsElsewhereRef = useRef(confirmsElsewhere)
+  useEffect(() => {
+    failedRef.current = failed
+    confirmsElsewhereRef.current = confirmsElsewhere
+  }, [failed, confirmsElsewhere])
 
   useEffect(() => {
     if (saving) {
@@ -72,7 +91,7 @@ export function SaveStatusPill({
     }
     if (!wasSaving.current) return
     wasSaving.current = false
-    if (failedRef.current) return
+    if (failedRef.current || confirmsElsewhereRef.current) return
 
     setShowSaved(true)
     const timer = setTimeout(() => setShowSaved(false), SAVED_VISIBLE_MS)

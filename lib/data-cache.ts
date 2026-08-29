@@ -161,6 +161,98 @@ function rowSequenceKey(key: string, rowId: string): string {
   return `${rowId}@${key}`
 }
 
+/**
+ * Rows a write has confirmed, and when.
+ *
+ * The generation counter above discards a read whose request overlapped a
+ * write. It cannot help after a REFRESH: the page is new, no write is in
+ * flight, the generation is 0, and a read endpoint that is briefly behind the
+ * write is accepted wholesale — so a row saved a moment before the refresh
+ * paints correctly from the mirror and then reverts to its pre-save values.
+ *
+ * A row confirmed by a write is therefore remembered for a short window, and a
+ * read that disagrees with it inside that window keeps the confirmed values for
+ * that row only. Everything else in the payload is taken as-is.
+ *
+ * Deliberately time-boxed rather than held until "something newer" arrives:
+ * there is no signal that would reliably clear it, and a permanent override
+ * would stop the client ever seeing a change made elsewhere. After the window
+ * the server is authoritative again, as it should be.
+ */
+const confirmedRows = new Map<string, { data: unknown; at: number }>()
+
+/** How long a write-confirmed row outranks a disagreeing read. */
+const CONFIRMED_ROW_TTL = 15_000
+
+function confirmedKey(key: string, rowId: string): string {
+  return `${rowId}@${key}`
+}
+
+/**
+ * Mirror key for the confirmed-row map.
+ *
+ * A function, not a const: STORAGE_PREFIX is declared further down the file and
+ * a top-level const here would read it before it is initialised.
+ */
+const confirmedStorageKey = () => `${STORAGE_PREFIX}confirmed-rows`
+
+/**
+ * Mirror the confirmed rows to sessionStorage.
+ *
+ * This map is the thing that has to survive a REFRESH — that is the whole case
+ * it exists for — and a module-level Map does not. Written alongside the cache
+ * entries themselves, into the same store, and read back by
+ * `hydrateCacheFromStorage`.
+ */
+function persistConfirmed(): void {
+  const store = storage()
+  if (!store) return
+  try {
+    store.setItem(confirmedStorageKey(), JSON.stringify([...confirmedRows]))
+  } catch {
+    // Quota or unserialisable — the in-memory map still applies for this tab.
+  }
+}
+
+/** Read the mirrored confirmed rows back after a reload. Expired ones are dropped. */
+function restoreConfirmed(): void {
+  const store = storage()
+  if (!store) return
+  try {
+    const raw = store.getItem(confirmedStorageKey())
+    if (!raw) return
+    const now = Date.now()
+    for (const [k, v] of JSON.parse(raw) as [string, { data: unknown; at: number }][]) {
+      if (v && now - v.at <= CONFIRMED_ROW_TTL) confirmedRows.set(k, v)
+    }
+  } catch {
+    store.removeItem(confirmedStorageKey())
+  }
+}
+
+/** Record what a write confirmed for a row, so a lagging read cannot undo it. */
+export function markRowConfirmed(key: string, rowId: string, data: unknown): void {
+  confirmedRows.set(confirmedKey(key, rowId), { data, at: Date.now() })
+  persistConfirmed()
+}
+
+/**
+ * The confirmed version of a row, if one is still within the window.
+ *
+ * Expired entries are dropped as they are read, so the map cannot grow without
+ * bound and no separate sweep is needed.
+ */
+export function getConfirmedRow<T>(key: string, rowId: string): T | undefined {
+  const entry = confirmedRows.get(confirmedKey(key, rowId))
+  if (!entry) return undefined
+  if (Date.now() - entry.at > CONFIRMED_ROW_TTL) {
+    confirmedRows.delete(confirmedKey(key, rowId))
+    persistConfirmed()
+    return undefined
+  }
+  return entry.data as T
+}
+
 /** Take the next write sequence for a row. Pair with `isLatestRowWrite`. */
 export function beginRowWrite(key: string, rowId: string): number {
   const seqKey = rowSequenceKey(key, rowId)
@@ -299,11 +391,15 @@ export function hydrateCacheFromStorage(): void {
   const store = storage()
   if (!store) return
 
+  // The confirmed rows come back with the entries they guard.
+  restoreConfirmed()
+
   try {
     for (let i = 0; i < store.length; i += 1) {
       const storageKey = store.key(i)
       if (!storageKey || !storageKey.startsWith(STORAGE_PREFIX)) continue
 
+      if (storageKey === confirmedStorageKey()) continue
       const key = storageKey.slice(STORAGE_PREFIX.length)
       // Anything already in memory is newer than the mirror by definition.
       if (cache.has(key)) continue
@@ -446,6 +542,7 @@ export function clearCache(): void {
   cache.clear()
   inflight.clear()
   restored.clear()
+  confirmedRows.clear()
   // The mirror goes too, or a sign-out would leave the next session able to
   // render the previous account's data before its first fetch returns.
   clearPersisted()

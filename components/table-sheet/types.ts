@@ -9,6 +9,8 @@ export type InfluencerRow = {
   contact_info?: string; approval_status?: "Approved" | "Declined" | "Pending";
   transferred_date?: string; approval_notes?: string; decline_reason?: string;
   tier?: string; community_status?: string; bio?: string; profile_image_url?: string;
+  /** A persisted blank row the user added but has not filled in yet. */
+  is_draft?: boolean;
   avg_likes?: string | number; avg_comments?: string | number; avg_views?: string | number;
   created_at?: string;
   updated_at?: string;

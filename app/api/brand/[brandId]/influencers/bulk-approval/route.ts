@@ -62,7 +62,15 @@ export async function POST(
       return NextResponse.json({ error: "influencerIds is required" }, { status: 400 })
     }
 
-    const scope = { brand_id: brandId, influencer_id: { in: influencerIds } }
+    // Drafts excluded. "Select all → approve" in the Influencer List passes
+    // every visible row's id, drafts included; approving one would set the
+    // approval and contact status that put it on the Pipeline board as a blank
+    // card. A draft is not an influencer and cannot be approved.
+    const scope = {
+      brand_id: brandId,
+      influencer_id: { in: influencerIds },
+      influencer: { is_draft: false },
+    }
     const reviewedAt = new Date()
 
     // The exact semantics of the row-by-row path: approve, stamp the review date
