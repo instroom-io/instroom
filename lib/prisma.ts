@@ -11,25 +11,83 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { PrismaClient } from "@prisma/client"
+import { PrismaClient as PrismaClientEdge } from "@prisma/client/edge"
+import { withAccelerate } from "@prisma/extension-accelerate"
 
-// Extend NodeJS.Global so TypeScript knows about our custom property
+// @prisma/extension-accelerate is pinned to exactly 1.3.0 in package.json —
+// NOT a mistake, don't bump it casually. Versions 2.x and 3.x (current
+// latest, as of this writing) silently strip relation/aggregate types from
+// every `include`/`_count`/`_sum`/etc. query across the ENTIRE app the moment
+// `.$extends(withAccelerate())` is applied — confirmed by testing directly
+// against this exact @prisma/client version (6.19.2): 2.x/3.x broke ~40
+// files' worth of type-checking project-wide, 1.3.0 does not. This matches
+// multiple known upstream reports (prisma/prisma issues #28758, #28703,
+// #29627, and a reported "v2.0.1 breaks types" regression) of the same
+// class of bug recurring across versions. Re-test the full `npx tsc --noEmit`
+// before ever bumping this.
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Prisma Accelerate — why two clients, not one
+// ─────────────────────────────────────────────────────────────────────────────
+// This host caps us at max_user_connections=30. Vercel serverless functions
+// each get their OWN connection pool on cold start — the globalThis singleton
+// below only holds within one warm instance, not across concurrently-invoked
+// ones — so a handful of concurrent instances × even a small per-instance
+// pool blew past 30 on its own. Accelerate pools many logical clients down to
+// a small number of real connections, which is what actually fixes this.
+//
+// The one thing Accelerate can't safely carry is `withUtf8mb4`'s interactive
+// transaction below: Accelerate hard-caps interactive transactions at 15s
+// with a documented history of "Transaction not found" failures, and that
+// helper already runs right at a 15s timeout because of a DIFFERENT
+// connection-starvation issue on the direct connection. Every other
+// `$transaction` call site in this codebase uses the sequential array form,
+// which Prisma's own docs say performs BETTER on Accelerate — only
+// `withUtf8mb4` uses the interactive callback form, so it alone keeps using
+// a small direct connection instead, sidestepping that risk entirely rather
+// than gambling on it for the one narrow, already-fragile path that needs it.
+
+// Extend NodeJS.Global so TypeScript knows about our custom properties
 declare global {
   // eslint-disable-next-line no-var
-  var __prisma: PrismaClient | undefined
+  var __prisma: ReturnType<typeof createAcceleratedClient> | undefined
+  // eslint-disable-next-line no-var
+  var __directPrisma: PrismaClient | undefined
 }
 
-function createPrismaClient(): PrismaClient {
-  return new PrismaClient({
+function createAcceleratedClient() {
+  return new PrismaClientEdge({
     log:
       process.env.NODE_ENV === "development"
         ? ["error", "warn"]  // remove 'query' unless you need SQL logging — it's very noisy
         : ["error"],
-    // Connection pool sizing.
-    // Default is 5 in dev. Keep it small to stay under max_user_connections.
-    // For staging/prod on a shared host, set DATABASE_CONNECTION_LIMIT in .env.
+    // `accelerateUrl` (the console's own snippet) isn't a recognized
+    // constructor option on this installed @prisma/client version — that
+    // instruction assumed a newer version than what's actually installed
+    // here. The version-compatible way to point this client at Accelerate
+    // is the datasource override below, same shape as any other client.
     datasources: {
       db: {
-        url: process.env.DATABASE_URL,
+        url: process.env.PRISMA_ACCELERATE_URL,
+      },
+    },
+  }).$extends(withAccelerate())
+}
+
+function createDirectPrismaClient(): PrismaClient {
+  return new PrismaClient({
+    log:
+      process.env.NODE_ENV === "development"
+        ? ["error", "warn"]
+        : ["error"],
+    // Connection pool sizing.
+    // Default is 5 in dev. Keep it small to stay under max_user_connections —
+    // this client is only ever used by withUtf8mb4, a low-frequency
+    // background path, not general app traffic (that goes through the
+    // Accelerate-backed `prisma` export above).
+    datasources: {
+      db: {
+        url: process.env.DIRECT_DATABASE_URL,
       },
     },
   })
@@ -41,11 +99,17 @@ function createPrismaClient(): PrismaClient {
 //
 // In production, module-level variables are stable — the global is just
 // for dev safety.
-export const prisma: PrismaClient =
-  globalThis.__prisma ?? createPrismaClient()
+export const prisma = globalThis.__prisma ?? createAcceleratedClient()
 
 if (process.env.NODE_ENV !== "production") {
   globalThis.__prisma = prisma
+}
+
+const directPrisma: PrismaClient =
+  globalThis.__directPrisma ?? createDirectPrismaClient()
+
+if (process.env.NODE_ENV !== "production") {
+  globalThis.__directPrisma = directPrisma
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -103,6 +167,11 @@ export async function timeStep<T>(label: string, fn: () => Promise<T>): Promise<
 const TRANSIENT_DB_CODES = new Set([
   "P1001", // can't reach database server
   "P1017", // server closed the connection
+  "P5010", // Accelerate: can't reach the service (network/DNS blip to
+           // accelerate.prisma-data.net, not a broken connection string —
+           // Prisma's own client already retries this 3x internally with a
+           // short backoff; this gives routes that opt into withDbRetry a
+           // few more chances beyond that before surfacing a 500).
 ])
 
 function isTransientDbError(error: unknown): boolean {
@@ -193,7 +262,9 @@ const UTF8MB4_SESSION = "SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci"
 export async function withUtf8mb4<T>(
   fn: (tx: Omit<PrismaClient, "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends">) => Promise<T>
 ): Promise<T> {
-  return prisma.$transaction(
+  // Deliberately directPrisma, not the Accelerate-backed `prisma` export —
+  // see the "why two clients" note near the top of this file.
+  return directPrisma.$transaction(
     async (tx) => {
       await tx.$executeRawUnsafe(UTF8MB4_SESSION)
       return fn(tx)

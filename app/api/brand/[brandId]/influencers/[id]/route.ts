@@ -152,7 +152,12 @@ export async function PUT(
     // for a problem it does not have.
     const needsUtf8mb4 = /[\u{10000}-\u{10FFFF}]/u.test(JSON.stringify(inf))
 
-    type WriteClient = Parameters<Parameters<typeof withUtf8mb4>[0]>[0]
+    // Called with EITHER withUtf8mb4's plain transaction client (the tx
+    // branch below) OR the real `prisma` export directly (the fast path) —
+    // the latter is Accelerate-extended (see lib/prisma.ts) and structurally
+    // different (extra cacheStrategy option on every method), so this must
+    // accept both rather than just the shape withUtf8mb4's callback expects.
+    type WriteClient = Parameters<Parameters<typeof withUtf8mb4>[0]>[0] | typeof prisma
 
     const runInfluencerUpdate = (client: WriteClient) =>
       client.influencer.update({

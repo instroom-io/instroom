@@ -4,8 +4,12 @@ generator client {
 }
 
 datasource db {
-  provider = "mysql"
-  url      = env("DATABASE_URL")
+  provider  = "mysql"
+  url       = env("DATABASE_URL")
+  // Accelerate (see lib/prisma.ts) doesn't support schema-level operations —
+  // prisma generate/migrate/introspection need a real direct connection
+  // regardless of what the app's own client does at runtime.
+  directUrl = env("DIRECT_DATABASE_URL")
 }
 
 model User {
