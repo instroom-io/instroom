@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { canAddInfluencer } from "@/lib/subscription-limits"
 import { logActivity } from "@/lib/activity-log"
+import { persistAvatarUrl } from "@/lib/avatar-storage"
 
 export async function POST(req: Request) {
   try {
@@ -57,7 +58,7 @@ export async function POST(req: Request) {
           niche: data.niche || null,
           location: data.location || null,
           bio: data.bio || null,
-          profile_image_url: data.profile_image_url || null,
+          profile_image_url: null, // stored below, once the row has an id
           social_link: data.social_link || null,
           follower_count: data.follower_count || 0,
           engagement_rate: data.engagement_rate || 0,
@@ -66,6 +67,19 @@ export async function POST(req: Request) {
           avg_views: data.avg_views || 0,
         },
       })
+
+      // The avatar arrives as an Instagram/TikTok CDN link, which expires. It is
+      // downloaded and stored on Cloudinary so what the database holds is a
+      // permanent URL — see lib/avatar-storage. Done after the create because
+      // the stored asset is keyed by the influencer's id; a failure here leaves
+      // the influencer saved with no avatar rather than failing the create.
+      const storedAvatar = await persistAvatarUrl(data.profile_image_url, influencer.id)
+      if (storedAvatar) {
+        influencer = await prisma.influencer.update({
+          where: { id: influencer.id },
+          data: { profile_image_url: storedAvatar },
+        })
+      }
     }
 
     if (data.brandId) {

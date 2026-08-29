@@ -28,6 +28,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
+import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 
 // ─── Pipeline status derivation ───────────────────────────────────────────────
 // Pure function — no DB access, called in a tight .map() loop.
@@ -324,6 +325,11 @@ export async function GET(
     )
   } catch (error) {
     console.error("GET /api/brand/[brandId]/pipeline error:", error)
+    // The board competes for the same three pooled connections as every other
+    // read, so it hits capacity the same way — and reported as a 500 it was a
+    // dead end for something a retry a moment later serves. A real fault is
+    // still a 500.
+    if (isDatabaseCapacityError(error)) return databaseCapacityResponse()
     return NextResponse.json(
       { error: "Failed to fetch pipeline data" },
       { status: 500 }

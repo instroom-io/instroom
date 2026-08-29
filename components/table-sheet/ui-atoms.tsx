@@ -14,7 +14,13 @@ const PLATFORM_ICONS: Record<string, React.ReactNode> = {}
 platforms.forEach(p => { PLATFORM_ICONS[p.value] = p.icon })
 
 export function PlatformIcon({ platform, size = 16, className = "" }: { platform: string; size?: number; className?: string }) {
-  const icon = PLATFORM_ICONS[platform]
+  // Matched case-insensitively, because the app stores and serves the value
+  // both ways: the table sheet and the database keep it lowercase
+  // ("instagram"), while the Pipeline and Post Tracker routes capitalise it for
+  // display ("Instagram", "Tiktok"). A strict lookup missed every capitalised
+  // value, so both boards fell through to IconWorld and showed a globe on every
+  // card whatever the platform was.
+  const icon = PLATFORM_ICONS[platform?.trim().toLowerCase()]
   if (!icon) return <IconWorld size={size} className={className} />
   return (
     <span className={`inline-flex items-center justify-center ${className}`} style={{ width: size, height: size }}>

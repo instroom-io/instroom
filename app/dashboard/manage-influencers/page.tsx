@@ -14,20 +14,84 @@ import { useInfluencerData } from "@/hooks/useInfluencerData"
 import { seedPipelineFromApproval, unseedPipelineRow, fetchPipelineRows, type ApprovedRowSeed } from "@/hooks/usePipelineData"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { fetchCached, hasCachedData, beginExternalRequest, endExternalRequest, beginKeyWrite, endKeyWrite } from "@/lib/data-cache"
-import { invalidateInfluencerDerivedCaches } from "@/lib/cache-invalidation"
+import { invalidateInfluencerDerivedCaches, influencersCacheKey } from "@/lib/cache-invalidation"
 import { LimitExceededDialog } from "@/components/limit-exceeded-dialog"
 import { WorkspaceUnavailableModal } from "@/components/workspace-unavailable-modal"
 import { TableSkeleton } from "@/components/shared/skeletons"
 import { STATUS_LABEL } from "@/components/table-sheet/constants"
-import { IconLoader2 } from "@tabler/icons-react"
+import { isUsableEmail, normalizeEmail, normalizeContactInfo } from "@/components/table-sheet/utils"
+import { SaveStatusPill } from "@/components/save-status-pill"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Shortest handle worth acting on — the same threshold TableSheet's own lookup
+ * uses before it will call the provider. A single character is someone still
+ * typing, not an identifier.
+ */
+const MIN_HANDLE_LENGTH = 2
+
 function rowHasHandle(row: InfluencerRow): boolean {
   const handle = row.handle?.trim().replace(/^@/, "")
-  return !!(handle && handle.length > 0 && row.platform)
+  return !!(handle && handle.length >= MIN_HANDLE_LENGTH && row.platform)
+}
+
+/**
+ * Does this row carry anything about the influencer beyond a handle?
+ *
+ * A blank row starts life with `contact_status: "not_contacted"`, `stage: "1"`,
+ * `approval_status: "Pending"`, `tier: "Bronze"` and `community_status:
+ * "Pending"` (newEmptyRow), and typing a handle also fills `social_link` with
+ * the derived profile URL. None of those is information the user or the
+ * provider supplied, so none of them may be what causes an influencer to be
+ * written — otherwise picking a platform and typing two characters persisted an
+ * otherwise-empty record, and a lookup that came back not-found persisted the
+ * same thing on the user's next keystroke.
+ *
+ * This is deliberately generous about WHAT counts: any real name, contact,
+ * classification, note or non-zero metric is enough. It gates only the empty
+ * case.
+ */
+function hasMeaningfulDetails(row: InfluencerRow): boolean {
+  const filled = (v: unknown) => typeof v === "string" && v.trim().length > 0
+  const positive = (v: unknown) => {
+    const n = Number(v)
+    return Number.isFinite(n) && n > 0
+  }
+  return (
+    filled(row.full_name) ||
+    filled(row.first_name) ||
+    // A provider stand-in is not contact information: a row carrying nothing
+    // but "Email not available" must not count as having details worth writing.
+    isUsableEmail(row.email) ||
+    normalizeContactInfo(row.contact_info).length > 0 ||
+    filled(row.niche) ||
+    filled(row.gender) ||
+    filled(row.location) ||
+    filled(row.bio) ||
+    filled(row.profile_image_url) ||
+    filled(row.agreed_rate) ||
+    filled(row.notes) ||
+    positive(row.follower_count) ||
+    positive(row.engagement_rate) ||
+    positive(row.avg_likes) ||
+    positive(row.avg_comments) ||
+    positive(row.avg_views)
+  )
+}
+
+/**
+ * The address to store for a row, or null.
+ *
+ * `contact_info` is preferred as before, but only when it is a real address:
+ * the provider's "Email not available" stand-in used to be sent here, and the
+ * route discarded it (no "@"), which is why the field appeared to empty itself
+ * on the next reload.
+ */
+function persistableEmail(row: InfluencerRow): string | null {
+  return normalizeEmail(row.contact_info) || normalizeEmail(row.email) || null
 }
 
 function buildCreatePayload(row: InfluencerRow, brandId: string) {
@@ -35,7 +99,7 @@ function buildCreatePayload(row: InfluencerRow, brandId: string) {
     handle: row.handle.trim().replace(/^@/, ""),
     platform: row.platform,
     full_name: row.full_name || row.first_name || null,
-    email: row.contact_info || row.email || null,
+    email: persistableEmail(row),
     gender: row.gender || null,
     niche: row.niche || null,
     location: row.location || null,
@@ -63,7 +127,7 @@ function buildUpdatePayload(row: InfluencerRow) {
 
   return {
     full_name: rebuiltFullName,
-    email: row.contact_info || row.email || null,
+    email: persistableEmail(row),
     gender: row.gender || null,
     niche: row.niche || null,
     location: row.location || null,
@@ -83,6 +147,24 @@ function buildUpdatePayload(row: InfluencerRow) {
     approval_notes: row.approval_notes || null,
     transferred_date: row.transferred_date || null,
   }
+}
+
+/**
+ * The two fields the PUT route normalises, mapped back onto the row's own
+ * shape. `email` is carried in `contact_info` as well, which is the field the
+ * grid and the sidebar actually read.
+ */
+function normalisedRow(normalised: Record<string, unknown>): Partial<InfluencerRow> {
+  const patch: Partial<InfluencerRow> = {}
+  if ("email" in normalised) {
+    const email = (normalised.email as string | null) ?? ""
+    patch.email = email
+    patch.contact_info = email
+  }
+  if ("profile_image_url" in normalised) {
+    patch.profile_image_url = (normalised.profile_image_url as string | null) ?? ""
+  }
+  return patch
 }
 
 /** Where an approval decision lands the influencer on the Pipeline board. */
@@ -108,7 +190,7 @@ function approvalSeed(row: InfluencerRow): ApprovedRowSeed | null {
     engagementRate:    Number(row.engagement_rate) || 0,
     niche:             row.niche || "",
     location:          row.location || "",
-    email:             row.contact_info || row.email || "",
+    email:             persistableEmail(row) ?? "",
     profileImageUrl:   row.profile_image_url || null,
     notes:             row.notes || "",
     approvalNotes:     row.approval_notes || null,
@@ -126,7 +208,7 @@ function approvalSeed(row: InfluencerRow): ApprovedRowSeed | null {
  * cleared and re-armed on every change and the payload is the whole row's latest
  * values, so any burst of edits still collapses into exactly one PUT.
  */
-const AUTOSAVE_DEBOUNCE_MS = 800
+const AUTOSAVE_DEBOUNCE_MS = 500
 
 /** Discrete lifecycle fields — a change to one of these is saved immediately. */
 const LIFECYCLE_FIELDS = ["approval_status", "contact_status", "stage", "transferred_date"] as const
@@ -147,6 +229,11 @@ type SavedInfluencer = {
 type QueueItem = {
   url: string
   payload: string
+  /**
+   * What the processing pill says while this PUT is out. Omitted for an
+   * ordinary edit, which takes the standard "Saving changes…".
+   */
+  processing?: string
   /** Confirmation shown when this save lands (e.g. "handle moved to Approved"). */
   message?: string | null
   /**
@@ -166,7 +253,11 @@ type QueueItem = {
  * actually in flight — not the debounce window before it, and not a timer.
  */
 function createPutQueue(
-  onRequest?: (phase: "start" | "ok" | "fail", message?: string | null) => void,
+  onRequest?: (
+    phase: "start" | "ok" | "fail",
+    message?: string | null,
+    processing?: string
+  ) => void,
   /**
    * The cache key these PUTs mutate, so the list's freshness indicator reports
    * "Syncing…" for a save and not only for a page load. A function, because the
@@ -182,7 +273,7 @@ function createPutQueue(
     running = true
     while (queue.length > 0) {
       const item = queue.shift()!
-      onRequest?.("start", item.message)
+      onRequest?.("start", item.message, item.processing)
       // Counted into the shared cache's in-flight total so the background
       // dashboard prefetch yields while this request is out. These PUTs do not
       // go through fetchCached, so without this the prefetch saw an idle app
@@ -264,7 +355,7 @@ function InfluencersContent() {
   const rawBrandId = searchParams.get("brandId")
   const brandId = rawBrandId?.trim() || null
 
-  const { rows, customColumns, isLoading, error, refetch, setCustomColumns } =
+  const { rows, customColumns, isLoading, error, refetch, setRows, setCustomColumns } =
     useInfluencerData(brandId)
   const { canManageInfluencers, canApproveInfluencers } = useBrandCapabilities(brandId)
 
@@ -380,10 +471,19 @@ function InfluencersContent() {
   }, [isLoading])
 
   // ── Save status (bottom indicator) ────────────────────────────────────────
-  // Same two-part pattern as the Pipeline board and the Post Tracker: a dark
-  // "Saving" pill while a request is in flight, replaced by the outcome
-  // notification once it settles (3s, as `showToast` uses there).
+  // Same two-part pattern as the Pipeline board, the Post Tracker and Brand
+  // Partners: the shared SaveStatusPill while a request is in flight, with the
+  // outcome notification once it settles (3s, as `showToast` uses there). The
+  // pill tracks the REAL request, not the debounce window before it.
   const [isSaving, setIsSaving] = useState(false)
+  /** Whether the batch that just finished failed, so the pill skips "Saved". */
+  const [saveFailed, setSaveFailed] = useState(false)
+  /**
+   * What the processing pill says for the operation in flight. Null takes the
+   * standard "Saving changes…"; an add, a delete, a bulk move or a profile
+   * enrichment names itself instead.
+   */
+  const [processingMessage, setProcessingMessage] = useState<string | null>(null)
   const [notice, setNotice] = useState<{ message: string; type: "success" | "error" } | null>(null)
   const savingCount = useRef(0)
   const failedSinceIdle = useRef(false)
@@ -393,13 +493,21 @@ function InfluencersContent() {
 
   const pendingMessage = useRef<string | null>(null)
 
-  const reportSave = useCallback((phase: "start" | "ok" | "fail", message?: string | null) => {
+  const reportSave = useCallback((
+    phase: "start" | "ok" | "fail",
+    message?: string | null,
+    processing?: string
+  ) => {
     if (phase === "start") {
       if (message) pendingMessage.current = message
+      // Only the first operation of a batch names it — a later one joining the
+      // same in-flight window must not relabel what is already on screen.
+      if (savingCount.current === 0) setProcessingMessage(processing ?? null)
       savingCount.current += 1
       failedSinceIdle.current = failedSinceIdle.current && savingCount.current > 1
       if (noticeTimer.current) { clearTimeout(noticeTimer.current); noticeTimer.current = null }
       setNotice(null)
+      setSaveFailed(false)
       setIsSaving(true)
       return
     }
@@ -422,7 +530,11 @@ function InfluencersContent() {
     const failureText = failureMessage.current
     failureMessage.current = null
     // The pill goes the moment the request is done — no lingering saving state.
+    // `failed` is handed to the pill so a failed batch shows nothing rather
+    // than "Saved"; the failure itself is reported by the notice below.
+    setSaveFailed(failed)
     setIsSaving(false)
+    setProcessingMessage(null)
     // Same wording as the Pipeline board and Post Tracker: "<influencer> moved
     // to <destination>" for a stage/approval move, and their plain failure line
     // otherwise.
@@ -446,8 +558,12 @@ function InfluencersContent() {
   // Wraps any save that doesn't go through the PUT queue (create, bulk approve,
   // delete) so every path feeds the same indicator.
   const trackSave = useCallback(
-    async <T,>(op: () => Promise<T>, succeeded: (result: T) => boolean): Promise<T> => {
-      reportSave("start")
+    async <T,>(
+      op: () => Promise<T>,
+      succeeded: (result: T) => boolean,
+      processing?: string
+    ): Promise<T> => {
+      reportSave("start", null, processing)
       try {
         const result = await op()
         reportSave(succeeded(result) ? "ok" : "fail")
@@ -521,11 +637,26 @@ function InfluencersContent() {
   // lands here instead (via onLookupFailed), which tells handleRowsChange to
   // treat it like any manually entered row from here on.
   //
-  // Membership alone saves nothing: the create still waits for a real edit, so a
-  // failed lookup the user walks away from is not persisted.
-  const manualRows = useRef<Set<string>>(new Set())
+  // Membership alone saves nothing, and now says so in two ways. The value is
+  // the HANDLE the lookup gave up on, so editing the handle afterwards drops
+  // the row back to the lookup (a different identifier deserves a fresh
+  // attempt, not a record built from a failure). And the create still waits for
+  // `hasMeaningfulDetails`, so a not-found the user walks away from — or types
+  // one more character into — is never persisted as an empty influencer.
+  const manualRows = useRef<Map<string, string>>(new Map())
 
   const idSwapCallback = useRef<((tempId: string, realId: string) => void) | null>(null)
+
+  /**
+   * Tail of the delete chain, so deletes run one after another.
+   *
+   * Deleting a multi-row selection fires one onDeleteRow per row at once, and a
+   * delete is now a transaction rather than a single statement — against
+   * connection_limit=3 a selection of any size would have queued transactions
+   * against the pool and timed out (P2024/P2037). Serialising costs a moment on
+   * a large selection and cannot exhaust the pool.
+   */
+  const deleteChain = useRef<Promise<void>>(Promise.resolve())
 
   const { data: session } = useSession()
 
@@ -661,11 +792,28 @@ function InfluencersContent() {
               wasNormalised ? JSON.stringify({ ...sentPayload, ...normalised }) : payload
             )
 
-            // Every derived view is stale now — and so is this page's own entry,
-            // because the row it holds was written locally. Marking it stale too
-            // (data is kept, so nothing blanks out) means the next read comes
-            // from the database rather than from the optimistic edit.
-            invalidateInfluencerDerivedCaches(brandId)
+            // ── 3. The cached row, updated from what was persisted ─────────
+            // The grid has its own copy of the rows, so an inline edit never
+            // reached the shared cache entry — the one that is mirrored to
+            // sessionStorage and painted first after a reload. A refresh taken
+            // right after a save therefore showed the PRE-save row until the
+            // background revalidation came back. Writing the persisted values
+            // in (from the response where the route rewrote a field, from the
+            // row that was sent otherwise) means the first paint is already
+            // right, with no extra request and no full-page refresh.
+            setRows((prev) =>
+              prev.map((r) => (r.id === row.id ? { ...row, ...normalisedRow(normalised) } : r))
+            )
+
+            // Every OTHER view of this row is stale now. This page's own entry
+            // is excluded, the same way the Pipeline board and the Post Tracker
+            // exclude theirs: the row above was just written into it from what
+            // the database reported, so it is correct. It used to be marked
+            // stale as well, which — with an autosave firing every 500ms of
+            // typing — left the entry permanently stale and had the list re-read
+            // itself from the database on every window focus, for a row it
+            // already held the persisted value of.
+            invalidateInfluencerDerivedCaches(brandId, [influencersCacheKey(brandId)])
 
             if (wasNormalised) {
               // Pull the row from the database so the grid shows what was
@@ -718,7 +866,7 @@ function InfluencersContent() {
       updateTimers.current.set(row.id, timer)
       pendingFlush.current.set(row.id, () => { clearTimeout(timer); fire() })
     },
-    [brandId, notify, refetch]
+    [brandId, notify, refetch, setRows]
   )
   // Assigned after definition so onSuccess can reschedule through the ref
   // without scheduleUpdate having to reference itself during construction.
@@ -758,7 +906,7 @@ function InfluencersContent() {
       savedHandles.current.add(key)
 
       try {
-        reportSave("start")
+        reportSave("start", null, "Adding…")
         const res = await fetch("/api/influencers/create", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -774,6 +922,7 @@ function InfluencersContent() {
 
           dbIds.current.add(realId)
           tempToReal.current.set(row.id, realId)
+          manualRows.current.delete(row.id)
           idSwapCallback.current?.(row.id, realId)
 
           // A newly linked influencer appears in the pipeline and in analytics
@@ -790,6 +939,7 @@ function InfluencersContent() {
 
           dbIds.current.add(existingId)
           tempToReal.current.set(row.id, existingId)
+          manualRows.current.delete(row.id)
           if (existingId !== row.id) idSwapCallback.current?.(row.id, existingId)
 
           // Linking an existing influencer to this brand widens what the other
@@ -858,6 +1008,7 @@ function InfluencersContent() {
         putQueue.current.enqueue({
           url: `/api/brand/${brandId}/influencers/${row.id}`,
           payload: JSON.stringify(buildUpdatePayload(row)),
+          processing: "Updating profile…",
         })
         return
       }
@@ -868,6 +1019,7 @@ function InfluencersContent() {
         putQueue.current.enqueue({
           url: `/api/brand/${brandId}/influencers/${realId}`,
           payload: JSON.stringify(buildUpdatePayload({ ...row, id: realId })),
+          processing: "Updating profile…",
         })
         return
       }
@@ -900,7 +1052,8 @@ function InfluencersContent() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ influencerIds }),
           }),
-          (r) => r.ok
+          (r) => r.ok,
+          "Updating…"
         )
         if (!res.ok) {
           const body = await res.json().catch(() => ({}))
@@ -933,7 +1086,10 @@ function InfluencersContent() {
   // it is and nothing is saved here; it simply becomes eligible to save the way
   // a YouTube or Twitter row already is, on the user's next edit.
   const handleLookupFailed = useCallback((rowId: string) => {
-    manualRows.current.add(rowId)
+    // Recorded against the handle that failed, so a later edit to the handle
+    // itself hands the row back to the lookup instead of creating from nothing.
+    const row = latestRows.current.find((r) => r.id === rowId)
+    manualRows.current.set(rowId, row?.handle?.trim().replace(/^@/, "") ?? "")
   }, [])
 
   // ── handleRowsChange ──────────────────────────────────────────────────────
@@ -958,12 +1114,16 @@ function InfluencersContent() {
   // here — an influencer with no verified profile data is not written.
   const handleRowsChange = useCallback(
     (updatedRows: InfluencerRow[]) => {
-      if (!readyToSave.current) return
-
       // The table owns the live rows; this is the page's view of them. Needed so
       // a save that has just landed can re-diff against what the row looks like
-      // NOW rather than against the snapshot the request was built from.
+      // NOW rather than against the snapshot the request was built from, and so
+      // handleLookupFailed can read the handle a lookup gave up on. Kept in step
+      // BEFORE the save gate below, because it is a mirror, not a write — it was
+      // left empty for the first 800ms after load, which is exactly when a
+      // freshly typed row's lookup can come back not-found.
       latestRows.current = updatedRows
+
+      if (!readyToSave.current) return
 
       updatedRows.forEach((row) => {
         if (!rowHasHandle(row)) return
@@ -983,16 +1143,28 @@ function InfluencersContent() {
         const isApiPlatform = row.platform === "instagram" || row.platform === "tiktok"
 
         if (!isApiPlatform) {
-          // YouTube, Twitter, etc. — no enrichment, save immediately
-          createRow(row)
+          // YouTube, Twitter, etc. — no enrichment, so the user is the only
+          // source of data. Written once they have actually entered some:
+          // a handle alone is not an influencer.
+          if (hasMeaningfulDetails(row)) createRow(row)
           return
         }
 
         // Instagram / TikTok — the lookup owns the create, EXCEPT for a row the
         // lookup already gave up on. That one is the user's to complete, so an
-        // edit to it saves like any manual row.
-        if (manualRows.current.has(row.id)) {
-          createRow(row)
+        // edit to it saves like any manual row — once there is something to
+        // save beyond the handle the lookup could not resolve.
+        const failedHandle = manualRows.current.get(row.id)
+        if (failedHandle !== undefined) {
+          if (failedHandle !== handle) {
+            // The identifier changed, so this is no longer the row the lookup
+            // failed on. TableSheet is already re-querying it; let that own the
+            // create again rather than writing a record for a handle nobody has
+            // looked up yet.
+            manualRows.current.delete(row.id)
+            return
+          }
+          if (hasMeaningfulDetails(row)) createRow(row)
           return
         }
 
@@ -1014,7 +1186,11 @@ function InfluencersContent() {
       let savedCount = 0
       let skippedCount = 0
 
-      const BATCH = 5
+      // Two at a time, not five: DATABASE_URL caps this deployment at
+      // connection_limit=3 and each create runs several queries, so a batch
+      // wider than the pool starved the user's own reads and surfaced as
+      // P2037/P2024 mid-import. One connection is deliberately left free.
+      const BATCH = 2
       for (let i = 0; i < validRows.length; i += BATCH) {
         const batch = validRows.slice(i, i + BATCH)
         await Promise.all(
@@ -1039,7 +1215,18 @@ function InfluencersContent() {
   )
 
   // ── handleDeleteRow ───────────────────────────────────────────────────────
-  const handleDeleteRow = useCallback(
+  // The table has already taken the row off screen by the time this runs, so
+  // the shared cache entry is brought in line with it IMMEDIATELY — the entry
+  // is what is mirrored into sessionStorage and painted first after a reload,
+  // and leaving the row in it meant a refresh taken straight after a delete put
+  // the influencer back until the background revalidation returned. The DELETE
+  // is bracketed as a write on that key for the same reason: a revalidation
+  // already in flight carries pre-delete rows, and data-cache discards a
+  // response whose lifetime overlaps a write window.
+  //
+  // If the request fails the row is put back at its original position, so the
+  // table shows it again rather than pretending it was deleted.
+  const deleteRowNow = useCallback(
     async (rowId: string) => {
       if (!brandId) return
 
@@ -1054,20 +1241,60 @@ function InfluencersContent() {
       // PUT the row straight back.
       pendingFlush.current.delete(rowId)
 
+      // The row as the cache still holds it, and where it sits — both needed to
+      // restore it untouched if the delete fails.
+      const cachedIndex = rows.findIndex((r) => r.id === rowId)
+      const cachedRow = cachedIndex >= 0 ? rows[cachedIndex] : null
+
       // If the row was never saved to DB (still temp), just clean up refs
       if (!dbIds.current.has(rowId)) {
         tempToReal.current.delete(rowId)
+        // The handle is free again, or createRow would treat a re-add of the
+        // same influencer as already saved and never POST it.
+        if (cachedRow?.handle) {
+          savedHandles.current.delete(`${cachedRow.handle.trim().replace(/^@/, "")}@${cachedRow.platform}`)
+        }
+        if (cachedIndex >= 0) setRows((prev) => prev.filter((r) => r.id !== rowId))
         return
       }
+
+      // Opened BEFORE the optimistic removal, so the freshness stamp a failed
+      // delete is rolled back to is the one from before this touched the entry.
+      const cacheKey = `/api/brand/${brandId}/influencers`
+      beginKeyWrite(cacheKey)
+      beginExternalRequest()
+      if (cachedIndex >= 0) setRows((prev) => prev.filter((r) => r.id !== rowId))
+      let deleted = false
 
       try {
         const res = await trackSave(
           () => fetch(`/api/brand/${brandId}/influencers/${rowId}`, { method: "DELETE" }),
-          (r) => r.ok || r.status === 404
+          (r) => r.ok || r.status === 404,
+          "Removing…"
         )
         if (res.ok || res.status === 404) {
-          dbIds.current.delete(rowId)
-          tempToReal.current.delete(rowId)
+          deleted = true
+          // The route reports the id it deleted; fall back to the one asked for
+          // when the row was already gone (404 has no body to read).
+          const body = (await res.json().catch(() => ({}))) as { id?: string }
+          const deletedId = body.id ?? rowId
+
+          dbIds.current.delete(deletedId)
+          tempToReal.current.delete(deletedId)
+          lastSentPayloads.current.delete(deletedId)
+          // Re-adding the same handle must create the influencer again rather
+          // than being skipped as "already saved or in flight".
+          if (cachedRow?.handle) {
+            savedHandles.current.delete(`${cachedRow.handle.trim().replace(/^@/, "")}@${cachedRow.platform}`)
+          }
+          if (deletedId !== rowId) setRows((prev) => prev.filter((r) => r.id !== deletedId))
+
+          // The Pipeline board keeps its own cached rows, so marking them
+          // stale alone would still paint the deleted card until the
+          // revalidation returned. Same helper the approval rollback uses.
+          if (cachedRow?.brand_influencer_id) {
+            unseedPipelineRow(brandId, cachedRow.brand_influencer_id)
+          }
           invalidateInfluencerDerivedCaches(brandId)
           if (res.ok) notify("success", "Influencer removed")
         } else {
@@ -1076,9 +1303,32 @@ function InfluencersContent() {
         }
       } catch {
         notify("error", "Network error — could not delete")
+      } finally {
+        // A failed delete puts the row back where it was, so the table picks it
+        // up again on the next render and nothing was silently lost.
+        if (!deleted && cachedRow) {
+          setRows((prev) =>
+            prev.some((r) => r.id === rowId)
+              ? prev
+              : [...prev.slice(0, cachedIndex), cachedRow, ...prev.slice(cachedIndex)]
+          )
+        }
+        endExternalRequest()
+        endKeyWrite(cacheKey, deleted)
       }
     },
-    [brandId, trackSave, notify]
+    [brandId, rows, setRows, trackSave, notify]
+  )
+
+  /** Queued behind any delete still running — see `deleteChain`. */
+  const handleDeleteRow = useCallback(
+    (rowId: string) => {
+      const next = deleteChain.current.then(() => deleteRowNow(rowId))
+      // Never breaks the chain: deleteRowNow reports its own failures.
+      deleteChain.current = next.catch(() => {})
+      return next
+    },
+    [deleteRowNow]
   )
 
   // ── handleCustomColumnsChange ─────────────────────────────────────────────
@@ -1248,15 +1498,11 @@ function InfluencersContent() {
         />
       )}
 
-      {/* The saving pill only — bottom-right, identical to the Pipeline board
-          and Post Tracker. The outcome moved to the top dock below. */}
+      {/* The shared saving pill — bottom-right, identical to the Pipeline board,
+          the Post Tracker and Brand Partners. The outcome moved to the top dock
+          below. */}
       <div className="notice-dock">
-        {isSaving && (
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-900/90 text-white text-xs font-medium shadow-lg animate-in fade-in">
-            <IconLoader2 size={12} className="animate-spin" />
-            Saving
-          </div>
-        )}
+        <SaveStatusPill saving={isSaving} failed={saveFailed} message={processingMessage ?? undefined} />
       </div>
 
       {/* Outcome floating at the top right (`.notice-dock-top`,

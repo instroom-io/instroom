@@ -20,11 +20,14 @@ import { useDraggable } from "@dnd-kit/core"
 import {
   IconSearch, IconX, IconChevronDown, IconChevronUp,
   IconLayoutKanban, IconList, IconFilter, IconLocation,
-  IconLayoutList, IconLink, IconArrowRight, IconAlertTriangle, IconLoader2,
+  IconLayoutList, IconLink, IconArrowRight, IconAlertTriangle,
 } from "@tabler/icons-react"
 import { useClosedData, type ClosedInfluencer, type ClosedColumn, type OrderDetailsFields } from "@/hooks/useClosedData"
 import { invalidateInfluencerDerivedCaches, closedCacheKey } from "@/lib/cache-invalidation"
 import { DataSyncStatus } from "@/components/data-sync-status"
+import { ProfilePicture, PlatformIcon } from "@/components/table-sheet/ui-atoms"
+import { getPlatformLabel } from "@/components/table-sheet/utils"
+import { SaveStatusPill } from "@/components/save-status-pill"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { SubscriptionGate } from "@/components/ui/subscription-gate"
 import { HistoryTab } from "@/components/InfluencerProfileSidebar"
@@ -428,15 +431,29 @@ function PostTrackerCardBase({ inf, onOpen, onMove, canApproveInfluencers }: {
     }`}>
       {/* Clickable body — same layout as pipeline card */}
       <div className="cursor-pointer" onClick={() => onOpen(inf)}>
-        {/* Name + handle */}
-        <div className="flex flex-col text-sm mb-2">
-          <span className="font-medium text-gray-900">{inf.influencer}</span>
-          <span className="text-xs text-gray-500">@{inf.handle}</span>
+        {/* Avatar + name/handle — same block as the Pipeline card. The image is
+            the persisted Cloudinary URL already on this row; nothing extra is
+            fetched or uploaded here, and ProfilePicture owns the fallback. */}
+        <div className="flex items-center gap-2 mb-2">
+          <ProfilePicture
+            src={inf.profileImageUrl ?? undefined}
+            name={inf.influencer}
+            handle={inf.handle}
+            size={40}
+          />
+          <div className="flex flex-col text-sm min-w-0">
+            <span className="font-medium text-gray-900">{inf.influencer}</span>
+            <span className="text-xs text-gray-500">@{inf.handle}</span>
+          </div>
         </div>
 
         {/* Platform + location */}
         <div className="flex items-center gap-2 text-xs text-gray-500 mb-1.5">
-          <span>{inf.platform || "Instagram"}</span>
+          {/* Same treatment as the Pipeline card — see the note there. */}
+          <span className="inline-flex min-w-0 items-center gap-1.5 leading-none">
+            <PlatformIcon platform={inf.platform} size={14} className="shrink-0" />
+            <span className="truncate">{getPlatformLabel(inf.platform) || "—"}</span>
+          </span>
           <span>•</span>
           <span className="flex items-center gap-0.5">
             <IconLocation size={11} />{inf.location || "—"}
@@ -449,27 +466,30 @@ function PostTrackerCardBase({ inf, onOpen, onMove, canApproveInfluencers }: {
           <span>{inf.engagementRate || "—"} eng</span>
         </div>
 
-        {/* Campaign badge */}
-        <div className="mt-2">
+        {/* Campaign badge + status pill share ONE row.
+            They were stacked blocks, each with its own mt-2, so a card that had
+            both was a row taller than one that had only the badge. Same shape
+            the Pipeline card already uses for its two badges: the row owns the
+            spacing, the pills keep their own styling, and it wraps rather than
+            overflowing on a narrow column. */}
+        <div className="mt-2 flex items-center gap-1.5 flex-wrap">
           <CampaignBadge type={inf.campaignType} />
+          {inf.closedStatus === "Delivered" && !inf.postedAt && (
+            <span className="text-[10px] text-amber-600 bg-amber-50 rounded-full px-2.5 py-1 inline-block font-medium">
+              ⚠️ Awaiting content
+            </span>
+          )}
+          {inf.closedStatus === "Posted" && inf.postUrl && (
+            <span className="text-[10px] text-green-600 bg-green-50 rounded-full px-2.5 py-1 inline-flex items-center gap-1 font-medium">
+              <IconLink size={10}/> Content live
+            </span>
+          )}
+          {isExit && (
+            <span className="text-[10px] text-red-500 bg-red-50 rounded-full px-2.5 py-1 inline-block font-medium">
+              ✕ No content published
+            </span>
+          )}
         </div>
-
-        {/* Status pills */}
-        {inf.closedStatus === "Delivered" && !inf.postedAt && (
-          <div className="mt-2 text-[10px] text-amber-600 bg-amber-50 rounded-full px-2.5 py-1 inline-block font-medium">
-            ⚠️ Awaiting content
-          </div>
-        )}
-        {inf.closedStatus === "Posted" && inf.postUrl && (
-          <div className="mt-2 text-[10px] text-green-600 bg-green-50 rounded-full px-2.5 py-1 inline-flex items-center gap-1 font-medium">
-            <IconLink size={10}/> Content live
-          </div>
-        )}
-        {isExit && (
-          <div className="mt-2 text-[10px] text-red-500 bg-red-50 rounded-full px-2.5 py-1 inline-block font-medium">
-            ✕ No content published
-          </div>
-        )}
       </div>
 
       {/* Stage action buttons — same pattern as pipeline cards */}
@@ -865,11 +885,19 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
         <div className="pph">
           <div className="ppt">Influencer Profile</div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
-            {inf.profileImageUrl ? (
-              <img src={inf.profileImageUrl} alt={inf.influencer} className="pav" style={{ objectFit: "cover" }} />
-            ) : (
-              <div className="pav">{inf.influencer.charAt(0).toUpperCase()}</div>
-            )}
+            {/* The persisted avatar — the permanent Cloudinary URL the Influencer
+                List stores on the Influencer record, carried here by the closed
+                route's own `profileImageUrl`. Rendered through the shared
+                ProfilePicture so a missing or broken image falls back to
+                initials the way it does on every other screen, instead of a
+                bare <img> that renders as a broken icon. */}
+            <div className="pav">
+              {inf.profileImageUrl ? (
+                <ProfilePicture src={inf.profileImageUrl} name={inf.influencer} handle={inf.handle} size={44} />
+              ) : (
+                inf.influencer.charAt(0).toUpperCase()
+              )}
+            </div>
             <div style={{ flex: 1 }}>
               <div className="pnm">{inf.influencer}</div>
               <div className="phd">@{inf.handle}</div>
@@ -927,7 +955,12 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
           )}
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-            <button className="atag plat">{inf.platform || "Instagram"}</button>
+            {/* The chip keeps its own pill styling; only the mark's size and
+                spacing are brought in line with the cards and the table. */}
+            <button className="atag plat" style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0, lineHeight: 1 }}>
+              <PlatformIcon platform={inf.platform} size={14} className="shrink-0" />
+              <span className="truncate">{getPlatformLabel(inf.platform) || "—"}</span>
+            </button>
             <button className="atag">Send Email</button>
             <button className="atag">Send DM</button>
             <button className="atag">Follow up</button>
@@ -1316,7 +1349,7 @@ function PostTrackerContent() {
   // feature for free-tier users. A cached answer resolves on mount instead.
   const { isSubscribed, status: subscriptionStatus } = useSubscriptionGate(brandId)
 
-  const { data, isLoading, error, updateColumn, updateCampaignType, updatePostUrl, updateOrderDetails, isSaving, refetch } = useClosedData(brandId)
+  const { data, isLoading, error, updateColumn, updateCampaignType, updatePostUrl, updateOrderDetails, isSaving, saveFailed, saveMessage, refetch } = useClosedData(brandId)
 
   const [view,                 setView]                 = useState<"Board"|"list">("Board")
   const [search,               setSearch]               = useState("")
@@ -1630,14 +1663,9 @@ function PostTrackerContent() {
     <SubscriptionGate isSubscribed={isSubscribed} status={subscriptionStatus} featureName="Post Tracker">
       <div className="flex flex-col gap-4 p-6">
       {/* Save state lives in the bottom-right corner, clear of the board columns
-          and the bulk action bar — same pattern as the Pipeline. */}
+          and the bulk action bar — the shared pill, same as every other board. */}
       <div className="notice-dock">
-        {isSaving && (
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-900/90 text-white text-xs font-medium shadow-lg animate-in fade-in">
-            <IconLoader2 size={12} className="animate-spin" />
-            Saving
-          </div>
-        )}
+        <SaveStatusPill saving={isSaving} failed={saveFailed} message={saveMessage ?? undefined} />
       </div>
 
       {/* Outcome floating at the top right (`.notice-dock-top`,
@@ -1997,7 +2025,12 @@ function PostTrackerContent() {
                       />
                     </td>
                     <td className="px-4 py-3"><div className="flex items-center gap-3">{inf.profileImageUrl?<img src={inf.profileImageUrl} alt="" className="w-8 h-8 rounded-full object-cover flex-shrink-0"/>:<div className={`w-8 h-8 rounded-full flex-shrink-0 ${getAvatarColor(inf.influencer)} bg-opacity-20 flex items-center justify-center text-[#0F6B3E] font-semibold text-xs`}>{inf.influencer.charAt(0).toUpperCase()}</div>}<span className="font-medium">{inf.influencer}</span></div></td>
-                    <td className="px-4 py-3">{inf.platform||"Instagram"}</td>
+                    <td className="px-4 py-3">
+                      <span className="inline-flex min-w-0 items-center gap-1.5 leading-none">
+                        <PlatformIcon platform={inf.platform} size={14} className="shrink-0" />
+                        <span className="truncate">{getPlatformLabel(inf.platform) || "—"}</span>
+                      </span>
+                    </td>
                     <td className="px-4 py-3 text-[#0F6B3E] font-medium">@{inf.handle}</td>
                     <td className="px-4 py-3"><div className="flex items-center gap-1"><IconLocation size={14} className="text-gray-400"/>{inf.location||"—"}</div></td>
                     <td className="px-4 py-3">{inf.followers}</td>

@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth"
 import { logActivity } from "@/lib/activity-log"
 import { provisionGoAffProAffiliate } from "@/lib/goaffpro-provision"
 import { hasBrandCapability } from "@/lib/permissions"
+import { persistAvatarUrl } from "@/lib/avatar-storage"
 import { NextRequest, NextResponse } from "next/server"
 
 // Must cover every contact_status the app writes anywhere, because an unknown
@@ -73,11 +74,21 @@ export async function PUT(
     if (data.niche !== undefined) inf.niche = data.niche || null
     if (data.location !== undefined) inf.location = data.location || null
     if (data.bio !== undefined) inf.bio = data.bio || null
-    if (data.profile_image_url !== undefined)
-      inf.profile_image_url =
-        data.profile_image_url && !data.profile_image_url.includes("x-expires=")
-          ? data.profile_image_url
-          : null
+    // The avatar is STORED, not linked. An Instagram/TikTok URL expires, so
+    // this used to drop it (null) and the avatar vanished. It is now mirrored
+    // into Cloudinary and the permanent URL is what gets written — see
+    // lib/avatar-storage. A URL already stored there is returned as-is, so an
+    // ordinary save does not re-upload anything.
+    if (data.profile_image_url !== undefined) {
+      if (!data.profile_image_url) {
+        inf.profile_image_url = null
+      } else {
+        const stored = await persistAvatarUrl(data.profile_image_url, id)
+        // null = the download or upload failed. Leave the stored avatar alone
+        // rather than replacing a working one with nothing.
+        if (stored) inf.profile_image_url = stored
+      }
+    }
     if (data.social_link !== undefined) inf.social_link = data.social_link || null
     if (data.follower_count !== undefined)
       inf.follower_count = parseInt(String(data.follower_count)) || 0
@@ -185,14 +196,13 @@ export async function PUT(
           if (Object.keys(bi).length > 0) savedBi = await runBrandInfluencerUpdate(tx)
         })
       } else {
-        // Fast path: no transaction. The two writes are independent, so they go
-        // out together exactly as they did before withUtf8mb4 was introduced.
-        const [infRow, biRow] = await Promise.all([
-          Object.keys(inf).length > 0 ? runInfluencerUpdate(prisma) : Promise.resolve(null),
-          Object.keys(bi).length > 0 ? runBrandInfluencerUpdate(prisma) : Promise.resolve(null),
-        ])
-        if (infRow) savedInf = infRow
-        if (biRow) savedBi = biRow
+        // Fast path: no transaction. The two writes are independent but run one
+        // after the other, not together: DATABASE_URL caps this deployment at
+        // connection_limit=3, and this is the route every autosave goes
+        // through, so a second concurrent connection per save was enough to
+        // exhaust the pool under normal editing (P2037/P2024).
+        if (Object.keys(inf).length > 0) savedInf = await runInfluencerUpdate(prisma)
+        if (Object.keys(bi).length > 0) savedBi = await runBrandInfluencerUpdate(prisma)
       }
     }
     if (!savedInf) {
@@ -213,10 +223,13 @@ export async function PUT(
 
     // Log only what actually changed
     const userId = session.user.id
-    const logs: Promise<void>[] = []
+    // Queued as thunks rather than started immediately: these are fire-and-
+    // forget writes, and starting them together took one pooled connection per
+    // log on top of the save that is still finishing.
+    const logs: (() => Promise<void>)[] = []
 
     if (before && Object.keys(inf).length > 0) {
-      logs.push(
+      logs.push(() =>
         logActivity({
           brandId,
           userId,
@@ -229,7 +242,7 @@ export async function PUT(
     }
 
     if (before && bi.stage !== undefined && bi.stage !== before.stage) {
-      logs.push(
+      logs.push(() =>
         logActivity({
           brandId,
           userId,
@@ -246,7 +259,7 @@ export async function PUT(
       bi.contact_status !== undefined &&
       bi.contact_status !== before.contact_status
     ) {
-      logs.push(
+      logs.push(() =>
         logActivity({
           brandId,
           userId,
@@ -269,7 +282,7 @@ export async function PUT(
       bi.approval_status !== undefined &&
       bi.approval_status !== before.approval_status
     ) {
-      logs.push(
+      logs.push(() =>
         logActivity({
           brandId,
           userId,
@@ -285,7 +298,12 @@ export async function PUT(
       )
     }
 
-    if (logs.length > 0) Promise.all(logs).catch(console.error)
+    if (logs.length > 0) {
+      // Sequential, for the same connection-pool reason as the writes above.
+      void (async () => {
+        for (const log of logs) await log()
+      })().catch(console.error)
+    }
 
     return NextResponse.json({
       success: true,
@@ -349,9 +367,71 @@ export async function DELETE(
       return NextResponse.json({ error: "Not found" }, { status: 404 })
     }
 
-    await prisma.brandInfluencer.delete({
+    // ── Delete for real, not just the link ──────────────────────────────────
+    // This used to delete ONLY the BrandInfluencer row. Two things were left
+    // behind by that:
+    //
+    //   1. Every record owned by that membership — attribution, partner,
+    //      custom values, outreach logs, content posts, detected posts,
+    //      detection settings — kept pointing at a row that no longer existed.
+    //      The schema declares onDelete: Cascade for these, but the tables are
+    //      MyISAM, where MySQL accepts a foreign key and then ignores it, so
+    //      nothing actually cascades and the children were orphaned. The same
+    //      explicit, dependency-ordered cascade the global delete already
+    //      performs (app/api/influencers/[id]) is done here.
+    //
+    //   2. The Influencer row itself, which is GLOBAL — /api/influencers/create
+    //      reuses it by handle+platform. Re-adding the same handle afterwards
+    //      therefore resurrected the old bio, avatar, email and stats instead
+    //      of storing what was just fetched.
+    //
+    // The global row is only removed when THIS was its last membership. While
+    // another brand still links it, it is that brand's data and must survive.
+    const link = await prisma.brandInfluencer.findUnique({
       where: { brand_id_influencer_id: { brand_id: brandId, influencer_id: id } },
+      select: { id: true },
     })
+    if (!link) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 })
+    }
+
+    const otherBrandLinks = await prisma.brandInfluencer.count({
+      where: { influencer_id: id, id: { not: link.id } },
+    })
+
+    // One transaction, sequential array form — the form this codebase uses
+    // everywhere except withUtf8mb4 (see lib/prisma.ts), and the one that holds
+    // a single pooled connection rather than one per statement. A partial
+    // delete therefore cannot leave a membership without its children, or
+    // children without their membership.
+    await prisma.$transaction([
+      prisma.brandPartner.deleteMany({ where: { brand_influencer_id: link.id } }),
+      prisma.attribution.deleteMany({ where: { brand_influencer_id: link.id } }),
+      prisma.brandInfluencerCustomValue.deleteMany({ where: { brand_influencer_id: link.id } }),
+      prisma.outreachLog.deleteMany({ where: { brand_influencer_id: link.id } }),
+      prisma.contentPost.deleteMany({ where: { brand_influencer_id: link.id } }),
+      prisma.detectedPost.deleteMany({ where: { brand_influencer_id: link.id } }),
+      prisma.postDetectionSetting.deleteMany({ where: { brand_influencer_id: link.id } }),
+      // Order history and monitoring runs are onDelete: SetNull in the schema:
+      // they are the brand's own records and outlive the influencer, they just
+      // lose the link. Deleting them would destroy financial and audit data.
+      prisma.goAffProOrder.updateMany({
+        where: { brand_influencer_id: link.id },
+        data: { brand_influencer_id: null },
+      }),
+      prisma.shopifyOrder.updateMany({
+        where: { brand_influencer_id: link.id },
+        data: { brand_influencer_id: null },
+      }),
+      prisma.monitoringRun.updateMany({
+        where: { brand_influencer_id: link.id },
+        data: { brand_influencer_id: null },
+      }),
+      prisma.brandInfluencer.delete({ where: { id: link.id } }),
+      ...(otherBrandLinks === 0
+        ? [prisma.influencer.delete({ where: { id } })]
+        : []),
+    ])
 
     logActivity({
       brandId,
@@ -362,7 +442,14 @@ export async function DELETE(
       details: {},
     }).catch(console.error)
 
-    return NextResponse.json({ success: true })
+    // The id is returned so the client can drop exactly this row from its own
+    // state and from the shared cache entry, rather than inferring it.
+    return NextResponse.json({
+      success: true,
+      id,
+      /** False when another brand still links this influencer, so the global row stays. */
+      influencerDeleted: otherBrandLinks === 0,
+    })
   } catch (err: any) {
     if (err.code === "P2025") {
       return NextResponse.json({ error: "Not found" }, { status: 404 })

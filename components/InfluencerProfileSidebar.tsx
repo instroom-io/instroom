@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { EmailModal } from "@/components/shared/email-modal"
+import { ProfilePicture } from "@/components/table-sheet/ui-atoms"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface MonthlyData {
@@ -48,6 +49,12 @@ export interface Partner {
   brandInfluencerId?: string
   brandId?: string
   email?: string | null
+  /**
+   * The influencer's stored avatar — the permanent Cloudinary URL the
+   * Influencer List saves on the Influencer record. Read straight from the
+   * pipeline payload; nothing is uploaded or re-fetched here.
+   */
+  profileImageUrl?: string | null
   /** Collaboration Type — same value persisted in product_details.campaignType,
    *  shared with the Pipeline board and Post Tracker so all three stay in sync. */
   collabType?: string
@@ -584,7 +591,7 @@ export default function InfluencerProfileSidebar({
         <NIModal
           partnerName={`${partner.firstName} ${partner.lastName}`.trim() || partner.handle}
           handle={partner.handle}
-          profileImageUrl={null}
+          profileImageUrl={partner.profileImageUrl ?? null}
           onConfirm={handleNIConfirm}
           onCancel={handleNICancel}
         />
@@ -609,7 +616,20 @@ export default function InfluencerProfileSidebar({
           <button onClick={onClose} title="Close" className="close-btn">✕</button>
           <div className="ppt">Influencer Profile</div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
-            <div className="pav">{partner.firstName ? partner.firstName[0] : partner.handle[1]?.toUpperCase()}</div>
+            <div className="pav">
+              {partner.profileImageUrl ? (
+                // Shared avatar component, so a broken or expired image falls
+                // back to initials exactly as it does in the Influencer List.
+                <ProfilePicture
+                  src={partner.profileImageUrl}
+                  name={`${partner.firstName} ${partner.lastName}`.trim()}
+                  handle={partner.handle}
+                  size={44}
+                />
+              ) : (
+                partner.firstName ? partner.firstName[0] : partner.handle[1]?.toUpperCase()
+              )}
+            </div>
             <div style={{ flex: 1 }}>
               <div className="pnm">{partner.firstName} {partner.lastName}</div>
               <div className="phd">{partner.handle}</div>

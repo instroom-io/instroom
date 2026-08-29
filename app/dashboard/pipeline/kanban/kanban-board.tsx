@@ -8,7 +8,7 @@
 
 "use client"
 
-import { useState, useEffect, useMemo, useRef, useCallback, memo, type CSSProperties, type ReactNode } from "react"
+import { useState, useEffect, useMemo, useRef, useCallback, memo, type CSSProperties } from "react"
 import ReactDOM from "react-dom"
 import {
   DndContext,
@@ -28,7 +28,6 @@ import {
   IconFilter,
   IconSearch,
   IconLocation,
-  IconBrandTwitter,
   IconX,
   IconLayoutList,
   IconChevronDown,
@@ -43,7 +42,6 @@ import {
   IconShoppingBag,
   IconCoins,
   IconStar,
-  IconLoader2,
 } from "@tabler/icons-react"
 
 import InfluencerProfileSidebar, {
@@ -54,26 +52,11 @@ import InfluencerProfileSidebar, {
 import { usePipelineData, type PipelineInfluencer } from "@/hooks/usePipelineData"
 import { invalidateInfluencerDerivedCaches, pipelineCacheKey } from "@/lib/cache-invalidation"
 import { DataSyncStatus } from "@/components/data-sync-status"
+import { SaveStatusPill } from "@/components/save-status-pill"
+import { ProfilePicture, PlatformIcon } from "@/components/table-sheet/ui-atoms"
+import { getPlatformLabel } from "@/components/table-sheet/utils"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { BoardSkeleton } from "@/components/shared/skeletons"
-
-// ─── Platform Icons ──────────────────────────────────────────────────────────
-export const PLATFORM_ICONS: Record<string, ReactNode> = {
-  Instagram: (
-    <img src="https://upload.wikimedia.org/wikipedia/commons/e/e7/Instagram_logo_2016.svg" alt="Instagram" className="w-4 h-4" />
-  ),
-  TikTok: (
-    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M19.589 6.686a4.793 4.793 0 0 1-3.77-4.245V2h-3.445v13.672a2.896 2.896 0 0 1-2.89 2.89 2.896 2.896 0 0 1-2.889-2.89 2.896 2.896 0 0 1 2.89-2.889c.302 0 .595.05.872.137V9.257a6.339 6.339 0 0 0-5.053 2.212 6.339 6.339 0 0 0-1.33 5.52 6.34 6.34 0 0 0 5.766 4.731 6.34 6.34 0 0 0 6.34-6.34V8.898a7.756 7.756 0 0 0 4.422 1.393V6.825a4.8 4.8 0 0 1-2.443-.139z" />
-    </svg>
-  ),
-  YouTube: (
-    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.376.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.376-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
-    </svg>
-  ),
-  Twitter: <IconBrandTwitter size={14} className="text-blue-400" />,
-}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const NICHES    = ["Beauty", "Fitness", "Lifestyle", "Food", "Tech", "Fashion", "Travel"]
@@ -265,6 +248,17 @@ function ColumnInfoTooltip({ status, variant }: { status: string; variant: "ligh
 const isTerminal            = (status: string) => status === "Not Interested" || status === "For Order Creation"
 const getStatusFromColumnKey = (key: string)   => columns.find((c) => c.key === key)?.status ?? key
 
+/**
+ * The column title a status is shown as on the board.
+ *
+ * The same lookup the bulk move already did inline, named so every message
+ * about a stage reads the label the user is actually looking at rather than
+ * the raw status string. Falls back to the status itself, which is what the
+ * inline version did.
+ */
+const getStatusTitle = (status: string) =>
+  columns.find((c) => c.status === status)?.title ?? status
+
 const getStatusColor = (status: string) => {
   const col = columns.find((c) => c.status === status)
   if (!col) return "bg-gray-100 text-gray-700 border-gray-300"
@@ -280,7 +274,6 @@ const getStatusColor = (status: string) => {
 }
 
 const getOptionDotColor = (status: string) => columns.find((c) => c.status === status)?.color ?? "bg-gray-400"
-const getPlatformIcon   = (platform?: string): ReactNode => PLATFORM_ICONS[platform ?? ""] || PLATFORM_ICONS.Instagram
 const getAvatarColor    = (name: string) => {
   const colors = ["bg-pink-500","bg-purple-500","bg-indigo-500","bg-blue-500","bg-cyan-500","bg-teal-500","bg-green-500","bg-yellow-500","bg-orange-500","bg-red-500","bg-rose-500"]
   return colors[name.charCodeAt(0) % colors.length]
@@ -324,7 +317,11 @@ function influencerToPartner(inf: PipelineInfluencer, brandId?: string): Partner
     firstName,
     lastName,
     birthday:     "",
-    plat:         inf.platform || "Instagram",
+    // No Instagram default: the stored platform is carried as-is, so a row
+    // with no platform reads as having none instead of claiming one it does
+    // not have (which also mis-sorted it under the Brand Partners platform
+    // filter).
+    plat:         inf.platform || "",
     niche:        inf.niche || "",
     gend:         "",
     loc:          inf.location || "",
@@ -367,6 +364,9 @@ function influencerToPartner(inf: PipelineInfluencer, brandId?: string): Partner
     hCVR:         0,
     hPosts:       0,
     email:              inf.email || null,
+    // The avatar the Influencer List persisted on the Influencer record; the
+    // pipeline route already returns it, it just was not carried across.
+    profileImageUrl:    inf.profileImageUrl,
     brandId:            brandId,
     brandInfluencerId:  inf.id,
     collabType:         inf.collabType,
@@ -835,12 +835,36 @@ function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApprov
       "border-gray-200"
     }`}>
       <div className="cursor-pointer" onClick={() => onOpenSidebar(influencer)}>
-        <div className="flex flex-col text-sm mb-2">
-          <span className="font-medium text-gray-900">{influencer.influencer}</span>
-          <span className="text-xs text-gray-500">@{influencer.handle}</span>
+        {/* Avatar + name/handle. The image is the permanent Cloudinary URL the
+            Influencer List persisted on the Influencer record, already carried
+            in this row by the pipeline payload — nothing extra is fetched or
+            uploaded here. ProfilePicture supplies the initials fallback. */}
+        <div className="flex items-center gap-2 mb-2">
+          <ProfilePicture
+            src={influencer.profileImageUrl ?? undefined}
+            name={influencer.influencer}
+            handle={influencer.handle}
+            size={40}
+          />
+          <div className="flex flex-col text-sm min-w-0">
+            <span className="font-medium text-gray-900">{influencer.influencer}</span>
+            <span className="text-xs text-gray-500">@{influencer.handle}</span>
+          </div>
         </div>
         <div className="flex items-center gap-2 text-xs text-gray-500 mb-1.5">
-          <span className="flex items-center gap-1">{getPlatformIcon(influencer.platform)}{influencer.platform || "Instagram"}</span>
+          {/* Icon then name, in the one treatment every board uses: the mark at
+              14px, centred against the label, gap-1.5. Narrow columns take
+              their space out of the TEXT — min-w-0 on the pair with truncate on
+              the label — while shrink-0 keeps the mark at full size, so it can
+              never squash or disappear. Both halves come from the shared
+              platform list the Influencer List reads; the board's own icon
+              table used to be keyed by the CAPITALISED display name while the
+              stored value is lowercase, so every lookup missed and a TikTok
+              creator showed as Instagram. */}
+          <span className="inline-flex min-w-0 items-center gap-1.5 leading-none">
+            <PlatformIcon platform={influencer.platform} size={14} className="shrink-0" />
+            <span className="truncate">{getPlatformLabel(influencer.platform) || "—"}</span>
+          </span>
           <span>•</span>
           <span className="flex items-center gap-0.5">
             <IconLocation size={11} />{influencer.location || "—"}
@@ -1088,7 +1112,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   const bulkBtnRef   = useRef<HTMLButtonElement>(null)
   const selectAllRef = useRef<HTMLInputElement>(null)
 
-  const { data, isLoading, error, updateStatus, isSaving, refetch } = usePipelineData(brandId)
+  const { data, isLoading, error, updateStatus, isSaving, saveFailed, saveMessage, refetch } = usePipelineData(brandId)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
   const { canApproveInfluencers, loading: capabilitiesLoading } = useBrandCapabilities(brandId)
@@ -1158,7 +1182,13 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     if (dragged.pipelineStatus === newStatus) return
 
     if (isTerminal(dragged.pipelineStatus)) {
-      toast(`Cannot move from "${dragged.pipelineStatus}"`, 2000, "error")
+      // Names the stage the user actually dropped onto — `newStatus`, captured
+      // above, before this check. It used to name only the stage the card was
+      // ALREADY in, so dragging a card onto Not Interested reported the source
+      // stage instead and read as a refusal to move somewhere nobody had asked
+      // to go. Looked up through getStatusTitle so it matches the column
+      // heading exactly.
+      toast(`Cannot move to ${getStatusTitle(newStatus)}`, 2000, "error")
       return
     }
 
@@ -1256,7 +1286,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     // rows already in the target stage are a no-op.
     const targets = selected.filter((d) => !isTerminal(d.pipelineStatus) && d.pipelineStatus !== newStatus)
     const skipped = selected.length - targets.length
-    const stageTitle = columns.find((c) => c.status === newStatus)?.title ?? newStatus
+    const stageTitle = getStatusTitle(newStatus)
 
     if (targets.length === 0) {
       toast(`Nothing to move — the selected influencers are already in ${stageTitle} or can't be moved`, 3500, "error")
@@ -1500,16 +1530,11 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
         />
       )}
 
-      {/* A subtle "Saving" pill in the bottom-right corner while a status write
-          is actually in flight, out of the way of the board. The outcome message
+      {/* The shared save pill in the bottom-right corner while a status write is
+          actually in flight, out of the way of the board. The outcome message
           lands in the top dock below. */}
       <div className="notice-dock">
-        {isSaving && (
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-900/90 text-white text-xs font-medium shadow-lg animate-in fade-in">
-            <IconLoader2 size={12} className="animate-spin" />
-            Saving
-          </div>
-        )}
+        <SaveStatusPill saving={isSaving} failed={saveFailed} message={saveMessage ?? undefined} />
       </div>
 
       {/* Outcome floating at the top right (`.notice-dock-top`,
@@ -1933,7 +1958,10 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        <div className="flex items-center gap-1">{getPlatformIcon(inf.platform)}<span>{inf.platform || "Instagram"}</span></div>
+                        <div className="inline-flex min-w-0 items-center gap-1.5 leading-none">
+                          <PlatformIcon platform={inf.platform} size={14} className="shrink-0" />
+                          <span className="truncate">{getPlatformLabel(inf.platform) || "—"}</span>
+                        </div>
                       </td>
                       <td className="px-4 py-3 text-[#0F6B3E] font-medium">{inf.instagramHandle}</td>
                       <td className="px-4 py-3">
