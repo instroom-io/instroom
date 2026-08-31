@@ -13,7 +13,7 @@ import TableSheet, {
 import { useInfluencerData } from "@/hooks/useInfluencerData"
 import { seedPipelineFromApproval, unseedPipelineRow, fetchPipelineRows, type ApprovedRowSeed } from "@/hooks/usePipelineData"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
-import { fetchCached, hasCachedData, beginExternalRequest, endExternalRequest, beginKeyWrite, endKeyWrite } from "@/lib/data-cache"
+import { fetchCached, hasCachedData, beginExternalRequest, endExternalRequest, beginKeyWrite, endKeyWrite, markRowConfirmed } from "@/lib/data-cache"
 import { invalidateInfluencerDerivedCaches, influencersCacheKey } from "@/lib/cache-invalidation"
 import { LimitExceededDialog } from "@/components/limit-exceeded-dialog"
 import { WorkspaceUnavailableModal } from "@/components/workspace-unavailable-modal"
@@ -126,6 +126,11 @@ function buildUpdatePayload(row: InfluencerRow) {
     : row.full_name || null
 
   return {
+    // Sent so a DRAFT row can be promoted in place — the PUT route accepts
+    // these only while the stored row is still a draft, and ignores them for a
+    // real influencer exactly as it did before.
+    handle: row.handle?.trim().replace(/^@/, "") || "",
+    platform: row.platform || "",
     full_name: rebuiltFullName,
     email: persistableEmail(row),
     gender: row.gender || null,
@@ -208,7 +213,7 @@ function approvalSeed(row: InfluencerRow): ApprovedRowSeed | null {
  * cleared and re-armed on every change and the payload is the whole row's latest
  * values, so any burst of edits still collapses into exactly one PUT.
  */
-const AUTOSAVE_DEBOUNCE_MS = 500
+const AUTOSAVE_DEBOUNCE_MS = 400
 
 /** Discrete lifecycle fields — a change to one of these is saved immediately. */
 const LIFECYCLE_FIELDS = ["approval_status", "contact_status", "stage", "transferred_date"] as const
@@ -480,10 +485,30 @@ function InfluencersContent() {
   const [saveFailed, setSaveFailed] = useState(false)
   /**
    * What the processing pill says for the operation in flight. Null takes the
-   * standard "Saving changes…"; an add, a delete, a bulk move or a profile
-   * enrichment names itself instead.
+   * standard "Saving changes…"; a delete or a bulk move names itself instead.
    */
   const [processingMessage, setProcessingMessage] = useState<string | null>(null)
+
+  // ── Status ownership, per operation ───────────────────────────────────────
+  // Adding an influencer, saving a typed edit and saving a fetch enrichment are
+  // three different operations that can overlap, and they used to share one
+  // counter and one label. Whichever started last renamed the pill, and
+  // whichever finished first cleared it — so an add showed "Saving changes…"
+  // and then "Saved", and an enrichment landing mid-add stole the label.
+  //
+  // Each flow now owns its own state:
+  //
+  //   Add        "Adding influencer…"  → "@handle added to Influencer List"
+  //   Manual     "Saving changes…"     → "Saved"          (reportSave)
+  //   Enrichment silent                → "@handle details updated"
+  //
+  // The pill renders the add when one is running, because that is the
+  // operation the user explicitly asked for; a manual save underneath it is
+  // still tracked and shows as soon as the add finishes.
+  const [addingCount, setAddingCount] = useState(0)
+  const reportAdd = useCallback((phase: "start" | "ok" | "fail") => {
+    setAddingCount((n) => (phase === "start" ? n + 1 : Math.max(0, n - 1)))
+  }, [])
   const [notice, setNotice] = useState<{ message: string; type: "success" | "error" } | null>(null)
   const savingCount = useRef(0)
   const failedSinceIdle = useRef(false)
@@ -645,6 +670,30 @@ function InfluencersContent() {
   // one more character into — is never persisted as an empty influencer.
   const manualRows = useRef<Map<string, string>>(new Map())
 
+  /**
+   * Rows that were still drafts when their enrichment save went out.
+   *
+   * The row reaches handleFetchComplete already flipped to `is_draft: false`
+   * (the sheet reconciles it from the response), so by then it no longer looks
+   * like an add. Recorded when the save starts, consumed when it lands.
+   */
+  const promotedDrafts = useRef<Set<string>>(new Set())
+
+  /**
+   * At most two draft creates in flight, so a rapid multi-add cannot exhaust
+   * the connection pool. A plain promise chain over two lanes — no timers, so
+   * nothing waits longer than it has to.
+   */
+  const createLanes = useRef<Promise<unknown>[]>([Promise.resolve(), Promise.resolve()])
+  const createDraftGate = useCallback(<T,>(op: () => Promise<T>): Promise<T> => {
+    // The lane that will free up first is the one whose turn it is; with only
+    // two, taking them in rotation is equivalent and needs no bookkeeping.
+    const lane = createLanes.current.shift()!
+    const run = lane.then(op, op)
+    createLanes.current.push(run.catch(() => {}))
+    return run
+  }, [])
+
   const idSwapCallback = useRef<((tempId: string, realId: string) => void) | null>(null)
 
   /**
@@ -757,6 +806,10 @@ function InfluencersContent() {
         putQueue.current.enqueue({
           url,
           payload,
+          // "Updating…", not the flat "Saving changes…": every row reaching
+          // this queue is already in the list, so this is an update to an
+          // existing influencer. A lifecycle move keeps its own wording below.
+          processing: "Updating…",
           message: moveMessage,
           // This queue only ever UPDATES a row that is already in the list, so
           // it reports an edit — "added to Influencer List" belongs to the
@@ -801,9 +854,9 @@ function InfluencersContent() {
             // in (from the response where the route rewrote a field, from the
             // row that was sent otherwise) means the first paint is already
             // right, with no extra request and no full-page refresh.
-            setRows((prev) =>
-              prev.map((r) => (r.id === row.id ? { ...row, ...normalisedRow(normalised) } : r))
-            )
+            const confirmed = { ...row, ...normalisedRow(normalised) }
+            setRows((prev) => prev.map((r) => (r.id === row.id ? confirmed : r)))
+            markRowConfirmed(influencersCacheKey(brandId), row.id, confirmed)
 
             // Every OTHER view of this row is stale now. This page's own entry
             // is excluded, the same way the Pipeline board and the Post Tracker
@@ -849,7 +902,17 @@ function InfluencersContent() {
             if (seeded && brandId && row.brand_influencer_id) {
               unseedPipelineRow(brandId, row.brand_influencer_id)
             }
-            if (status === 404) {
+            if (status === 409) {
+              // Promoting this draft hit an influencer that already exists —
+              // the same handle typed into two rows, or one already added from
+              // another brand. The row is left on screen with what was typed so
+              // the user can correct it; nothing is created twice.
+              notify("error", `@${handle} already exists in this list`)
+            } else if (status === 403) {
+              // The plan limit applies at promotion, not at add — a blank draft
+              // costs nothing. The route's own message is the accurate one.
+              notify("error", `Could not save @${handle} — influencer limit reached`)
+            } else if (status === 404) {
               dbIds.current.delete(row.id)
               notify("error", `Could not save @${handle} — not found. Try refreshing.`)
             } else if (status === 0) {
@@ -906,14 +969,14 @@ function InfluencersContent() {
       savedHandles.current.add(key)
 
       try {
-        reportSave("start", null, "Adding…")
+        reportAdd("start")
         const res = await fetch("/api/influencers/create", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(buildCreatePayload(row, brandId)),
         }).then(
-          (r) => { reportSave(r.ok || r.status === 409 ? "ok" : "fail"); return r },
-          (e) => { reportSave("fail"); throw e }
+          (r) => { reportAdd(r.ok || r.status === 409 ? "ok" : "fail"); return r },
+          (e) => { reportAdd("fail"); throw e }
         )
 
         if (res.ok) {
@@ -974,7 +1037,61 @@ function InfluencersContent() {
         return null
       }
     },
-    [brandId, reportSave, notify]
+    // reportSave is no longer used here — createRow reports through reportAdd,
+    // so the add flow owns its own status.
+    [brandId, reportAdd, notify]
+  )
+
+  // ── handleCreateDraft ─────────────────────────────────────────────────────
+  // Persist a blank row the moment it is added, so it is still there after a
+  // refresh. Each call is independent and they run in parallel: five rapid
+  // additions are five requests, each resolving into its own row by id, with no
+  // shared state to overwrite.
+  //
+  // A draft consumes no plan slot and appears in no other view — the server
+  // owns both of those rules (`is_draft`). On failure the row simply stays as a
+  // local temp row: it still saves normally once it has a handle, it just will
+  // not survive a refresh, which is strictly better than removing it.
+  const handleCreateDraft = useCallback(
+    async (rowId: string): Promise<string | null> => {
+      if (!brandId) return null
+      // Queued behind at most one other create.
+      //
+      // Adding several rows started every create at once. Each one opens a
+      // transaction (influencer + link), and DATABASE_URL caps this deployment
+      // at connection_limit=3 — so a burst of five produced
+      // "P2028 Unable to start a transaction in the given time" for the ones
+      // that could not get in, surfacing as HTTP 500. Reproduced directly
+      // against the database: 3 of 5 concurrent creates succeed, 2 fail.
+      //
+      // Two at a time, matching the bulk limit used elsewhere, leaves a
+      // connection free for whatever the user does next. Not a delay: a slot is
+      // taken as soon as one frees, so a single add is unchanged.
+      return createDraftGate(async () => {
+      try {
+        const res = await fetch("/api/influencers/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ draft: true, brandId }),
+        })
+        if (!res.ok) return null
+        const created = await res.json()
+        const realId: string | undefined = created?.id
+        if (!realId) return null
+
+        // The row is now a real database row, so ordinary editing saves apply
+        // to it — this is what makes typing a handle promote THIS row rather
+        // than create another.
+        dbIds.current.add(realId)
+        tempToReal.current.set(rowId, realId)
+        idSwapCallback.current?.(rowId, realId)
+        return realId
+      } catch {
+        return null
+      }
+      })
+    },
+    [brandId, createDraftGate]
   )
 
   // ── handleFetchComplete ───────────────────────────────────────────────────
@@ -991,6 +1108,28 @@ function InfluencersContent() {
   //      POST resolves — createRow is no longer called from anywhere that runs
   //      before a lookup succeeds, so there is no pre-enrichment POST to
   //      out-race any more.
+  /**
+   * Called by the sheet as an enrichment save goes out, before the row is
+   * reconciled — the only moment it is still visibly a draft.
+   */
+  const handleEnrichmentStart = useCallback((rowId: string, wasDraft: boolean) => {
+    if (!wasDraft) return
+    promotedDrafts.current.add(rowId)
+    // A draft becoming a real influencer IS the add, so the pill belongs to it.
+    // createRow — which used to own this — is not on this path: a draft row is
+    // already in the database, so it is promoted by the enrichment's PUT rather
+    // than created, and the pill went silent for the one operation the user
+    // most obviously started. Closed in handleFetchComplete, immediately before
+    // the "added to Influencer List" notice, so the two hand over cleanly
+    // instead of overlapping.
+    reportAdd("start")
+  }, [reportAdd])
+
+  /** The promote failed, so the add never happened — close its pill. */
+  const handleEnrichmentFailed = useCallback((rowId: string) => {
+    if (promotedDrafts.current.delete(rowId)) reportAdd("fail")
+  }, [reportAdd])
+
   const handleFetchComplete = useCallback(
     async (row: InfluencerRow) => {
       if (!brandId || !rowHasHandle(row)) return
@@ -998,18 +1137,73 @@ function InfluencersContent() {
       const handle = row.handle.trim().replace(/^@/, "")
       const key = `${handle}@${row.platform}`
 
-      // Case A — row is already in the DB with its own real ID
+      // Case A — row is already in the DB with its own real ID.
+      //
+      // TableSheet has ALREADY written this row: onFetchComplete is called
+      // after its own save landed, so re-enqueueing the same payload here was
+      // the second half of the double save. What is left to do is bookkeeping:
+      //
+      //   * cancel any typed-field save still pending for this row — it holds a
+      //     pre-fetch payload that the enrichment has now superseded;
+      //   * record the enriched payload as the last one sent, so the next diff
+      //     compares against what is actually stored and a burst of enrichment
+      //     fields does not read as an edit and start another save;
+      //   * mark the derived views stale, exactly as a save through the queue
+      //     would have.
+      //
+      // A later manual edit diffs against this snapshot and saves normally on
+      // the ordinary debounce.
       if (dbIds.current.has(row.id)) {
         const existing = updateTimers.current.get(row.id)
-        if (existing) clearTimeout(existing)
-        // Dropped with the timer, or an unload flush would re-send the payload
-        // this enqueue already supersedes.
+        if (existing) { clearTimeout(existing); updateTimers.current.delete(row.id) }
         pendingFlush.current.delete(row.id)
-        putQueue.current.enqueue({
-          url: `/api/brand/${brandId}/influencers/${row.id}`,
-          payload: JSON.stringify(buildUpdatePayload(row)),
-          processing: "Updating profile…",
-        })
+        lastSentPayloads.current.set(row.id, JSON.stringify(buildUpdatePayload(row)))
+
+        // Write the confirmed row into the SHARED cache entry.
+        //
+        // The sheet keeps its own copy of the rows, so the enriched row was
+        // only ever on screen — this entry still held the blank draft. And this
+        // entry is what is mirrored into sessionStorage and painted first after
+        // a reload, so refreshing right after an enrichment showed the row as
+        // it was BEFORE the fetch (blank handle, no avatar) until the
+        // background revalidation returned, then it snapped to the real values.
+        //
+        // The PUT queue already does this for a typed save (see its onSuccess);
+        // the enrichment bypasses that queue, so it has to do it here. Same
+        // shape, same helper, no extra request: `row` is what the sheet
+        // reconciled from the PUT's own response, so it is what the database
+        // holds — including the permanent Cloudinary avatar URL.
+        setRows((prev) =>
+          prev.some((r) => r.id === row.id)
+            ? prev.map((r) => (r.id === row.id ? { ...r, ...row } : r))
+            // A row created during this session may not be in the cached
+            // payload yet; add it rather than dropping the confirmed values.
+            : [...prev, row]
+        )
+        // Remembered briefly, so a read that has not caught up — the one a
+        // refresh a second later issues — cannot revert this row.
+        markRowConfirmed(influencersCacheKey(brandId), row.id, row)
+
+        invalidateInfluencerDerivedCaches(brandId, [influencersCacheKey(brandId)])
+
+        // Which confirmation this is depends on what just happened to the row.
+        //
+        // A row that was a draft until this write is an ADD — it has just
+        // become a real influencer, so it gets the add's own wording. Anything
+        // else is a re-fetch of a row that was already in the list, which is an
+        // update. Both used to say "details updated", so adding an influencer
+        // never confirmed that it had been added.
+        const wasDraft = promotedDrafts.current.delete(row.id)
+        // Close the add pill BEFORE its notice, so the sequence reads
+        // "Adding influencer…" → "@handle added to Influencer List" rather than
+        // the two sitting on screen together.
+        if (wasDraft) reportAdd("ok")
+        notify(
+          "success",
+          wasDraft
+            ? `@${handle} added to Influencer List`
+            : `@${handle} details updated`
+        )
         return
       }
 
@@ -1034,7 +1228,7 @@ function InfluencersContent() {
       // already carries this enriched row, and once it resolves the row has a
       // real ID, so any later edit goes through scheduleUpdate.
     },
-    [brandId, createRow]
+    [brandId, createRow, notify, reportAdd, setRows]
   )
 
   // ── handleBulkApprove ─────────────────────────────────────────────────────
@@ -1112,6 +1306,21 @@ function InfluencersContent() {
   // The trade-off, stated plainly: if a lookup neither succeeds nor fails, the
   // row stays unsaved and is lost on refresh. That is the intended behaviour
   // here — an influencer with no verified profile data is not written.
+  /**
+   * Is this row's handle still the lookup's to resolve?
+   *
+   * True for a draft on an API platform whose handle has not been looked up
+   * yet — the enrichment owns the write until it succeeds or gives up. False
+   * once the row is a real influencer, once the lookup has failed (manualRows),
+   * or on a platform with no lookup at all.
+   */
+  const awaitingLookup = useCallback((row: InfluencerRow): boolean => {
+    if (!row.is_draft) return false
+    const isApiPlatform = row.platform === "instagram" || row.platform === "tiktok"
+    if (!isApiPlatform) return false
+    return !manualRows.current.has(row.id)
+  }, [])
+
   const handleRowsChange = useCallback(
     (updatedRows: InfluencerRow[]) => {
       // The table owns the live rows; this is the page's view of them. Needed so
@@ -1130,6 +1339,16 @@ function InfluencersContent() {
 
         // ── Already in DB — just debounce-update
         if (dbIds.current.has(row.id)) {
+          // EXCEPT while its lookup still owns it.
+          //
+          // A draft row is in the database from the moment it is added, so
+          // typing the first characters of a handle used to start saving
+          // immediately — a write per pause, each one a partially typed handle,
+          // before the API had returned anything. The enrichment writes this
+          // row itself once the fetch resolves (saveRowToDatabase), so nothing
+          // is lost by waiting; a lookup that fails hands the row over through
+          // manualRows and typing saves from then on.
+          if (awaitingLookup(row)) return
           scheduleUpdate(row)
           return
         }
@@ -1173,7 +1392,7 @@ function InfluencersContent() {
         // the handle or switching the platform must not write anything.
       })
     },
-    [scheduleUpdate, createRow]
+    [scheduleUpdate, createRow, awaitingLookup]
   )
 
   // ── handleImportRows — bulk import, bypasses enrichment wait ─────────────
@@ -1270,7 +1489,7 @@ function InfluencersContent() {
         const res = await trackSave(
           () => fetch(`/api/brand/${brandId}/influencers/${rowId}`, { method: "DELETE" }),
           (r) => r.ok || r.status === 404,
-          "Removing…"
+          "Removing influencer…"
         )
         if (res.ok || res.status === 404) {
           deleted = true
@@ -1400,6 +1619,26 @@ function InfluencersContent() {
 
   if (error) {
     const isSubscriptionExpired = error.toLowerCase().includes("subscription expired")
+    /**
+     * Is this the database refusing another connection, rather than a fault?
+     *
+     * The read routes report capacity as a retryable 503 whose message is
+     * "The database is temporarily out of connections…" (lib/db-capacity), and
+     * the raw driver text can also reach here when a failure surfaces from
+     * somewhere without that handling. Matched on the message, the same way the
+     * two states above are — this is a transient, self-clearing condition, so
+     * it gets wording that says "wait" rather than "something broke".
+     */
+    const isAtCapacity = (() => {
+      const text = error.toLowerCase()
+      return (
+        text.includes("out of connections") ||
+        text.includes("too many database connections") ||
+        text.includes("max_user_connections") ||
+        text.includes("too many clients") ||
+        text.includes("timed out fetching a new connection")
+      )
+    })()
     const isWorkspaceUnavailable =
       error.toLowerCase().includes("workspace is unavailable") ||
       error.toLowerCase().includes("subscription is inactive")
@@ -1457,8 +1696,14 @@ function InfluencersContent() {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
-          <p className="text-red-600 mb-2 font-medium">Failed to load influencers</p>
-          <p className="text-sm text-gray-500">{error}</p>
+          <p className="text-red-600 mb-2 font-medium">
+            {isAtCapacity ? "Please wait, we're currently full!" : "Failed to load influencers"}
+          </p>
+          <p className="text-sm text-gray-500">
+            {isAtCapacity
+              ? "Too many connections right now. Please try again in a few seconds or refresh the page."
+              : error}
+          </p>
           <button
             onClick={refetch}
             className="mt-4 text-[13px] px-4 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 transition"
@@ -1487,6 +1732,20 @@ function InfluencersContent() {
           onRegisterIdSwap={(fn) => {
             idSwapCallback.current = fn
           }}
+          onCreateDraft={handleCreateDraft}
+          // Deliberately NOT wired to reportSave.
+          //
+          // The enrichment's save is not a state the user needs narrated: the
+          // row already shows its own fetching spinner, and the outcome is the
+          // single "@handle details updated" notice raised by
+          // handleFetchComplete. Routing it through the shared save state made
+          // it announce "Saving changes…" and "Saved" around a write nobody
+          // asked for, and let it overwrite the label of an add running at the
+          // same time. Failures still surface — saveRowToDatabase raises its
+          // own error toast.
+          onSaveState={undefined}
+          onEnrichmentStart={handleEnrichmentStart}
+          onEnrichmentFailed={handleEnrichmentFailed}
           brandId={brandId}
           subscriptionStatus={subscriptionStatus}
           onShowTrialModal={() => setShowTrialLimitModal(true)}
@@ -1502,7 +1761,18 @@ function InfluencersContent() {
           the Post Tracker and Brand Partners. The outcome moved to the top dock
           below. */}
       <div className="notice-dock">
-        <SaveStatusPill saving={isSaving} failed={saveFailed} message={processingMessage ?? undefined} />
+        {/* One pill, but the ADD owns it while an add is in flight — it is the
+            operation the user explicitly started, and it must never read
+            "Saving changes…". A manual save overlapping it is still tracked and
+            appears the moment the add finishes. */}
+        <SaveStatusPill
+          saving={addingCount > 0 || isSaving}
+          failed={addingCount > 0 ? false : saveFailed}
+          message={addingCount > 0 ? "Adding influencer…" : processingMessage ?? undefined}
+          // An add confirms with "@handle added to Influencer List", so the
+          // pill must not also say "Saved" as it closes.
+          confirmsElsewhere={addingCount > 0}
+        />
       </div>
 
       {/* Outcome floating at the top right (`.notice-dock-top`,

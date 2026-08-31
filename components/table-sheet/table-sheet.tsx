@@ -127,6 +127,7 @@ export default function TableSheet({
   onRowsChange, onDeleteRow, onFetchComplete, onRegisterIdSwap,
   onCustomColumnsChange, onImportRows, onBulkApprove, readOnly = false, brandId,
   subscriptionStatus, onShowTrialModal, canApproveInfluencers = true, onNotify, onLookupFailed,
+  onCreateDraft, onSaveState, onEnrichmentStart, onEnrichmentFailed,
 }: {
   initialRows?: InfluencerRow[]
   initialCustomColumns?: CustomColumn[]
@@ -134,6 +135,37 @@ export default function TableSheet({
   onDeleteRow?: (rowId: string) => Promise<void>
   onFetchComplete?: (row: InfluencerRow) => void
   onRegisterIdSwap?: (fn: (tempId: string, realId: string) => void) => void
+  /**
+   * Persist a blank row as a draft and resolve with its real database id.
+   *
+   * Called once per added row, in parallel — each add is independent, so a
+   * burst of them must not queue behind one another. The row is already on
+   * screen with a temp id by the time this runs; the id is swapped in when it
+   * resolves, and the row is simply left as-is if it fails.
+   */
+  onCreateDraft?: (rowId: string) => Promise<string | null>
+  /**
+   * Brackets a write this component performs itself, so the page's save
+   * indicator covers it.
+   *
+   * The enrichment save goes out from here rather than through the page's PUT
+   * queue, so without this the pill stayed silent for the one write the user is
+   * most obviously waiting on. "start" then "ok"/"fail", matching the queue's
+   * own reporting.
+   */
+  onSaveState?: (phase: "start" | "ok" | "fail", processing?: string) => void
+  /**
+   * Reports an enrichment save as it goes out, with whether the row was still a
+   * draft at that moment — which is what makes it an ADD rather than an update.
+   * The row is reconciled to `is_draft: false` before onFetchComplete runs, so
+   * this is the last point at which that is knowable.
+   */
+  onEnrichmentStart?: (rowId: string, wasDraft: boolean) => void
+  /**
+   * The enrichment save failed. Reported so a caller that opened a status for
+   * it (the add pill) can close it — onFetchComplete never runs on this path.
+   */
+  onEnrichmentFailed?: (rowId: string) => void
   onCustomColumnsChange?: (cols: CustomColumn[]) => void
   onImportRows?: (rows: InfluencerRow[]) => void
   /** Approves a whole selection in one request; resolves with what the DB stored. */
@@ -214,15 +246,107 @@ export default function TableSheet({
   useEffect(() => {
     const swapFn = (tempId: string, realId: string) => {
       setRows(prev => prev.map(r => r.id === tempId ? { ...r, id: realId } : r))
+      // The row now carries the real id, so the server's copy of it is the same
+      // row and no longer needs suppressing.
+      creatingDraftIds.current.delete(realId)
     }
     swapIdRef.current = swapFn
     onRegisterIdSwap?.(swapFn)
   }, [onRegisterIdSwap])
 
+  /**
+   * Real ids of drafts whose creating POST has landed but whose row on screen
+   * may not have been swapped over yet.
+   *
+   * A background sync can fetch AFTER the draft was written and resolve BEFORE
+   * the swap runs. Its payload then carries the real row while local state
+   * still holds the temp one, and the merge below would show both for a frame.
+   * Holding the id here lets the merge skip the server copy until the swap has
+   * happened, so the row is one row throughout.
+   */
+  const creatingDraftIds = useRef<Set<string>>(new Set())
+
+  /**
+   * Rows the user has just deleted, until the server payload agrees they are
+   * gone.
+   *
+   * The merge below re-adds any server row that local state does not have,
+   * which is what rescues a freshly created row from a payload fetched before
+   * it existed. It cannot tell that case apart from a row that is missing
+   * locally because it was just DELETED — so a sync landing between the
+   * confirmation and the DELETE resolving put the row straight back, and it
+   * took a refresh to clear.
+   *
+   * Holding the id here makes the merge skip it. Released when the payload no
+   * longer lists it (the delete is confirmed and the entry has caught up) or if
+   * the delete fails, when the row is restored.
+   */
+  const deletedIds = useRef<Set<string>>(new Set())
+
+  /** Latest `initialRows`, for reads outside the render that produced them. */
+  const initialRowsRef = useRef<InfluencerRow[]>(initialRows)
+  initialRowsRef.current = initialRows
+
   const lastInitialKey = useRef("")
   useEffect(() => {
     const key = initialRows.map(r => r.id).join(",")
-    if (key !== lastInitialKey.current) { lastInitialKey.current = key; setRows(initialRows) }
+    if (key === lastInitialKey.current) return
+    lastInitialKey.current = key
+    // MERGE, don't replace.
+    //
+    // `initialRows` is the shared cache entry — what the server last returned.
+    // A blank row the user just added lives only here, in local state, because
+    // nothing is written to the database until it has a handle and some
+    // details. So a plain `setRows(initialRows)` threw those rows away.
+    //
+    // And this effect runs precisely when that is most likely: the id set only
+    // changes when a row is created or removed server-side, which is exactly
+    // what happens when the FIRST of several new rows gets filled in and saved.
+    // Adding five rows and typing into one made the other four disappear the
+    // moment the save's revalidation came back.
+    //
+    // Anything the server payload does not contain is therefore carried over,
+    // in the order it was added. That covers the blank rows above and a row
+    // whose create succeeded but has not yet appeared in a refetched payload.
+    // A row genuinely removed here is dropped from local state by the delete
+    // path itself, so it is not in `prev` to be carried over.
+    // Merged IN PLACE, walking the rows already on screen first.
+    //
+    // Carrying the rescued rows by appending them put a draft added in the
+    // middle of the sheet at the bottom the moment a sync landed, and back
+    // where it belonged once the server payload finally included it — a row
+    // jumping away and returning, which is the flicker this replaces.
+    //
+    // So local order and local identity lead: each row on screen keeps its
+    // position and its id, taking the server's version of itself where the
+    // server has one (that is how an enrichment or a persisted normalisation
+    // arrives) and staying exactly as it is where the server does not — a
+    // draft whose POST is still in flight, or one created after this payload
+    // was fetched. Server rows nobody is showing yet are appended after, which
+    // is how a row added in another tab arrives. Matching by id throughout, so
+    // a row reconciled this way can never be duplicated.
+    setRows(prev => {
+      const serverById = new Map(initialRows.map(r => [r.id, r]))
+      const seen = new Set<string>()
+      const merged = prev.map(local => {
+        seen.add(local.id)
+        return serverById.get(local.id) ?? local
+      })
+      const added = initialRows.filter(r =>
+        !seen.has(r.id) &&
+        !creatingDraftIds.current.has(r.id) &&
+        // Deleted by the user; do not resurrect it from a payload that predates
+        // the delete.
+        !deletedIds.current.has(r.id)
+      )
+      // A tombstone whose row is gone from the payload has done its job — the
+      // server and the sheet agree, so stop tracking it.
+      if (deletedIds.current.size) {
+        const serverIds = new Set(initialRows.map(r => r.id))
+        deletedIds.current.forEach(id => { if (!serverIds.has(id)) deletedIds.current.delete(id) })
+      }
+      return added.length ? [...merged, ...added] : merged
+    })
   }, [initialRows])
   useEffect(() => { setCustomCols(initialCustomColumns) }, [initialCustomColumns])
 
@@ -759,8 +883,71 @@ export default function TableSheet({
         console.error("saveRowToDatabase POST error:", err)
         addToast("error", `Network error saving @${row.handle}`)
       }
+    } else if (row.is_draft && brandId) {
+      onEnrichmentStart?.(row.id, true)
+      onSaveState?.("start", "Updating profile…")
+      // A draft that the lookup has just enriched. It is already a database
+      // row, so this PROMOTES it in place — same id, same position, everything
+      // already typed into it kept — instead of creating a second row. The
+      // brand-scoped route is the one that accepts handle/platform for a draft
+      // and flips is_draft; /api/influencers/[id] does not.
+      try {
+        const res = await fetch(`/api/brand/${brandId}/influencers/${row.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        })
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}))
+          onSaveState?.("fail")
+          onEnrichmentFailed?.(row.id)
+          if (res.status === 409) {
+            addToast("error", `@${row.handle} is already in this list`)
+            return
+          }
+          addToast("error", `Failed to save @${row.handle}: ${err.error || res.statusText}`)
+          return
+        }
+        // Reconcile from what the DATABASE stored.
+        //
+        // The route mirrors an expiring Instagram/TikTok avatar into Cloudinary
+        // and returns the permanent URL; the row still held the CDN one. Left
+        // alone, the sheet kept showing a URL that expires — and, because the
+        // row also still said `is_draft: true`, the next save re-sent that same
+        // CDN URL instead of the stored one. That is why the avatar came back
+        // blank after a refresh.
+        const saved = (await res.json().catch(() => ({}))) as {
+          profile_image_url?: string | null
+          handle?: string | null
+        }
+        setRows(prev => prev.map(r => r.id === row.id ? {
+          ...r,
+          // No longer a draft — it has a handle and a platform now, so later
+          // saves take the ordinary update path.
+          is_draft: false,
+          ...(saved.profile_image_url !== undefined
+            ? { profile_image_url: saved.profile_image_url ?? "" }
+            : {}),
+        } : r))
+        // Reported OK BEFORE onFetchComplete, so the pill closes and the page's
+        // single "details updated" notice is the last thing the user sees.
+        onSaveState?.("ok")
+        onFetchComplete?.({
+          ...row,
+          is_draft: false,
+          ...(saved.profile_image_url !== undefined
+            ? { profile_image_url: saved.profile_image_url ?? "" }
+            : {}),
+        })
+      } catch (err) {
+        onSaveState?.("fail")
+        onEnrichmentFailed?.(row.id)
+        console.error("saveRowToDatabase draft-promote error:", err)
+        addToast("error", `Network error saving @${row.handle}`)
+      }
     } else {
       const { handle, platform, brandId: _b, ...updatePayload } = payload as any
+      onSaveState?.("start", "Updating profile…")
       try {
         const res = await fetch(`/api/influencers/${row.id}`, {
           method: "PUT",
@@ -768,12 +955,19 @@ export default function TableSheet({
           body: JSON.stringify(updatePayload),
         })
         if (!res.ok) {
+          onSaveState?.("fail")
           const err = await res.json().catch(() => ({}))
           console.error(`PUT /api/influencers/${row.id} failed:`, err)
-        } else { onFetchComplete?.(row) }
-      } catch (err) { console.error("saveRowToDatabase PUT error:", err) }
+        } else {
+          onSaveState?.("ok")
+          onFetchComplete?.(row)
+        }
+      } catch (err) {
+        onSaveState?.("fail")
+        console.error("saveRowToDatabase PUT error:", err)
+      }
     }
-  }, [brandId, addToast, onFetchComplete])
+  }, [brandId, addToast, onFetchComplete, onSaveState, onEnrichmentStart, onEnrichmentFailed])
 
   const autoFetchInfluencer = useCallback(async (rowId: string, handle: string, platform: string) => {
     const clean = handle.trim().replace(/^@/, "").toLowerCase()
@@ -883,23 +1077,45 @@ export default function TableSheet({
       })
 
       setRows(next)
-      onRowsChange?.(next)
-      // Same wording and same trigger as before, just raised after the render
-      // rather than during it.
+      // `onRowsChange` is deliberately NOT called with the enriched row.
+      //
+      // It arms the page's typed-field autosave, and the enrichment already
+      // saves this row itself on the next line — so one lookup produced two
+      // writes of the same payload, and the indicator ran
+      // "Saving changes… → Details updated → Saving changes…". The enrichment
+      // owns its save; the page is told once, by onFetchComplete, when that
+      // save has actually landed.
+      //
+      // Local state is still updated above, so the row shows its fetched
+      // details immediately — nothing waits on the write.
       if (emailDuplicate) {
         addToast("warning", `@${clean} shares an email with @${emailDuplicate.handle} — possible duplicate`)
       }
       const enrichedRow = next.find(r => r.id === rowId) ?? null
-      if (enrichedRow) setTimeout(() => saveRowToDatabase(enrichedRow), 0)
+      // No timer: the fetch has resolved, so this is the moment to write. The
+      // setTimeout(…, 0) it replaces existed only to escape the state updater
+      // this code no longer runs inside.
+      if (enrichedRow) void saveRowToDatabase(enrichedRow)
     } catch (err) { console.error("Auto-fetch failed:", err) }
     finally { setFetchingRows(prev => { const n = new Set(prev); n.delete(rowId); return n }) }
-  }, [onRowsChange, addToast, saveRowToDatabase, fetchInfluencerFromAPI, onLookupFailed])
+    // onRowsChange is intentionally absent: the enriched row is no longer
+    // handed to it — see the note above the save.
+  }, [addToast, saveRowToDatabase, fetchInfluencerFromAPI, onLookupFailed])
 
   const addRow = () => {
     const r = newEmptyRow(customCols)
+    // Rendered immediately with its temp id — nothing waits on the network.
     setRows(prev => { const n = [...prev, r]; onRowsChange?.(n); return n })
     setCurrentPage(filters.sortOrder === "newest" ? 1 : Math.ceil((rows.length + 1) / rowsPerPage))
     setActiveCell({ rowIdx: 0, colIdx: 0 }); containerRef.current?.focus()
+    // …and persisted as a draft in the background, so it is still here after a
+    // refresh. Fire-and-forget on purpose: the swap happens when it lands, and
+    // a failure leaves the row exactly where it is rather than removing it.
+    void onCreateDraft?.(r.id).then(realId => {
+      // Registered the instant the write is confirmed, so a sync already in
+      // flight cannot briefly render the server's copy next to this row.
+      if (realId) creatingDraftIds.current.add(realId)
+    })
   }
 
   const handleAddMultipleRows = (count: number) => {
@@ -915,7 +1131,23 @@ export default function TableSheet({
       onRowsChange?.(n); return n
     })
     setCurrentPage(Math.ceil((rows.length + count) / rowsPerPage)); containerRef.current?.focus()
+    // One draft per row, all started together — rapid additions must not
+    // serialise behind each other. Each resolves into its own row by id.
+    nr.forEach(r => {
+      void onCreateDraft?.(r.id).then(realId => {
+        if (realId) creatingDraftIds.current.add(realId)
+      })
+    })
   }
+
+  /**
+   * Did the delete stick?
+   *
+   * The page restores a failed delete by putting the row back into the shared
+   * cache entry, so the row reappearing in `initialRows` is exactly the signal
+   * that the delete did NOT succeed and the tombstone must be lifted.
+   */
+  const deletedRowStillGone = (id: string) => !initialRowsRef.current.some(r => r.id === id)
 
   const deleteRow = (id: string) => {
     const r = rows.find(x => x.id === id)
@@ -923,11 +1155,16 @@ export default function TableSheet({
       isOpen: true, title: "Delete Row",
       message: <span>Delete <strong>{r?.full_name || r?.handle || "this row"}</strong>?</span>,
       onConfirm: () => {
+        deletedIds.current.add(id)
         setRows(prev => { const n = prev.filter(x => x.id !== id); onRowsChange?.(n); return n })
         if (selectedRowId === id) setSelectedRowId(null)
         if (sidebarRowId === id) setSidebarRowId(null)
         setSelectedRowIds(prev => { const n = new Set(prev); n.delete(id); return n })
-        onDeleteRow?.(id)
+        // The page restores the row itself on failure; lifting the tombstone
+        // here is what lets the merge show it again.
+        void Promise.resolve(onDeleteRow?.(id)).catch(() => {}).finally(() => {
+          if (!deletedRowStillGone(id)) deletedIds.current.delete(id)
+        })
       }, variant: "danger",
     })
   }
@@ -939,10 +1176,15 @@ export default function TableSheet({
       isOpen: true, title: "Delete Selected Rows",
       message: <span>Delete <strong>{selectedRowIds.size} rows</strong>?</span>,
       onConfirm: () => {
+        idsToDelete.forEach(id => deletedIds.current.add(id))
         setRows(prev => { const n = prev.filter(r => !idsToDelete.has(r.id)); onRowsChange?.(n); return n })
         setSelectedRowId(null); setSelectedRowIds(new Set())
         if (sidebarRowId && idsToDelete.has(sidebarRowId)) setSidebarRowId(null)
-        idsToDelete.forEach(id => onDeleteRow?.(id))
+        idsToDelete.forEach(id => {
+          void Promise.resolve(onDeleteRow?.(id)).catch(() => {}).finally(() => {
+            if (!deletedRowStillGone(id)) deletedIds.current.delete(id)
+          })
+        })
       }, variant: "danger",
     })
   }
@@ -1040,6 +1282,37 @@ export default function TableSheet({
    * up with. A pair already requested is dropped here as well, so the timer is
    * not even armed for a repeat.
    */
+  /**
+   * Enrichment lookups in flight, and the rows waiting for a slot.
+   *
+   * Adding or pasting several handles armed one timer per row at the same
+   * delay, so every lookup fired at once — a burst straight at the provider,
+   * and then a burst of creates behind it. The provider answers a burst with
+   * 502s that wrap its own rate limiting, which read as "not found" and left
+   * good rows looking unresolvable.
+   *
+   * Two at a time, matching the limit the Pipeline and Post Tracker bulk moves
+   * already use. Not a delay: a slot is taken the moment one frees, so a single
+   * add is exactly as fast as before and a burst is merely ordered.
+   */
+  const fetchSlotsInUse = useRef(0)
+  const fetchQueue = useRef<Array<() => void>>([])
+  const MAX_CONCURRENT_FETCHES = 2
+
+  const runQueuedFetch = useCallback(() => {
+    while (fetchSlotsInUse.current < MAX_CONCURRENT_FETCHES && fetchQueue.current.length > 0) {
+      const next = fetchQueue.current.shift()!
+      fetchSlotsInUse.current += 1
+      next()
+    }
+  }, [])
+
+  /** Release a slot and start whatever is waiting. */
+  const releaseFetchSlot = useCallback(() => {
+    fetchSlotsInUse.current = Math.max(0, fetchSlotsInUse.current - 1)
+    runQueuedFetch()
+  }, [runQueuedFetch])
+
   const scheduleAutoFetch = useCallback((rowId: string, handle: string, platform: string) => {
     // Both halves must be present and the handle usable before anything is
     // scheduled — this is what keeps a half-filled row from asking.
@@ -1063,9 +1336,16 @@ export default function TableSheet({
       const latestPlatform = row.platform
       if (!latestHandle || latestHandle.trim().length < 2) return
       if (latestPlatform !== "instagram" && latestPlatform !== "tiktok") return
-      autoFetchInfluencer(rowId, latestHandle, latestPlatform)
+      // Through the gate: runs now if a slot is free, otherwise waits for one.
+      // The slot is released in autoFetchInfluencer's `finally`, so a lookup
+      // that fails or throws frees it exactly like one that succeeds — a single
+      // bad handle can never stall the rows behind it.
+      fetchQueue.current.push(() => {
+        void autoFetchInfluencer(rowId, latestHandle, latestPlatform).finally(releaseFetchSlot)
+      })
+      runQueuedFetch()
     }, AUTO_FETCH_DEBOUNCE_MS))
-  }, [autoFetchInfluencer])
+  }, [autoFetchInfluencer, runQueuedFetch, releaseFetchSlot])
 
   const applyCellValue = useCallback((rowIdx: number, colKey: string, value: string) => {
     const actualRow = filteredRows[rowIdx]; const actualRowIdx = rows.findIndex(r => r.id === actualRow.id); if (actualRowIdx === -1) return

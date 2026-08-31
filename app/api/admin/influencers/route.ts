@@ -8,10 +8,13 @@ export async function GET(req: NextRequest) {
 
   const q = req.nextUrl.searchParams.get("q")?.trim() || ""
 
+  // Drafts are blank rows belonging to one brand's sheet, not platform
+  // influencers — they do not belong in the admin directory.
   const influencers = await prisma.influencer.findMany({
-    where: q
-      ? { OR: [{ handle: { contains: q } }, { full_name: { contains: q } }] }
-      : undefined,
+    where: {
+      is_draft: false,
+      ...(q ? { OR: [{ handle: { contains: q } }, { full_name: { contains: q } }] } : {}),
+    },
     orderBy: { created_at: "desc" },
     take: 200,
     select: {

@@ -5,6 +5,8 @@ import { logActivity } from "@/lib/activity-log"
 import { provisionGoAffProAffiliate } from "@/lib/goaffpro-provision"
 import { hasBrandCapability } from "@/lib/permissions"
 import { persistAvatarUrl } from "@/lib/avatar-storage"
+import { canAddInfluencer } from "@/lib/subscription-limits"
+import { publicHandle } from "@/lib/influencer-draft"
 import { NextRequest, NextResponse } from "next/server"
 
 // Must cover every contact_status the app writes anywhere, because an unknown
@@ -67,6 +69,62 @@ export async function PUT(
     })
 
     const inf: any = {}
+
+    // ── Promoting a draft ───────────────────────────────────────────────────
+    // A draft is the blank row the user added; typing a handle into it makes it
+    // a real influencer. That must UPDATE this row rather than create another,
+    // so the row keeps its id, its position and everything already typed into
+    // it — which is why handle/platform are accepted here at all. They are
+    // accepted ONLY for a draft: a real influencer's handle is still immutable
+    // through this route, exactly as before.
+    const current = await prisma.influencer.findUnique({
+      where: { id },
+      select: { is_draft: true },
+    })
+    const promotingHandle =
+      current?.is_draft && typeof data.handle === "string" ? data.handle.trim().replace(/^@/, "") : ""
+    const promotingPlatform =
+      current?.is_draft && typeof data.platform === "string" ? data.platform.trim().toLowerCase() : ""
+
+    if (promotingHandle && promotingPlatform) {
+      // This is the moment an influencer is actually added to the brand, so it
+      // is the moment the plan limit applies — a blank draft never consumed a
+      // slot.
+      const limitCheck = await canAddInfluencer(session.user.id, brandId)
+      if (!limitCheck.allowed) {
+        return NextResponse.json(
+          {
+            error: limitCheck.message || "Influencer limit reached",
+            requiresSubscription: limitCheck.requiresSubscription ?? false,
+            current: limitCheck.current,
+            max: limitCheck.max,
+            subscriptionStatus: limitCheck.subscriptionStatus,
+          },
+          { status: 403 }
+        )
+      }
+
+      // The handle may already exist globally — the same influencer added from
+      // another brand, or typed into two draft rows. The unique index would
+      // reject the update, so it is checked first and reported as a conflict
+      // the client can act on (it links to the existing row and drops the
+      // draft), rather than surfacing a raw constraint error.
+      const existing = await prisma.influencer.findUnique({
+        where: { handle_platform: { handle: promotingHandle, platform: promotingPlatform } },
+        select: { id: true },
+      })
+      if (existing && existing.id !== id) {
+        return NextResponse.json(
+          { error: "This influencer already exists", code: "DUPLICATE_HANDLE", id: existing.id },
+          { status: 409 }
+        )
+      }
+
+      inf.handle = promotingHandle
+      inf.platform = promotingPlatform
+      inf.is_draft = false
+    }
+
     if (data.full_name !== undefined) inf.full_name = data.full_name || null
     if (data.email !== undefined)
       inf.email = data.email && data.email.includes("@") ? data.email : null
@@ -309,7 +367,9 @@ export async function PUT(
       success: true,
       ...(savedInf
         ? {
-            handle:   (savedInf as { handle: string }).handle,
+            // Blanked while the row is still a draft: the placeholder handle
+            // is an implementation detail of the unique index.
+            handle:   publicHandle((savedInf as { handle: string }).handle),
             platform: (savedInf as { platform: string }).platform,
             // Returned so the client can reconcile the two fields this route
             // rewrites. Without them the client kept showing an address it had

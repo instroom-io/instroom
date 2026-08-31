@@ -5,9 +5,9 @@
 
 "use client"
 
-import { useCallback } from "react"
+import { useCallback, useMemo } from "react"
 import type { InfluencerRow, CustomColumn } from "@/components/table-sheet"
-import { useCachedFetch, setCachedData, getCachedData } from "@/lib/data-cache"
+import { useCachedFetch, setCachedData, getCachedData, getConfirmedRow } from "@/lib/data-cache"
 
 type InfluencerPayload = { rows: InfluencerRow[]; customColumns: CustomColumn[] }
 
@@ -35,7 +35,8 @@ type UseInfluencerDataReturn = {
  * shape it cannot render.
  */
 export async function fetchInfluencerPayload(brandId: string): Promise<InfluencerPayload> {
-    const res = await fetch(`/api/brand/${brandId}/influencers`)
+    // include_drafts: this sheet is the only place blank draft rows belong.
+    const res = await fetch(`/api/brand/${brandId}/influencers?include_drafts=true`)
 
     if (!res.ok) {
       const errBody = await res.json().catch(() => ({}))
@@ -77,6 +78,8 @@ export async function fetchInfluencerPayload(brandId: string): Promise<Influence
           social_link: inf.social_link ?? "",
           bio: inf.bio ?? "",
           profile_image_url: inf.profile_image_url ?? "",
+          // A blank row the user added and has not filled in yet.
+          is_draft: Boolean(inf.is_draft),
           avg_likes: inf.avg_likes ?? "",
           avg_comments: inf.avg_comments ?? "",
           avg_views: inf.avg_views ?? "",
@@ -157,7 +160,23 @@ export function useInfluencerData(brandId: string | null): UseInfluencerDataRetu
   // The cache IS the state: reading it during render (rather than copying it
   // into local state in an effect) is what keeps every consumer of this brand's
   // rows in sync without extra renders or extra requests.
-  const rows = data?.rows ?? EMPTY_ROWS
+  // A row a write confirmed outranks a read that has not caught up yet, for a
+  // short window (see markRowConfirmed). Without this, refreshing right after a
+  // save could paint the saved row from the mirror and then revert it when a
+  // briefly-stale read landed. Applied per row: everything the read agrees on,
+  // and every other row, is taken exactly as it arrived.
+  const rows = useMemo(() => {
+    const fetched = data?.rows ?? EMPTY_ROWS
+    if (!cacheKey || fetched.length === 0) return fetched
+    let changed = false
+    const reconciled = fetched.map((row) => {
+      const confirmed = getConfirmedRow<InfluencerRow>(cacheKey, row.id)
+      if (!confirmed) return row
+      changed = true
+      return confirmed
+    })
+    return changed ? reconciled : fetched
+  }, [data?.rows, cacheKey])
   const customColumns = data?.customColumns ?? EMPTY_COLUMNS
 
   // Local edits (inline cell edits, optimistic updates) write straight into the

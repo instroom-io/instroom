@@ -174,8 +174,9 @@ export async function canAddInfluencer(
 
     // Basic: free-forever plan with a one-time lifetime cap.
     if (subscription.plan.name === "basic") {
+      // Drafts are blank rows, not influencers — they must not consume a slot.
       const influencerCount = await prisma.brandInfluencer.count({
-        where: { brand_id: brandId },
+        where: { brand_id: brandId, influencer: { is_draft: false } },
       })
 
       return {
@@ -193,8 +194,13 @@ export async function canAddInfluencer(
     // Solo/Team: limit resets every calendar month.
     const now = new Date()
     const startOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
+    // Drafts excluded here too — see the Basic branch above.
     const influencerCountThisMonth = await prisma.brandInfluencer.count({
-      where: { brand_id: brandId, created_at: { gte: startOfMonth } },
+      where: {
+        brand_id: brandId,
+        created_at: { gte: startOfMonth },
+        influencer: { is_draft: false },
+      },
     })
 
     return {

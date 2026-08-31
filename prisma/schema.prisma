@@ -71,7 +71,7 @@ model Account {
   // Populated by /api/gmail/callback from Google's userinfo endpoint at
   // connect time. Lets the inbox tell "this thread's other party" apart from
   // "this thread is with my own connected mailbox" without a live API call.
-  email             String? @db.VarChar(255)
+  email String? @db.VarChar(255)
 
   // Set explicitly by /api/gmail/callback on every deliberate connect or
   // reconnect — NOT touched by refreshGmailToken's silent background token
@@ -79,7 +79,7 @@ model Account {
   // the row's own id can't be used for that, since reconnecting an account
   // used before updates its existing row rather than creating a new one, so
   // the id stays fixed at whenever that row was first ever created.
-  last_selected_at  DateTime?
+  last_selected_at DateTime?
 
   @@unique([provider, providerAccountId])
   @@index([userId])
@@ -212,15 +212,15 @@ model PaymentHistory {
 // Squeezy's refund API. The actual refund is still issued manually in their
 // dashboard, exactly as before this feature existed.
 model RefundRequest {
-  id                 String    @id @default(cuid()) @db.VarChar(30)
-  user_id            String    @db.VarChar(30)
-  payment_history_id String    @db.VarChar(30)
+  id                 String @id @default(cuid()) @db.VarChar(30)
+  user_id            String @db.VarChar(30)
+  payment_history_id String @db.VarChar(30)
 
   // Snapshot at request time — protects this record from ever silently
   // changing even though PaymentHistory is treated as immutable.
-  amount     Decimal  @db.Decimal(65, 30)
-  currency   String   @default("USD") @db.VarChar(10)
-  plan_name  String?  @db.VarChar(50)
+  amount    Decimal @db.Decimal(65, 30)
+  currency  String  @default("USD") @db.VarChar(10)
+  plan_name String? @db.VarChar(50)
 
   reason      String  @db.Text
   status      String  @default("pending") @db.VarChar(20) // "pending" | "approved" | "denied"
@@ -318,6 +318,21 @@ model Influencer {
   // distinct from the per-brand BrandInfluencer.approval_status workflow.
   verification_status String   @default("pending") @db.VarChar(20)
   is_suspended        Boolean  @default(false)
+  // A blank row the user added in the Influencer List but has not filled in.
+  // It exists so the row survives a refresh; it is NOT an influencer yet.
+  //
+  // Drafts are excluded from every count and every other view (plan limits,
+  // analytics, Pipeline, approvals, admin metrics, exports, and the
+  // existing-influencer picker) — see the `is_draft: false` filters across
+  // app/api. The Influencer List is the only place that reads them.
+  //
+  // `handle` stays NOT NULL and `@@unique([handle, platform])` is untouched:
+  // real influencers still dedupe on it. A draft is given a generated unique
+  // handle instead (DRAFT_HANDLE_PREFIX in lib/influencer-draft), which the
+  // read paths blank out, so drafts cannot collide with each other or with a
+  // real handle. Typing a real handle promotes the row in place: the same
+  // record gets the handle and `is_draft` flips to false.
+  is_draft            Boolean  @default(false)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
@@ -330,6 +345,7 @@ model Influencer {
   @@index([verification_status])
   @@index([email])
   @@index([niche])
+  @@index([is_draft])
 }
 
 model Campaign {
@@ -718,11 +734,11 @@ model PostTrackerAddon {
   // PostDetectionSetting keeps its own hashtags/mentions columns for brands
   // configured before this existed; the monitor prefers these and falls back to
   // those, so nothing already working stops working.
-  detection_hashtags   String?   @db.VarChar(255)
-  detection_mentions   String?   @db.VarChar(255)
+  detection_hashtags String? @db.VarChar(255)
+  detection_mentions String? @db.VarChar(255)
 
-  created_at           DateTime  @default(now())
-  updated_at           DateTime  @updatedAt
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
 
   @@index([status])
 }

@@ -75,7 +75,11 @@ export async function GET(req: Request) {
     const whereClause = {
       brand_id: brandId,
       ...(dateFilter ? { created_at: dateFilter } : {}),
-      ...(Object.keys(influencerFilter).length ? { influencer: { is: influencerFilter } } : {}),
+      // Drafts are blank rows the user has not filled in. They are not
+      // influencers, so they must not enter any funnel count, chart or export.
+      // Merged into the influencer filter rather than added beside it, because
+      // a second `influencer` key would overwrite the first.
+      influencer: { is: { ...influencerFilter, is_draft: false } },
     }
 
     const records = await prisma.brandInfluencer.findMany({
