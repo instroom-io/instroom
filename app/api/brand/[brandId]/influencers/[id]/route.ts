@@ -6,7 +6,9 @@ import { provisionGoAffProAffiliate } from "@/lib/goaffpro-provision"
 import { hasBrandCapability } from "@/lib/permissions"
 import { persistAvatarUrl } from "@/lib/avatar-storage"
 import { canAddInfluencer } from "@/lib/subscription-limits"
+import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 import { publicHandle } from "@/lib/influencer-draft"
+import { normalizeInfluencerIdentity } from "@/lib/influencer-draft"
 import { NextRequest, NextResponse } from "next/server"
 
 // Must cover every contact_status the app writes anywhere, because an unknown
@@ -81,10 +83,15 @@ export async function PUT(
       where: { id },
       select: { is_draft: true },
     })
-    const promotingHandle =
-      current?.is_draft && typeof data.handle === "string" ? data.handle.trim().replace(/^@/, "") : ""
-    const promotingPlatform =
-      current?.is_draft && typeof data.platform === "string" ? data.platform.trim().toLowerCase() : ""
+    // Normalized through the shared helper: this path lower-cased the platform
+    // but NOT the handle, so promoting "Nike" stored a record that a later
+    // lookup for "nike" could not find — a second copy of the same influencer.
+    const promoting = normalizeInfluencerIdentity(
+      typeof data.handle === "string" ? data.handle : "",
+      typeof data.platform === "string" ? data.platform : ""
+    )
+    const promotingHandle = current?.is_draft ? promoting.handle : ""
+    const promotingPlatform = current?.is_draft ? promoting.platform : ""
 
     if (promotingHandle && promotingPlatform) {
       // This is the moment an influencer is actually added to the brand, so it
@@ -104,20 +111,72 @@ export async function PUT(
         )
       }
 
-      // The handle may already exist globally — the same influencer added from
-      // another brand, or typed into two draft rows. The unique index would
-      // reject the update, so it is checked first and reported as a conflict
-      // the client can act on (it links to the existing row and drops the
-      // draft), rather than surfacing a raw constraint error.
+      // ── Global existence is NOT brand existence ─────────────────────────
+      // The Influencer table is global and shared: the same person can be on
+      // several brands' lists. So a global match is the NORMAL case — it means
+      // "reuse this record", not "reject this request".
+      //
+      // This used to return 409 "This influencer already exists" for any global
+      // match, which meant a brand-new brand with an empty list could not add an
+      // influencer that any other brand had ever added. The two questions are
+      // now asked separately:
+      //
+      //   global match  -> reuse it: link THIS brand to the existing record and
+      //                    discard the draft row that was standing in for it
+      //   brand match   -> a real duplicate: the influencer is already on this
+      //                    brand's list, so it is reported and nothing changes
+      //
+      // Identity is handle+platform throughout (never handle alone), so the same
+      // handle on a different platform is a different influencer and is allowed.
       const existing = await prisma.influencer.findUnique({
         where: { handle_platform: { handle: promotingHandle, platform: promotingPlatform } },
         select: { id: true },
       })
+
       if (existing && existing.id !== id) {
-        return NextResponse.json(
-          { error: "This influencer already exists", code: "DUPLICATE_HANDLE", id: existing.id },
-          { status: 409 }
-        )
+        // Is the EXISTING influencer already on this brand's list?
+        const alreadyOnBrand = await prisma.brandInfluencer.findUnique({
+          where: {
+            brand_id_influencer_id: { brand_id: brandId, influencer_id: existing.id },
+          },
+          select: { id: true },
+        })
+
+        if (alreadyOnBrand) {
+          // A genuine duplicate within this brand. The submitted handle is left
+          // exactly as it is — nothing is nulled or overwritten — and the client
+          // drops the draft row it was typing into, keeping the row that is
+          // already there.
+          return NextResponse.json(
+            {
+              error: "This influencer is already in your list",
+              code: "DUPLICATE_IN_BRAND",
+              id: existing.id,
+            },
+            { status: 409 }
+          )
+        }
+
+        // Global reuse: link the existing record to this brand, moving the draft
+        // row's own membership over rather than creating a second one. The
+        // draft's placeholder Influencer is then removed — it never represented
+        // a real person, and leaving it behind would strand a blank row.
+        await prisma.$transaction([
+          prisma.brandInfluencer.updateMany({
+            where: { brand_id: brandId, influencer_id: id },
+            data: { influencer_id: existing.id },
+          }),
+          prisma.influencer.deleteMany({ where: { id, is_draft: true } }),
+        ])
+
+        return NextResponse.json({
+          success: true,
+          code: "LINKED_EXISTING",
+          // The id the row must now use, so the sheet points at the reused
+          // record instead of the discarded draft.
+          id: existing.id,
+          reused: true,
+        })
       }
 
       inf.handle = promotingHandle
@@ -126,8 +185,18 @@ export async function PUT(
     }
 
     if (data.full_name !== undefined) inf.full_name = data.full_name || null
+    // Stores ANY contact detail the user entered, not only addresses.
+    //
+    // The `includes("@")` test nulled everything else, so a DM link, a bare
+    // social handle and a phone number were all discarded on save even though
+    // the sheet showed them. This column is the app's general contact field —
+    // the importer maps an "email address/handlename" column into it — so the
+    // only thing worth rejecting is an empty value.
+    //
+    // Whether a contact is UNIQUE is a separate question, answered by
+    // isUniqueContact during duplicate detection; it does not decide storage.
     if (data.email !== undefined)
-      inf.email = data.email && data.email.includes("@") ? data.email : null
+      inf.email = typeof data.email === "string" && data.email.trim() ? data.email.trim() : null
     if (data.gender !== undefined) inf.gender = data.gender || null
     if (data.niche !== undefined) inf.niche = data.niche || null
     if (data.location !== undefined) inf.location = data.location || null
@@ -396,6 +465,14 @@ export async function PUT(
     // editing an influencer and it describes our storage internals.
     console.error("PUT /influencers/[id]:", err?.code, err?.message)
 
+    // The pool is momentarily empty — the save did not happen, but nothing is
+    // wrong with it. 503 lets the client say "try again" instead of showing a
+    // dead-end failure for something that would work a moment later. Logged
+    // just above, so the driver text stays diagnosable.
+    if (isDatabaseCapacityError(err)) {
+      return databaseCapacityResponse()
+    }
+
     // Length overflow is the one remaining failure a user can act on.
     if (err?.code === "P2000") {
       return NextResponse.json(
@@ -514,6 +591,18 @@ export async function DELETE(
     if (err.code === "P2025") {
       return NextResponse.json({ error: "Not found" }, { status: 404 })
     }
-    return NextResponse.json({ error: err?.message }, { status: 500 })
+
+    // Same split as the PUT above: log the driver text, show the user a
+    // sentence. This previously returned err.message straight to the browser.
+    console.error("DELETE /influencers/[id]:", err?.code, err?.message)
+
+    if (isDatabaseCapacityError(err)) {
+      return databaseCapacityResponse()
+    }
+
+    return NextResponse.json(
+      { error: "Couldn't delete this influencer. Please try again." },
+      { status: 500 }
+    )
   }
 }

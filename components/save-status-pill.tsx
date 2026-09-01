@@ -6,7 +6,7 @@
 // app/globals.css) while a save is happening:
 //
 //   ◌ Saving changes…   a write is in flight RIGHT NOW
-//   ✓ Saved             that write came back OK — shown briefly, then it goes
+//   ✓ Changes saved     that write came back OK — shown briefly, then it goes
 //   (nothing)           idle, or the write failed
 //
 // The processing wording is standardised app-wide: "Saving changes…" is the
@@ -118,7 +118,7 @@ export function SaveStatusPill({
       ) : (
         <>
           <IconCheck size={12} />
-          Saved
+          Changes saved
         </>
       )}
     </div>

@@ -2,28 +2,28 @@
 
 import ReactDOM from "react-dom"
 import React, {
-  useState, useRef, useEffect, useCallback, useMemo,
+  useState, useRef, useEffect, useCallback, useMemo, memo,
   type KeyboardEvent, type ReactNode, type DragEvent,
 } from "react"
 import {
   IconTrash, IconPlus, IconX, IconExternalLink, IconCheck, IconCalendar,
   IconGripVertical, IconSearch, IconFilter, IconTags, IconMapPin,
-  IconChecklist, IconCopy, IconAlertTriangle, IconDownload, IconUpload,
-  IconSettings, IconChevronDown, IconLoader2, IconArrowsSort, IconDots, IconDotsVertical,
+  IconCopy, IconAlertTriangle, IconDownload, IconUpload,
+  IconSettings, IconLoader2, IconDots, IconDotsVertical,
 } from "@tabler/icons-react"
 
 import type { InfluencerRow, CustomColumn, AnyColDef, CustomColDef, CellAddress, FilterState, ToastNotification, BulkApprovalResult } from "./types"
 import {
   DEFAULT_NICHES, DEFAULT_LOCATIONS, DEFAULT_GENDERS, DEFAULT_CONTACT_STATUSES,
-  OUTREACH_FIELDS, platforms, STATUS_STYLE, STATUS_LABEL, APPROVAL_STYLE,
+  OUTREACH_FIELDS, platforms, STATUS_STYLE, APPROVAL_STYLE,
   INSTROOM_API_BASE_URL, INSTROOM_PROFILE_ENDPOINTS, isInstroomApiConfigured,
 } from "./constants"
 import {
   cleanHandle, getProfileUrl, sortRows, newEmptyRow, getStaticCols,
   handleApprovalChange, isValidUrl, normalizeUrl, formatFollowers,
   exportToCSV, downloadTemplate, importFromCSV,
-  normalizeApiUsername, isValidApiUsername, describeLookupFailure,
-  isUsableEmail, normalizeEmail, normalizeContactInfo,
+  normalizeApiUsername, isValidApiUsername, describeLookupFailure, lookupFailureMessage,
+  isUsableEmail, normalizeEmail, normalizeContactInfo, isUniqueContact, contactMatchKey,
 } from "./utils"
 import { useToast } from "./hooks"
 import { ProfilePicture, PlatformIcon, StatusBadge, ApprovalBadge, MultiSelectDisplay } from "./ui-atoms"
@@ -37,6 +37,100 @@ import { ToastContainer } from "./toast"
 import { DataSyncStatus } from "@/components/data-sync-status"
 import ProfileSidebar from "./profile-sidebar"
 import { useBrandTaxonomy } from "@/hooks/useBrandTaxonomy"
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   SHEET ROW  —  the render boundary
+   ═══════════════════════════════════════════════════════════════════════════════
+   Editing one cell used to re-run `renderCell` for EVERY visible row: at the
+   default 100 rows per page and ~17 columns that is ~1,700 cell renders per
+   keystroke, and an 8-character edit wasted ~13,400 of them.
+
+   This boundary is the whole fix. The row takes only per-row values plus
+   callbacks that are stable for the life of the component, so a keystroke
+   re-renders the edited row and nothing else.
+
+   `renderCell` is deliberately EXCLUDED from the comparator. It is recreated on
+   every parent render (it closes over ~20 pieces of sheet state), so comparing
+   it would defeat the memo entirely. What it renders for a given row is decided
+   by `cellsKey` below — the row's own active/edit/popup position and the values
+   that actually change its output — so the row still repaints whenever anything
+   affecting it moves, and never when it does not.
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+type SheetRowProps = {
+  row: InfluencerRow
+  /** Absolute index in the filtered list, used for the # column and cell coords. */
+  rowIdx: number
+  isSelected: boolean
+  isDeclined: boolean
+  isDuplicate: boolean
+  isFetching: boolean
+  readOnly: boolean
+  cols: AnyColDef[]
+  /**
+   * Everything about the SHEET's state that changes what this row renders, as
+   * one string: which of its cells is active, being edited or showing a popup,
+   * and the current edit value. Compared instead of the individual pieces so a
+   * cell address object identity cannot cause a needless repaint.
+   */
+  cellsKey: string
+  renderCell: (row: InfluencerRow, rowIdx: number, col: AnyColDef, colIdx: number) => React.ReactNode
+  onRowClick: (id: string, e: React.MouseEvent) => void
+  onRowDoubleClick: (id: string) => void
+  onCheckboxToggle: (id: string) => void
+  onDeleteRow: (id: string) => void
+}
+
+function SheetRowBase({
+  row, rowIdx, isSelected, isDeclined, isDuplicate, isFetching, readOnly,
+  cols, renderCell, onRowClick, onRowDoubleClick, onCheckboxToggle, onDeleteRow,
+}: SheetRowProps) {
+  return (
+    <tr className={`group cursor-pointer transition-colors ${
+      isSelected
+        ? "bg-blue-100 ring-1 ring-inset ring-blue-400 relative z-[1]"
+        : `hover:bg-gray-50/60 ${isDeclined ? "bg-red-50/30" : ""} ${isDuplicate ? "bg-amber-50/50 opacity-60" : ""}`
+    }`}
+      onClick={e => onRowClick(row.id, e)} onDoubleClick={() => onRowDoubleClick(row.id)}>
+      <td className="border border-gray-100 text-center bg-gray-50/40 select-none py-0.5">
+        <div className="flex flex-col items-center justify-center gap-0.5">
+          {isFetching ? <IconLoader2 size={12} className="text-green-600 animate-spin" />
+            : !readOnly ? <input type="checkbox" checked={isSelected} onChange={() => onCheckboxToggle(row.id)} onClick={e => e.stopPropagation()} className="w-3 h-3 rounded accent-blue-600 cursor-pointer" />
+            : null}
+          <span className="text-[9px] text-gray-400 leading-none">{rowIdx + 1}</span>
+        </div>
+      </td>
+      {cols.map((col, ci) => renderCell(row, rowIdx, col, ci))}
+      {!readOnly && <td className="border border-gray-200 bg-gray-50/40" />}
+      <td className="border border-gray-200 text-center bg-gray-50/40">
+        {/* Delete only. The "view profile" eye that sat here was a second way in
+            to the panel the handle cell's avatar already opens, so the row-end
+            actions are just the destructive one now. Nothing else about opening
+            the profile changed — setSidebarRowId is still reached from the
+            avatar and from the phone row cards. */}
+        <div className="flex items-center justify-center gap-0.5">
+          {!readOnly && <button onClick={e => { e.stopPropagation(); onDeleteRow(row.id) }} title="Delete row"
+            className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-500 transition"><IconTrash size={12} /></button>}
+        </div>
+      </td>
+    </tr>
+  )
+}
+
+const SheetRow = memo(SheetRowBase, (prev: SheetRowProps, next: SheetRowProps) =>
+  // Row data by reference: every edit path produces a NEW row object, so a
+  // changed cell always repaints its row and a stale snapshot is impossible.
+  prev.row === next.row &&
+  prev.rowIdx === next.rowIdx &&
+  prev.isSelected === next.isSelected &&
+  prev.isDeclined === next.isDeclined &&
+  prev.isDuplicate === next.isDuplicate &&
+  prev.isFetching === next.isFetching &&
+  prev.readOnly === next.readOnly &&
+  prev.cols === next.cols &&
+  prev.cellsKey === next.cellsKey
+  // renderCell and the handlers are excluded on purpose — see the note above.
+)
 
 /* ═══════════════════════════════════════════════════════════════════════════════
    EMPTY STATE
@@ -127,7 +221,7 @@ export default function TableSheet({
   onRowsChange, onDeleteRow, onFetchComplete, onRegisterIdSwap,
   onCustomColumnsChange, onImportRows, onBulkApprove, readOnly = false, brandId,
   subscriptionStatus, onShowTrialModal, canApproveInfluencers = true, onNotify, onLookupFailed,
-  onCreateDraft, onSaveState, onEnrichmentStart, onEnrichmentFailed,
+  onCreateDraft, onSaveState, onEnrichmentStart, onEnrichmentFailed, onContactHoldChange,
 }: {
   initialRows?: InfluencerRow[]
   initialCustomColumns?: CustomColumn[]
@@ -166,6 +260,14 @@ export default function TableSheet({
    * it (the add pill) can close it — onFetchComplete never runs on this path.
    */
   onEnrichmentFailed?: (rowId: string) => void
+  /**
+   * A row has started or finished waiting on a contact-duplicate decision.
+   *
+   * The page pauses that row's autosave while held, so a duplicated contact is
+   * never written before the user has chosen. Nothing else about the row is
+   * touched — the handle and every other field stay exactly as entered.
+   */
+  onContactHoldChange?: (rowId: string, held: boolean) => void
   onCustomColumnsChange?: (cols: CustomColumn[]) => void
   onImportRows?: (rows: InfluencerRow[]) => void
   /** Approves a whole selection in one request; resolves with what the DB stored. */
@@ -287,6 +389,24 @@ export default function TableSheet({
   const initialRowsRef = useRef<InfluencerRow[]>(initialRows)
   initialRowsRef.current = initialRows
 
+  /**
+   * Live mirrors of the state the ROW-level handlers read.
+   *
+   * Those handlers have to keep a stable identity or the memoized row below
+   * re-renders on every parent render and the boundary buys nothing. Reading
+   * through a ref keeps them stable AND current — a `useCallback` listing these
+   * in its deps would get a new identity every time any of them changed, which
+   * is the same problem.
+   *
+   * Assigned in an effect, not during render: writing a ref while rendering is a
+   * render-phase side effect. Every consumer runs from an event handler, which
+   * is always after the commit.
+   */
+  const editCellRef = useRef<CellAddress | null>(null)
+  const popupCellRef = useRef<CellAddress | null>(null)
+  const selectedRowIdRef = useRef<string | null>(null)
+  const sidebarRowIdRef = useRef<string | null>(null)
+
   const lastInitialKey = useRef("")
   useEffect(() => {
     const key = initialRows.map(r => r.id).join(",")
@@ -403,6 +523,14 @@ export default function TableSheet({
   const [selectedRowId, setSelectedRowId]   = useState<string | null>(null)
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set())
   const [sidebarRowId, setSidebarRowId]     = useState<string | null>(null)
+
+  // Mirrors for the stable row handlers — see the refs above.
+  useEffect(() => { editCellRef.current = editCell }, [editCell])
+  useEffect(() => { popupCellRef.current = popupCell }, [popupCell])
+  useEffect(() => { selectedRowIdRef.current = selectedRowId }, [selectedRowId])
+  useEffect(() => { sidebarRowIdRef.current = sidebarRowId }, [sidebarRowId])
+  /** Live mirror of `filteredRows`, for the stable Shift-click range handler. */
+  const filteredRowsRef = useRef<InfluencerRow[]>([])
   /**
    * Pending "open the profile" from a click on the handle name.
    *
@@ -436,14 +564,27 @@ export default function TableSheet({
 
   const [fetchingRows, setFetchingRows]           = useState<Set<string>>(new Set())
   const [duplicateRowIds, setDuplicateRowIds]     = useState<Set<string>>(new Set())
-  const [pendingDuplicateInfo, setPendingDuplicateInfo] = useState<{ rowId: string; handle: string; existingName: string } | null>(null)
+  const [pendingDuplicateInfo, setPendingDuplicateInfo] = useState<{
+    rowId: string
+    handle: string
+    existingName: string
+    /**
+     * Which identity matched.
+     *
+     * "handle" is the real duplicate — the same handle+platform already in the
+     * sheet. "contact" is a shared email on a DIFFERENT handle/platform, which
+     * is legitimate (an agency address, one creator on two platforms) and must
+     * be the user's call rather than an automatic block.
+     */
+    reason?: "handle" | "contact"
+    /** The influencers whose contact info matched, for the contact case. */
+    matches?: { handle: string; platform: string; name: string }[]
+  } | null>(null)
 
   const [openRowMenuId, setOpenRowMenuId]                 = useState<string | null>(null)
-  const [showBulkStatusMenu, setShowBulkStatusMenu]       = useState(false)
   const [showBulkTransferConfirm, setShowBulkTransferConfirm] = useState(false)
   // Guards against a second submit while the bulk write is in flight.
   const [bulkApproving, setBulkApproving] = useState(false)
-  const bulkStatusRef = useRef<HTMLDivElement>(null)
 
   const commitGuardRef     = useRef(false)
   const editInputRef       = useRef<HTMLInputElement | HTMLSelectElement | null>(null)
@@ -501,9 +642,12 @@ export default function TableSheet({
         open: true,
         platform,
         handle: clean,
+        // A CONFIRMED service-side problem — no request could even be made — so
+        // unlike a private or unavailable profile this one may say so. The env
+        // var name stays in the console error above, not here: it is for
+        // whoever deploys the app, not for the person adding an influencer.
         reason:
-          "The influencer API host is not configured, so no request was sent. " +
-          "Set INSTROOM_API_BASE_URL to the deployed API URL and restart the server. " +
+          "Profile lookup isn't available right now, so no data could be fetched. " +
           "You can still add this influencer manually.",
       })
       return null
@@ -538,7 +682,19 @@ export default function TableSheet({
         // toast, which is correct, and the auto-fetch flow continues normally.
         if (failure.notFound) return null
 
-        setApiErrorModal({ open: true, platform, handle: clean, reason: failure.reason })
+        // The classified cause and the technical detail go to the CONSOLE; the
+        // modal gets the one neutral line. A private or restricted profile is an
+        // ordinary fetch limitation, not an outage, so nothing here tells the
+        // user an API is down — and no HTTP code or provider name is shown.
+        console.warn(
+          `Influencer lookup failed for @${clean} on ${platform} [cause=${failure.cause}]: ${failure.reason}`
+        )
+        setApiErrorModal({
+          open: true,
+          platform,
+          handle: clean,
+          reason: lookupFailureMessage(clean),
+        })
         return null
       }
 
@@ -607,7 +763,15 @@ export default function TableSheet({
     setColOrder(prev => (!prev || prev.length !== rawCols.length) ? rawCols.map((_, i) => i) : prev)
   }, [rawCols.length])
   const order   = colOrder && colOrder.length === rawCols.length ? colOrder : rawCols.map((_, i) => i)
-  const allCols = order.map(i => rawCols[i])
+  // Memoized: the memo boundary below compares `cols` by reference, and a fresh
+  // `.map()` on every render would make that comparison always false — the row
+  // would repaint on every keystroke and the boundary would buy nothing.
+  // Recomputed only when the columns or their order actually change.
+  const allCols = useMemo(
+    () => order.map(i => rawCols[i]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [colOrder, customCols, nicheOptions, locationOptions]
+  )
   const totalCols = allCols.length
 
   useEffect(() => {
@@ -668,6 +832,10 @@ export default function TableSheet({
     return sortRows(filtered, filters.sortOrder)
   }, [rows, searchQuery, filters])
 
+  // Keeps the mirror the stable selection handler reads in step. An effect, not
+  // an assignment during render — see the mirrors above.
+  useEffect(() => { filteredRowsRef.current = filteredRows }, [filteredRows])
+
   const totalRows  = filteredRows.length
   const totalPages = Math.max(1, Math.ceil(totalRows / rowsPerPage))
   const pageStart  = (currentPage - 1) * rowsPerPage
@@ -700,13 +868,16 @@ export default function TableSheet({
    */
   const editIntentRef = useRef(false)
 
-  const handleRowClick = (id: string, e: React.MouseEvent) => {
+  // Stable so the memoized row is not invalidated on every parent render. The
+  // state it needs is read through the live mirrors above, so it cannot go
+  // stale — the logic is byte-for-byte what it was.
+  const handleRowClick = useCallback((id: string, e: React.MouseEvent) => {
     // This click opened a cell editor (or a cell popup). Selecting the row was
     // not what the user asked for.
     if (editIntentRef.current) { editIntentRef.current = false; return }
     // An editor is already open — a click anywhere in the row while typing must
     // not change what is selected.
-    if (editCell || popupCell) return
+    if (editCellRef.current || popupCellRef.current) return
     // Or the click came from a control inside a cell: the editor's own input,
     // Save, Cancel. Same test the table wrapper's onMouseDown already uses.
     if ((e.target as HTMLElement).closest("input, select, textarea, button, [tabindex]")) return
@@ -717,7 +888,8 @@ export default function TableSheet({
     }
     if (rowClickTimerRef.current) clearTimeout(rowClickTimerRef.current)
     rowClickTimerRef.current = setTimeout(() => { handleRowSelect(id, e); rowClickTimerRef.current = null }, 200)
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const handleRowDoubleClick = (id: string) => {
     // Always cancel the pending single-click selection, even when the profile is
@@ -734,28 +906,37 @@ export default function TableSheet({
     setSidebarRowId(id)
   }
 
-  const handleRowSelect = (id: string, e?: React.MouseEvent) => {
+  // Stable, so the memoized row keeps its identity. `selectedRowId` and
+  // `filteredRows` are read through their live mirrors rather than captured, so
+  // Ctrl-click toggling and Shift-click range selection behave exactly as before.
+  const handleRowSelect = useCallback((id: string, e?: React.MouseEvent) => {
+    const currentSelectedId = selectedRowIdRef.current
+    // Falls back to the unfiltered mirror on the very first interaction, before
+    // the effect that fills the filtered one has run, so a range select always
+    // has rows to work with.
+    const currentFiltered = filteredRowsRef.current.length ? filteredRowsRef.current : rowsRef.current
     if (e?.ctrlKey || e?.metaKey) {
       setSelectedRowIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
       setSelectedRowId(id)
-    } else if (e?.shiftKey && selectedRowId) {
-      const ci = filteredRows.findIndex(r => r.id === selectedRowId)
-      const ti = filteredRows.findIndex(r => r.id === id)
+    } else if (e?.shiftKey && currentSelectedId) {
+      const ci = currentFiltered.findIndex(r => r.id === currentSelectedId)
+      const ti = currentFiltered.findIndex(r => r.id === id)
       if (ci !== -1 && ti !== -1) {
         const s = Math.min(ci, ti); const e2 = Math.max(ci, ti)
-        setSelectedRowIds(new Set(filteredRows.slice(s, e2 + 1).map(r => r.id)))
+        setSelectedRowIds(new Set(currentFiltered.slice(s, e2 + 1).map(r => r.id)))
       }
       setSelectedRowId(id)
     } else { setSelectedRowId(id); setSelectedRowIds(new Set([id])) }
-  }
+  }, [])
 
   // Checkbox click always toggles that row into/out of the current selection —
   // no modifier key needed, since ticking a checkbox is already an explicit
   // multi-select gesture (unlike clicking the row itself, which selects only it).
-  const handleCheckboxToggle = (id: string) => {
+  // Stable: setters only. Behaviour unchanged.
+  const handleCheckboxToggle = useCallback((id: string) => {
     setSelectedRowIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
     setSelectedRowId(id)
-  }
+  }, [])
 
   const allPageSelected = pageRows.length > 0 && pageRows.every(r => selectedRowIds.has(r.id))
   const someSelected    = selectedRowIds.size > 0
@@ -783,23 +964,20 @@ export default function TableSheet({
     setCurrentPage(1)
   }
 
-  const handleBulkStatusChange = (newStatus: string) => {
-    if (!selectedRowIds.size) return
-    setRows(prev => {
-      const next = prev.map(row => !selectedRowIds.has(row.id) ? row : { ...row, contact_status: newStatus })
-      onRowsChange?.(next); return next
-    })
-    setShowBulkStatusMenu(false)
-    addToast("success", `${selectedRowIds.size} influencer${selectedRowIds.size !== 1 ? "s" : ""} moved to ${STATUS_LABEL[newStatus] || newStatus}`)
-  }
-
   // One request for the whole selection, applied by the DB in a transaction, and
   // the rows are then set from what the DB returned — not from what we guessed.
   // Deliberately does NOT route through onRowsChange: that path debounces one
   // PUT per row, which is what made a large selection slow and lossy.
   const handleBulkTransferToOutreach = async () => {
     if (!selectedRowIds.size || bulkApproving) return
-    const ids = rows.filter(r => selectedRowIds.has(r.id) && !r.id.startsWith("temp-")).map(r => r.id)
+    // Drafts are excluded here, not just server-side. A draft is a blank row
+    // with no influencer to approve, and the bulk route rightly refuses it —
+    // but sending it meant the route returned it under `failed`, so a selection
+    // containing drafts always reported a partial failure and re-selected them,
+    // which read as "only some rows were approved".
+    const ids = rows
+      .filter(r => selectedRowIds.has(r.id) && !r.id.startsWith("temp-") && !r.is_draft)
+      .map(r => r.id)
     if (!ids.length) { setShowBulkTransferConfirm(false); return }
 
     setBulkApproving(true)
@@ -872,8 +1050,21 @@ export default function TableSheet({
             if (existing?.id) { swapIdRef.current(row.id, existing.id); onFetchComplete?.({ ...row, id: existing.id }) }
             return
           }
-          if (res.status === 403) { addToast("error", err.message || "Influencer limit reached for your plan"); return }
-          addToast("error", `Failed to save @${row.handle}: ${err.error || res.statusText}`)
+          // 403 is the plan limit — the route writes that line for users, so it
+          // is shown as-is; anything unexpected falls back to a safe default
+          // rather than whatever string happened to be in the body.
+          if (res.status === 403) {
+            const limitMsg = typeof err.message === "string" ? err.message : ""
+            addToast("error", limitMsg || "Influencer limit reached for your plan")
+            return
+          }
+          // The technical detail goes to the console, never to the toast:
+          // `res.statusText` is raw HTTP ("Internal Server Error") and
+          // `err.error` can carry driver text. The user gets something they can
+          // act on instead. The row and everything typed into it are untouched,
+          // so a retry is just another edit.
+          console.error(`POST /api/influencers/create failed for @${row.handle}:`, res.status, err)
+          addToast("error", `Couldn't add @${row.handle}. Please check the handle and try again.`)
           return
         }
         const created = await res.json()
@@ -902,10 +1093,15 @@ export default function TableSheet({
           onSaveState?.("fail")
           onEnrichmentFailed?.(row.id)
           if (res.status === 409) {
-            addToast("error", `@${row.handle} is already in this list`)
+            // A real duplicate WITHIN this brand — the only 409 the route sends
+            // now. A global match is no longer an error: it comes back OK as
+            // LINKED_EXISTING and is handled below. The typed handle is left on
+            // screen so the user can correct it; nothing is nulled.
+            addToast("error", err.error || `@${row.handle} is already in this list`)
             return
           }
-          addToast("error", `Failed to save @${row.handle}: ${err.error || res.statusText}`)
+          console.error(`PUT draft-promote failed for @${row.handle}:`, res.status, err)
+          addToast("error", `Couldn't save @${row.handle}. Your changes are still here — please try again.`)
           return
         }
         // Reconcile from what the DATABASE stored.
@@ -919,6 +1115,20 @@ export default function TableSheet({
         const saved = (await res.json().catch(() => ({}))) as {
           profile_image_url?: string | null
           handle?: string | null
+          code?: string
+          id?: string
+        }
+
+        // The influencer already existed globally and has been LINKED to this
+        // brand, with this draft's membership moved onto it. The row now IS that
+        // record, so it takes its id and re-enters the normal flow — which
+        // fetches and populates the reused influencer's stored data. No
+        // duplicate global record, no error, and the handle is untouched.
+        if (saved.code === "LINKED_EXISTING" && saved.id) {
+          swapIdRef.current(row.id, saved.id)
+          onSaveState?.("ok")
+          onFetchComplete?.({ ...row, id: saved.id, is_draft: false })
+          return
         }
         setRows(prev => prev.map(r => r.id === row.id ? {
           ...r,
@@ -958,6 +1168,15 @@ export default function TableSheet({
           onSaveState?.("fail")
           const err = await res.json().catch(() => ({}))
           console.error(`PUT /api/influencers/${row.id} failed:`, err)
+          // This page passes no onSaveState, so without a toast the failed save
+          // was invisible: the fetched profile sat on screen looking saved.
+          // 503 is the pool being momentarily empty — nothing typed was lost.
+          addToast(
+            "error",
+            res.status === 503
+              ? "The server is busy right now. Your changes are safe. Please wait a moment and try again."
+              : `Couldn't save @${row.handle}. Please try again.`
+          )
         } else {
           onSaveState?.("ok")
           onFetchComplete?.(row)
@@ -968,6 +1187,105 @@ export default function TableSheet({
       }
     }
   }, [brandId, addToast, onFetchComplete, onSaveState, onEnrichmentStart, onEnrichmentFailed])
+
+  /**
+   * Does this contact detail already belong to another row? If so, ask.
+   *
+   * Deliberately INDEPENDENT of the handle/platform identity check:
+   *
+   *   * it runs even when handle+platform is unique, because that is exactly
+   *     the interesting case — a different account sharing an address;
+   *   * a match never blocks the add. Multiple handles legitimately share one
+   *     inbox (an agency, a manager, one creator on two platforms), so a shared
+   *     address is not evidence that two accounts are the same person;
+   *   * the address is never folded into the identity query. Identity is
+   *     handle+platform and nothing else.
+   *
+   * Returns true when a modal was raised, so the caller knows the user has been
+   * asked. Nothing is written or cleared here either way — the row keeps its
+   * handle and everything typed into it.
+   */
+  /**
+   * Rows waiting on a contact-duplicate decision.
+   *
+   * A ref, not state, because the page's autosave reads it synchronously the
+   * moment a row changes — a state read would be a render behind and the save
+   * would already have gone out. `onContactHoldChange` mirrors it to the page.
+   *
+   * While a row is in here its contact is NOT persisted: the save is paused, not
+   * cancelled, so everything already typed stays on screen and the row resumes
+   * saving as soon as the user chooses.
+   */
+  const contactHoldRef = useRef<Set<string>>(new Set())
+
+  const setContactHold = useCallback((rowId: string, held: boolean) => {
+    if (held) contactHoldRef.current.add(rowId)
+    else contactHoldRef.current.delete(rowId)
+    onContactHoldChange?.(rowId, held)
+  }, [onContactHoldChange])
+
+  const checkContactDuplicate = useCallback((rowId: string, contact: string): boolean => {
+    const incoming = normalizeEmail(contact) || normalizeContactInfo(contact)
+    if (!incoming) return false
+    // A DM / social handle is not an identity, so it is never a duplicate.
+    //
+    // `contact_info` is fed by the importer's "email address/handlename"
+    // column, so a messaging handle lands in it routinely — and one brand inbox
+    // messages many creators, a manager runs several accounts, and the same
+    // handle can belong to different people on different platforms. Flagging
+    // those interrupted the user for something that was never a conflict.
+    // Email and phone still identify one person and are still checked.
+    if (!isUniqueContact(incoming)) return false
+    // Already waiting on a decision for this row — one modal, not one per
+    // keystroke. Rapid typing therefore cannot stack modals or slip a save past
+    // the one already open.
+    if (contactHoldRef.current.has(rowId)) return true
+    // Compared on the match KEY, not the display string: a phone number is the
+    // same line however it is punctuated, so "+63 917 123 4567" and
+    // "+639171234567" have to land on the same key. Emails still compare as
+    // their lowercase selves.
+    const needle = contactMatchKey(incoming)
+    if (!needle) return false
+
+    // Both sides are filtered: a stored DM handle is not a duplicate of anything
+    // either, so it can never be the row a modal points at. `contactMatchKey`
+    // returns "" for those, and "" never matches a non-empty needle.
+    const matches = rowsRef.current.filter(r =>
+      r.id !== rowId &&
+      (contactMatchKey(r.email) === needle ||
+       contactMatchKey(r.contact_info) === needle)
+    )
+    if (!matches.length) return false
+
+    const row = rowsRef.current.find(r => r.id === rowId)
+    // Held BEFORE the modal opens, so the save that would otherwise be armed by
+    // this very edit is paused rather than racing the user's decision.
+    setContactHold(rowId, true)
+    setPendingDuplicateInfo({
+      rowId,
+      handle: cleanHandle(row?.handle ?? ""),
+      existingName: matches[0].full_name || cleanHandle(matches[0].handle),
+      reason: "contact",
+      matches: matches.map(r => ({
+        handle: cleanHandle(r.handle),
+        platform: r.platform,
+        name: r.full_name || cleanHandle(r.handle),
+      })),
+    })
+    return true
+  }, [setContactHold])
+
+  /**
+   * Clear a row's fetching spinner.
+   *
+   * scheduleAutoFetch turns the spinner on when a row is QUEUED, so the three
+   * guards below — already requested, already enriched, duplicate — must turn it
+   * off again: they return before the try/finally that normally clears it, and a
+   * queued row would otherwise spin forever.
+   */
+  const clearFetching = useCallback((rowId: string) => {
+    setFetchingRows(prev => { if (!prev.has(rowId)) return prev; const n = new Set(prev); n.delete(rowId); return n })
+  }, [])
 
   const autoFetchInfluencer = useCallback(async (rowId: string, handle: string, platform: string) => {
     const clean = handle.trim().replace(/^@/, "").toLowerCase()
@@ -980,7 +1298,7 @@ export default function TableSheet({
     // duplicate warning from reappearing on a later commit — which it did
     // before this change.
     const pairKey = `${platform}|${clean}`
-    if (requestedPairsRef.current.has(pairKey)) return
+    if (requestedPairsRef.current.has(pairKey)) { clearFetching(rowId); return }
 
     // ── Credit guards ────────────────────────────────────────────────────────
     // These two checks used to live inside a setRows updater, which React runs
@@ -996,7 +1314,7 @@ export default function TableSheet({
     // Already-known details are treated as fetched: imported and
     // already-enriched rows stay editable and approvable, they are just not
     // re-requested. A row genuinely missing its numbers still fetches.
-    if (existingRow && Number(existingRow.follower_count) > 0) return
+    if (existingRow && Number(existingRow.follower_count) > 0) { clearFetching(rowId); return }
 
     const duplicate = currentRows.find(r =>
       r.id !== rowId && cleanHandle(r.handle).toLowerCase() === clean && r.platform === platform
@@ -1004,6 +1322,7 @@ export default function TableSheet({
     if (duplicate) {
       setPendingDuplicateInfo({ rowId, handle: clean, existingName: duplicate.full_name || duplicate.handle })
       setDuplicateRowIds(p => { const n = new Set(p); n.add(rowId); return n })
+      clearFetching(rowId)
       return
     }
     setDuplicateRowIds(p => { if (!p.has(rowId)) return p; const n = new Set(p); n.delete(rowId); return n })
@@ -1042,16 +1361,10 @@ export default function TableSheet({
       const incomingEmail = normalizeEmail(data.email)
       const incomingContact = normalizeContactInfo(data.contact_info)
 
-      // Only a REAL address can collide with another row's. "Email not
-      // available" is what the provider sends when it has none, and every row
-      // lacking an email used to "share" it with every other.
-      const emailDuplicate = incomingEmail
-        ? prev.find(r =>
-            r.id !== rowId &&
-            (normalizeEmail(r.email).toLowerCase() === incomingEmail.toLowerCase() ||
-             normalizeContactInfo(r.contact_info).toLowerCase() === incomingEmail.toLowerCase())
-          )
-        : undefined
+      // The contact check is a SEPARATE concern, run through the shared
+      // `checkContactDuplicate` below so a fetched address and a typed one are
+      // judged the same way. It is raised after the merge has been applied, so
+      // the modal describes the row as it now stands.
 
       const next = prev.map(row => {
         if (row.id !== rowId) return row
@@ -1088,19 +1401,26 @@ export default function TableSheet({
       //
       // Local state is still updated above, so the row shows its fetched
       // details immediately — nothing waits on the write.
-      if (emailDuplicate) {
-        addToast("warning", `@${clean} shares an email with @${emailDuplicate.handle} — possible duplicate`)
-      }
+      // Asked, never decided — see checkContactDuplicate. Returns true when a
+      // modal was raised, which HOLDS this row.
+      const heldForContact = checkContactDuplicate(rowId, incomingEmail || incomingContact)
+
       const enrichedRow = next.find(r => r.id === rowId) ?? null
-      // No timer: the fetch has resolved, so this is the moment to write. The
-      // setTimeout(…, 0) it replaces existed only to escape the state updater
-      // this code no longer runs inside.
-      if (enrichedRow) void saveRowToDatabase(enrichedRow)
+      // The write is skipped while the row is held: a FETCHED duplicate contact
+      // must wait for the same decision a typed one does, or the enrichment
+      // would persist it before the user ever saw the modal. The fetched values
+      // are already on screen (setRows above), and the save resumes when the
+      // user chooses — the modal's own handler re-emits the row.
+      //
+      // No timer otherwise: the fetch has resolved, so this is the moment to
+      // write. The setTimeout(…, 0) it replaces existed only to escape the state
+      // updater this code no longer runs inside.
+      if (enrichedRow && !heldForContact) void saveRowToDatabase(enrichedRow)
     } catch (err) { console.error("Auto-fetch failed:", err) }
     finally { setFetchingRows(prev => { const n = new Set(prev); n.delete(rowId); return n }) }
     // onRowsChange is intentionally absent: the enriched row is no longer
     // handed to it — see the note above the save.
-  }, [addToast, saveRowToDatabase, fetchInfluencerFromAPI, onLookupFailed])
+  }, [addToast, saveRowToDatabase, fetchInfluencerFromAPI, onLookupFailed, checkContactDuplicate, clearFetching])
 
   const addRow = () => {
     const r = newEmptyRow(customCols)
@@ -1149,6 +1469,25 @@ export default function TableSheet({
    */
   const deletedRowStillGone = (id: string) => !initialRowsRef.current.some(r => r.id === id)
 
+  /**
+   * Let go of everything the duplicate-contact modal is holding for a row that
+   * is going away.
+   *
+   * The hold is what blocks the row from saving while the user decides, so it
+   * has to be released here: if the delete later FAILS and the page restores the
+   * row under the same id, a hold left behind would block that row's saves for
+   * good, with no modal left on screen to explain why. The modal state is
+   * cleared for the same reason it points at a row that no longer exists.
+   */
+  const releaseContactHold = (matches: (rowId: string) => boolean) => {
+    // Snapshot first: setContactHold mutates the ref, and the updater below must
+    // stay a pure function of prev — React may run it more than once.
+    Array.from(contactHoldRef.current).forEach(rowId => {
+      if (matches(rowId)) setContactHold(rowId, false)
+    })
+    setPendingDuplicateInfo(prev => (prev && matches(prev.rowId) ? null : prev))
+  }
+
   const deleteRow = (id: string) => {
     const r = rows.find(x => x.id === id)
     setConfirmDialog({
@@ -1160,6 +1499,7 @@ export default function TableSheet({
         if (selectedRowId === id) setSelectedRowId(null)
         if (sidebarRowId === id) setSidebarRowId(null)
         setSelectedRowIds(prev => { const n = new Set(prev); n.delete(id); return n })
+        releaseContactHold(rowId => rowId === id)
         // The page restores the row itself on failure; lifting the tombstone
         // here is what lets the merge show it again.
         void Promise.resolve(onDeleteRow?.(id)).catch(() => {}).finally(() => {
@@ -1180,6 +1520,7 @@ export default function TableSheet({
         setRows(prev => { const n = prev.filter(r => !idsToDelete.has(r.id)); onRowsChange?.(n); return n })
         setSelectedRowId(null); setSelectedRowIds(new Set())
         if (sidebarRowId && idsToDelete.has(sidebarRowId)) setSidebarRowId(null)
+        releaseContactHold(rowId => idsToDelete.has(rowId))
         idsToDelete.forEach(id => {
           void Promise.resolve(onDeleteRow?.(id)).catch(() => {}).finally(() => {
             if (!deletedRowStillGone(id)) deletedIds.current.delete(id)
@@ -1336,6 +1677,13 @@ export default function TableSheet({
       const latestPlatform = row.platform
       if (!latestHandle || latestHandle.trim().length < 2) return
       if (latestPlatform !== "instagram" && latestPlatform !== "tiktok") return
+      // The row shows its spinner as soon as it is QUEUED, not when its slot
+      // frees. Lookups run two at a time, so with several rapid additions rows
+      // 3+ sat with no indicator at all while they waited — they looked idle
+      // when they were in fact pending. Set here, and cleared by
+      // autoFetchInfluencer's own `finally`, which every path reaches.
+      setFetchingRows(prev => prev.has(rowId) ? prev : new Set(prev).add(rowId))
+
       // Through the gate: runs now if a slot is free, otherwise waits for one.
       // The slot is released in autoFetchInfluencer's `finally`, so a lookup
       // that fails or throws frees it exactly like one that succeeds — a single
@@ -1384,7 +1732,20 @@ export default function TableSheet({
       next[actualRowIdx] = row; onRowsChange?.(next); return next
     })
     if (shouldFetch) scheduleAutoFetch(fetchRowId, fetchHandle, fetchPlatform)
-  }, [onRowsChange, customCols, filteredRows, rows, isOutreachField, nicheOptions, locationOptions, scheduleAutoFetch, canApproveInfluencers])
+
+    // A contact detail typed by hand gets the same independent check a fetched
+    // one does. Previously this lived only inside the enrichment, so it ran only
+    // when an Instagram/TikTok lookup SUCCEEDED — a manually entered email, or
+    // any address on a YouTube/X row, was never checked at all.
+    //
+    // Deferred a tick so it reads the row as just updated rather than the one
+    // captured before this edit, and so it cannot set state inside the updater
+    // above.
+    if (colKey === "email" || colKey === "contact_info") {
+      const typed = cleanedValue
+      if (typed) setTimeout(() => checkContactDuplicate(currentRow.id, typed), 0)
+    }
+  }, [onRowsChange, customCols, filteredRows, rows, isOutreachField, nicheOptions, locationOptions, scheduleAutoFetch, canApproveInfluencers, checkContactDuplicate])
 
   const addOptionToCol = useCallback((fk: string, no: string) => {
     setCustomCols(prev => { const n = prev.map(c => c.field_key !== fk ? c : { ...c, field_options: [...(c.field_options ?? []), no] }); onCustomColumnsChange?.(n); return n })
@@ -1864,9 +2225,18 @@ export default function TableSheet({
                 <IconAlertTriangle size={20} className="text-red-600" />
               </div>
               <div className="flex-1">
-                <h2 className="text-base font-semibold text-gray-900">Influencer API unavailable</h2>
+                {/* Neutral heading and body.
+                    "Influencer API unavailable" was wrong for most of the cases
+                    that land here — a private account, a restricted or removed
+                    profile, or a momentary hiccup are not outages, and blaming
+                    the API sent users chasing a problem that was not theirs and
+                    was not ours. The classified cause is in the console for us;
+                    the user gets the two things they can act on, which the
+                    buttons below provide. */}
+                <h2 className="text-base font-semibold text-gray-900">Couldn&apos;t fetch this profile</h2>
                 <p className="mt-2 text-sm text-gray-600">
-                  We couldn't fetch data for <strong>@{apiErrorModal.handle}</strong>. You may retry or continue adding the influencer manually.
+                  {apiErrorModal.reason
+                    ?? `We couldn't fetch data for @${apiErrorModal.handle ?? ""}. The profile may be private, unavailable, or temporarily unable to be accessed. You can retry or continue adding the influencer manually.`}
                 </p>
               </div>
             </div>
@@ -1889,25 +2259,110 @@ export default function TableSheet({
       )}
 
       {pendingDuplicateInfo && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={e => { if (e.target === e.currentTarget) setPendingDuplicateInfo(null) }}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={e => {
+          if (e.target !== e.currentTarget) return
+          // Dismissed without choosing. The hold is lifted so the row is not
+          // stuck unsaveable, but the row is NOT re-emitted — so the unresolved
+          // duplicated contact is not persisted by this dismissal. The row stays
+          // exactly as typed and editable; changing the contact, or triggering
+          // the check again, is what moves it forward.
+          if (pendingDuplicateInfo.reason === "contact") setContactHold(pendingDuplicateInfo.rowId, false)
+          setPendingDuplicateInfo(null)
+        }}>
           <div className="bg-white rounded-xl shadow-xl w-[420px] max-w-[90vw] p-5">
             <div className="flex items-start gap-2.5 mb-3">
               <div className="p-1.5 bg-amber-100 rounded-full flex-shrink-0"><IconAlertTriangle size={18} className="text-amber-600" /></div>
               <div>
-                <h3 className="text-sm font-semibold text-gray-900">Duplicate Influencer</h3>
-                <p className="text-xs text-gray-500 mt-0.5"><strong>@{pendingDuplicateInfo.handle}</strong> already exists as <strong>{pendingDuplicateInfo.existingName}</strong>.</p>
+                <h3 className="text-sm font-semibold text-gray-900">
+                  {pendingDuplicateInfo.reason === "contact" ? "Contact info already in use" : "Duplicate Influencer"}
+                </h3>
+                {pendingDuplicateInfo.reason === "contact" ? (
+                  <>
+                    {/* Plain language: no "handle", no "platform", no "shares
+                        contact info". It says what happened, that it may be
+                        deliberate, and what the two buttons below will do. The
+                        list of matches stays so the user can recognise who the
+                        contact already belongs to. */}
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      This contact information is already being used by another creator.
+                      If this is a different person, you can keep the creator and use the
+                      contact info anyway.
+                    </p>
+                    <p className="text-xs text-gray-500 mt-2">
+                      {(pendingDuplicateInfo.matches?.length ?? 0) === 1
+                        ? "Already used by:"
+                        : "Already used by these creators:"}
+                    </p>
+                    <ul className="mt-1 space-y-0.5">
+                      {pendingDuplicateInfo.matches?.map(m => (
+                        <li key={`${m.handle}@${m.platform}`} className="text-xs text-gray-600">
+                          {/* Name first — that is what a person recognises. The
+                              @name and network stay as the smaller detail. */}
+                          • <strong>{m.name || `@${m.handle}`}</strong>
+                          {m.name && m.handle ? ` (@${m.handle})` : ""}
+                          {m.platform ? ` on ${platforms.find(pl => pl.value === m.platform)?.name ?? m.platform}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                ) : (
+                  <p className="text-xs text-gray-500 mt-0.5"><strong>@{pendingDuplicateInfo.handle}</strong> already exists as <strong>{pendingDuplicateInfo.existingName}</strong>.</p>
+                )}
               </div>
             </div>
             <div className="flex gap-2">
               <button onClick={() => {
-                setRows(prev => { const n = prev.filter(r => r.id !== pendingDuplicateInfo.rowId); onRowsChange?.(n); return n })
-                setDuplicateRowIds(prev => { const n = new Set(prev); n.delete(pendingDuplicateInfo.rowId); return n })
+                const { rowId, reason } = pendingDuplicateInfo
+                if (reason === "contact") {
+                  // Clear the shared CONTACT and carry on — the influencer is
+                  // still being added. The row and the handle are untouched;
+                  // only the duplicated address is dropped, and it is dropped to
+                  // empty, which the API stores as null.
+                  //
+                  // The hold is released FIRST so the onRowsChange below is the
+                  // save that finally goes out, now carrying an empty contact.
+                  setContactHold(rowId, false)
+                  setRows(prev => {
+                    const n = prev.map(r => r.id === rowId ? { ...r, email: "", contact_info: "" } : r)
+                    onRowsChange?.(n)
+                    // Finish the write the enrichment skipped while held. A
+                    // draft never reaches the page's autosave (it waits on its
+                    // lookup), so re-emitting the row is not enough on its own.
+                    const resumed = n.find(r => r.id === rowId)
+                    if (resumed) void saveRowToDatabase(resumed)
+                    return n
+                  })
+                } else {
+                  // A handle+platform duplicate: the row itself is the
+                  // duplicate, so removing it is the fix.
+                  setRows(prev => { const n = prev.filter(r => r.id !== rowId); onRowsChange?.(n); return n })
+                }
+                setDuplicateRowIds(prev => { const n = new Set(prev); n.delete(rowId); return n })
                 setPendingDuplicateInfo(null)
-              }} className="flex-1 px-3 py-1.5 rounded-lg bg-red-50 text-red-600 border border-red-200 text-xs hover:bg-red-100 transition">Remove duplicate</button>
+              }} className="flex-1 px-3 py-1.5 rounded-lg bg-red-50 text-red-600 border border-red-200 text-xs hover:bg-red-100 transition">
+                {pendingDuplicateInfo.reason === "contact" ? "Remove contact info" : "Remove duplicate"}
+              </button>
               <button onClick={() => {
-                setDuplicateRowIds(prev => { const n = new Set(prev); n.delete(pendingDuplicateInfo.rowId); return n })
+                const { rowId, reason } = pendingDuplicateInfo
+                if (reason === "contact") {
+                  // Keep the shared contact deliberately. Releasing the hold and
+                  // re-emitting the row lets the paused save proceed with the
+                  // duplicated address intact; saveRowToDatabase covers the row
+                  // the enrichment was mid-way through, which the page's
+                  // autosave does not reach on its own.
+                  setContactHold(rowId, false)
+                  setRows(prev => {
+                    onRowsChange?.(prev)
+                    const resumed = prev.find(r => r.id === rowId)
+                    if (resumed) void saveRowToDatabase(resumed)
+                    return prev
+                  })
+                }
+                setDuplicateRowIds(prev => { const n = new Set(prev); n.delete(rowId); return n })
                 setPendingDuplicateInfo(null)
-              }} className="flex-1 px-3 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition">Keep anyway</button>
+              }} className="flex-1 px-3 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition">
+                {pendingDuplicateInfo.reason === "contact" ? "Keep it anyway" : "Keep anyway"}
+              </button>
             </div>
           </div>
         </div>
@@ -2033,25 +2488,12 @@ export default function TableSheet({
             <button onClick={() => setSelectedRowIds(new Set())} className="text-xs text-gray-500 hover:text-gray-700 transition">✕ Clear</button>
           </div>
           <div className="h-4 w-px bg-blue-200" />
+          {/* Same flow as before (onBulkApprove sets approval to Approved and
+              stamps the transferred date) — only the wording changed, so the
+              button now says what it does. */}
           <button onClick={() => setShowBulkTransferConfirm(true)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-green-600 text-white rounded-lg hover:bg-green-700 transition">
-            <IconChecklist size={13} /> Transfer to Outreach
+            <IconCheck size={13} /> Approved
           </button>
-          <div className="relative" ref={bulkStatusRef}>
-            <button onClick={() => setShowBulkStatusMenu(v => !v)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white border border-blue-300 text-blue-700 rounded-lg hover:bg-blue-100 transition">
-              <IconArrowsSort size={13} /> Change Status <IconChevronDown size={11} />
-            </button>
-            {showBulkStatusMenu && (
-              <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-gray-200 rounded-lg shadow-xl w-52 py-1">
-                <div className="px-3 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-wider">Set for {selectedRowIds.size} rows</div>
-                {DEFAULT_CONTACT_STATUSES.map(s => (
-                  <button key={s.value} onClick={() => handleBulkStatusChange(s.value)} className="flex items-center gap-2 w-full text-left px-3 py-2 text-xs hover:bg-gray-50 transition text-gray-700">
-                    <span className={`inline-block w-2 h-2 rounded-full flex-shrink-0 ${s.value === "not_contacted" ? "bg-gray-400" : s.value === "contacted" ? "bg-blue-500" : s.value === "interested" ? "bg-yellow-500" : "bg-green-500"}`} />
-                    {s.label}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
           <button onClick={deleteSelectedRows} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-600 bg-white border border-red-200 rounded-lg hover:bg-red-50 transition">
             <IconTrash size={13} /> Delete {selectedRowIds.size}
           </button>
@@ -2063,18 +2505,15 @@ export default function TableSheet({
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={e => { if (e.target === e.currentTarget) setShowBulkTransferConfirm(false) }}>
           <div className="bg-white rounded-xl shadow-xl w-[400px] max-w-[90vw] p-5">
             <div className="flex items-start gap-2.5 mb-3">
-              <div className="p-1.5 bg-green-100 rounded-full flex-shrink-0"><IconChecklist size={18} className="text-green-600" /></div>
+              <div className="p-1.5 bg-green-100 rounded-full flex-shrink-0"><IconCheck size={18} className="text-green-600" /></div>
               <div className="flex-1">
-                <h3 className="text-sm font-semibold text-gray-900">Transfer to Outreach</h3>
-                <p className="text-xs text-gray-500 mt-0.5">Mark <strong>{selectedRowIds.size} influencer{selectedRowIds.size !== 1 ? "s" : ""}</strong> as Approved and move to outreach — no individual review needed.</p>
+                <h3 className="text-sm font-semibold text-gray-900">Approve influencers</h3>
+                <p className="text-xs text-gray-500 mt-0.5">Mark <strong>{selectedRowIds.size} influencer{selectedRowIds.size !== 1 ? "s" : ""}</strong> as Approved — no individual review needed.</p>
               </div>
-            </div>
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-4">
-              <p className="text-[10px] text-amber-800">This sets approval to <strong>Approved</strong> and stamps the transferred date for all selected rows.</p>
             </div>
             <div className="flex gap-2">
               <button onClick={() => setShowBulkTransferConfirm(false)} className="flex-1 px-3 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition">Cancel</button>
-              <button onClick={handleBulkTransferToOutreach} disabled={bulkApproving} className="flex-1 px-3 py-1.5 rounded-lg bg-green-600 text-white text-xs hover:bg-green-700 transition font-medium disabled:opacity-60 disabled:cursor-not-allowed">{bulkApproving ? "Transferring…" : "Confirm Transfer"}</button>
+              <button onClick={handleBulkTransferToOutreach} disabled={bulkApproving} className="flex-1 px-3 py-1.5 rounded-lg bg-green-600 text-white text-xs hover:bg-green-700 transition font-medium disabled:opacity-60 disabled:cursor-not-allowed">{bulkApproving ? "Approving…" : "Confirm"}</button>
             </div>
           </div>
         </div>
@@ -2191,36 +2630,40 @@ export default function TableSheet({
             </thead>
             <tbody>
               {pageRows.map((row, li) => {
-                const ri = pageStart + li; const isSel = selectedRowIds.has(row.id)
-                const isDeclined = row.approval_status === "Declined"
-                const isFetching = fetchingRows.has(row.id)
-                const isDup = duplicateRowIds.has(row.id)
+                const ri = pageStart + li
+                // Everything about the SHEET's cell state that changes what THIS
+                // row renders, collapsed to one comparable string: which of its
+                // own cells is active / being edited / showing a popup, and the
+                // live edit value. A row whose cells are untouched produces the
+                // same key on every keystroke elsewhere and does not repaint.
+                //
+                // The edit value is included so the controlled input stays
+                // exactly that — the edited row repaints on every character, and
+                // no stale snapshot is possible.
+                const cellsKey = [
+                  activeCell?.rowIdx === ri ? activeCell.colIdx : -1,
+                  editCell?.rowIdx === ri ? editCell.colIdx : -1,
+                  popupCell?.rowIdx === ri ? popupCell.colIdx : -1,
+                  editCell?.rowIdx === ri ? editValue : "",
+                ].join("|")
                 return (
-                  <tr key={row.id} className={`group cursor-pointer transition-colors ${isSel ? "bg-blue-100" : "hover:bg-gray-50/60"} ${isDeclined ? "bg-red-50/30" : ""} ${isDup ? "bg-amber-50/50 opacity-60" : ""}`}
-                    onClick={e => handleRowClick(row.id, e)} onDoubleClick={() => handleRowDoubleClick(row.id)}>
-                    <td className="border border-gray-100 text-center bg-gray-50/40 select-none py-0.5">
-                      <div className="flex flex-col items-center justify-center gap-0.5">
-                        {isFetching ? <IconLoader2 size={12} className="text-green-600 animate-spin" />
-                          : !readOnly ? <input type="checkbox" checked={isSel} onChange={() => handleCheckboxToggle(row.id)} onClick={e => e.stopPropagation()} className="w-3 h-3 rounded accent-blue-600 cursor-pointer" />
-                          : null}
-                        <span className="text-[9px] text-gray-400 leading-none">{ri + 1}</span>
-                      </div>
-                    </td>
-                    {allCols.map((col, ci) => renderCell(row, ri, col, ci))}
-                    {!readOnly && <td className="border border-gray-200 bg-gray-50/40" />}
-                    <td className="border border-gray-200 text-center bg-gray-50/40">
-                      {/* Delete only. The "view profile" eye that sat here was a
-                          second way in to the panel the handle cell's avatar
-                          already opens, so the row-end actions are just the
-                          destructive one now. Nothing else about opening the
-                          profile changed — setSidebarRowId is still reached from
-                          the avatar and from the phone row cards. */}
-                      <div className="flex items-center justify-center gap-0.5">
-                        {!readOnly && <button onClick={e => { e.stopPropagation(); deleteRow(row.id) }} title="Delete row"
-                          className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-500 transition"><IconTrash size={12} /></button>}
-                      </div>
-                    </td>
-                  </tr>
+                  <SheetRow
+                    key={row.id}
+                    row={row}
+                    rowIdx={ri}
+                    isSelected={selectedRowIds.has(row.id)}
+                    isDeclined={row.approval_status === "Declined"}
+                    isDuplicate={duplicateRowIds.has(row.id)}
+                    isFetching={fetchingRows.has(row.id)}
+                    readOnly={readOnly}
+                    cols={allCols}
+                    cellsKey={cellsKey}
+                    renderCell={renderCell}
+                    onRowClick={handleRowClick}
+                    onRowDoubleClick={handleRowDoubleClick}
+                    onCheckboxToggle={handleCheckboxToggle}
+                    onDeleteRow={deleteRow}
+                  />
                 )
               })}
 

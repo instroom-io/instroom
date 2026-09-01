@@ -9,7 +9,7 @@ import { useSession } from "next-auth/react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { DashboardSkeleton } from "@/components/shared/skeletons"
 import { useCachedFetch } from "@/lib/data-cache"
-import { toStyledWorkbook, downloadFile, exportStamp, type ExportLine } from "@/lib/analytics-export"
+import { toXlsx, downloadBlob, exportStamp, type ExportLine } from "@/lib/analytics-export"
 import { DataSyncStatus } from "@/components/data-sync-status"
 import { PlatformBadge } from "@/components/shared/platform-icon"
 
@@ -782,27 +782,37 @@ function AnalyticsPageContent() {
     // A funnel stage must count everyone who reached it OR PASSED THROUGH it:
     //   responded ⊇ closed, so closing rate can no longer exceed 100% by
     //   construction — no clamping involved.
-    const RESPONDED_OR_BEYOND = ["In Conversation", "Onboarded", "In Transit", "Content Pending", "Posted"]
+    // Responded is an UMBRELLA: every influencer who moved beyond "reached out
+    // but nothing came back". In this page's vocabulary (resolveAnalyticsStatus)
+    // that is Reached Out (= Contacted), In Conversation, Onboarded (= Deal
+    // Agreed, plus everything downstream of it) and Rejected (= Not Interested).
+    //
+    // Deal Agreed and Not Interested are both INSIDE the umbrella, not carved
+    // out of it: agreeing a deal and declining are both things that only happen
+    // after the influencer engaged, so subtracting either understated the
+    // response count.
+    const RESPONDED_OR_BEYOND = ["Reached Out", "In Conversation", "Onboarded", "In Transit", "Content Pending", "Posted", "Rejected"]
+    // Closed stays a strict SUBSET of responded, and counts Deal Agreed only —
+    // "Onboarded" is what Deal Agreed resolves to, together with the stages it
+    // can only be reached through.
     const CLOSED_OR_BEYOND    = ["Onboarded", "In Transit", "Content Pending", "Posted"]
 
     const totalOutreach = dataToUse.length
-    // A response is a RECORDED response: a reply logged against the outreach
-    // record, or a reply the inbox recorded on the row (hasResponse). Reaching a
-    // stage that cannot be entered without the influencer answering counts too.
+    // Responded = anyone with a recorded reply (hasResponse: an OutreachLog
+    // response, or a contact_status the inbox writes off a real thread) OR
+    // anyone whose resolved stage is inside the umbrella above.
     //
-    // A decline never counts on its own. Not Interested can be set without the
-    // influencer ever answering ("Ghosted / no longer active", "Can't ship to
-    // their location"), so a declined row only counts when an actual response is
-    // recorded against it — checked off the persisted row rather than the stage
-    // it happens to render in, so a decline that already passed through the Post
-    // Tracker cannot slip back in through RESPONDED_OR_BEYOND.
+    // The previous version excluded declines (`!i.isDeclined`) on the grounds
+    // that Not Interested can be recorded without the influencer answering.
+    // Responded is now defined as the umbrella metric it is named after, so a
+    // decline counts like any other post-outreach outcome and the exclusion is
+    // gone.
     const responded = dataToUse.filter(
-      i => i.hasResponse || (!i.isDeclined && RESPONDED_OR_BEYOND.includes(i.pipelineStatus))
+      i => i.hasResponse || RESPONDED_OR_BEYOND.includes(i.pipelineStatus)
     ).length
     const closed = dataToUse.filter(i => CLOSED_OR_BEYOND.includes(i.pipelineStatus)).length
-    // "Rejected" is left out of `responded`: a decline can be recorded without
-    // the creator ever replying (e.g. "Ghosted / no longer active"), so counting
-    // every rejection as a response would inflate the response rate.
+    // Reported on its own as well as inside `responded` — it is a breakdown of
+    // the umbrella, not a step outside it.
     const notInterested = dataToUse.filter(i => i.pipelineStatus === "Rejected").length
     const responseRate = totalOutreach > 0 ? (responded / totalOutreach) * 100 : 0
     const closingRate = responded > 0 ? (closed / responded) * 100 : 0
@@ -985,22 +995,25 @@ function AnalyticsPageContent() {
     exportResetTimer.current = setTimeout(() => setExportState("idle"), 2500)
   }
 
-  const exportCSV = () => {
+  const exportCSV = async () => {
     if (exportState === "working") return
     setExportState("working")
     try {
-      buildAndDownloadCSV()
+      // Awaited: writing a real .xlsx is asynchronous (it is a ZIP), so without
+      // this the button would report "done" before the file existed and a
+      // failure would escape the catch below entirely.
+      await buildAndDownloadCSV()
       settleExport("done")
     } catch (err) {
       // Not swallowed: the button turns red and says so. Logged too, since the
       // cause here would be a serialisation or DOM failure worth seeing.
-      console.error("[analytics] CSV export failed:", err)
+      console.error("[analytics] export failed:", err)
       settleExport("error")
     }
   }
 
   /** The export itself, unchanged in what it writes. */
-  const buildAndDownloadCSV = () => {
+  const buildAndDownloadCSV = async () => {
     const pctOf = (value: number, total: number) => formatPercent(value, total)
     const untracked = 'Not tracked'
 
@@ -1172,11 +1185,20 @@ function AnalyticsPageContent() {
       scopeCount: metrics.totalOutreach,
     }
 
-    downloadFile(
-      `instroom_analytics_${stamp}.xls`,
-      toStyledWorkbook(lines, meta),
-      'application/vnd.ms-excel;charset=utf-8'
-    )
+    // A GENUINE .xlsx — a real ZIP of XML written by exceljs, so the format
+    // matches the extension and Excel/WPS open it with no "file format and
+    // extension don't match" prompt, WITH the design intact.
+    //
+    // This replaces two attempts that each gave up one half: the HTML-in-.xls
+    // document kept the styling but always tripped the prompt (its bytes were
+    // HTML however they were labelled), and the plain .csv removed the prompt
+    // but took every fill, border and column width with it.
+    //
+    // toXlsx reads the SAME tagged row model as toCSV and the HTML renderer, so
+    // every section, card figure and table row appears, and the palette and
+    // column widths are the shared constants — the workbook and the HTML
+    // document remain one visual system.
+    downloadBlob(`instroom_analytics_${stamp}.xlsx`, await toXlsx(lines, meta))
   }
 
 
@@ -1423,7 +1445,7 @@ function AnalyticsPageContent() {
               />
               <MetricCard
                 label="Responded" value={metrics.responded} subLabel={`of ${metrics.totalOutreach} reached out`}
-                info="Influencers who actually replied: a recorded response on their outreach (or a reply captured in the Inbox), plus anyone who has reached In Conversation or a later stage, which cannot happen without a reply. Marking someone Not Interested does not count as a response on its own."
+                info="Everyone who moved beyond being merely reached out to — Contacted, In Conversation, Deal Agreed and Not Interested — plus anyone with a recorded response on their outreach or a reply captured in the Inbox. An umbrella metric: Closed collaborations and Not interested are both counted inside it, so it is the denominator of Closing rate."
               />
               <MetricCard
                 label="Response rate" value={`${Math.round(metrics.responseRate)}%`} subLabel={`${metrics.responded} responded`} isGreen
@@ -1435,7 +1457,7 @@ function AnalyticsPageContent() {
               />
               <MetricCard
                 label="Closing rate" value={`${Math.round(metrics.closingRate)}%`} subLabel={`of ${metrics.responded} who responded`} isGreen
-                info="Closed collaborations ÷ Responded × 100. Of the influencers who replied, how many turned into an agreed collaboration. Everyone counted as closed is also counted as responded, so this can never exceed 100%."
+                info="Closed collaborations ÷ Responded × 100. Of the influencers who engaged, how many turned into an agreed collaboration. Closed is a subset of Responded, so this can never exceed 100%."
               />
             </div>
 

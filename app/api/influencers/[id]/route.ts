@@ -2,6 +2,7 @@
 
 import { NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
+import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 
@@ -36,8 +37,17 @@ export async function GET(
 
     return NextResponse.json(influencer)
   } catch (error: any) {
+    // Logged in full; the response carries no driver text. `details` used to
+    // echo error.message straight back, which put collation names, SQL and
+    // storage internals in front of the user.
+    console.error("GET /api/influencers/[id]:", error?.code, error?.message)
+
+    if (isDatabaseCapacityError(error)) {
+      return databaseCapacityResponse()
+    }
+
     return NextResponse.json(
-      { error: "Failed to fetch influencer", details: error?.message || String(error) },
+      { error: "Couldn't load this influencer. Please try again." },
       { status: 500 }
     )
   }
@@ -71,7 +81,7 @@ export async function PUT(
     if (!existingInfluencer) {
       console.error(`Influencer not found for update: ${id}`)
       return NextResponse.json(
-        { error: "Influencer not found", details: `No influencer record exists with ID: ${id}` },
+        { error: "This influencer no longer exists. Try refreshing." },
         { status: 404 }
       )
     }
@@ -119,7 +129,7 @@ export async function PUT(
     // here instead of by an exception.
     if (writeResult.count === 0) {
       return NextResponse.json(
-        { error: "Influencer not found", details: "This influencer does not exist or was not saved to the database" },
+        { error: "This influencer no longer exists. Try refreshing." },
         { status: 404 }
       )
     }
@@ -132,12 +142,20 @@ export async function PUT(
     // Handle case where record doesn't exist
     if (error?.code === 'P2025') {
       return NextResponse.json(
-        { error: "Influencer not found", details: "This influencer does not exist or was not saved to the database" },
+        { error: "This influencer no longer exists. Try refreshing." },
         { status: 404 }
       )
     }
+    console.error("PUT /api/influencers/[id]:", errorMessage)
+
+    // Transient pool exhaustion: the save did not happen, so this must not read
+    // as success, but it is worth retrying and a 500 would not say that.
+    if (isDatabaseCapacityError(error)) {
+      return databaseCapacityResponse()
+    }
+
     return NextResponse.json(
-      { error: "Failed to update influencer", details: errorMessage },
+      { error: "Couldn't save this influencer. Please try again." },
       { status: 500 }
     )
   }
@@ -205,12 +223,19 @@ export async function DELETE(
     // Handle case where record doesn't exist
     if (error?.code === 'P2025') {
       return NextResponse.json(
-        { error: "Influencer not found", details: "This influencer does not exist" },
+        { error: "This influencer no longer exists. Try refreshing." },
         { status: 404 }
       )
     }
+
+    console.error("DELETE /api/influencers/[id]:", errorMessage)
+
+    if (isDatabaseCapacityError(error)) {
+      return databaseCapacityResponse()
+    }
+
     return NextResponse.json(
-      { error: "Failed to delete influencer", details: errorMessage },
+      { error: "Couldn't remove this influencer. Please try again." },
       { status: 500 }
     )
   }

@@ -3,11 +3,20 @@
 
 import { CustomColumn, InfluencerRow, SortOrder } from "./types"
 import { PLATFORM_URL_MAP, CSV_EXPORT_FIELDS, IMPORT_FIELDS, platforms, DEFAULT_GENDERS, DEFAULT_CONTACT_STATUSES } from "./constants"
+import { isDraftHandle } from "@/lib/influencer-draft"
 
 // ── Handle helpers ────────────────────────────────────────────────────────────
 
 export function cleanHandle(raw: string): string {
-  return raw.trim().replace(/^@/, "")
+  const value = raw.trim()
+  // A draft's generated placeholder is not a handle the user typed — it exists
+  // only to keep the row unique on @@unique([handle, platform]). Blanked here,
+  // the one function every read and render path in the sheet already runs, so
+  // the placeholder cannot surface in the Handle column, be mistaken for a real
+  // value, or be carried into a save. The row then renders as the empty,
+  // editable row the user actually added.
+  if (isDraftHandle(value)) return ""
+  return value.replace(/^@/, "")
 }
 
 export function displayHandle(handle: string): string {
@@ -55,10 +64,45 @@ export function isValidApiUsername(username: string): boolean {
 export type LookupFailure = {
   /** True only for a genuine 404: the caller keeps its existing toast. */
   notFound: boolean
-  /** Shown in the existing API error modal, which offers Retry + manual add. */
+  /**
+   * The technical cause, for the CONSOLE only.
+   *
+   * Carries HTTP codes and upstream detail because that is what makes a report
+   * actionable for us. Never rendered: a private profile is not a system fault,
+   * and telling the user "HTTP 403" or naming the API blames the wrong thing.
+   */
   reason: string
   /** True when retrying could plausibly succeed. */
   retryable: boolean
+  /**
+   * What actually went wrong, kept internally so a genuine outage stays
+   * distinguishable from an ordinary fetch limitation.
+   *
+   *   restricted  private / blocked / not readable — the profile may be real
+   *   invalid     the platform rejected the username itself
+   *   rate-limit  too many requests, ours or the platform's
+   *   service     a confirmed API/service failure
+   */
+  cause: "restricted" | "invalid" | "rate-limit" | "service"
+}
+
+/**
+ * The one user-facing line for a failed lookup.
+ *
+ * Neutral on purpose. The user cannot tell — and does not need to tell — a
+ * private account from a restricted one from a momentary hiccup, and none of
+ * those is an API outage. What they need is the two things they can do, which
+ * the modal offers: retry, or carry on filling the row in by hand. Identical
+ * across Instagram, TikTok, YouTube, X and anything added later, so the message
+ * cannot drift per platform.
+ */
+export function lookupFailureMessage(handle: string): string {
+  const clean = handle.trim().replace(/^@+/, "")
+  return (
+    `We couldn't fetch data for @${clean}. The profile may be private, ` +
+    `unavailable, or temporarily unable to be accessed. You can retry or ` +
+    `continue adding the influencer manually.`
+  )
 }
 
 /**
@@ -118,21 +162,21 @@ export function describeLookupFailure(
   if (status === 400) {
     return {
       notFound: false,
-      reason: `The API rejected this username as invalid for ${platform}. Check the spelling and try again.`,
+      reason: `API rejected the username as invalid for ${platform} (HTTP 400).`,
       retryable: false,
+      cause: "invalid",
     }
   }
   if (status === 404) {
-    return { notFound: true, reason: "", retryable: false }
+    return { notFound: true, reason: "", retryable: false, cause: "invalid" }
   }
   // 429 — request or monthly plan limit. The username is fine.
   if (status === 429) {
     return {
       notFound: false,
-      reason:
-        "The influencer API has hit its rate or monthly request limit. " +
-        "This username is fine — wait a moment and retry, or add the influencer manually.",
+      reason: "API rate or monthly request limit reached (HTTP 429).",
       retryable: true,
+      cause: "rate-limit",
     }
   }
   if (status === 500 || status === 502) {
@@ -142,26 +186,26 @@ export function describeLookupFailure(
     // Treated exactly like a direct 404 so the existing not-found toast is used
     // instead of an "API is broken" modal the user can do nothing about.
     if (upstream === 404) {
-      return { notFound: true, reason: "", retryable: false }
+      return { notFound: true, reason: "", retryable: false, cause: "invalid" }
     }
 
     // Same conclusion, reached from a body with no status code in it at all —
     // how the TikTok path reports a nonexistent handle. See isProviderMissTold.
     if (upstream === null && isProviderMissTold(detail)) {
-      return { notFound: true, reason: "", retryable: false }
+      return { notFound: true, reason: "", retryable: false, cause: "invalid" }
     }
 
     // Upstream 401/403 — the account exists but the provider could not read it:
     // private, restricted, or blocked for this profile. Retrying is futile, and
     // this is NOT "not found" — the influencer may well be real.
     if (upstream === 401 || upstream === 403) {
+      // The account exists but could not be read: private, restricted or
+      // blocked. An ordinary limitation, NOT a service failure.
       return {
         notFound: false,
-        reason:
-          `${platform} did not allow this profile to be read (HTTP ${upstream}). ` +
-          `That usually means the account is private or restricted. Check the platform is ` +
-          `right for this handle, or add the influencer manually.`,
+        reason: `${platform} refused to serve this profile (upstream HTTP ${upstream}) — private or restricted.`,
         retryable: false,
+        cause: "restricted",
       }
     }
 
@@ -169,32 +213,36 @@ export function describeLookupFailure(
     if (upstream === 429) {
       return {
         notFound: false,
-        reason:
-          `${platform} is rate limiting the API. This username is fine — wait a moment and retry.`,
+        reason: `${platform} is rate limiting the API (upstream HTTP 429).`,
         retryable: true,
+        cause: "rate-limit",
       }
     }
 
+    // A confirmed service-side failure: the API answered, but could not reach
+    // the platform. This is the ONLY branch that is genuinely an outage.
     return {
       notFound: false,
       reason:
-        `The influencer API could not reach ${platform} (HTTP ${status}` +
-        `${upstream ? `, upstream ${upstream}` : ""}). This is a problem with the API or the ` +
-        `platform, not with this username — retrying often works.`,
+        `API could not reach ${platform} (HTTP ${status}` +
+        `${upstream ? `, upstream ${upstream}` : ""}).`,
       retryable: true,
+      cause: "service",
     }
   }
   if (status === 401 || status === 403) {
     return {
       notFound: false,
-      reason: `The influencer API rejected our request (HTTP ${status}). This needs an API key or configuration fix.`,
+      reason: `API rejected our request (HTTP ${status}) — key or configuration issue.`,
       retryable: false,
+      cause: "service",
     }
   }
   return {
     notFound: false,
-    reason: `The influencer API returned an unexpected HTTP ${status}.`,
+    reason: `API returned an unexpected HTTP ${status}.`,
     retryable: true,
+    cause: "service",
   }
 }
 
@@ -324,6 +372,71 @@ export function isUsableEmail(value?: string | null): boolean {
 /** The address if it is usable, an empty string otherwise. */
 export function normalizeEmail(value?: string | null): string {
   return isUsableEmail(value) ? value!.trim() : ""
+}
+
+/**
+ * Is this contact detail one that IDENTIFIES a person?
+ *
+ * Duplicate detection only makes sense for a contact that is unique to someone.
+ * Two of them exist in this column:
+ *
+ *   unique      an email address, a phone number — one inbox, one line, one
+ *               person, so a second row carrying it is worth asking about;
+ *   NOT unique  a DM / social handle. `contact_info` is fed by the importer's
+ *               "email address/handlename" column, so a messaging handle lands
+ *               here routinely — and a DM route is not an identity. A brand
+ *               messages many creators from one inbox, a manager runs several
+ *               accounts, and the same handle string can belong to different
+ *               people on different platforms. Flagging those as duplicates
+ *               interrupted the user for something that was never a conflict.
+ *
+ * Anything containing "@" in the middle is an address; a leading "@", or no "@"
+ * at all with no digits, reads as a handle. A value that is mostly digits is
+ * treated as a phone number and stays unique.
+ */
+export function isUniqueContact(value?: string | null): boolean {
+  const v = normalizeContactInfo(value)
+  if (!v) return false
+
+  // A DM/social handle: "@name", or a bare social URL. Never unique.
+  if (v.startsWith("@")) return false
+  if (/^(https?:\/\/)?(www\.)?(instagram|tiktok|twitter|x|facebook|fb|youtube|threads|linkedin)\.com\//i.test(v)) return false
+  if (/^ig\.me\/|^m\.me\//i.test(v)) return false
+
+  // An email address — unique.
+  if (isUsableEmail(v)) return true
+
+  // A phone number: mostly digits, allowing the usual punctuation. Unique.
+  const digits = v.replace(/[\s()+.-]/g, "")
+  if (/^\d{6,}$/.test(digits)) return true
+
+  // Anything else with no "@" is a bare handle or free text — not an identity.
+  return false
+}
+
+/**
+ * The value a unique contact should be COMPARED on.
+ *
+ * A phone number is one line whichever way it is punctuated, so
+ * "+63 917 123 4567", "+639171234567" and "(0917) 123-4567" have to reduce to
+ * the same key or the same number gets accepted twice. Comparing the display
+ * string missed exactly that. Everything else — an email above all — keeps its
+ * existing lowercase-string comparison untouched.
+ *
+ * Returns "" for anything that is not a unique contact, so a DM handle can
+ * never match: callers already gate on `isUniqueContact`, and an empty key is
+ * the same answer if one ever does not.
+ */
+export function contactMatchKey(value?: string | null): string {
+  const v = normalizeContactInfo(value)
+  if (!v || !isUniqueContact(v)) return ""
+  // Emails and anything else compare as themselves.
+  if (isUsableEmail(v)) return v.toLowerCase()
+  // Phone-shaped: compare on digits alone, using the same rule that classified
+  // it as a phone number in the first place so the two cannot drift apart.
+  const digits = v.replace(/[\s()+.-]/g, "")
+  if (/^\d{6,}$/.test(digits)) return digits
+  return v.toLowerCase()
 }
 
 /**

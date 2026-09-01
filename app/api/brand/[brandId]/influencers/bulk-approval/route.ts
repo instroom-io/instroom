@@ -19,6 +19,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
+import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 import { logActivity } from "@/lib/activity-log"
 import { hasBrandCapability } from "@/lib/permissions"
 
@@ -123,6 +124,17 @@ export async function POST(
     return NextResponse.json({ success: failed.length === 0, updated: saved, failed })
   } catch (err: any) {
     console.error("POST /influencers/bulk-approval:", err?.code, err?.message)
-    return NextResponse.json({ error: err?.message ?? "error", code: err?.code }, { status: 500 })
+
+    // Approving a large selection is exactly when the pool runs dry. Nothing
+    // was approved, so this must not read as success — but it is retryable.
+    if (isDatabaseCapacityError(err)) {
+      return databaseCapacityResponse()
+    }
+
+    // The raw driver message used to go back to the browser here.
+    return NextResponse.json(
+      { error: "Couldn't update the selected influencers. Please try again." },
+      { status: 500 }
+    )
   }
 }
