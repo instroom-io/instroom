@@ -345,9 +345,37 @@ export default function TableSheet({
   }, [])
 
   const swapIdRef = useRef<(tempId: string, realId: string) => void>(() => {})
+
+  // The latest onRowsChange, read through a ref so the registration effect below
+  // does not depend on its identity. Registering the swap callback is a one-time
+  // wiring step; re-running it because the parent re-rendered is pointless work,
+  // and adding the prop to the dependency array is what changed that array's
+  // size between renders.
+  const onRowsChangeRef = useRef(onRowsChange)
+  useEffect(() => { onRowsChangeRef.current = onRowsChange }, [onRowsChange])
+
   useEffect(() => {
     const swapFn = (tempId: string, realId: string) => {
-      setRows(prev => prev.map(r => r.id === tempId ? { ...r, id: realId } : r))
+      setRows(prev => {
+        // Global reuse can point the draft at a row ALREADY on screen: the user
+        // types a handle this brand happens to have, the route answers
+        // LINKED_EXISTING with that influencer's id, and renaming the draft to
+        // it would leave two rows carrying the same id — the same influencer
+        // twice, which the merge below can never collapse because it matches by
+        // id and both are "seen". Duplicate React keys, too.
+        //
+        // The existing row IS the influencer, so the draft has nothing left to
+        // represent: keep the one already there and drop the draft. Anything
+        // typed into the draft is not lost — the promote request carried it, and
+        // the reused row takes the server's values on the next payload.
+        const existing = prev.find(r => r.id === realId && r.id !== tempId)
+        if (existing) {
+          const next = prev.filter(r => r.id !== tempId)
+          onRowsChangeRef.current?.(next)
+          return next
+        }
+        return prev.map(r => r.id === tempId ? { ...r, id: realId } : r)
+      })
       // The row now carries the real id, so the server's copy of it is the same
       // row and no longer needs suppressing.
       creatingDraftIds.current.delete(realId)
@@ -1002,10 +1030,10 @@ export default function TableSheet({
       }))
       setShowBulkTransferConfirm(false)
       if (result.failed.length) {
-        addToast("error", `${result.updated.length} moved to Approved, ${result.failed.length} failed — try refreshing`)
+        addToast("error", `${result.updated.length} moved to for Outreach, ${result.failed.length} failed — try refreshing`)
         setSelectedRowIds(new Set(result.failed))
       } else {
-        addToast("success", `${result.updated.length} influencer${result.updated.length !== 1 ? "s" : ""} moved to Approved`)
+        addToast("success", `${result.updated.length} influencer${result.updated.length !== 1 ? "s" : ""} moved to for Outreach`)
         setSelectedRowIds(new Set())
       }
     } finally {
@@ -1045,7 +1073,7 @@ export default function TableSheet({
           const err = await res.json().catch(() => ({}))
           if (res.status === 409) {
             const existing = await fetch(
-              `/api/influencers/find?handle=${encodeURIComponent(row.handle)}&platform=${encodeURIComponent(row.platform)}`
+              `/api/brand/${brandId}/influencers/find?handle=${encodeURIComponent(row.handle)}&platform=${encodeURIComponent(row.platform)}`
             ).then(r => r.ok ? r.json() : null).catch(() => null)
             if (existing?.id) { swapIdRef.current(row.id, existing.id); onFetchComplete?.({ ...row, id: existing.id }) }
             return
@@ -1159,7 +1187,21 @@ export default function TableSheet({
       const { handle, platform, brandId: _b, ...updatePayload } = payload as any
       onSaveState?.("start", "Updating profile…")
       try {
-        const res = await fetch(`/api/influencers/${row.id}`, {
+        // Brand-scoped when we know the brand.
+        //
+        // /api/influencers/[id] is the GLOBAL route: it writes the shared
+        // Influencer record and never touches BrandInfluencer. For a creator
+        // reused from another brand that is wrong twice over — the brand's own
+        // per-row fields are not saved, and the shared profile is overwritten
+        // with this brand's copy of it, reverting what another brand stored.
+        //
+        // The brand route writes the profile AND the brand's own row, scoped to
+        // { brand_id, influencer_id }, which is what every other save on this
+        // page already uses. It is also the route that reports a missing
+        // membership honestly instead of the global route's "no longer exists".
+        const res = await fetch(brandId
+          ? `/api/brand/${brandId}/influencers/${row.id}`
+          : `/api/influencers/${row.id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(updatePayload),
@@ -1330,10 +1372,49 @@ export default function TableSheet({
     setFetchingRows(prev => { const n = new Set(prev); n.add(rowId); return n })
 
     try {
-      // Recorded immediately before the request, so a pair the provider had
-      // nothing for is not asked again either — that was a credit per commit.
-      requestedPairsRef.current.add(pairKey)
-      const data = await fetchInfluencerFromAPI(handle, platform)
+      // ── Global Influencer first, provider second ─────────────────────────
+      //
+      // The same creator is routinely added by several brands. The Influencer
+      // table is global and keyed by handle+platform, so once anyone has
+      // fetched a creator their details are already here — asking the provider
+      // again spends a credit to be told what we know, and the create route
+      // would reuse that very record anyway (it findUniques on handle_platform
+      // before creating).
+      //
+      // A miss here is the ONLY case that reaches the provider, which is what
+      // makes the enrichment call the exception rather than the default.
+      let data: Partial<InfluencerRow> | null = null
+      const known = await fetch(
+        `/api/brand/${brandId}/influencers/find?handle=${encodeURIComponent(clean)}&platform=${encodeURIComponent(platform)}`
+      ).then(r => (r.ok ? r.json() : null)).catch(() => null)
+
+      if (known?.id) {
+        // Mapped onto the row shape the merge below expects. `engagement_rate`
+        // is a Prisma Decimal, so it arrives as a string; the numeric fields
+        // are sent through String() because the merge skips a literal "0" and
+        // treats anything else as present.
+        data = {
+          full_name:         known.full_name         || "",
+          email:             known.email             || "",
+          social_link:       known.social_link       || "",
+          location:          known.location          || "",
+          niche:             known.niche             || "",
+          gender:            known.gender            || "",
+          bio:               known.bio               || "",
+          profile_image_url: known.profile_image_url || "",
+          follower_count:    String(known.follower_count ?? 0),
+          engagement_rate:   String(known.engagement_rate ?? 0),
+          avg_likes:         known.avg_likes ?? 0,
+          avg_comments:      known.avg_comments ?? 0,
+          avg_views:         known.avg_views ?? 0,
+        }
+      } else {
+        // Recorded immediately before the request, so a pair the provider had
+        // nothing for is not asked again either — that was a credit per commit.
+        // Only set on the path that actually spends one.
+        requestedPairsRef.current.add(pairKey)
+        data = await fetchInfluencerFromAPI(handle, platform)
+      }
       // Nothing came back: not found, an API error, or no API host configured
       // (fetchInfluencerFromAPI has already raised the modal or the toast for
       // each). Hand the row to the page as manually-completable — see
@@ -1420,7 +1501,7 @@ export default function TableSheet({
     finally { setFetchingRows(prev => { const n = new Set(prev); n.delete(rowId); return n }) }
     // onRowsChange is intentionally absent: the enriched row is no longer
     // handed to it — see the note above the save.
-  }, [addToast, saveRowToDatabase, fetchInfluencerFromAPI, onLookupFailed, checkContactDuplicate, clearFetching])
+  }, [brandId, addToast, saveRowToDatabase, fetchInfluencerFromAPI, onLookupFailed, checkContactDuplicate, clearFetching])
 
   const addRow = () => {
     const r = newEmptyRow(customCols)

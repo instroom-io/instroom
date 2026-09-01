@@ -872,7 +872,7 @@ function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApprov
         </div>
         <div className="flex items-center gap-3 text-xs text-gray-500">
           <span>{influencer.followers || "—"} followers</span>
-          <span>{influencer.engagementRate || "—"}% eng</span>
+          <span>{influencer.engagementRate || "—"} eng</span>
         </div>
 
         {/* NI reason pill */}
