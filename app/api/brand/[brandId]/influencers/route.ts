@@ -351,18 +351,32 @@ export async function POST(
       return NextResponse.json({ error: "Influencer not found" }, { status: 404 })
     }
 
+    // The duplicate answer comes from the unique key, not from a separate read.
+    //
+    // `findUnique` then `create` is not atomic: two adds arriving together both
+    // saw no membership and both inserted, and the index then rejected the
+    // loser — a failure for what should have been a no-op. The upsert makes a
+    // repeat add idempotent, and a membership that was deleted earlier is
+    // recreated cleanly against the SAME global influencer.
+    //
+    // `update: {}` on purpose: an existing membership keeps its stage, status
+    // and history, so re-adding never resets someone's pipeline position.
     const existing = await prisma.brandInfluencer.findUnique({
       where: { brand_id_influencer_id: { brand_id: brandId, influencer_id } },
+      select: { id: true },
     })
     if (existing) {
+      // A REAL active duplicate — this influencer is on the list right now.
       return NextResponse.json(
-        { error: "This influencer is already added to your brand" },
+        { error: "This influencer is already in your list" },
         { status: 409 }
       )
     }
 
-    const brandInfluencer = await prisma.brandInfluencer.create({
-      data: { brand_id: brandId, influencer_id, contact_status: "not_contacted" },
+    const brandInfluencer = await prisma.brandInfluencer.upsert({
+      where: { brand_id_influencer_id: { brand_id: brandId, influencer_id } },
+      create: { brand_id: brandId, influencer_id, contact_status: "not_contacted" },
+      update: {},
       include: { influencer: true },
     })
 

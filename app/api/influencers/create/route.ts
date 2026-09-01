@@ -6,6 +6,7 @@ import { canAddInfluencer } from "@/lib/subscription-limits"
 import { logActivity } from "@/lib/activity-log"
 import { persistAvatarUrl } from "@/lib/avatar-storage"
 import { newDraftHandle } from "@/lib/influencer-draft"
+import { normalizeInfluencerIdentity } from "@/lib/influencer-draft"
 import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 
 export async function POST(req: Request) {
@@ -75,8 +76,10 @@ export async function POST(req: Request) {
       )
     }
 
-    const handle = data.handle.trim().toLowerCase()
-    const platform = data.platform.trim().toLowerCase()
+    // One shared normalizer, so the identity this stores is byte-identical to
+    // the one the promote path and the find route look up. This used to omit the
+    // "@" strip, so "@nike" was stored as a different influencer from "nike".
+    const { handle, platform } = normalizeInfluencerIdentity(data.handle, data.platform)
 
     if (data.brandId) {
       const limitCheck = await canAddInfluencer(session.user.id, data.brandId)
@@ -137,19 +140,45 @@ export async function POST(req: Request) {
 
     if (data.brandId) {
       try {
-        const existingLink = await prisma.brandInfluencer.findFirst({
-          where: { brand_id: data.brandId, influencer_id: influencer.id },
+        // ── Membership is UPSERTED, not checked-then-created ────────────────
+        // The previous shape was `findFirst` then `create`, which is not atomic:
+        // two adds of the same influencer landing together both saw "no link"
+        // and both inserted, so the unique index rejected the loser and the user
+        // got a failure for an add that should simply have been a no-op.
+        //
+        // `upsert` on the (brand_id, influencer_id) unique key lets the DATABASE
+        // arbitrate. Re-adding an influencer that is already on the list is
+        // therefore idempotent rather than an error, and a membership deleted
+        // earlier is recreated cleanly — the global Influencer record is reused
+        // untouched, which is what keeps brand membership separate from the
+        // global directory.
+        //
+        // `update: {}` is deliberate: an existing membership keeps its stage,
+        // status, notes and history. Re-adding must not reset someone's pipeline
+        // position.
+        const beforeUpsert = await prisma.brandInfluencer.findUnique({
+          where: {
+            brand_id_influencer_id: { brand_id: data.brandId, influencer_id: influencer.id },
+          },
+          select: { id: true },
         })
 
-        if (!existingLink) {
-          const brandInfluencer = await prisma.brandInfluencer.create({
-            data: {
-              brand_id: data.brandId,
-              influencer_id: influencer.id,
-              contact_status: "not_contacted",
-              stage: 1,
-            },
-          })
+        const brandInfluencer = await prisma.brandInfluencer.upsert({
+          where: {
+            brand_id_influencer_id: { brand_id: data.brandId, influencer_id: influencer.id },
+          },
+          create: {
+            brand_id: data.brandId,
+            influencer_id: influencer.id,
+            contact_status: "not_contacted",
+            stage: 1,
+          },
+          update: {},
+        })
+
+        // Logged only for a membership that did not exist a moment ago, so
+        // re-adding an existing one does not add a second "added" entry.
+        if (!beforeUpsert) {
 
           logActivity({
             brandId: data.brandId,

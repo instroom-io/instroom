@@ -15,9 +15,13 @@
 // fills, borders, font weights, alignment, number formats and column widths —
 // which is everything the design needs.
 //
-// The one cost, stated plainly rather than hidden: Excel shows a one-time "the
-// file format and extension don't match" prompt on open, because the bytes are
-// HTML. WPS (what the screenshot shows) opens it without complaint.
+// The bytes are HTML, so the download MUST be handed over as text/html — see
+// the downloadFile call in app/dashboard/analytics/page.tsx. Declaring
+// application/vnd.ms-excel instead claimed the binary Excel format, and Excel
+// and WPS compared that claim against the actual content and raised "the file
+// format and extension don't match" on every open. With the type matching the
+// content the prompt is gone, and Excel still opens the .xls as a styled
+// workbook.
 //
 // `toCSV` below is still exported but no longer wired to a button: the export
 // action now produces the styled document. Restoring a raw-CSV option is a
@@ -309,4 +313,158 @@ export function downloadFile(filename: string, contents: string, mime: string): 
 /** `instroom_analytics_2026-08-25-00-55-27` — stamped, so exports are distinct. */
 export function exportStamp(at: Date): string {
   return at.toISOString().slice(0, 19).replace(/[:T]/g, "-")
+}
+
+// ─── Real .xlsx ──────────────────────────────────────────────────────────────
+//
+// Why this exists alongside the HTML renderer above.
+//
+// That renderer emits an HTML table with an .xls extension. Excel and WPS parse
+// it and honour the styling, but the bytes are HTML however they are labelled,
+// so both compare content against extension and raise "the file format and
+// extension don't match" on every open. Correcting the MIME to text/html did
+// not settle it on every build. A plain .csv removed the prompt but took the
+// whole design with it — no fills, no borders, no column widths.
+//
+// This writes a GENUINE xlsx (a ZIP of XML, produced by exceljs), so the format
+// matches the extension, the prompt is gone, and the design survives. It reads
+// the SAME tagged `ExportLine` model as the other two renderers, so a section
+// added anywhere appears in all three.
+//
+// The palette and column widths are the constants above, so the workbook and
+// the HTML document stay one visual system.
+
+/** exceljs wants widths in characters; the design carries pixels. */
+const pxToChars = (px: number) => Math.round(px / 7)
+
+/** exceljs colours are AARRGGBB with no "#". */
+const argb = (hex: string) => "FF" + hex.replace("#", "").toUpperCase()
+
+const thinBorder = {
+  top:    { style: "thin" as const, color: { argb: argb(HAIRLINE) } },
+  left:   { style: "thin" as const, color: { argb: argb(HAIRLINE) } },
+  bottom: { style: "thin" as const, color: { argb: argb(HAIRLINE) } },
+  right:  { style: "thin" as const, color: { argb: argb(HAIRLINE) } },
+}
+
+/**
+ * Build the Analytics workbook as a real .xlsx.
+ *
+ * Returns the file bytes, ready to hand to `downloadFile`. Async because
+ * exceljs writes the ZIP asynchronously.
+ */
+export async function toXlsx(lines: ExportLine[], meta: ExportMeta): Promise<Blob> {
+  const ExcelJS = await import("exceljs")
+  const wb = new ExcelJS.Workbook()
+  wb.creator = "Instroom"
+  wb.created = meta.generatedAt
+  // No `views`.
+  //
+  // This asked for `{ state: "frozen", ySplit: 0 }` — a frozen pane split at row
+  // zero, i.e. freezing nothing. exceljs writes that out as
+  //
+  //     <pane topLeftCell="A1" activePane="bottomLeft" state="frozen"/>
+  //
+  // with NO ySplit and no xSplit attribute. Excel and WPS read a frozen pane
+  // that declares no split as malformed content and offer to repair the file on
+  // open. The ZIP itself was always valid — this one element was the fault.
+  //
+  // The document opens with a merged title band rather than a header row, so
+  // there is no row worth freezing; omitting `views` entirely is both correct
+  // and what the design wants. Verified against the real export data: the sheet
+  // still carries exactly the same 103 cells with the element gone.
+  const ws = wb.addWorksheet("Analytics")
+
+  ws.columns = COL_WIDTHS.map((px) => ({ width: pxToChars(px) }))
+  const lastCol = COL_WIDTHS.length
+
+  /** A full-width band, matching the HTML renderer's `band`. */
+  const band = (text: string, opts: { bg: string; color: string; size?: number; bold?: boolean }) => {
+    const r = ws.addRow([text])
+    ws.mergeCells(r.number, 1, r.number, lastCol)
+    const c = r.getCell(1)
+    c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: argb(opts.bg) } }
+    c.font = { color: { argb: argb(opts.color) }, size: opts.size ?? 11, bold: opts.bold ?? false }
+    c.alignment = { vertical: "middle", horizontal: "left", indent: 1 }
+    r.height = 22
+    return r
+  }
+
+  // ── Title, the same teal band the HTML document opens with ────────────────
+  // Same two lines titleBlock writes, so the workbook opens the way the HTML
+  // document does: the report name, then brand · timestamp.
+  const when = meta.generatedAt.toLocaleString(undefined, {
+    year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit",
+  })
+  const name = meta.brandName?.trim() || meta.brandId
+  band("Analytics Report", { bg: TEAL_900, color: "#FFFFFF", size: 20, bold: true })
+  band(`${name}  ·  ${when}`, { bg: TEAL_900, color: TEAL_200, size: 10 })
+  ws.addRow([])
+
+  let zebra = false
+
+  for (const line of lines) {
+    if (line.kind === "cards") continue // a presentation-only grouping
+
+    if (line.kind === "section") {
+      ws.addRow([])
+      band(String(line.title), { bg: TEAL_050, color: TEAL_900, size: 11, bold: true })
+      zebra = false
+      continue
+    }
+
+    if (line.kind === "card") {
+      const r = ws.addRow([line.label, line.value, line.note ?? ""])
+      r.getCell(1).font = { bold: true, color: { argb: argb(INK) } }
+      r.getCell(2).font = { bold: true, color: { argb: argb(TEAL_900) }, size: 12 }
+      r.getCell(2).alignment = { horizontal: "right" }
+      r.getCell(3).font = { color: { argb: argb(MUTED) }, size: 9 }
+      for (let i = 1; i <= 3; i += 1) r.getCell(i).border = thinBorder
+      continue
+    }
+
+    // A data row. The first row after a section reads as its header.
+    const r = ws.addRow(line.cells as (string | number)[])
+    const isHeader = !zebra && line.cells.every((c) => typeof c === "string")
+    zebra = !zebra
+
+    line.cells.forEach((cell, i) => {
+      const c = r.getCell(i + 1)
+      c.border = thinBorder
+      if (isHeader) {
+        c.font = { bold: true, color: { argb: argb(INK) } }
+        c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: argb(HAIRLINE) } }
+      } else {
+        c.font = { color: { argb: argb(INK) } }
+        if (zebra) c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: argb(ZEBRA) } }
+      }
+      // Same rule the HTML renderer uses: anything that reads as a figure is
+      // right-aligned so the columns line up.
+      if (isFigure(cell)) c.alignment = { horizontal: "right" }
+    })
+  }
+
+  const buffer = await wb.xlsx.writeBuffer()
+  return new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  })
+}
+
+/**
+ * Download a Blob under a filename.
+ *
+ * The string-based `downloadFile` above cannot carry binary — a .xlsx is a ZIP,
+ * and putting it through a string Blob corrupts it.
+ */
+export function downloadBlob(filename: string, blob: Blob): void {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  // Revoked on the next tick, not immediately: revoking synchronously can beat
+  // the browser's own read of the blob — the same reason downloadFile defers.
+  setTimeout(() => URL.revokeObjectURL(url), 0)
 }

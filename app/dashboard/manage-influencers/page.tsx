@@ -19,7 +19,7 @@ import { LimitExceededDialog } from "@/components/limit-exceeded-dialog"
 import { WorkspaceUnavailableModal } from "@/components/workspace-unavailable-modal"
 import { TableSkeleton } from "@/components/shared/skeletons"
 import { STATUS_LABEL } from "@/components/table-sheet/constants"
-import { isUsableEmail, normalizeEmail, normalizeContactInfo } from "@/components/table-sheet/utils"
+import { isUsableEmail, normalizeContactInfo } from "@/components/table-sheet/utils"
 import { SaveStatusPill } from "@/components/save-status-pill"
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -91,7 +91,20 @@ function hasMeaningfulDetails(row: InfluencerRow): boolean {
  * on the next reload.
  */
 function persistableEmail(row: InfluencerRow): string | null {
-  return normalizeEmail(row.contact_info) || normalizeEmail(row.email) || null
+  // Keeps ANY real contact detail the user entered — not just addresses.
+  //
+  // This used to run both fields through `normalizeEmail`, which requires an
+  // "@", so everything else was silently dropped to null on save: a DM link
+  // (ig.me/m/nike), a bare handle (nike) and a phone number all vanished the
+  // moment the row was written. Only "@creatorname" survived, and then only by
+  // accident of containing an "@".
+  //
+  // `normalizeContactInfo` strips the provider's "not available" stand-ins and
+  // keeps everything else exactly as typed, which is what this field is for —
+  // the importer maps an "email address/handlename" column into it. Whether a
+  // value is UNIQUE is a separate question, asked by isUniqueContact at
+  // duplicate-detection time; it must not decide what gets stored.
+  return normalizeContactInfo(row.contact_info) || normalizeContactInfo(row.email) || null
 }
 
 function buildCreatePayload(row: InfluencerRow, brandId: string) {
@@ -680,6 +693,34 @@ function InfluencersContent() {
   const promotedDrafts = useRef<Set<string>>(new Set())
 
   /**
+   * Rows paused on a contact-duplicate decision.
+   *
+   * The sheet raises the modal and holds the row; this is the gate that stops
+   * the row's contact reaching the database before the user has chosen. Held in
+   * a ref so `handleRowsChange` — which runs on every edit — reads the current
+   * value rather than one render behind.
+   *
+   * Paused, not cancelled: any timer already armed for the row is cleared, and
+   * the row saves normally the moment the hold lifts.
+   */
+  const contactHeldRows = useRef<Set<string>>(new Set())
+
+  const handleContactHoldChange = useCallback((rowId: string, held: boolean) => {
+    if (held) {
+      contactHeldRows.current.add(rowId)
+      // Cancel a debounce already counting down for this row, or it would fire
+      // mid-modal and persist the very contact the user is being asked about.
+      const pending = updateTimers.current.get(rowId)
+      if (pending) { clearTimeout(pending); updateTimers.current.delete(rowId) }
+      // And drop the unload flush, which would otherwise send the same payload
+      // if the tab were closed while the modal was open.
+      pendingFlush.current.delete(rowId)
+    } else {
+      contactHeldRows.current.delete(rowId)
+    }
+  }, [])
+
+  /**
    * At most two draft creates in flight, so a rapid multi-add cannot exhaust
    * the connection pool. A plain promise chain over two lanes — no timers, so
    * nothing waits longer than it has to.
@@ -749,6 +790,11 @@ function InfluencersContent() {
   const scheduleUpdate = useCallback(
     (row: InfluencerRow) => {
       if (!brandId || !dbIds.current.has(row.id)) return
+      // Waiting on a contact-duplicate decision: nothing for this row is written
+      // until the user chooses. This is the single gate every autosave passes
+      // through, so a typed contact, a fetched one and a debounce already in
+      // flight are all covered by it — no per-call-site guarding needed.
+      if (contactHeldRows.current.has(row.id)) return
 
       const payload = JSON.stringify(buildUpdatePayload(row))
       const lastSent = lastSentPayloads.current.get(row.id)
@@ -811,15 +857,18 @@ function InfluencersContent() {
           // existing influencer. A lifecycle move keeps its own wording below.
           processing: "Updating…",
           message: moveMessage,
-          // This queue only ever UPDATES a row that is already in the list, so
-          // it reports an edit — "added to Influencer List" belongs to the
-          // create path alone (createRow, below), which is what actually puts a
-          // fetched influencer in the list. The handle comes from the PUT
-          // response, not from this row's local copy.
-          messageFromSaved: (saved) => {
-            const savedHandle = saved.handle?.trim()
-            return savedHandle ? `@${savedHandle} details updated` : null
-          },
+          // NO per-row toast.
+          //
+          // This fired "@handle details updated" for every single row edit, so
+          // editing a few fields — or a few rows — produced a queue of near
+          // identical notifications. An ordinary edit is not news: the pill
+          // already says "Updating…" while the write is out and "Saved" when it
+          // lands, and it coalesces because `savingCount` only settles once the
+          // whole burst is done.
+          //
+          // A LIFECYCLE move keeps its notification (`message` above, e.g.
+          // "@handle moved to Approved") — that is a state change worth
+          // announcing, not a field edit.
           // An approval or stage edit here changes what Pipeline, Post Tracker,
           // Brand Partners and Analytics should show. Their cached entries are
           // marked stale so those pages pick the change up on open — this
@@ -869,12 +918,19 @@ function InfluencersContent() {
             invalidateInfluencerDerivedCaches(brandId, [influencersCacheKey(brandId)])
 
             if (wasNormalised) {
-              // Pull the row from the database so the grid shows what was
-              // actually stored. Deliberately NOT followed by the re-diff below:
-              // the on-screen row still holds the rejected value, so diffing it
-              // against the reconciled snapshot would send that same value
-              // straight back and the route would reject it again — forever.
-              void refetch()
+              // The MUTATION RESPONSE is the answer — no follow-up fetch.
+              //
+              // `confirmed` above already carries what the database stored (the
+              // route reports back the fields it rewrites: an email without "@"
+              // and the Cloudinary avatar URL), and it has been written into both
+              // the local row and the cache entry. A `refetch()` here re-read the
+              // WHOLE list to learn what the response had just told us — and it
+              // ran on every enrichment, because mirroring an avatar to
+              // Cloudinary always counts as a normalisation.
+              //
+              // Still no re-diff: the on-screen row now matches the reconciled
+              // snapshot, so there is nothing to re-send, and diffing a rejected
+              // value against it would loop forever.
               return
             }
 
@@ -903,11 +959,14 @@ function InfluencersContent() {
               unseedPipelineRow(brandId, row.brand_influencer_id)
             }
             if (status === 409) {
-              // Promoting this draft hit an influencer that already exists —
-              // the same handle typed into two rows, or one already added from
-              // another brand. The row is left on screen with what was typed so
-              // the user can correct it; nothing is created twice.
-              notify("error", `@${handle} already exists in this list`)
+              // A real duplicate WITHIN this brand — this influencer is already
+              // on the list. A GLOBAL match is no longer a 409: the route links
+              // the existing record to this brand and returns OK, so reusing an
+              // influencer another brand already has is not an error here.
+              //
+              // The row keeps what was typed so the user can correct it; nothing
+              // is created twice and no handle is cleared.
+              notify("error", `@${handle} is already in your list`)
             } else if (status === 403) {
               // The plan limit applies at promotion, not at add — a blank draft
               // costs nothing. The route's own message is the accurate one.
@@ -918,8 +977,20 @@ function InfluencersContent() {
             } else if (status === 0) {
               // Never reached the server — "(0)" would mean nothing to the user.
               notify("error", `Could not save @${handle} — you appear to be offline.`)
-            } else if (status !== 503) {
-              notify("error", `Save failed (${status})`)
+            } else if (status === 503) {
+              // The database is momentarily out of connections. The save did
+              // NOT happen, so staying silent here would leave the user
+              // believing it had — the edited values are still on screen and
+              // look saved. Say plainly that it failed, that nothing was lost,
+              // and that waiting is the fix. No automatic retry: retrying into
+              // an exhausted pool is what deepens the exhaustion.
+              notify("error", "The server is busy right now. Your changes are safe. Please wait a moment and try again.")
+            } else {
+              // No status code: it tells the user nothing they can act on, and
+              // the code is already in the console from the queue's own logging.
+              // The edited values stay on screen, so a retry is just an edit.
+              console.error(`PUT influencer ${row.id} failed with status ${status}`)
+              notify("error", `Couldn't save @${handle}. Your changes are still here — please try again.`)
             }
           },
         })
@@ -929,7 +1000,9 @@ function InfluencersContent() {
       updateTimers.current.set(row.id, timer)
       pendingFlush.current.set(row.id, () => { clearTimeout(timer); fire() })
     },
-    [brandId, notify, refetch, setRows]
+    // refetch is gone from here: a normalised field is reconciled from the
+    // mutation response now, so this path no longer re-reads the list.
+    [brandId, notify, setRows]
   )
   // Assigned after definition so onSuccess can reschedule through the ref
   // without scheduleUpdate having to reference itself during construction.
@@ -1027,12 +1100,27 @@ function InfluencersContent() {
 
         } else {
           const body = await res.json().catch(() => ({}))
-          if (!skipToast) notify("error", body.details || body.error || `Failed to save @${handle}`)
+          // `body.details` is deliberately NOT used: /api/influencers/[id]
+          // returns the raw driver message there, which is for the log, not for
+          // the person adding an influencer. Logged in full, reported briefly.
+          console.error(`POST /api/influencers/create failed for @${handle}:`, res.status, body)
+          if (!skipToast) {
+            // 503 is the database being momentarily out of connections. Saying
+            // "check the handle" there would send the user to fix something
+            // that is not wrong; nothing was created and waiting is the fix.
+            notify(
+              "error",
+              res.status === 503
+                ? "The server is busy right now. Your changes are safe. Please wait a moment and try again."
+                : `Couldn't add @${handle}. Please check the handle and try again.`
+            )
+          }
           savedHandles.current.delete(key)
           return null
         }
-      } catch {
-        if (!skipToast) notify("error", `Network error saving @${handle}`)
+      } catch (err) {
+        console.error(`POST /api/influencers/create threw for @${handle}:`, err)
+        if (!skipToast) notify("error", `Couldn't add @${handle} — you appear to be offline.`)
         savedHandles.current.delete(`${handle}@${row.platform}`)
         return null
       }
@@ -1251,9 +1339,14 @@ function InfluencersContent() {
         )
         if (!res.ok) {
           const body = await res.json().catch(() => ({}))
+          console.error("Bulk approval failed:", res.status, body)
           notify("error", body.error === "Forbidden"
             ? "Only Owners and Managers can approve influencers"
-            : `Bulk approval failed (${res.status})`)
+            // Nothing was approved either way, so the selection is still there.
+            // Capacity gets the "wait" wording; anything else gets "try again".
+            : res.status === 503
+              ? "The server is busy right now. Your changes are safe. Please wait a moment and try again."
+              : "Couldn't approve the selected influencers. Please try again.")
           return null
         }
         const result = (await res.json()) as BulkApprovalResult
@@ -1265,14 +1358,48 @@ function InfluencersContent() {
           const seed = approvalSeed({ ...row, brand_influencer_id: saved.id })
           if (seed) seedPipelineFromApproval(brandId, seed)
         })
-        invalidateInfluencerDerivedCaches(brandId)
+
+        // Write the persisted rows into the SHARED cache entry.
+        //
+        // The sheet applies the result to its own local rows, but this entry —
+        // the one mirrored to sessionStorage and re-read on revalidation — still
+        // held the PRE-approval values. So the rows showed Approved, then a
+        // background read returned and replaced them with the old state, which
+        // is the "only some of them stayed Approved until I refreshed" symptom.
+        //
+        // Values come from the response (what the database stored), not from a
+        // guess, and each row is marked confirmed so a read that has not caught
+        // up cannot revert it.
+        const savedById = new Map(result.updated.map((u) => [u.influencer_id, u]))
+        const listKey = influencersCacheKey(brandId)
+        setRows((prev) =>
+          prev.map((r) => {
+            const saved = savedById.get(r.id)
+            if (!saved) return r
+            const next = {
+              ...r,
+              approval_status: (saved.approval_status ?? "Pending") as InfluencerRow["approval_status"],
+              transferred_date: saved.transferred_date
+                ? new Date(saved.transferred_date).toISOString().split("T")[0]
+                : "",
+              contact_status: saved.contact_status ?? r.contact_status,
+            }
+            markRowConfirmed(listKey, r.id, next)
+            return next
+          })
+        )
+
+        // Every OTHER view is stale now; this page's own entry was just written
+        // above, so it is excluded — the same rule the single-row save follows.
+        invalidateInfluencerDerivedCaches(brandId, [listKey])
         return result
-      } catch {
-        notify("error", "Bulk approval failed — check your connection and try again")
+      } catch (err) {
+        console.error("Bulk approval threw:", err)
+        notify("error", "Couldn't approve the selected influencers — check your connection and try again.")
         return null
       }
     },
-    [brandId, trackSave, rows, notify]
+    [brandId, trackSave, rows, notify, setRows]
   )
 
   // ── handleLookupFailed ────────────────────────────────────────────────────
@@ -1421,14 +1548,20 @@ function InfluencersContent() {
         )
       }
 
+      // ONE notification for the whole run, not one per row.
+      //
+      // Every row is attempted independently (createRow is called per row and
+      // returns null on failure), so a row that fails never stops the others and
+      // every successful row is kept. The outcome is summarised once — stacking
+      // a toast per failure was unreadable on a large import.
       if (savedCount > 0)
-        notify("success", 
+        notify("success",
           `Imported ${savedCount} influencer${savedCount !== 1 ? "s" : ""}${
-            skippedCount ? ` (${skippedCount} skipped — duplicates or limit reached)` : ""
+            skippedCount ? ` (${skippedCount} skipped — already in your list or limit reached)` : ""
           }`
         )
       else if (skippedCount > 0)
-        notify("warning", `${skippedCount} rows skipped — already exist or limit reached`)
+        notify("warning", `${skippedCount} row${skippedCount !== 1 ? "s" : ""} skipped — already in your list or limit reached`)
     },
     [brandId, createRow, notify]
   )
@@ -1518,10 +1651,19 @@ function InfluencersContent() {
           if (res.ok) notify("success", "Influencer removed")
         } else {
           const body = await res.json().catch(() => ({}))
-          notify("error", body.error || "Failed to delete")
+          console.error(`DELETE influencer ${rowId} failed:`, res.status, body)
+          // The row is restored either way by the `finally` below, so the list
+          // still shows the influencer — the message just has to match why.
+          notify(
+            "error",
+            res.status === 503
+              ? "The server is busy right now. Your changes are safe. Please wait a moment and try again."
+              : "Couldn't remove this influencer. Please try again."
+          )
         }
-      } catch {
-        notify("error", "Network error — could not delete")
+      } catch (err) {
+        console.error(`DELETE influencer ${rowId} threw:`, err)
+        notify("error", "Couldn't remove this influencer — you appear to be offline.")
       } finally {
         // A failed delete puts the row back where it was, so the table picks it
         // up again on the next render and nothing was silently lost.
@@ -1695,15 +1837,26 @@ function InfluencersContent() {
     // retryable 503 — and the only way out was a full page reload.
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <div className="text-center">
-          <p className="text-red-600 mb-2 font-medium">
-            {isAtCapacity ? "Please wait, we're currently full!" : "Failed to load influencers"}
-          </p>
-          <p className="text-sm text-gray-500">
-            {isAtCapacity
-              ? "Too many connections right now. Please try again in a few seconds or refresh the page."
-              : error}
-          </p>
+        <div className="flex flex-col items-center text-center">
+          {/* Capacity is transient and nothing is lost, so it reads as the
+              table's own empty state — same 15px/13px pair and grey palette as
+              "No influencers yet" — rather than as a red fault. A genuine
+              failure keeps the red heading it has always had. */}
+          {isAtCapacity ? (
+            <>
+              <p className="text-[15px] font-medium text-gray-900 mb-1.5">
+                We&apos;re having trouble loading your influencers
+              </p>
+              <p className="text-[13px] text-gray-500 max-w-xs leading-relaxed">
+                The server is temporarily busy. Your data is safe. Please try again in a moment.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="text-red-600 mb-2 font-medium">Failed to load influencers</p>
+              <p className="text-sm text-gray-500">{error}</p>
+            </>
+          )}
           <button
             onClick={refetch}
             className="mt-4 text-[13px] px-4 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 transition"
@@ -1733,6 +1886,7 @@ function InfluencersContent() {
             idSwapCallback.current = fn
           }}
           onCreateDraft={handleCreateDraft}
+          onContactHoldChange={handleContactHoldChange}
           // Deliberately NOT wired to reportSave.
           //
           // The enrichment's save is not a state the user needs narrated: the
