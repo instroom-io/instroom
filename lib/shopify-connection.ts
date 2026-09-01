@@ -39,6 +39,22 @@ export async function getShopifyConnection(brandId: string): Promise<ShopifyConn
   }
 }
 
+// Resolves a brand from the shop domain Shopify's compliance webhooks and
+// the embedded-app status route identify a shop by — those payloads carry
+// no brandId, only the shop's own domain, since Shopify has no concept of
+// Instroom's brand model. `config` is a Json column, so this is a JSON-path
+// filter rather than a plain equality where clause.
+export async function getBrandIdByShopDomain(shopDomain: string): Promise<string | null> {
+  const connection = await prisma.integrationConnection.findFirst({
+    where: {
+      integration_key: SHOPIFY_KEY,
+      config: { path: "$.shopDomain", equals: shopDomain },
+    },
+    select: { brand_id: true },
+  })
+  return connection?.brand_id ?? null
+}
+
 export async function listConnectedShopifyBrandIds(): Promise<string[]> {
   const connections = await prisma.integrationConnection.findMany({
     where: { integration_key: SHOPIFY_KEY, connected: true },

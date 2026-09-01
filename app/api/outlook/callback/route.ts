@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getServerSession } from "next-auth"
-import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import {
   MICROSOFT_TOKEN_URL,
@@ -9,6 +7,7 @@ import {
   outlookRedirectUri,
   readMicrosoftOAuthConfig,
 } from "@/lib/microsoft-oauth"
+import { decodeOAuthConnectState } from "@/lib/oauth-connect-state"
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
@@ -32,25 +31,20 @@ export async function GET(req: NextRequest) {
     )
   }
 
-  let userId: string
-  let returnTo: string = "/dashboard/inbox"
-
-  try {
-    const decoded = JSON.parse(Buffer.from(stateParam, "base64url").toString("utf-8"))
-    userId = decoded.userId
-    returnTo = decoded.returnTo || "/dashboard/inbox"
-  } catch {
+  // Encrypted, so it's tamper-proof — only this server could have produced
+  // it, and only for whoever was logged in when they clicked "Connect". That
+  // makes this the identity check on its own; no separate live-session
+  // comparison needed (and that comparison used to break whenever
+  // Microsoft's sign-in page landed the callback in a different Edge
+  // browser profile than the one that started the flow — see
+  // lib/oauth-connect-state.ts).
+  const decoded = decodeOAuthConnectState(stateParam)
+  if (!decoded) {
     return NextResponse.redirect(
       new URL("/dashboard/inbox?outlookError=invalid_state", req.url)
     )
   }
-
-  const session = await getServerSession(authOptions)
-  if (!session?.user?.id || session.user.id !== userId) {
-    return NextResponse.redirect(
-      new URL("/login?outlookError=session_mismatch", req.url)
-    )
-  }
+  const { userId, returnTo } = decoded
 
   // Same guard as /connect: without credentials the exchange would post
   // client_id=undefined and fail with an unrelated-looking error.

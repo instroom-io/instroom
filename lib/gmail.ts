@@ -10,6 +10,48 @@ import { prisma } from "@/lib/prisma"
 // label means the login flow never touches it, full stop.
 export const GMAIL_PROVIDER = "gmail"
 
+// ─── Rate-limit-aware batch fetching ────────────────────────────────────────
+// The threads route fans out one request per thread to hydrate full message
+// bodies (up to 200 threads for a large inbox). Firing all of them truly in
+// parallel trips Gmail's per-user rate limit — confirmed directly: 200
+// simultaneous requests against a real account came back 155 OK / 45 HTTP
+// 429. Those 429s used to get silently treated as empty threads (fixed
+// separately), and under heavy enough load even the one-shot threads.list
+// call ahead of this can 429 too. Batching keeps concurrency below the
+// limit; the retry is the safety net for whatever a batch size can't avoid.
+
+/** Retries only on 429, honoring Retry-After when Gmail sends one. */
+export async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  maxAttempts = 3
+): Promise<Response> {
+  let res: Response
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    res = await fetch(url, options)
+    if (res.status !== 429) return res
+    if (attempt === maxAttempts - 1) return res
+    const retryAfterHeader = res.headers.get("Retry-After")
+    const delayMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : 500 * 2 ** attempt
+    await new Promise((resolve) => setTimeout(resolve, delayMs))
+  }
+  return res!
+}
+
+/** Runs `fn` over `items` in fixed-size concurrent chunks instead of all at once. */
+export async function fetchInBatches<T, R>(
+  items: T[],
+  batchSize: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = []
+  for (let i = 0; i < items.length; i += batchSize) {
+    const batch = items.slice(i, i + batchSize)
+    results.push(...(await Promise.all(batch.map(fn))))
+  }
+  return results
+}
+
 // ─── Token handling ───────────────────────────────────────────────────────────
 // Previously duplicated near-identically in app/api/gmail/send/route.ts and
 // inlined again in app/api/gmail/threads/route.ts — extracted here so a third
