@@ -10,6 +10,7 @@ import {
   readMicrosoftOAuthConfig,
 } from "@/lib/microsoft-oauth"
 import { appBaseUrlSource } from "@/lib/app-url"
+import { decodeOAuthConnectState, encodeOAuthConnectState } from "@/lib/oauth-connect-state"
 
 // Required env vars: MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET
 // App registration: https://portal.azure.com → App registrations
@@ -17,10 +18,33 @@ import { appBaseUrlSource } from "@/lib/app-url"
 //   production: https://instroom.io/api/outlook/callback
 
 export async function GET(req: NextRequest) {
-  const session = await getServerSession(authOptions)
+  // The inbox page opens this route in a popup and can hand it a pre-built
+  // identity token (minted by /api/oauth-handoff from the ORIGINAL tab,
+  // which is guaranteed to have a live session) instead of relying on this
+  // route's own session cookie — necessary because Microsoft's sign-in page
+  // can land the popup in a different Edge browser profile with no
+  // Instroom session at all before this code ever runs. Falls back to the
+  // normal session check for any direct/non-popup access.
+  const tokenParam = req.nextUrl.searchParams.get("token")
+  let userId: string
+  let returnTo: string
 
-  if (!session?.user?.id) {
-    return NextResponse.redirect(new URL("/login", req.url))
+  if (tokenParam) {
+    const decoded = decodeOAuthConnectState(tokenParam)
+    if (!decoded) {
+      return NextResponse.redirect(
+        new URL("/dashboard/inbox?outlookError=invalid_state", req.url)
+      )
+    }
+    userId = decoded.userId
+    returnTo = decoded.returnTo
+  } else {
+    const session = await getServerSession(authOptions)
+    if (!session?.user?.id) {
+      return NextResponse.redirect(new URL("/login", req.url))
+    }
+    userId = session.user.id
+    returnTo = req.nextUrl.searchParams.get("returnTo") || "/dashboard/inbox"
   }
 
   // Validate BEFORE building the URL. Previously a missing MICROSOFT_CLIENT_ID
@@ -35,12 +59,9 @@ export async function GET(req: NextRequest) {
     )
   }
 
-  const state = Buffer.from(
-    JSON.stringify({
-      userId: session.user.id,
-      returnTo: req.nextUrl.searchParams.get("returnTo") || "/dashboard/inbox",
-    })
-  ).toString("base64url")
+  // Reuse the handoff token as-is when one was given (already encrypted,
+  // freshly minted) instead of encoding a second one.
+  const state = tokenParam ?? encodeOAuthConnectState({ userId, returnTo })
 
   // Logged so the exact string Microsoft must have registered is recoverable
   // from any deployment's logs, instead of being inferred. No secret in it.

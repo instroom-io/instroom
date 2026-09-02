@@ -486,6 +486,27 @@ model ShopifyOrder {
   @@index([brand_influencer_id])
 }
 
+// Logs Shopify's three mandatory GDPR compliance webhooks (customers/data_request,
+// customers/redact, shop/redact) so someone can act on the request within its
+// legal deadline (30 days for the first two, 48 hours for shop/redact).
+// No FK to Brand — shop/redact fires when a store's connection is being torn
+// down, and a data_request/redact can arrive for a shop that's since
+// disconnected, so brand_id is a plain nullable scalar, not a relation.
+model ShopifyComplianceRequest {
+  id                  String    @id @default(cuid()) @db.VarChar(30)
+  brand_id            String?   @db.VarChar(30)
+  shop_domain         String    @db.VarChar(255)
+  request_type        String    @db.VarChar(30) // "customers_data_request" | "customers_redact" | "shop_redact"
+  shopify_customer_id String?   @db.VarChar(100)
+  order_ids           Json?
+  payload             Json
+  resolved_at         DateTime?
+  created_at          DateTime  @default(now())
+
+  @@index([brand_id])
+  @@index([resolved_at])
+}
+
 model OutreachLog {
   id                  String    @id @default(cuid()) @db.VarChar(30)
   brand_influencer_id String    @db.VarChar(30)

@@ -1,23 +1,43 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
+import { decodeOAuthConnectState, encodeOAuthConnectState } from "@/lib/oauth-connect-state"
 
 export async function GET(req: NextRequest) {
-  const session = await getServerSession(authOptions)
+  // The inbox page opens this route in a popup and can hand it a pre-built
+  // identity token (minted by /api/oauth-handoff from the ORIGINAL tab,
+  // which is guaranteed to have a live session) instead of relying on this
+  // route's own session cookie — same handoff Outlook's connect route uses,
+  // kept consistent across both providers even though Google's sign-in page
+  // doesn't trigger the Edge profile-switching issue that made this
+  // necessary for Outlook. Falls back to the normal session check for any
+  // direct/non-popup access.
+  const tokenParam = req.nextUrl.searchParams.get("token")
+  let userId: string
+  let returnTo: string
 
-  if (!session?.user?.id) {
-    return NextResponse.redirect(new URL("/login", req.url))
+  if (tokenParam) {
+    const decoded = decodeOAuthConnectState(tokenParam)
+    if (!decoded) {
+      return NextResponse.redirect(
+        new URL("/dashboard/inbox?gmailError=invalid_state", req.url)
+      )
+    }
+    userId = decoded.userId
+    returnTo = decoded.returnTo
+  } else {
+    const session = await getServerSession(authOptions)
+    if (!session?.user?.id) {
+      return NextResponse.redirect(new URL("/login", req.url))
+    }
+    userId = session.user.id
+    returnTo = req.nextUrl.searchParams.get("returnTo") || "/dashboard/inbox"
   }
 
-  // Build the Google OAuth URL with Gmail scopes.
-  // We pass the user's internal ID as `state` so the callback
-  // knows which DB user to attach the tokens to.
-  const state = Buffer.from(
-    JSON.stringify({
-      userId: session.user.id,
-      returnTo: req.nextUrl.searchParams.get("returnTo") || "/dashboard/inbox",
-    })
-  ).toString("base64url")
+  // Build the Google OAuth URL with Gmail scopes. Reuse the handoff token
+  // as-is when one was given (already encrypted, freshly minted) instead of
+  // encoding a second one.
+  const state = tokenParam ?? encodeOAuthConnectState({ userId, returnTo })
 
   const params = new URLSearchParams({
     client_id: process.env.GOOGLE_CLIENT_ID!,

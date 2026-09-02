@@ -48,6 +48,23 @@ const nextConfig: NextConfig = {
   env: {
     INSTROOM_API_BASE_URL: instroomApiBaseUrl,
   },
+  // Shopify loads /shopify-embedded inside an iframe in its own admin —
+  // browsers block framing by default unless the framed page explicitly
+  // allows it. Scoped to this one route only; every other page in the app
+  // keeps its default (no framing allowed) posture.
+  async headers() {
+    return [
+      {
+        source: "/shopify-embedded/:path*",
+        headers: [
+          {
+            key: "Content-Security-Policy",
+            value: "frame-ancestors https://admin.shopify.com https://*.myshopify.com;",
+          },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;
