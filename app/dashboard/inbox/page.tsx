@@ -300,7 +300,11 @@ function mapGmailThreadToEmail(thread: any, index: number, accountId?: string | 
   })
 
   const status = getPipelineStatus(thread.brandInfluencer)
-  const timestamp = firstMsg.date || new Date().toISOString()
+  // The conversation's date should reflect its most recent activity, not
+  // when it started — use the last message, not the first (messages[0] is
+  // the oldest, per the comment above). Matches how Outlook's timestamp is
+  // already derived below.
+  const timestamp = lastMsg.date || firstMsg.date || new Date().toISOString()
 
   return {
     id: thread.id || `gmail-${index}`,
@@ -1103,19 +1107,39 @@ function InboxContent() {
     // blocked popup from an opened tab — it always took the fallback branch and
     // navigated THIS tab to Google / Microsoft. The tab we open is our own
     // origin, and the handle is what lets us notice it closing.
-    const opened = window.open(
-      `/api/${provider}/connect?returnTo=${encodeURIComponent(returnTo)}`,
-      "_blank"
-    )
-    // Popup/tab blocked. Don't navigate this tab; surface the existing error
-    // state so the user can allow the popup and retry.
+    //
+    // Opened blank and navigated once the handoff token is ready, rather than
+    // opening straight to /api/{provider}/connect — window.open must run
+    // synchronously inside the click handler or browsers treat it as an
+    // unrequested popup and block it, so the async token fetch below can't
+    // happen before the popup opens, only before it navigates.
+    const opened = window.open("", "_blank")
     if (!opened) {
       setProviderError(provider, "Your browser blocked the sign-in tab. Allow pop-ups for this site and try again.")
       setProviderSyncState(provider, "error")
       return
     }
     setProviderSyncState(provider, "connecting")
-    awaitOAuthTab(provider, opened)
+
+    // Hand the popup a pre-built identity token from THIS tab (guaranteed to
+    // have a live session) instead of letting it authenticate itself —
+    // Microsoft's sign-in page can land the popup in a different Edge
+    // browser profile with no Instroom session at all, which broke this
+    // when the popup relied on its own cookie. See lib/oauth-connect-state.ts.
+    fetch(`/api/oauth-handoff?returnTo=${encodeURIComponent(returnTo)}`)
+      .then((res) => {
+        if (!res.ok) throw new Error("handoff failed")
+        return res.json()
+      })
+      .then(({ token }: { token: string }) => {
+        opened.location.href = `/api/${provider}/connect?token=${encodeURIComponent(token)}`
+        awaitOAuthTab(provider, opened)
+      })
+      .catch(() => {
+        opened.close()
+        setProviderError(provider, "Couldn't start the sign-in flow. Please try again.")
+        setProviderSyncState(provider, "error")
+      })
   }
 
   /**
@@ -1543,15 +1567,21 @@ function InboxContent() {
 
   const filteredEmails = useMemo(() => {
     const query = debouncedSearchQuery.toLowerCase()
-    return emails.filter((email) => {
-      const matchesStage = selectedStage === "ALL" || email.status === selectedStage
-      const matchesSearch =
-        query === "" ||
-        email.name.toLowerCase().includes(query) ||
-        email.handle.toLowerCase().includes(query) ||
-        email.subject.toLowerCase().includes(query)
-      return matchesStage && matchesSearch
-    })
+    return emails
+      .filter((email) => {
+        const matchesStage = selectedStage === "ALL" || email.status === selectedStage
+        const matchesSearch =
+          query === "" ||
+          email.name.toLowerCase().includes(query) ||
+          email.handle.toLowerCase().includes(query) ||
+          email.subject.toLowerCase().includes(query)
+        return matchesStage && matchesSearch
+      })
+      // `emails` is built by concatenating Gmail and Outlook batches as each
+      // provider finishes loading (see setEmails call sites below) — never
+      // merged by date. Sort here, once, at the single point everything
+      // actually renders from, rather than at every fetch call site.
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
   }, [emails, selectedStage, debouncedSearchQuery])
 
   // Pipeline-stage tabs count distinct contacts, not threads — "In

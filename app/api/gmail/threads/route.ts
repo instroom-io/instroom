@@ -4,13 +4,26 @@ import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import { sendNotification } from "@/lib/notifications"
 import { autoAdvanceRepliedToInConversation } from "@/lib/pipeline"
-import { getGmailAccessToken, getGmailAccountEmail, shapeGmailThread, getHeader } from "@/lib/gmail"
+import {
+  getGmailAccessToken,
+  getGmailAccountEmail,
+  shapeGmailThread,
+  getHeader,
+  fetchWithRetry,
+  fetchInBatches,
+} from "@/lib/gmail"
 
 // Short-TTL in-memory cache so rapid refresh/mount cycles (e.g. React effects
 // firing twice, quick manual "Refresh" clicks) don't repeat the full N-thread
 // Gmail fan-out fetch. Keyed by user + the brandId the request was made with.
 const THREADS_CACHE_TTL_MS = 15_000
 const threadsCache = new Map<string, { expiresAt: number; body: any }>()
+
+// Firing every per-thread fetch truly in parallel trips Gmail's per-user
+// rate limit on a real-sized inbox (confirmed: 200 at once → 45 HTTP 429s).
+// Batching below this keeps concurrency under the limit; fetchWithRetry is
+// the backstop for whatever a batch this size still can't avoid.
+const GMAIL_FETCH_BATCH_SIZE = 20
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions) as any
@@ -60,7 +73,7 @@ export async function GET(req: NextRequest) {
 
   try {
     // 1. List inbox threads
-    const listRes = await fetch(
+    const listRes = await fetchWithRetry(
       "https://gmail.googleapis.com/gmail/v1/users/me/threads?maxResults=200&labelIds=INBOX",
       { headers: { Authorization: `Bearer ${accessToken}` } }
     )
@@ -86,23 +99,36 @@ export async function GET(req: NextRequest) {
     const listData = await listRes.json()
     const threadIds: string[] = (listData.threads || []).map((t: any) => t.id)
 
-    // 2. Fetch full thread details in parallel (skipped entirely when there
+    // 2. Fetch full thread details in batches (skipped entirely when there
     // are no INBOX threads — note this does NOT early-return the whole
     // request, since a user with zero replied-to conversations can still
     // have sent-but-unreplied threads worth surfacing below).
     const threadDetails = threadIds.length
-      ? await Promise.all(
-          threadIds.map((id) =>
-            fetch(
-              `https://gmail.googleapis.com/gmail/v1/users/me/threads/${id}?format=full`,
-              { headers: { Authorization: `Bearer ${accessToken}` } }
-            ).then((r) => r.json())
-          )
+      ? await fetchInBatches(threadIds, GMAIL_FETCH_BATCH_SIZE, (id) =>
+          fetchWithRetry(
+            `https://gmail.googleapis.com/gmail/v1/users/me/threads/${id}?format=full`,
+            { headers: { Authorization: `Bearer ${accessToken}` } }
+          ).then((r) => (r.ok ? r.json() : null))
         )
       : []
 
-    // 3. Shape threads + extract sender emails
-    const shapedThreads = threadDetails.map(shapeGmailThread)
+    // 3. Shape threads + extract sender emails. A failed per-thread fetch
+    // (rate-limited or otherwise) returns null above rather than an error
+    // body — without this filter, shapeGmailThread happily "shapes" that
+    // error object into a blank thread (empty messages, "Unknown" sender,
+    // "(No subject)"), which is indistinguishable from a real empty thread
+    // in the UI. Real Gmail threads always have a non-empty messages array.
+    const validThreadDetails = threadDetails.filter(
+      (thread): thread is NonNullable<typeof thread> =>
+        Boolean(thread?.id) && Array.isArray(thread?.messages) && thread.messages.length > 0
+    )
+    if (validThreadDetails.length < threadDetails.length) {
+      console.error(
+        `[gmail/threads] ${threadDetails.length - validThreadDetails.length}/${threadDetails.length} ` +
+          "per-thread fetches failed or returned no messages (likely Gmail API rate-limiting from the parallel fan-out) — dropped rather than shown as blank threads."
+      )
+    }
+    const shapedThreads = validThreadDetails.map(shapeGmailThread)
 
     // 4. Try to resolve brand context — if none found, return threads without pipeline data
     let brand_id = brandId
@@ -133,7 +159,7 @@ export async function GET(req: NextRequest) {
     // no body/attachment decoding) since these show as lightweight "awaiting
     // reply" entries, not full conversations — see lib/gmail.ts for why this
     // doesn't reuse the expensive format=full path used above.
-    const sentListRes = await fetch(
+    const sentListRes = await fetchWithRetry(
       "https://gmail.googleapis.com/gmail/v1/users/me/threads?maxResults=200&labelIds=SENT",
       { headers: { Authorization: `Bearer ${accessToken}` } }
     )
@@ -143,13 +169,11 @@ export async function GET(req: NextRequest) {
       .map((t: any) => t.id)
       .filter((id: string) => !inboxThreadIdSet.has(id))
 
-    const sentOnlyDetails = await Promise.all(
-      sentOnlyIds.map((id) =>
-        fetch(
-          `https://gmail.googleapis.com/gmail/v1/users/me/threads/${id}?format=metadata&metadataHeaders=Subject&metadataHeaders=To&metadataHeaders=Date`,
-          { headers: { Authorization: `Bearer ${accessToken}` } }
-        ).then((r) => (r.ok ? r.json() : null))
-      )
+    const sentOnlyDetails = await fetchInBatches(sentOnlyIds, GMAIL_FETCH_BATCH_SIZE, (id) =>
+      fetchWithRetry(
+        `https://gmail.googleapis.com/gmail/v1/users/me/threads/${id}?format=metadata&metadataHeaders=Subject&metadataHeaders=To&metadataHeaders=Date`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      ).then((r) => (r.ok ? r.json() : null))
     )
 
     const shapedSentOnly = sentOnlyDetails

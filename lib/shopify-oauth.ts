@@ -1,19 +1,24 @@
 import crypto from "crypto"
 import { encrypt, decrypt } from "@/lib/crypto"
 
-// Kept in sync with the six scopes configured on the shared Instroom app in
+// Kept in sync with the scopes configured on the shared Instroom app in
 // Shopify's Dev Dashboard (Settings → API access). Every brand authorizes
 // the SAME app via OAuth; only the resulting per-shop access token differs.
+// `read_discounts` replaces the legacy `read_price_rules` now that discount
+// code lookups go through the GraphQL Admin API's codeDiscountNodeByCode
+// instead of the old REST price_rules/discount_codes endpoints — brands
+// connected before this change was shipped need to reconnect to pick up
+// the new scope (existing tokens don't retroactively gain it).
 export const SHOPIFY_SCOPES =
-  "read_products,read_orders,write_orders,read_draft_orders,write_draft_orders,read_price_rules"
+  "read_products,read_orders,write_orders,read_draft_orders,write_draft_orders,read_discounts"
 
-function getClientId() {
+export function getClientId() {
   const id = process.env.SHOPIFY_CLIENT_ID
   if (!id) throw new Error("SHOPIFY_CLIENT_ID is not configured")
   return id
 }
 
-function getClientSecret() {
+export function getClientSecret() {
   const secret = process.env.SHOPIFY_CLIENT_SECRET
   if (!secret) throw new Error("SHOPIFY_CLIENT_SECRET is not configured")
   return secret

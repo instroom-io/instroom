@@ -149,6 +149,31 @@ export async function syncShopifyOrder(params: { brandId: string; order: Shopify
   return { success: true as const, orderId, brandInfluencerId, appliedStatus: target }
 }
 
+// Strips customer PII out of a stored order's raw payload for a
+// customers/redact GDPR request. `raw` can be either shape this codebase
+// produces: a full REST-style webhook push (still carries customer/address/
+// IP fields) or the slimmer object lib/shopify.ts's GraphQL functions build
+// (which never included these fields to begin with) — deleting a key that
+// isn't present is a harmless no-op, so the same field list handles both.
+const PII_FIELDS = [
+  "customer",
+  "email",
+  "phone",
+  "shipping_address",
+  "billing_address",
+  "contact_email",
+  "client_details", // carries browser_ip
+]
+
+export function redactOrderPII(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object") return raw
+  const redacted: Record<string, unknown> = { ...(raw as Record<string, unknown>) }
+  for (const field of PII_FIELDS) {
+    delete redacted[field]
+  }
+  return redacted
+}
+
 export async function syncShopifyOrdersForBrand(brandId: string) {
   const connection = await getShopifyConnection(brandId)
   if (!connection) {

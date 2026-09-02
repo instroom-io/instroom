@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getServerSession } from "next-auth"
-import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import { GMAIL_PROVIDER } from "@/lib/gmail"
+import { decodeOAuthConnectState } from "@/lib/oauth-connect-state"
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
@@ -24,29 +23,19 @@ export async function GET(req: NextRequest) {
   }
 
   // ── Decode state ──────────────────────────────────────────────────────────
-  let userId: string
-  let returnTo: string = "/dashboard/inbox"
-
-  try {
-    const decoded = JSON.parse(
-      Buffer.from(stateParam, "base64url").toString("utf-8")
-    )
-    userId = decoded.userId
-    returnTo = decoded.returnTo || "/dashboard/inbox"
-  } catch {
+  // Encrypted, so it's tamper-proof — only this server could have produced
+  // it, and only for whoever was logged in when they clicked "Connect". That
+  // makes this the identity check on its own; no separate live-session
+  // comparison needed (and that comparison used to break whenever the
+  // provider's sign-in page landed in a different browser context than the
+  // one that started the flow — see lib/oauth-connect-state.ts).
+  const decoded = decodeOAuthConnectState(stateParam)
+  if (!decoded) {
     return NextResponse.redirect(
       new URL("/dashboard/inbox?gmailError=invalid_state", req.url)
     )
   }
-
-  // ── Double-check the session still belongs to the same user ───────────────
-  // (guards against CSRF — state userId must match the active session)
-  const session = await getServerSession(authOptions)
-  if (!session?.user?.id || session.user.id !== userId) {
-    return NextResponse.redirect(
-      new URL("/login?gmailError=session_mismatch", req.url)
-    )
-  }
+  const { userId, returnTo } = decoded
 
   // ── Exchange code for tokens ──────────────────────────────────────────────
   let accessToken: string
