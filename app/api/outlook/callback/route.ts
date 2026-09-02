@@ -10,7 +10,6 @@ import {
   outlookRedirectUri,
   readMicrosoftOAuthConfig,
 } from "@/lib/microsoft-oauth"
-import { decodeOAuthConnectState } from "@/lib/oauth-connect-state"
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)

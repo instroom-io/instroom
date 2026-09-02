@@ -1107,39 +1107,19 @@ function InboxContent() {
     // blocked popup from an opened tab — it always took the fallback branch and
     // navigated THIS tab to Google / Microsoft. The tab we open is our own
     // origin, and the handle is what lets us notice it closing.
-    //
-    // Opened blank and navigated once the handoff token is ready, rather than
-    // opening straight to /api/{provider}/connect — window.open must run
-    // synchronously inside the click handler or browsers treat it as an
-    // unrequested popup and block it, so the async token fetch below can't
-    // happen before the popup opens, only before it navigates.
-    const opened = window.open("", "_blank")
+    const opened = window.open(
+      `/api/${provider}/connect?returnTo=${encodeURIComponent(returnTo)}`,
+      "_blank"
+    )
+    // Popup/tab blocked. Don't navigate this tab; surface the existing error
+    // state so the user can allow the popup and retry.
     if (!opened) {
       setProviderError(provider, "Your browser blocked the sign-in tab. Allow pop-ups for this site and try again.")
       setProviderSyncState(provider, "error")
       return
     }
     setProviderSyncState(provider, "connecting")
-
-    // Hand the popup a pre-built identity token from THIS tab (guaranteed to
-    // have a live session) instead of letting it authenticate itself —
-    // Microsoft's sign-in page can land the popup in a different Edge
-    // browser profile with no Instroom session at all, which broke this
-    // when the popup relied on its own cookie. See lib/oauth-connect-state.ts.
-    fetch(`/api/oauth-handoff?returnTo=${encodeURIComponent(returnTo)}`)
-      .then((res) => {
-        if (!res.ok) throw new Error("handoff failed")
-        return res.json()
-      })
-      .then(({ token }: { token: string }) => {
-        opened.location.href = `/api/${provider}/connect?token=${encodeURIComponent(token)}`
-        awaitOAuthTab(provider, opened)
-      })
-      .catch(() => {
-        opened.close()
-        setProviderError(provider, "Couldn't start the sign-in flow. Please try again.")
-        setProviderSyncState(provider, "error")
-      })
+    awaitOAuthTab(provider, opened)
   }
 
   /**
