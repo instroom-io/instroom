@@ -1,6 +1,5 @@
 import type { Metadata } from "next"
 import Script from "next/script"
-import { getClientId } from "@/lib/shopify-oauth"
 import EmbeddedStatus from "./EmbeddedStatus"
 
 // Minimal, read-only panel Shopify loads inside its own admin (in an
@@ -9,9 +8,16 @@ import EmbeddedStatus from "./EmbeddedStatus"
 // inside Shopify. Shows connection status and links out to the real
 // dashboard for everything else; see the plan doc for what's deliberately
 // out of scope (no SSO into Instroom, no Pipeline/Post Tracker here).
+//
+// Reads process.env directly (not lib/shopify-oauth's getClientId, which
+// throws) — this page is statically prerendered, so generateMetadata runs
+// at build time, before deploy-time env vars are necessarily configured.
+// Missing the tag just means Shopify won't recognize the embed until the
+// var is set; it must not fail the whole build.
 export function generateMetadata(): Metadata {
+  const clientId = process.env.SHOPIFY_CLIENT_ID
   return {
-    other: { "shopify-api-key": getClientId() },
+    other: clientId ? { "shopify-api-key": clientId } : {},
   }
 }
 
