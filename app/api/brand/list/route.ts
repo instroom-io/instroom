@@ -1,6 +1,7 @@
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
+import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 import type { UserSubscription } from "@prisma/client"
 
 // Mirrors the logic of lib/subscription-limits.ts#userHasActiveSubscription,
@@ -35,53 +36,59 @@ export async function GET() {
     })
   }
 
-  // Get brands owned by user OR where user is a member
-  const brands = await prisma.brand.findMany({
-    where: {
-      OR: [
-        { owner_id: session.user.id },  // User is owner
-        { members: { some: { user_id: session.user.id } } },  // User is member
-      ],
-    },
-    select: {
-      id: true,
-      name: true,
-      slug: true,
-      logo_url: true,
-      owner_id: true,
-    },
-    orderBy: { created_at: "desc" },
-  })
+  try {
+    // Get brands owned by user OR where user is a member
+    const brands = await prisma.brand.findMany({
+      where: {
+        OR: [
+          { owner_id: session.user.id },  // User is owner
+          { members: { some: { user_id: session.user.id } } },  // User is member
+        ],
+      },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        logo_url: true,
+        owner_id: true,
+      },
+      orderBy: { created_at: "desc" },
+    })
 
-  // Get subscription status for each brand owner in a single batched query
-  // instead of one sequential round-trip per brand.
-  const ownerIds = [...new Set(brands.map((brand) => brand.owner_id))]
-  const subscriptions = ownerIds.length
-    ? await prisma.userSubscription.findMany({
-        where: { user_id: { in: ownerIds } },
-      })
-    : []
-  const subscriptionMap = new Map(subscriptions.map((sub) => [sub.user_id, sub]))
+    // Get subscription status for each brand owner in a single batched query
+    // instead of one sequential round-trip per brand.
+    const ownerIds = [...new Set(brands.map((brand) => brand.owner_id))]
+    const subscriptions = ownerIds.length
+      ? await prisma.userSubscription.findMany({
+          where: { user_id: { in: ownerIds } },
+        })
+      : []
+    const subscriptionMap = new Map(subscriptions.map((sub) => [sub.user_id, sub]))
 
-  const accessibleBrands = brands.map((brand) => {
-    const subscription = subscriptionMap.get(brand.owner_id)
-    const ownerHasActiveSubscription = isSubscriptionActive(subscription)
+    const accessibleBrands = brands.map((brand) => {
+      const subscription = subscriptionMap.get(brand.owner_id)
+      const ownerHasActiveSubscription = isSubscriptionActive(subscription)
 
-    // Include all brands, but mark subscription status
-    return {
-      ...brand,
-      subscriptionActive: ownerHasActiveSubscription,
-    }
-  })
+      // Include all brands, but mark subscription status
+      return {
+        ...brand,
+        subscriptionActive: ownerHasActiveSubscription,
+      }
+    })
 
-  return Response.json({
-    brands: accessibleBrands.map((brand) => ({
-      id: brand.id,
-      name: brand.name,
-      slug: brand.slug,
-      logo_url: brand.logo_url,
-      isOwner: brand.owner_id === session.user.id,
-      subscriptionActive: brand.subscriptionActive,
-    })),
-  })
+    return Response.json({
+      brands: accessibleBrands.map((brand) => ({
+        id: brand.id,
+        name: brand.name,
+        slug: brand.slug,
+        logo_url: brand.logo_url,
+        isOwner: brand.owner_id === session.user.id,
+        subscriptionActive: brand.subscriptionActive,
+      })),
+    })
+  } catch (error) {
+    console.error("GET /api/brand/list error:", error)
+    if (isDatabaseCapacityError(error)) return databaseCapacityResponse()
+    return Response.json({ error: "Failed to fetch brands" }, { status: 500 })
+  }
 }

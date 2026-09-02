@@ -34,6 +34,7 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import { checkBrandAccess } from "@/lib/brand-access"
+import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions)
@@ -52,14 +53,14 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "brandId is required" }, { status: 400 })
   }
 
-  // Brand ownership gate: every row below is additionally constrained by
-  // brand_id, so no other brand's, account's or user's data can be reached
-  // even if this check were bypassed.
-  if (!(await checkBrandAccess(brandId, session.user.id))) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 })
-  }
-
   try {
+    // Brand ownership gate: every row below is additionally constrained by
+    // brand_id, so no other brand's, account's or user's data can be reached
+    // even if this check were bypassed.
+    if (!(await checkBrandAccess(brandId, session.user.id))) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
+
     const dateFilter = buildDateFilter(dateRange)
 
     // Filters are pushed into the query, so changing one re-queries the
@@ -239,6 +240,7 @@ export async function GET(req: Request) {
       },
     })
   } catch (err: unknown) {
+    if (isDatabaseCapacityError(err)) return databaseCapacityResponse()
     const message = err instanceof Error ? err.message : "Internal server error"
     console.error("[analytics] GET error:", message)
     return NextResponse.json({ error: message }, { status: 500 })

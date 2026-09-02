@@ -20,6 +20,7 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import { GMAIL_PROVIDER } from "@/lib/gmail"
+import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 
 /** Provider label the Outlook callback writes its rows under. */
 const OUTLOOK_PROVIDER = "microsoft"
@@ -75,6 +76,7 @@ export async function GET() {
     return NextResponse.json({ accounts })
   } catch (error: any) {
     console.error("[GET /api/mail/accounts]", error)
+    if (isDatabaseCapacityError(error)) return databaseCapacityResponse()
     return NextResponse.json(
       { error: error?.message || "Failed to load connected accounts" },
       { status: 500 }
@@ -127,6 +129,7 @@ export async function POST(req: NextRequest) {
     })
   } catch (error: any) {
     console.error("[POST /api/mail/accounts]", error)
+    if (isDatabaseCapacityError(error)) return databaseCapacityResponse()
     return NextResponse.json(
       { error: error?.message || "Failed to switch account" },
       { status: 500 }
@@ -191,6 +194,7 @@ export async function DELETE(req: NextRequest) {
     })
   } catch (error: any) {
     console.error("[DELETE /api/mail/accounts]", error)
+    if (isDatabaseCapacityError(error)) return databaseCapacityResponse()
     return NextResponse.json(
       { error: error?.message || "Failed to remove account" },
       { status: 500 }

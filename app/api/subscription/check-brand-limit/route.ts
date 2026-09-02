@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import { NextResponse } from "next/server"
+import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 
 export async function GET(req: Request) {
   try {
@@ -89,6 +90,7 @@ export async function GET(req: Request) {
           : "You've reached your brand limit. Unable to purchase more brands for your plan.",
     })
   } catch (error) {
+    if (isDatabaseCapacityError(error)) return databaseCapacityResponse()
     return NextResponse.json(
       { error: "Failed to check brand limit" },
       { status: 500 }

@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
+import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 
 async function checkBrandAccess(brandId: string, userId: string) {
   return prisma.brand.findFirst({
@@ -46,6 +47,7 @@ export async function GET(
     return NextResponse.json({ locations })
   } catch (error: any) {
     console.error("GET locations error:", error)
+    if (isDatabaseCapacityError(error)) return databaseCapacityResponse()
     return NextResponse.json({ error: "Failed to fetch locations" }, { status: 500 })
   }
 }
@@ -93,6 +95,7 @@ export async function POST(
       return NextResponse.json({ error: "Location already exists" }, { status: 409 })
     }
     console.error("POST location error:", error)
+    if (isDatabaseCapacityError(error)) return databaseCapacityResponse()
     return NextResponse.json({ error: "Failed to save location" }, { status: 500 })
   }
 }

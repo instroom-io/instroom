@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import { NextResponse } from "next/server"
+import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 
 export async function GET(request: Request) {
   try {
@@ -96,6 +97,7 @@ export async function GET(request: Request) {
     })
   } catch (error) {
     console.error("Error fetching subscription status:", error)
+    if (isDatabaseCapacityError(error)) return databaseCapacityResponse()
     return NextResponse.json(
       { error: "Failed to fetch subscription status" },
       { status: 500 }

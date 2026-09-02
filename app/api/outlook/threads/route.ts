@@ -8,6 +8,7 @@ import {
   outlookTokenErrorMessage,
 } from "@/lib/microsoft-oauth"
 import { autoAdvanceRepliedToInConversation } from "@/lib/pipeline"
+import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 
 function stripHtml(html: string): string {
   return html
@@ -258,6 +259,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ accountId, connectedEmail, threads })
   } catch (err: any) {
     console.error("[outlook] threads: unhandled failure —", err?.message || err)
+    if (isDatabaseCapacityError(err)) return databaseCapacityResponse()
     return NextResponse.json(
       { error: err?.message || "Failed to fetch Outlook messages" },
       { status: 500 }

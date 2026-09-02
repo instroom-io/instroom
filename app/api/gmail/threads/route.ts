@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import { sendNotification } from "@/lib/notifications"
 import { autoAdvanceRepliedToInConversation } from "@/lib/pipeline"
+import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 import {
   getGmailAccessToken,
   getGmailAccountEmail,
@@ -333,6 +334,7 @@ export async function GET(req: NextRequest) {
     if (cacheKey) threadsCache.set(cacheKey, { expiresAt: Date.now() + THREADS_CACHE_TTL_MS, body })
     return NextResponse.json(body)
   } catch (err: any) {
+    if (isDatabaseCapacityError(err)) return databaseCapacityResponse()
     return NextResponse.json({ error: err.message || "Failed to fetch threads" }, { status: 500 })
   }
 }
