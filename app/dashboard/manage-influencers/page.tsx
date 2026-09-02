@@ -168,6 +168,56 @@ function buildUpdatePayload(row: InfluencerRow) {
 }
 
 /**
+ * The fields that live on the GLOBAL Influencer record, shared by every brand
+ * that has this creator.
+ *
+ * Everything not listed here belongs to the brand's own BrandInfluencer row
+ * (stage, contact_status, approval_status, notes, agreed_rate, …) and is safe
+ * to send on every request — it is scoped to one brand_id + influencer_id.
+ *
+ * `handle` and `platform` are deliberately ABSENT: they are the draft-promotion
+ * keys, the PUT route accepts them only while the stored row is still a draft,
+ * and dropping them would break promoting a draft in place.
+ */
+const GLOBAL_PROFILE_FIELDS = [
+  "full_name", "email", "gender", "niche", "location", "bio",
+  "profile_image_url", "social_link", "follower_count",
+  "engagement_rate", "avg_likes", "avg_comments", "avg_views",
+] as const
+
+/**
+ * Drop global profile fields this edit did not actually change.
+ *
+ * One Influencer row is shared by every brand linked to it, and the PUT route
+ * writes any field that is not `undefined`. Because the payload always carried
+ * the whole row, a brand changing only its OWN stage still rewrote the shared
+ * profile with its copy of it — so a second brand's profile edit was silently
+ * reverted by the first brand's next stage change.
+ *
+ * Comparing against the previously sent payload leaves genuinely edited fields
+ * in place (editing a name still updates it globally, as before) while a
+ * brand-scoped edit now sends only brand-scoped fields. `lastSent` is absent on
+ * the row's first PUT of the session, where the full payload is still correct.
+ */
+function withoutUnchangedGlobalFields(
+  payload: Record<string, unknown>,
+  lastSent: string | undefined
+): Record<string, unknown> {
+  if (!lastSent) return payload
+  let previous: Record<string, unknown>
+  try { previous = JSON.parse(lastSent) as Record<string, unknown> }
+  catch { return payload }
+
+  const trimmed = { ...payload }
+  for (const field of GLOBAL_PROFILE_FIELDS) {
+    // Only when the previous payload actually carried the field, so a field
+    // trimmed from an earlier request is never treated as "unchanged".
+    if (field in previous && previous[field] === trimmed[field]) delete trimmed[field]
+  }
+  return trimmed
+}
+
+/**
  * The two fields the PUT route normalises, mapped back onto the row's own
  * shape. `email` is carried in `contact_info` as well, which is the field the
  * grid and the sidebar actually read.
@@ -738,6 +788,18 @@ function InfluencersContent() {
   const idSwapCallback = useRef<((tempId: string, realId: string) => void) | null>(null)
 
   /**
+   * Stable, so the sheet's registration effect does not re-run every render.
+   *
+   * This was an inline arrow in the JSX below, which is a new function on every
+   * render of this page — the effect that registers the swap callback therefore
+   * re-ran constantly, re-registering it each time. It only writes a ref, so it
+   * has no dependencies and never needs to change identity.
+   */
+  const handleRegisterIdSwap = useCallback((fn: (tempId: string, realId: string) => void) => {
+    idSwapCallback.current = fn
+  }, [])
+
+  /**
    * Tail of the delete chain, so deletes run one after another.
    *
    * Deleting a multi-row selection fires one onDeleteRow per row at once, and a
@@ -851,7 +913,14 @@ function InfluencersContent() {
         const seeded = seedsPipeline && brandId ? seedPipelineFromApproval(brandId, seed!) : false
         putQueue.current.enqueue({
           url,
-          payload,
+          // Unchanged GLOBAL profile fields are stripped here, not above: the
+          // comparison that decides `discrete` and detects "nothing changed"
+          // needs the whole row, and `lastSentPayloads` must keep storing the
+          // whole row or the next diff would compare against a partial one.
+          // Only what actually goes over the wire is trimmed.
+          payload: JSON.stringify(
+            withoutUnchangedGlobalFields(JSON.parse(payload), lastSent)
+          ),
           // "Updating…", not the flat "Saving changes…": every row reaching
           // this queue is already in the list, so this is an update to an
           // existing influencer. A lifecycle move keeps its own wording below.
@@ -1882,9 +1951,7 @@ function InfluencersContent() {
           onCustomColumnsChange={handleCustomColumnsChange}
           onImportRows={handleImportRows}
           onBulkApprove={handleBulkApprove}
-          onRegisterIdSwap={(fn) => {
-            idSwapCallback.current = fn
-          }}
+          onRegisterIdSwap={handleRegisterIdSwap}
           onCreateDraft={handleCreateDraft}
           onContactHoldChange={handleContactHoldChange}
           // Deliberately NOT wired to reportSave.

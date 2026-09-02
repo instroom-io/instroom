@@ -83,6 +83,18 @@ export async function PUT(
       where: { id },
       select: { is_draft: true },
     })
+
+    // A genuinely unknown influencer is still a 404. Checked explicitly because
+    // the membership write below is an upsert: without this, an id that exists
+    // nowhere would have a BrandInfluencer row created pointing at nothing.
+    // "Exists globally but not on this brand" is the case the upsert is for —
+    // that one is a valid reuse, not a missing record.
+    if (!current) {
+      return NextResponse.json(
+        { error: "This influencer no longer exists. Try refreshing." },
+        { status: 404 }
+      )
+    }
     // Normalized through the shared helper: this path lower-cased the platform
     // but NOT the handle, so promoting "Nike" stored a record that a later
     // lookup for "nike" could not find — a second copy of the same influencer.
@@ -307,10 +319,27 @@ export async function PUT(
         select: { handle: true, platform: true, email: true, profile_image_url: true },
       })
 
+    // upsert, not update: an influencer REUSED from the global table can exist
+    // globally while this brand has no membership row for it yet. `update` threw
+    // P2025 there, which this route reported as 404 "Not found" — telling the
+    // user an influencer they can see does not exist, purely because it was
+    // first added by another brand. Creating the missing membership is what the
+    // create route already does for the same situation (brandInfluencer.upsert).
+    //
+    // `update: bi` keeps every existing membership's stage, status and history
+    // exactly as before — only a brand that genuinely had no row gets a new one,
+    // with the same defaults the create route uses.
     const runBrandInfluencerUpdate = (client: WriteClient) =>
-      client.brandInfluencer.update({
+      client.brandInfluencer.upsert({
         where: { brand_id_influencer_id: { brand_id: brandId, influencer_id: id } },
-        data: bi,
+        create: {
+          brand_id: brandId,
+          influencer_id: id,
+          contact_status: "not_contacted",
+          stage: 1,
+          ...bi,
+        },
+        update: bi,
         select: { approval_status: true, transferred_date: true },
       })
 

@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
+import { getServerSession } from "next-auth"
+import { authOptions, SESSION_COOKIE_NAME } from "@/lib/auth"
+import { appBaseUrl, appBaseUrlSource } from "@/lib/app-url"
 import { prisma } from "@/lib/prisma"
 import {
   MICROSOFT_TOKEN_URL,
@@ -31,20 +34,61 @@ export async function GET(req: NextRequest) {
     )
   }
 
-  // Encrypted, so it's tamper-proof — only this server could have produced
-  // it, and only for whoever was logged in when they clicked "Connect". That
-  // makes this the identity check on its own; no separate live-session
-  // comparison needed (and that comparison used to break whenever
-  // Microsoft's sign-in page landed the callback in a different Edge
-  // browser profile than the one that started the flow — see
-  // lib/oauth-connect-state.ts).
-  const decoded = decodeOAuthConnectState(stateParam)
-  if (!decoded) {
+  let userId: string
+  let returnTo: string = "/dashboard/inbox"
+
+  try {
+    const decoded = JSON.parse(Buffer.from(stateParam, "base64url").toString("utf-8"))
+    userId = decoded.userId
+    returnTo = decoded.returnTo || "/dashboard/inbox"
+  } catch {
+    console.error(
+      "[outlook] callback: invalid_state — the state parameter did not decode as " +
+        "base64url JSON. It is built by /api/outlook/connect and passed through " +
+        "Microsoft untouched, so a failure here means it was truncated or rewritten in transit."
+    )
     return NextResponse.redirect(
       new URL("/dashboard/inbox?outlookError=invalid_state", req.url)
     )
   }
-  const { userId, returnTo } = decoded
+
+  const session = await getServerSession(authOptions)
+  if (!session?.user?.id || session.user.id !== userId) {
+    // The ONLY exit in this route that logged nothing, while collapsing three
+    // unrelated failures into one identical URL:
+    //
+    //   no session   the session cookie did not arrive on this hop at all —
+    //                a cross-site top-level GET back from Microsoft. Points at
+    //                cookie delivery: a different host than the one that set it
+    //                (www vs apex, http vs https), or a browser withholding it.
+    //   wrong user   a cookie arrived, but for a DIFFERENT user than the one
+    //                who started the flow — a second account signed in, or a
+    //                stale tab.
+    //   expired      a cookie arrived and could not be decoded or had lapsed.
+    //
+    // Nothing here is user-controlled output — it is a server log. The session
+    // check itself is unchanged: the same condition still fails the same way.
+    const cookieHeader = req.headers.get("cookie") ?? ""
+    const sessionCookiePresent = cookieHeader.includes(SESSION_COOKIE_NAME)
+    const cause = !sessionCookiePresent
+      ? "no session cookie was sent on the callback request"
+      : !session?.user?.id
+        ? "a session cookie was sent but resolved to no session (expired, or signed with a different NEXTAUTH_SECRET)"
+        : "the session belongs to a different user than the one who started the flow"
+
+    console.error(
+      `[outlook] callback: session_mismatch — ${cause}. ` +
+        `callback host=${req.nextUrl.host} proto=${req.nextUrl.protocol.replace(":", "")} ` +
+        `configured origin=${appBaseUrl(req)} (from ${appBaseUrlSource(req)}) ` +
+        `expected cookie=${SESSION_COOKIE_NAME} present=${sessionCookiePresent} ` +
+        `state.userId=${userId} session.userId=${session?.user?.id ?? "none"}. ` +
+        `If host differs from the configured origin, the browser is on a different ` +
+        `hostname than the one that set the cookie and it can never be sent here.`
+    )
+    return NextResponse.redirect(
+      new URL("/login?outlookError=session_mismatch", req.url)
+    )
+  }
 
   // Same guard as /connect: without credentials the exchange would post
   // client_id=undefined and fail with an unrelated-looking error.
