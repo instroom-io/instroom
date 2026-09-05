@@ -141,7 +141,7 @@ function PipelineRow({ stage }: { stage: PipeStage }) {
   const isExit = stage.isExit
   return (
     <div
-      className={`flex items-center gap-2.5 px-3 py-2 rounded-lg border ${
+      className={`flex items-center gap-2.5 px-3 py-1.5 rounded-lg border ${
         isExit ? "border-red-100 bg-red-50/40 opacity-80" : "border-gray-100 bg-gray-50"
       }`}
     >
@@ -291,18 +291,18 @@ export default function CreateBrandPage() {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/70"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4"
       onClick={handleBackdropClose}
     >
       <div
-        className="relative bg-white rounded-2xl w-full max-w-[480px] overflow-hidden shadow-[0_24px_60px_rgba(0,0,0,0.35)]"
+        className="relative bg-white rounded-2xl w-[640px] max-w-[calc(100vw-2rem)] max-h-[90vh] shadow-2xl overflow-hidden flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         {/* X button */}
         {step < 3 && (
           <button
             onClick={handleXClose}
-            className="absolute top-3.5 right-3.5 z-10 text-gray-300 hover:text-gray-500 transition-colors p-1"
+            className="absolute top-5 right-4 sm:right-6 z-10 text-gray-400 hover:text-gray-600 transition-colors p-1"
             aria-label="Close"
           >
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -311,16 +311,19 @@ export default function CreateBrandPage() {
           </button>
         )}
 
-        {/* Progress bar */}
-        <div className="h-1 bg-gray-100">
+        {/* Progress bar — fixed, never scrolls with the body */}
+        <div className="h-1 bg-gray-100 flex-shrink-0">
           <div
             className="h-full bg-[#1FAE5B] rounded-r-sm transition-[width] duration-300 ease-in-out"
             style={{ width: progressWidth }}
           />
         </div>
 
-        {/* Body */}
-        <div className="px-7 pt-7 pb-5">
+        {/* Body — the only region that scrolls, so the header/progress bar
+            above and the footer below stay fully visible on any viewport
+            height. min-h-0 is required for a flex child to actually shrink
+            and scroll instead of overflowing its flex-1 sibling. */}
+        <div className="px-4 sm:px-6 pt-5 sm:pt-6 pb-5 flex-1 min-h-0 overflow-y-auto">
 
           {/* ── Step 1: Workspace info ── */}
           {step === 1 && (
@@ -400,29 +403,29 @@ export default function CreateBrandPage() {
                 Step 2 of 3
               </div>
               <div className="text-xl font-bold text-gray-900 mb-1 leading-snug">Your DTC pipeline stages</div>
-              <p className="text-[13px] text-gray-400 mb-5 leading-relaxed">
+              <p className="text-[13px] text-gray-400 mb-3 leading-relaxed">
                 These will appear across your pipeline, campaign tracker, and analytics.
               </p>
 
-              <div className="max-h-64 overflow-y-auto pr-0.5">
+              <div className="pr-0.5">
                 {DTC_PIPELINE.map((group) => (
-                  <div key={group.label} className="mb-3.5">
-                    <div className="text-[10px] font-bold text-gray-300 uppercase tracking-widest mb-1.5 pl-0.5">
+                  <div key={group.label} className="mb-2.5">
+                    <div className="text-[10px] font-bold text-gray-300 uppercase tracking-widest mb-1 pl-0.5">
                       {group.label}
                     </div>
-                    <div className="flex flex-col gap-1.5">
+                    <div className="flex flex-col gap-1">
                       {group.stages.map((stage) => (
                         <PipelineRow key={stage.name} stage={stage} />
                       ))}
                     </div>
                     {group.exitStage && (
                       <>
-                        <div className="flex items-center gap-2 text-[10px] font-semibold text-gray-300 uppercase tracking-wide my-2">
+                        <div className="flex items-center gap-2 text-[10px] font-semibold text-gray-300 uppercase tracking-wide my-1.5">
                           <span className="flex-1 h-px bg-gray-100 block" />
                           exit
                           <span className="flex-1 h-px bg-gray-100 block" />
                         </div>
-                        <div className="flex flex-col gap-1.5">
+                        <div className="flex flex-col gap-1">
                           <PipelineRow stage={group.exitStage} />
                         </div>
                       </>
@@ -504,7 +507,7 @@ export default function CreateBrandPage() {
 
         {/* Footer (hidden on step 3) */}
         {step < 3 && (
-          <div className="flex items-center justify-between px-7 pt-3.5 pb-5 border-t border-gray-100 gap-2.5">
+          <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl gap-2.5 flex-shrink-0">
             <div className="flex gap-1.5 items-center">
               {Array.from({ length: TOTAL }).map((_, i) => (
                 <StepDot key={i} active={i === step - 1} />

@@ -30,10 +30,12 @@ import {
 import { ChannelList } from "./_discord/ChannelList"
 import { MessageList } from "./_discord/MessageList"
 import { Composer, type PendingFile } from "./_discord/Composer"
+import { PollComposer, type NewPoll } from "./_discord/PollComposer"
 import { MemberList, type Presence } from "./_discord/MemberList"
 import { CommunitySkeleton } from "./_discord/CommunitySkeleton"
 import { rememberBrand } from "./_discord/ServerSwitcher"
 import { ConfirmDialog } from "./_discord/ConfirmDialog"
+import { ThreadPanel } from "./_discord/ThreadPanel"
 import { DiscordCta } from "./_discord/ui"
 import type { Channel, Message, Member } from "./_discord/types"
 import type { MentionResolver } from "./_discord/markdown"
@@ -159,6 +161,16 @@ export function DiscordClient({ brandId }: { brandId: string }) {
   const [files, setFiles] = useState<PendingFile[]>([])
   const [sending, setSending] = useState(false)
   const [replyTo, setReplyTo] = useState<Message | null>(null)
+  /** id of the message currently being edited in place, if any. */
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editDraft, setEditDraft] = useState("")
+  /** The open thread's own conversation view, or null when none is open. */
+  const [activeThread, setActiveThread] = useState<{ id: string; name: string; originMessage: Message } | null>(null)
+  /** Message awaiting delete confirmation — its own dialog, not the shared `confirm` union above, since it has to carry WHICH message. */
+  const [confirmDeleteMessage, setConfirmDeleteMessage] = useState<Message | null>(null)
+  const [deletingMessage, setDeletingMessage] = useState(false)
+  const [pollComposerOpen, setPollComposerOpen] = useState(false)
+  const [creatingPoll, setCreatingPoll] = useState(false)
   const [search, setSearch] = useState("")
   const [searchOpen, setSearchOpen] = useState(false)
   const [gate, setGate] = useState<{ code: string; error: string } | null>(null)
@@ -172,6 +184,8 @@ export function DiscordClient({ brandId }: { brandId: string }) {
     discordLinked: boolean
     /** Which Discord account is linked — shown in the account menu. */
     discordUsername: string | null
+    /** The `**DisplayName**: ` prefix this user's own sent messages carry. */
+    displayName: string | null
     botConfigured: boolean
     /** Last status request failed — state below is the last known good. */
     unreachable?: boolean
@@ -221,6 +235,7 @@ export function DiscordClient({ brandId }: { brandId: string }) {
                 connection: null,
                 discordLinked: false,
                 discordUsername: null,
+                displayName: null,
                 // Unknown, not false — the button stays available.
                 botConfigured: true,
                 unreachable: true,
@@ -237,6 +252,7 @@ export function DiscordClient({ brandId }: { brandId: string }) {
         connection: data.connection ?? null,
         discordLinked: Boolean(data.discordLinked ?? data.accountLinked),
         discordUsername: data.discordUsername ?? null,
+        displayName: data.displayName ?? null,
         botConfigured: data.botConfigured !== false,
         unreachable: false,
         lastError: null,
@@ -246,6 +262,7 @@ export function DiscordClient({ brandId }: { brandId: string }) {
         connection: data.connection ?? null,
         discordLinked: Boolean(data.discordLinked ?? data.accountLinked),
         discordUsername: data.discordUsername ?? null,
+        displayName: data.displayName ?? null,
         // Only an explicit `false` from a successful response counts as
         // unconfigured. A missing field means the server didn't say.
         botConfigured: data.botConfigured !== false,
@@ -263,6 +280,7 @@ export function DiscordClient({ brandId }: { brandId: string }) {
               connection: null,
               discordLinked: false,
               discordUsername: null,
+              displayName: null,
               botConfigured: true,
               unreachable: true,
               lastError: "Couldn't reach the server.",
@@ -578,10 +596,47 @@ export function DiscordClient({ brandId }: { brandId: string }) {
   }, [])
 
   /* ── Send + typing ──────────────────────────────────────────────────────── */
+  /**
+   * Turn the human-readable "@DisplayName" the mention popup inserted into
+   * Discord's own `<@id>` syntax, which is what the composer stores and shows
+   * throughout typing — matching every other piece of text in the box.
+   *
+   * `sendMessage` in lib/discord/bot-provider already sets
+   * `allowed_mentions: { parse: ["users"] }`, so once the id lands in the
+   * outgoing content Discord notifies that user itself; nothing else has to.
+   *
+   * Matched against the CURRENT member list only, longest display name first,
+   * so "@Ann" cannot match inside a message meant for "@Annabelle" and a plain
+   * "@word" that names nobody on this brand is left as ordinary text rather
+   * than silently swallowed.
+   */
+  const encodeMentions = useCallback(
+    (text: string) => {
+      if (!members.length) return text
+      const byLength = [...members].sort((a, b) => b.displayName.length - a.displayName.length)
+      let out = text
+      for (const m of byLength) {
+        if (!m.displayName) continue
+        // Boundaries either side: whitespace/start and whitespace/punctuation/
+        // end, so "@Ann" only matches the whole name, never a prefix of it.
+        const escaped = m.displayName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+        const re = new RegExp(`(^|\\s)@${escaped}(?=$|\\s|[.,!?;:])`, "g")
+        out = out.replace(re, `$1<@${m.id}>`)
+      }
+      return out
+    },
+    [members]
+  )
+
   const send = useCallback(async () => {
-    const content = draft.trim()
+    // `draft` is what the box shows and what a failed send restores — always
+    // the human-readable "@DisplayName" form. `content` is only what goes over
+    // the wire; encoding happens once, here, so the composer itself never has
+    // to know Discord's mention syntax exists.
+    const typed = draft.trim()
+    const content = encodeMentions(typed)
     const attachments = files
-    if ((!content && attachments.length === 0) || !activeId || sending) return
+    if ((!typed && attachments.length === 0) || !activeId || sending) return
 
     setSending(true)
     setDraft("")
@@ -608,9 +663,11 @@ export function DiscordClient({ brandId }: { brandId: string }) {
 
       const data = await res.json()
       if (!res.ok) {
-        // Give the text back rather than losing it. Files can't be restored
-        // into an <input>, so the user is told explicitly.
-        setDraft(content)
+        // Give the text back rather than losing it — the ORIGINAL typed text,
+        // not the encoded wire form, so a retry still shows "@DisplayName"
+        // rather than a raw <@id>. Files can't be restored into an <input>,
+        // so the user is told explicitly.
+        setDraft(typed)
         if (replyTo) setReplyTo(replyTo)
         showToast(data.error ?? "Couldn't send")
         if (attachments.length > 0) showToast("Couldn't send — please re-attach your files.")
@@ -622,12 +679,12 @@ export function DiscordClient({ brandId }: { brandId: string }) {
       setMessages((prev) => (prev.some((m) => m.id === data.message.id) ? prev : [...prev, data.message]))
       atBottomRef.current = true
     } catch {
-      setDraft(content)
+      setDraft(typed)
       showToast("Couldn't send")
     } finally {
       setSending(false)
     }
-  }, [draft, files, activeId, sending, replyTo, base, showToast])
+  }, [draft, files, activeId, sending, replyTo, base, showToast, encodeMentions])
 
   const onDraftChange = useCallback((value: string) => {
     setDraft(value)
@@ -700,6 +757,238 @@ export function DiscordClient({ brandId }: { brandId: string }) {
     navigator.clipboard?.writeText(m.content.replace(/^\*\*[^*]+\*\*:\s/, ""))
     showToast("Message text copied")
   }, [showToast])
+
+  /* ── Edit ───────────────────────────────────────────────────────────────── */
+  // Own-message check on the client is a DISPLAY decision only — it decides
+  // whether the Edit/Delete buttons even render. The server re-derives and
+  // re-checks the identical thing (bot-provider's isOwnMessage) before either
+  // action is allowed to run, so this being wrong or stale can only hide a
+  // button a user was entitled to see, never grant one they weren't.
+  const isOwnMessage = useCallback(
+    (m: Message) => Boolean(m.authorIsBot) && Boolean(status?.displayName) && m.content.startsWith(`**${status?.displayName}**: `),
+    [status?.displayName]
+  )
+
+  const startEdit = useCallback((m: Message) => {
+    setEditingId(m.id)
+    setEditDraft(m.content.replace(/^\*\*[^*]+\*\*:\s/, ""))
+  }, [])
+
+  const cancelEdit = useCallback(() => {
+    setEditingId(null)
+    setEditDraft("")
+  }, [])
+
+  const submitEdit = useCallback(async () => {
+    if (!editingId || !activeId) return
+    const trimmed = editDraft.trim()
+    if (!trimmed) return
+
+    const messageId = editingId
+    const previous = messages.find((m) => m.id === messageId)
+    // Optimistic — the same pattern toggleReaction uses: applied immediately,
+    // rolled back only if the request actually fails.
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === messageId
+          ? { ...m, content: `${m.content.match(/^\*\*[^*]+\*\*:\s/)?.[0] ?? ""}${trimmed}`, editedAt: new Date().toISOString() }
+          : m
+      )
+    )
+    setEditingId(null)
+    setEditDraft("")
+
+    try {
+      const res = await fetch(`${base}/messages`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channelId: activeId, messageId, content: trimmed }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        if (previous) setMessages((prev) => prev.map((m) => (m.id === messageId ? previous : m)))
+        showToast(data.error ?? "Couldn't edit message")
+        return
+      }
+      // Reconciled from what Discord actually stored — matters if the server
+      // trimmed the content to Discord's 2000-char cap.
+      setMessages((prev) => prev.map((m) => (m.id === messageId ? data.message : m)))
+    } catch {
+      if (previous) setMessages((prev) => prev.map((m) => (m.id === messageId ? previous : m)))
+      showToast("Couldn't edit message")
+    }
+  }, [editingId, editDraft, activeId, messages, base, showToast])
+
+  /* ── Delete ─────────────────────────────────────────────────────────────── */
+  // Gated behind ConfirmDialog rather than optimistic-and-reversible like
+  // reactions/pins: unlike those, there is no toggling back — the message and
+  // whatever replies point at it are genuinely gone once this runs.
+  const confirmDeleteMessageHandler = useCallback(async () => {
+    const m = confirmDeleteMessage
+    if (!m || !activeId) return
+    setDeletingMessage(true)
+    try {
+      const res = await fetch(`${base}/messages`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channelId: activeId, messageId: m.id }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        showToast(data.error ?? "Couldn't delete message")
+        return
+      }
+      setMessages((prev) => prev.filter((x) => x.id !== m.id))
+      setConfirmDeleteMessage(null)
+    } catch {
+      showToast("Couldn't delete message")
+    } finally {
+      setDeletingMessage(false)
+    }
+  }, [confirmDeleteMessage, activeId, base, showToast])
+
+  /* ── Pin / unpin ────────────────────────────────────────────────────────── */
+  const togglePin = useCallback(
+    async (m: Message, on: boolean) => {
+      if (!activeId) return
+      setMessages((prev) => prev.map((x) => (x.id === m.id ? { ...x, pinned: on } : x)))
+
+      try {
+        const res = await fetch(`${base}/pins`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ channelId: activeId, messageId: m.id, on }),
+        })
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          setMessages((prev) => prev.map((x) => (x.id === m.id ? { ...x, pinned: !on } : x)))
+          showToast(data.error ?? "Couldn't update pin")
+        } else {
+          showToast(on ? "Message pinned" : "Message unpinned")
+        }
+      } catch {
+        setMessages((prev) => prev.map((x) => (x.id === m.id ? { ...x, pinned: !on } : x)))
+        showToast("Couldn't update pin")
+      }
+    },
+    [activeId, base, showToast]
+  )
+
+  /* ── Poll votes ─────────────────────────────────────────────────────────── */
+  // Optimistic, same pattern as togglePin/toggleReaction: the vote counts and
+  // this user's own picks are what the poll renders from, so applying the
+  // change locally first is what makes a vote feel instant. Rolled back only
+  // if the request actually fails.
+  const votePoll = useCallback(
+    async (m: Message, answerId: number, on: boolean) => {
+      if (!activeId || !m.poll) return
+      const previous = m
+
+      setMessages((prev) =>
+        prev.map((x) => {
+          if (x.id !== m.id || !x.poll) return x
+          // Single-select: turning ONE option on clears any other the user had.
+          const nextMyVotes = x.poll.allowMultiselect
+            ? on
+              ? [...x.myVotes.filter((id) => id !== answerId), answerId]
+              : x.myVotes.filter((id) => id !== answerId)
+            : on
+              ? [answerId]
+              : []
+          const delta = (id: number) =>
+            (nextMyVotes.includes(id) ? 1 : 0) - (x.myVotes.includes(id) ? 1 : 0)
+          const options = x.poll.options.map((o) => ({ ...o, count: Math.max(0, o.count + delta(o.answerId)) }))
+          return {
+            ...x,
+            myVotes: nextMyVotes,
+            poll: { ...x.poll, options, totalVotes: options.reduce((sum, o) => sum + o.count, 0) },
+          }
+        })
+      )
+
+      try {
+        const res = await fetch(`${base}/polls/votes`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ channelId: activeId, messageId: m.id, answerId, on }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          setMessages((prev) => prev.map((x) => (x.id === m.id ? previous : x)))
+          showToast(data.error ?? "Couldn't update your vote")
+          return
+        }
+        // Reconciled from the server's own tally rather than trusted from the
+        // optimistic guess above — the source of truth for counts is
+        // CommunityPollVote, and another user's vote could have landed between
+        // this request going out and its response coming back.
+        setMessages((prev) =>
+          prev.map((x) => (x.id === m.id && x.poll ? { ...x, myVotes: data.myVotes ?? x.myVotes } : x))
+        )
+      } catch {
+        setMessages((prev) => prev.map((x) => (x.id === m.id ? previous : x)))
+        showToast("Couldn't update your vote")
+      }
+    },
+    [activeId, base, showToast]
+  )
+
+  /* ── Threads ────────────────────────────────────────────────────────────── */
+  // Not optimistic — a real thread id from Discord is what the "own
+  // conversation view" opens against, and there is nothing sensible to show
+  // before that id exists.
+  const startThread = useCallback(
+    async (m: Message) => {
+      if (!activeId) return
+      try {
+        const res = await fetch(`${base}/threads`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ channelId: activeId, messageId: m.id }),
+        })
+        const data = await res.json()
+        if (!res.ok) {
+          showToast(data.error ?? "Couldn't create thread")
+          return
+        }
+        setMessages((prev) => prev.map((x) => (x.id === m.id ? { ...x, thread: data.thread } : x)))
+        setActiveThread({ id: data.thread.id, name: data.thread.name, originMessage: m })
+      } catch {
+        showToast("Couldn't create thread")
+      }
+    },
+    [activeId, base, showToast]
+  )
+
+  /* ── Polls ──────────────────────────────────────────────────────────────── */
+  // Not optimistic, same reasoning as startThread: a poll's answer_ids come
+  // from Discord and there is nothing sensible to render before they exist.
+  const createPoll = useCallback(
+    async (poll: NewPoll) => {
+      if (!activeId) return
+      setCreatingPoll(true)
+      try {
+        const res = await fetch(`${base}/polls`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ channelId: activeId, ...poll }),
+        })
+        const data = await res.json()
+        if (!res.ok) {
+          showToast(data.error ?? "Couldn't create poll")
+          return
+        }
+        setMessages((prev) => (prev.some((m) => m.id === data.message.id) ? prev : [...prev, data.message]))
+        atBottomRef.current = true
+        setPollComposerOpen(false)
+      } catch {
+        showToast("Couldn't create poll")
+      } finally {
+        setCreatingPoll(false)
+      }
+    },
+    [activeId, base, showToast]
+  )
 
   const selectChannel = useCallback((id: string) => {
     setActiveId(id)
@@ -1232,6 +1521,20 @@ export function DiscordClient({ brandId }: { brandId: string }) {
           onToggleReaction={toggleReaction}
           onCopyLink={copyLink}
           onCopyText={copyText}
+          isOwnMessage={isOwnMessage}
+          onEdit={startEdit}
+          onDelete={setConfirmDeleteMessage}
+          onTogglePin={togglePin}
+          onStartThread={startThread}
+          onOpenThread={(m) =>
+            m.thread && setActiveThread({ id: m.thread.id, name: m.thread.name, originMessage: m })
+          }
+          onVote={votePoll}
+          editingId={editingId}
+          editDraft={editDraft}
+          onEditDraftChange={setEditDraft}
+          onSubmitEdit={submitEdit}
+          onCancelEdit={cancelEdit}
         />
 
         <Composer
@@ -1242,11 +1545,13 @@ export function DiscordClient({ brandId }: { brandId: string }) {
           files={files}
           replyTo={replyTo}
           typingNames={typingNames}
+          members={members}
           onDraftChange={onDraftChange}
           onAddFiles={addFiles}
           onRemoveFile={removeFile}
           onCancelReply={() => setReplyTo(null)}
           onSend={send}
+          onOpenPollComposer={active?.canSend ? () => setPollComposerOpen(true) : undefined}
         />
       </main>
 
@@ -1280,6 +1585,28 @@ export function DiscordClient({ brandId }: { brandId: string }) {
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {activeThread && (
+          <ThreadPanel
+            base={base}
+            threadId={activeThread.id}
+            threadName={activeThread.name}
+            originMessage={activeThread.originMessage}
+            resolve={resolve}
+            onClose={() => setActiveThread(null)}
+            showToast={showToast}
+          />
+        )}
+      </AnimatePresence>
+
+      <PollComposer
+        open={pollComposerOpen}
+        channelName={active?.name ?? null}
+        busy={creatingPoll}
+        onSubmit={createPoll}
+        onCancel={() => setPollComposerOpen(false)}
+      />
+
       <ConfirmDialog
         open={confirm === "server"}
         title="Disconnect Discord Server?"
@@ -1311,6 +1638,17 @@ export function DiscordClient({ brandId }: { brandId: string }) {
         busy={working}
         onConfirm={logoutAll}
         onCancel={() => setConfirm(null)}
+      />
+
+      <ConfirmDialog
+        open={confirmDeleteMessage !== null}
+        title="Delete message?"
+        body="This permanently deletes the message from Discord. This cannot be undone."
+        confirmLabel="Delete"
+        busyLabel="Deleting…"
+        busy={deletingMessage}
+        onConfirm={confirmDeleteMessageHandler}
+        onCancel={() => setConfirmDeleteMessage(null)}
       />
     </div>
   )

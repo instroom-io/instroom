@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma"
+import { Prisma } from "@prisma/client"
 import { canAddInfluencer } from "@/lib/subscription-limits"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
@@ -68,67 +69,131 @@ export async function GET(
       }
     }
 
-    const brandInfluencers = await prisma.brandInfluencer.findMany({
-      where: {
-        brand_id: brandId,
-        ...(includeDrafts ? {} : { influencer: { is_draft: false } }),
-        // Push the search filter down to the DB via the influencer relation
-        // when a caller supplies one, instead of always loading every row
-        // for the brand and filtering the full set in JS. No current caller
-        // passes `search`, so this is purely additive and changes nothing
-        // for existing behavior — it only narrows the query when used.
-        ...(search
-          ? {
-              influencer: {
-                OR: [
-                  { handle: { contains: search } },
-                  { full_name: { contains: search } },
-                  { niche: { contains: search } },
-                  { location: { contains: search } },
-                ],
-              },
-            }
-          : {}),
-      },
-      // The influencer is read through the relation rather than by a second
-      // findMany over the collected ids. Same tight field list as before — only
-      // what the response below reads — but one fewer database round trip, and
-      // so one fewer connection acquisition per request. That matters here: the
-      // MySQL user has a max_user_connections ceiling, and this is the heaviest
-      // route in the app, so it is the one that trips the ceiling first and
-      // surfaces as "Failed to load influencers".
-      //
-      // A missing influencer still comes back as null and is still filtered out
-      // below — the tables are MyISAM, so there is no foreign key to guarantee
-      // the row exists.
-      include: {
-        attribution: true,
-        influencer: {
-          select: {
-            id: true,
-            handle: true,
-            platform: true,
-            full_name: true,
-            email: true,
-            gender: true,
-            niche: true,
-            location: true,
-            bio: true,
-            profile_image_url: true,
-            is_draft: true,
-            social_link: true,
-            follower_count: true,
-            engagement_rate: true,
-            avg_likes: true,
-            avg_comments: true,
-            avg_views: true,
-            created_at: true,
-            updated_at: true,
-          },
+    // brand_id + the caller's own filters, WITHOUT excluding any orphan — kept
+    // as its own object so the fallback below can reuse it unchanged and only
+    // add the exclusion, rather than the two queries drifting apart over time.
+    const brandInfluencerWhere = {
+      brand_id: brandId,
+      ...(includeDrafts ? {} : { influencer: { is_draft: false } }),
+      // Push the search filter down to the DB via the influencer relation
+      // when a caller supplies one, instead of always loading every row
+      // for the brand and filtering the full set in JS. No current caller
+      // passes `search`, so this is purely additive and changes nothing
+      // for existing behavior — it only narrows the query when used.
+      ...(search
+        ? {
+            influencer: {
+              OR: [
+                { handle: { contains: search } },
+                { full_name: { contains: search } },
+                { niche: { contains: search } },
+                { location: { contains: search } },
+              ],
+            },
+          }
+        : {}),
+    }
+
+    const brandInfluencerInclude = {
+      attribution: true,
+      influencer: {
+        select: {
+          id: true,
+          handle: true,
+          platform: true,
+          full_name: true,
+          email: true,
+          gender: true,
+          niche: true,
+          location: true,
+          bio: true,
+          profile_image_url: true,
+          is_draft: true,
+          social_link: true,
+          follower_count: true,
+          engagement_rate: true,
+          avg_likes: true,
+          avg_comments: true,
+          avg_views: true,
+          created_at: true,
+          updated_at: true,
         },
       },
-      orderBy: { created_at: "desc" },
-    })
+    }
+
+    // The influencer is read through the relation rather than by a second
+    // findMany over the collected ids. Same tight field list as before — only
+    // what the response below reads — but one fewer database round trip, and
+    // so one fewer connection acquisition per request. That matters here: the
+    // MySQL user has a max_user_connections ceiling, and this is the heaviest
+    // route in the app, so it is the one that trips the ceiling first and
+    // surfaces as "Failed to load influencers".
+    //
+    // A row whose influencer_id no longer resolves is NOT quietly filtered
+    // below: `influencer` is a required relation, and MyISAM has no real FK
+    // (verified against this database — Influencer rows have gone missing
+    // while their BrandInfluencer link stayed behind), so Prisma cannot
+    // materialise it as `null` for that filter to catch. It instead refuses
+    // the WHOLE findMany with "Inconsistent query result: Field influencer is
+    // required to return data, got `null` instead" — one bad row taking down
+    // every influencer in the brand.
+    //
+    // Caught narrowly by MESSAGE, not by a broad catch that would also swallow
+    // a genuine fault. This is NOT a Prisma error code — reproduced directly
+    // against this database: Prisma reports it as a bare
+    // PrismaClientUnknownRequestError with `code: undefined`, so the message
+    // text is the only signal available to tell "a required relation is
+    // missing its row" apart from every other failure this query could have.
+    // On that one specific message, and nothing else, the same query runs once
+    // more excluding the specific influencer_id(s) found to be dangling — the
+    // rest of the brand's data is still real and still returned; nothing here
+    // creates, edits or removes any database row.
+    const isMissingRequiredRelationError = (err: unknown): boolean =>
+      err instanceof Prisma.PrismaClientUnknownRequestError &&
+      err.message.includes("Inconsistent query result") &&
+      err.message.includes("is required to return data")
+
+    let brandInfluencers
+    try {
+      brandInfluencers = await prisma.brandInfluencer.findMany({
+        where: brandInfluencerWhere,
+        include: brandInfluencerInclude,
+        orderBy: { created_at: "desc" },
+      })
+    } catch (err) {
+      if (!isMissingRequiredRelationError(err)) throw err
+
+      // Same query, id-only, so identifying WHICH influencer_id is dangling
+      // costs one narrow round trip rather than guessing or discarding the
+      // whole brand. is_draft is read here too — a draft's placeholder
+      // Influencer resolving fine means it isn't the dangling one.
+      const candidateIds = await prisma.brandInfluencer.findMany({
+        where: { brand_id: brandId },
+        select: { id: true, influencer_id: true },
+      })
+      const existingInfluencerIds = new Set(
+        (
+          await prisma.influencer.findMany({
+            where: { id: { in: candidateIds.map((c) => c.influencer_id) } },
+            select: { id: true },
+          })
+        ).map((i) => i.id)
+      )
+      const orphanIds = candidateIds
+        .filter((c) => !existingInfluencerIds.has(c.influencer_id))
+        .map((c) => c.id)
+
+      console.error(
+        `[GET /api/brand/${brandId}/influencers] excluded ${orphanIds.length} ` +
+          `BrandInfluencer row(s) whose Influencer no longer exists: ${orphanIds.join(", ")}`
+      )
+
+      brandInfluencers = await prisma.brandInfluencer.findMany({
+        where: { ...brandInfluencerWhere, id: { notIn: orphanIds } },
+        include: brandInfluencerInclude,
+        orderBy: { created_at: "desc" },
+      })
+    }
 
     // Only asked for when the caller wants it; previously this sat in a
     // Promise.all whose other branch was an already-resolved literal.

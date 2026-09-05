@@ -10,14 +10,15 @@
 // seconds, so without memoisation each tick would re-render every message, every
 // attachment and every reaction in the viewport.
 
-import { memo, useMemo, useState, useCallback, useEffect, useRef } from "react"
+import { memo, useMemo, useState, useCallback, useEffect, useRef, useSyncExternalStore } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import {
   IconCornerUpLeft, IconMoodPlus, IconLink, IconDots, IconLoader2,
-  IconCornerDownRight, IconPin, IconMessageReply, IconBrandDiscord,
+  IconCornerDownRight, IconPin, IconPinnedOff, IconMessageReply, IconBrandDiscord,
   IconFile, IconDownload, IconX, IconCopy, IconPlayerPlayFilled, IconBolt,
+  IconEdit, IconTrash, IconMessages, IconCheck,
 } from "@tabler/icons-react"
-import { RichText, type MentionResolver } from "./markdown"
+import { RichText, subscribeClock, clockSnapshot, serverClockSnapshot, TICK_MS, type MentionResolver } from "./markdown"
 import { EmojiPicker, QUICK_REACTIONS, rememberEmoji } from "@/components/shared/emoji-picker"
 import type { Message, Attachment, MessageGroup } from "./types"
 import { Skeleton } from "./ui"
@@ -215,6 +216,101 @@ const AttachmentView = memo(function AttachmentView({
   )
 })
 
+/* ── Poll ─────────────────────────────────────────────────────────────────── */
+
+/**
+ * One option row. Counts and percentages come from Instroom's own vote store
+ * (see CommunityPollVote), not from Discord's poll object — the message's
+ * `poll.options[].count` the API sends has ALREADY been overlaid with the
+ * real per-user tally server-side, so this component reads it exactly like
+ * any other field on the message.
+ */
+const PollView = memo(function PollView({
+  message,
+  onVote,
+}: {
+  message: Message
+  onVote: (m: Message, answerId: number, on: boolean) => void
+}) {
+  const poll = message.poll
+  const [pendingId, setPendingId] = useState<number | null>(null)
+  // The shared clock markdown.tsx already ticks every 30s for relative
+  // timestamps — reused here rather than reading Date.now() directly (impure
+  // during render) or standing up a second timer. This is a DISPLAY hint
+  // only; the actual close is enforced server-side on every vote request
+  // regardless of what this component currently thinks the time is.
+  const tick = useSyncExternalStore(subscribeClock, clockSnapshot, serverClockSnapshot)
+
+  if (!poll) return null
+
+  const expired = poll.expiresAt ? new Date(poll.expiresAt).getTime() <= tick * TICK_MS : false
+  const closed = poll.isFinalized || expired
+  const myVotes = new Set(message.myVotes)
+  const maxCount = Math.max(1, ...poll.options.map((o) => o.count))
+
+  const pick = (answerId: number) => {
+    if (closed || pendingId !== null) return
+    const already = myVotes.has(answerId)
+    // Single-select picking a DIFFERENT option than the current one still
+    // reads as "on" for that option — the route's own single-select handling
+    // (setPollVote) takes care of clearing the old one.
+    const nextOn = poll.allowMultiselect ? !already : true
+    setPendingId(answerId)
+    Promise.resolve(onVote(message, answerId, already && poll.allowMultiselect ? false : nextOn)).finally(() =>
+      setPendingId(null)
+    )
+  }
+
+  return (
+    <div className="mt-1.5 w-full max-w-[380px] rounded-xl border border-gray-200 bg-white p-3">
+      <p className="mb-2 text-[13px] font-semibold text-gray-900">{poll.question}</p>
+
+      <div className="flex flex-col gap-1.5">
+        {poll.options.map((o) => {
+          const pct = poll.totalVotes > 0 ? Math.round((o.count / poll.totalVotes) * 100) : 0
+          const mine = myVotes.has(o.answerId)
+          return (
+            <button
+              key={o.answerId}
+              type="button"
+              disabled={closed || pendingId !== null}
+              onClick={() => pick(o.answerId)}
+              aria-pressed={mine}
+              className={`group relative overflow-hidden rounded-lg border px-2.5 py-1.5 text-left text-[12.5px] transition-colors disabled:cursor-default ${
+                mine ? "border-[#0F6B3E]/50 bg-[#0F6B3E]/5" : "border-gray-200 hover:bg-gray-50"
+              }`}
+            >
+              {/* Fill bar — width by SHARE OF THE LEADING OPTION, not of total
+                  votes, so a two-option 1-vs-1 poll doesn't render two full-width
+                  bars that read as 100% each. */}
+              <span
+                aria-hidden
+                className={`absolute inset-y-0 left-0 -z-0 transition-all ${mine ? "bg-[#0F6B3E]/10" : "bg-gray-100"}`}
+                style={{ width: `${(o.count / maxCount) * 100}%` }}
+              />
+              <span className="relative flex items-center justify-between gap-2">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  {mine && <IconCheck size={13} className="flex-shrink-0 text-[#0F6B3E]" aria-hidden />}
+                  <span className="min-w-0 truncate text-gray-800">{o.text}</span>
+                </span>
+                <span className="flex-shrink-0 text-[11px] tabular-nums text-gray-400">
+                  {poll.totalVotes > 0 ? `${pct}% · ${o.count}` : "0"}
+                </span>
+              </span>
+            </button>
+          )
+        })}
+      </div>
+
+      <p className="mt-2 text-[10.5px] text-gray-400">
+        {poll.totalVotes} vote{poll.totalVotes === 1 ? "" : "s"}
+        {poll.allowMultiselect && !closed && " · Select one or more"}
+        {closed && " · Poll closed"}
+      </p>
+    </div>
+  )
+})
+
 /* ── Lightbox ─────────────────────────────────────────────────────────────── */
 
 function Lightbox({ attachment, onClose }: { attachment: Attachment; onClose: () => void }) {
@@ -331,17 +427,29 @@ const ReactionBar = memo(function ReactionBar({
 const HoverActions = memo(function HoverActions({
   message,
   canSend,
+  isOwn,
   onReply,
   onReact,
   onCopyLink,
   onCopyText,
+  onEdit,
+  onDelete,
+  onTogglePin,
+  onStartThread,
 }: {
   message: Message
   canSend: boolean
+  /** This viewer's own message, per the client-side check — see isOwnMessage's
+   *  own comment on why this only ever hides a button, never grants one. */
+  isOwn: boolean
   onReply: (m: Message) => void
   onReact: (m: Message, emoji: string) => void
   onCopyLink: (m: Message) => void
   onCopyText: (m: Message) => void
+  onEdit: (m: Message) => void
+  onDelete: (m: Message) => void
+  onTogglePin: (m: Message, on: boolean) => void
+  onStartThread: (m: Message) => void
 }) {
   const [showPicker, setShowPicker] = useState(false)
   const [showMore, setShowMore] = useState(false)
@@ -436,6 +544,25 @@ const HoverActions = memo(function HoverActions({
               role="menu"
               className="absolute right-0 top-full z-40 mt-1 w-[188px] overflow-hidden rounded-lg border border-gray-200 bg-white py-1 shadow-xl"
             >
+              {isOwn && (
+                <MenuItem icon={<IconEdit size={14} />} onClick={() => { onEdit(message); setShowMore(false) }}>
+                  Edit
+                </MenuItem>
+              )}
+              {canSend && !message.thread && (
+                <MenuItem
+                  icon={<IconMessages size={14} />}
+                  onClick={() => { onStartThread(message); setShowMore(false) }}
+                >
+                  Create thread
+                </MenuItem>
+              )}
+              <MenuItem
+                icon={message.pinned ? <IconPinnedOff size={14} /> : <IconPin size={14} />}
+                onClick={() => { onTogglePin(message, !message.pinned); setShowMore(false) }}
+              >
+                {message.pinned ? "Unpin" : "Pin"}
+              </MenuItem>
               <MenuItem icon={<IconCopy size={14} />} onClick={() => { onCopyText(message); setShowMore(false) }}>
                 Copy text
               </MenuItem>
@@ -448,10 +575,17 @@ const HoverActions = memo(function HoverActions({
               >
                 Open in Discord
               </MenuItem>
-              <div className="my-1 h-px bg-gray-100" />
-              <div className="px-3 py-1 text-[10.5px] leading-relaxed text-gray-400">
-                {message.pinned ? "Pinned in Discord" : "Editing and deleting happen in Discord."}
-              </div>
+              {isOwn && (
+                <>
+                  <div className="my-1 h-px bg-gray-100" />
+                  <MenuItem
+                    icon={<IconTrash size={14} className="text-red-500" />}
+                    onClick={() => { onDelete(message); setShowMore(false) }}
+                  >
+                    <span className="text-red-500">Delete</span>
+                  </MenuItem>
+                </>
+              )}
             </motion.div>
           )}
         </AnimatePresence>
@@ -482,6 +616,69 @@ function MenuItem({
   )
 }
 
+/* ── Inline edit box ──────────────────────────────────────────────────────── */
+
+/**
+ * Replaces a message's rendered content in place while it is being edited.
+ * Enter saves, Shift+Enter inserts a newline, Escape cancels — the same
+ * three keys the main composer already uses, so editing feels like the same
+ * control rather than a second one to learn.
+ */
+const EditBox = memo(function EditBox({
+  value,
+  onChange,
+  onSubmit,
+  onCancel,
+}: {
+  value: string
+  onChange: (v: string) => void
+  onSubmit: () => void
+  onCancel: () => void
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.focus()
+    el.setSelectionRange(el.value.length, el.value.length)
+  }, [])
+
+  return (
+    <div className="mt-0.5 rounded-lg border border-[#0F6B3E]/40 bg-white p-1.5">
+      <textarea
+        ref={ref}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            e.preventDefault()
+            if (value.trim()) onSubmit()
+          }
+          if (e.key === "Escape") { e.preventDefault(); onCancel() }
+        }}
+        rows={1}
+        className="max-h-[200px] min-h-[24px] w-full resize-none bg-transparent px-1 py-0.5 text-[13.5px] leading-[1.45] text-gray-800 outline-none"
+      />
+      <div className="mt-1 flex items-center gap-1 px-1 text-[10.5px] text-gray-400">
+        escape to{" "}
+        <button type="button" onClick={onCancel} className="font-medium text-gray-600 hover:underline">
+          cancel
+        </button>
+        · enter to{" "}
+        <button
+          type="button"
+          onClick={onSubmit}
+          disabled={!value.trim()}
+          className="font-medium text-[#0F6B3E] hover:underline disabled:pointer-events-none disabled:text-gray-300"
+        >
+          save
+        </button>
+      </div>
+    </div>
+  )
+})
+
 /* ── One message block ────────────────────────────────────────────────────── */
 
 const GroupView = memo(function GroupView({
@@ -497,6 +694,18 @@ const GroupView = memo(function GroupView({
   onCopyText,
   onOpenImage,
   onJumpToReply,
+  isOwnMessage,
+  onEdit,
+  onDelete,
+  onTogglePin,
+  onStartThread,
+  onOpenThread,
+  onVote,
+  editingId,
+  editDraft,
+  onEditDraftChange,
+  onSubmitEdit,
+  onCancelEdit,
 }: {
   group: Group
   canSend: boolean
@@ -510,6 +719,18 @@ const GroupView = memo(function GroupView({
   onCopyText: (m: Message) => void
   onOpenImage: (a: Attachment) => void
   onJumpToReply: (id: string) => void
+  isOwnMessage: (m: Message) => boolean
+  onEdit: (m: Message) => void
+  onDelete: (m: Message) => void
+  onTogglePin: (m: Message, on: boolean) => void
+  onStartThread: (m: Message) => void
+  onOpenThread: (m: Message) => void
+  onVote: (m: Message, answerId: number, on: boolean) => void
+  editingId: string | null
+  editDraft: string
+  onEditDraftChange: (v: string) => void
+  onSubmitEdit: () => void
+  onCancelEdit: () => void
 }) {
   const first = group.messages[0]
 
@@ -609,12 +830,21 @@ const GroupView = memo(function GroupView({
                     </span>
                   )}
 
-                  {content && (
-                    <div className="flex flex-wrap items-baseline gap-1.5">
-                      <RichText content={content} resolve={resolve} highlight={highlight} />
-                      {m.editedAt && <span className="text-[10px] text-gray-400">(edited)</span>}
-                      {m.pinned && <IconPin size={10} className="text-gray-400" aria-label="Pinned" />}
-                    </div>
+                  {m.id === editingId ? (
+                    <EditBox
+                      value={editDraft}
+                      onChange={onEditDraftChange}
+                      onSubmit={onSubmitEdit}
+                      onCancel={onCancelEdit}
+                    />
+                  ) : (
+                    content && (
+                      <div className="flex flex-wrap items-baseline gap-1.5">
+                        <RichText content={content} resolve={resolve} highlight={highlight} />
+                        {m.editedAt && <span className="text-[10px] text-gray-400">(edited)</span>}
+                        {m.pinned && <IconPin size={10} className="text-gray-400" aria-label="Pinned" />}
+                      </div>
+                    )
                   )}
 
                   {m.attachments.length > 0 && (
@@ -625,13 +855,17 @@ const GroupView = memo(function GroupView({
                     </div>
                   )}
 
+                  {m.poll && <PollView message={m} onVote={onVote} />}
+
                   <ReactionBar message={m} onToggle={onToggleReaction} onOpenPicker={onSetPicker} />
 
                   {m.thread && (
-                    <a
-                      href={`https://discord.com/channels/@me/${m.thread.id}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    // Opens the in-app thread view — its own conversation,
+                    // still attached to this message — rather than sending the
+                    // user out to Discord for something Instroom can show.
+                    <button
+                      type="button"
+                      onClick={() => onOpenThread(m)}
                       className="mt-1 inline-flex items-center gap-1.5 rounded-md bg-gray-50 px-2 py-1 text-[11px] text-gray-500 transition-colors hover:bg-gray-100"
                     >
                       <IconMessageReply size={11} aria-hidden />
@@ -639,16 +873,21 @@ const GroupView = memo(function GroupView({
                       <span className="text-gray-400">
                         {m.thread.messageCount} {m.thread.messageCount === 1 ? "reply" : "replies"}
                       </span>
-                    </a>
+                    </button>
                   )}
 
                   <HoverActions
                     message={m}
                     canSend={canSend}
+                    isOwn={isOwnMessage(m)}
                     onReply={onReply}
                     onReact={react}
                     onCopyLink={onCopyLink}
                     onCopyText={onCopyText}
+                    onEdit={onEdit}
+                    onDelete={onDelete}
+                    onTogglePin={onTogglePin}
+                    onStartThread={onStartThread}
                   />
 
                   {/* Picker opened from the reaction bar's "+" rather than the
@@ -691,6 +930,18 @@ export function MessageList({
   onToggleReaction,
   onCopyLink,
   onCopyText,
+  isOwnMessage,
+  onEdit,
+  onDelete,
+  onTogglePin,
+  onStartThread,
+  onOpenThread,
+  onVote,
+  editingId,
+  editDraft,
+  onEditDraftChange,
+  onSubmitEdit,
+  onCancelEdit,
 }: {
   messages: Message[]
   loading: boolean
@@ -706,6 +957,20 @@ export function MessageList({
   onToggleReaction: (m: Message, emoji: string, on: boolean) => void
   onCopyLink: (m: Message) => void
   onCopyText: (m: Message) => void
+  isOwnMessage: (m: Message) => boolean
+  onEdit: (m: Message) => void
+  onDelete: (m: Message) => void
+  onTogglePin: (m: Message, on: boolean) => void
+  onStartThread: (m: Message) => void
+  /** Opens the in-app thread view for a message that already has one. */
+  onOpenThread: (m: Message) => void
+  onVote: (m: Message, answerId: number, on: boolean) => void
+  /** id of the message currently being edited in place, or null. */
+  editingId: string | null
+  editDraft: string
+  onEditDraftChange: (v: string) => void
+  onSubmitEdit: () => void
+  onCancelEdit: () => void
 }) {
   const [lightbox, setLightbox] = useState<Attachment | null>(null)
   const [pickerId, setPickerId] = useState<string | null>(null)
@@ -797,6 +1062,18 @@ export function MessageList({
                 onCopyText={onCopyText}
                 onOpenImage={setLightbox}
                 onJumpToReply={jumpToReply}
+                isOwnMessage={isOwnMessage}
+                onEdit={onEdit}
+                onDelete={onDelete}
+                onTogglePin={onTogglePin}
+                onStartThread={onStartThread}
+                onOpenThread={onOpenThread}
+                onVote={onVote}
+                editingId={editingId}
+                editDraft={editDraft}
+                onEditDraftChange={onEditDraftChange}
+                onSubmitEdit={onSubmitEdit}
+                onCancelEdit={onCancelEdit}
               />
             )
           )

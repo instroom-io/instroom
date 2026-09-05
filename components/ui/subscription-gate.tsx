@@ -60,13 +60,19 @@ export function SubscriptionGate({
         {children}
       </div>
 
-      {/* Overlay — soft backdrop blur for depth */}
+      {/* Overlay — soft backdrop blur for depth.
+          items-start + a viewport-height-relative top offset, not
+          items-center: dead-center in the remaining content height read as
+          floating in the middle of the screen, disconnected from the header
+          above it. pt-[12vh] keeps the card sitting just beneath the header
+          on any viewport HEIGHT rather than fixing a pixel offset that would
+          only look right at one resolution. */}
       <div
-        className="absolute inset-0 z-10 flex items-center justify-center"
+        className="absolute inset-0 z-10 flex items-start justify-center pt-[12vh] sm:pt-[14vh]"
         style={{ background: "rgba(10,20,15,0.45)", backdropFilter: "blur(1px)" }}
       >
         <div
-          className="flex flex-col items-center gap-6 rounded-2xl px-8 py-9 text-center"
+          className="flex flex-col items-center rounded-2xl px-6 sm:px-8 pt-6 sm:pt-7 pb-7 sm:pb-8 text-center"
           style={{
             background: "rgba(255,255,255,0.98)",
             boxShadow:
@@ -76,13 +82,18 @@ export function SubscriptionGate({
             borderRadius: 20,
           }}
         >
-          {/* Lock icon */}
+          {/* Lock icon — icon, title and description read as ONE top group:
+              tight gaps within it (mb-3.5, gap-1.5), then a wider gap below
+              before the separate plan/CTA action group. The old uniform
+              gap-6 between every child treated the icon as its own section
+              with as much air below it as above the CTA, which is what read
+              as "floating" at the top. */}
           <div
-            className="flex items-center justify-center"
+            className="flex items-center justify-center mb-3.5"
             style={{
-              width: 52,
-              height: 52,
-              borderRadius: 14,
+              width: 44,
+              height: 44,
+              borderRadius: 12,
               background: isUpgradeCase
                 ? "linear-gradient(145deg, #fef3c7 0%, #fde68a 100%)"
                 : "linear-gradient(145deg, #e6f9ef 0%, #c8f0db 100%)",
@@ -92,8 +103,8 @@ export function SubscriptionGate({
             }}
           >
             <svg
-              width="22"
-              height="22"
+              width="19"
+              height="19"
               viewBox="0 0 24 24"
               fill="none"
               stroke={isUpgradeCase ? "#b45309" : "#0F6B3E"}
@@ -118,7 +129,7 @@ export function SubscriptionGate({
           </div>
 
           {/* Text */}
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-1.5 mb-6">
             <h2
               className="text-xl font-semibold leading-tight"
               style={{ color: "#111827", letterSpacing: "-0.025em" }}
