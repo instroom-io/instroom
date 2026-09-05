@@ -440,7 +440,7 @@ function PostTrackerCardBase({ inf, onOpen, onMove, canApproveInfluencers }: {
             src={inf.profileImageUrl ?? undefined}
             name={inf.influencer}
             handle={inf.handle}
-            size={40}
+            size={36}
           />
           <div className="flex flex-col text-sm min-w-0">
             <span className="font-medium text-gray-900">{inf.influencer}</span>
@@ -449,7 +449,7 @@ function PostTrackerCardBase({ inf, onOpen, onMove, canApproveInfluencers }: {
         </div>
 
         {/* Platform + location */}
-        <div className="flex items-center gap-2 text-xs text-gray-500 mb-1.5">
+        <div className="flex items-center gap-2 text-xs text-gray-500 mb-2">
           {/* Same treatment as the Pipeline card — see the note there. */}
           <span className="inline-flex min-w-0 items-center gap-1.5 leading-none">
             <PlatformIcon platform={inf.platform} size={14} className="shrink-0" />
@@ -495,7 +495,7 @@ function PostTrackerCardBase({ inf, onOpen, onMove, canApproveInfluencers }: {
 
       {/* Stage action buttons — same pattern as pipeline cards */}
       {!isTerminal && (nextStage || showNoPost) && (
-        <div className="flex gap-1.5 mt-3 pt-2 border-t border-gray-100 flex-nowrap">
+        <div className="flex gap-1.5 mt-2.5 pt-2 border-t border-gray-100 flex-nowrap">
           {nextStage && (
             <button
               onClick={e => { e.stopPropagation(); if (!canApproveInfluencers) return; onMove(inf.id, nextStage) }}
@@ -535,7 +535,7 @@ function DroppableColumn({ id, children, isExit }: { id: string; children: React
   const { setNodeRef, isOver } = useDroppable({ id })
   return (
     <div ref={setNodeRef}
-      className={`flex flex-col gap-3 transition-all rounded-lg ${
+      className={`flex flex-col gap-3 h-full transition-all rounded-lg ${
         isOver ? (isExit ? "bg-red-50" : "bg-gray-50") : ""
       }`}>
       {children}
@@ -1379,6 +1379,26 @@ function PostTrackerContent() {
 
   const { data, isLoading, error, updateColumn, updateCampaignType, updatePostDetails, updateOrderDetails, isSaving, saveFailed, saveMessage, refetch } = useClosedData(brandId)
 
+  // Same approach and constant as the Pipeline board (kanban/kanban-board.tsx)
+  // — see there for why it's measured rather than a flat vh, and why this
+  // depends on `isLoading`.
+  const boardPanelRef = useRef<HTMLDivElement>(null)
+  const [columnHeight, setColumnHeight] = useState<number | null>(null)
+
+  useEffect(() => {
+    function recomputeColumnHeight() {
+      const panel = boardPanelRef.current
+      if (!panel) return
+      const top = panel.getBoundingClientRect().top
+      const RESERVED_BELOW_TOP = 76
+      const available = window.innerHeight - top - RESERVED_BELOW_TOP
+      setColumnHeight(Math.max(220, Math.round(available)))
+    }
+    recomputeColumnHeight()
+    window.addEventListener("resize", recomputeColumnHeight)
+    return () => window.removeEventListener("resize", recomputeColumnHeight)
+  }, [isLoading])
+
   const [view,                 setView]                 = useState<"Board"|"list">("Board")
   const [search,               setSearch]               = useState("")
   const [activeId,             setActiveId]             = useState<string|null>(null)
@@ -1888,14 +1908,14 @@ function PostTrackerContent() {
       {/* ── KANBAN ── */}
       {view==="Board"&&(
         <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-          <div className="rounded-xl border border-[#0F6B3E]/10 bg-white p-5 overflow-x-auto" style={{ scrollSnapType: "x proximity" }}>
+          <div ref={boardPanelRef} className="rounded-xl border border-[#0F6B3E]/10 bg-white px-5 pt-5 pb-6 overflow-x-auto" style={{ scrollSnapType: "x proximity" }}>
             <div className="flex gap-4 min-w-max">
 
               {/* Main columns */}
               {COLUMNS.filter(c=>c.key!=="No post").map((col, colIndex) => {
                 const items = getItemsByColumn(col.key)
                 return (
-                  <div key={col.key} className="w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0" style={{ scrollSnapAlign: "start" }}>
+                  <div key={col.key} className="w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0" style={{ scrollSnapAlign: "start", height: columnHeight ?? undefined }}>
                     <DroppableColumn id={col.key}>
                       {/* ── Column header — identical structure to pipeline ── */}
                       <div
@@ -1914,7 +1934,7 @@ function PostTrackerContent() {
                       </div>
                       </div>
                       {/* No description text here — it's in the tooltip */}
-                      <div className="flex flex-col gap-2 min-h-[400px] mt-2">
+                      <div className="flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto mt-2 pr-1">
                         {items.length===0?(
                           <div className="border-2 border-dashed border-gray-200 rounded-lg p-4 text-center text-xs text-gray-400">Drop here</div>
                         ):items.map(inf=>(
@@ -1940,7 +1960,7 @@ function PostTrackerContent() {
                 const col   = COLUMNS.find(c=>c.key==="No post")!
                 const items = getItemsByColumn(col.key)
                 return (
-                  <div className="w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0" style={{ scrollSnapAlign: "start" }}>
+                  <div className="w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0" style={{ scrollSnapAlign: "start", height: columnHeight ?? undefined }}>
                     <DroppableColumn id={col.key} isExit>
                       {/* Soft red style matching pipeline NI header */}
                       <div className="bg-red-100 text-red-700 border border-red-200 rounded-lg px-3 py-2 text-sm font-semibold flex items-center justify-between">
@@ -1955,7 +1975,7 @@ function PostTrackerContent() {
                           <span className="bg-red-200 text-red-700 rounded-full px-2 py-0.5 text-xs">{items.length}</span>
                         </div>
                       </div>
-                      <div className="flex flex-col gap-2 min-h-[400px] mt-2">
+                      <div className="flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto mt-2 pr-1">
                         {items.length===0?(
                           <div className="border-2 border-dashed border-red-200 rounded-lg p-4 text-center text-xs text-gray-400">Drop here</div>
                         ):items.map(inf=>(

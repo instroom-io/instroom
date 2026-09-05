@@ -814,7 +814,7 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
 // browser does for items nobody is looking at.
 const OFFSCREEN_SKIP: CSSProperties = {
   contentVisibility: "auto",
-  containIntrinsicSize: "auto 168px",
+  containIntrinsicSize: "auto 178px",
 }
 
 function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApproveInfluencers }: {
@@ -844,14 +844,14 @@ function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApprov
             src={influencer.profileImageUrl ?? undefined}
             name={influencer.influencer}
             handle={influencer.handle}
-            size={40}
+            size={36}
           />
           <div className="flex flex-col text-sm min-w-0">
             <span className="font-medium text-gray-900">{influencer.influencer}</span>
             <span className="text-xs text-gray-500">@{influencer.handle}</span>
           </div>
         </div>
-        <div className="flex items-center gap-2 text-xs text-gray-500 mb-1.5">
+        <div className="flex items-center gap-2 text-xs text-gray-500 mb-2">
           {/* Icon then name, in the one treatment every board uses: the mark at
               14px, centred against the label, gap-1.5. Narrow columns take
               their space out of the TEXT — min-w-0 on the pair with truncate on
@@ -923,7 +923,7 @@ function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApprov
 
       {/* Quick-move buttons — only for non-terminal cards */}
       {nextStages.length > 0 && !terminal && (
-        <div className="flex gap-1.5 mt-3 pt-2 border-t border-gray-100 flex-nowrap">
+        <div className="flex gap-1.5 mt-2.5 pt-2 border-t border-gray-100 flex-nowrap">
           {nextStages.map((stage) => (
             <button key={stage}
               onClick={(e) => { e.stopPropagation(); if (!canApproveInfluencers) return; onStatusChange(influencer.id, stage) }}
@@ -1025,13 +1025,13 @@ function StatusDropdown({ currentStatus, onStatusChange, canApproveInfluencers }
 }
 
 // ─── Droppable / Draggable ────────────────────────────────────────────────────
-function DroppableColumn({ id, children }: { id: string; children: React.ReactNode }) {
+function DroppableColumn({ id, children, height }: { id: string; children: React.ReactNode; height?: number | null }) {
   const { setNodeRef, isOver } = useDroppable({ id })
   const isExit = id === "not-interested" || id === "for-order-creation"
   return (
     <div ref={setNodeRef}
-      style={{ scrollSnapAlign: "start" }}
-      className={`flex flex-col gap-3 w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0 transition-all rounded-lg ${
+      style={{ scrollSnapAlign: "start", height: height ?? undefined }}
+      className={`flex flex-col gap-2.5 w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0 transition-all rounded-lg ${
         isOver ? (isExit ? "bg-red-50" : "bg-gray-50") : ""
       }`}>
       {children}
@@ -1117,6 +1117,32 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
 
   const { canApproveInfluencers, loading: capabilitiesLoading } = useBrandCapabilities(brandId)
   const canApprove = !capabilitiesLoading && canApproveInfluencers
+
+  // Column height is measured from the real viewport rather than a flat vh
+  // guess, so each column's scrollbar appears only once it genuinely doesn't
+  // fit — not before, not with dead space left over.
+  //
+  // Depends on `isLoading`: the board panel isn't in the DOM until it's false
+  // (a BoardSkeleton renders in its place before then), so an empty-deps
+  // effect would measure nothing during that phase and never fire again.
+  const boardPanelRef = useRef<HTMLDivElement>(null)
+  const [columnHeight, setColumnHeight] = useState<number | null>(null)
+
+  useEffect(() => {
+    function recomputeColumnHeight() {
+      const panel = boardPanelRef.current
+      if (!panel) return
+      const top = panel.getBoundingClientRect().top
+      // Tuned empirically against the real page — adjust if columns end up
+      // clipped or leave dead space above the horizontal scrollbar.
+      const RESERVED_BELOW_TOP = 76
+      const available = window.innerHeight - top - RESERVED_BELOW_TOP
+      setColumnHeight(Math.max(220, Math.round(available)))
+    }
+    recomputeColumnHeight()
+    window.addEventListener("resize", recomputeColumnHeight)
+    return () => window.removeEventListener("resize", recomputeColumnHeight)
+  }, [isLoading])
 
   const toast = useCallback((msg: string, duration = 3000, type: "success" | "error" = "success") => {
     setToastType(type)
@@ -1716,13 +1742,13 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
       {/* ── KANBAN VIEW ── */}
       {view === "Board" && (
         <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-          <div className="rounded-xl border border-[#0F6B3E]/10 bg-white p-5 overflow-x-auto" style={{ scrollSnapType: "x proximity" }}>
+          <div ref={boardPanelRef} className="rounded-xl border border-[#0F6B3E]/10 bg-white px-5 pt-5 pb-6 overflow-x-auto" style={{ scrollSnapType: "x proximity" }}>
             <div className="flex gap-4 min-w-max">
 
               {visibleColumns.filter((c) => c.key !== "not-interested").map((col, colIndex) => {
                 const items = getItemsByColumn(col.key)
                 return (
-                  <DroppableColumn key={col.key} id={col.key}>
+                  <DroppableColumn key={col.key} id={col.key} height={columnHeight}>
                     <div
                       className={`${col.color} text-white rounded-lg px-3 py-2 text-sm font-semibold flex items-center justify-between`}
                       data-tour={colIndex === 0 ? "pipeline-board" : undefined}
@@ -1739,7 +1765,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                       </div>
                     </div>
 
-                    <div className="flex flex-col gap-2 min-h-[400px] mt-2">
+                    <div className="flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto mt-2 pr-1">
                       {items.map((inf) => (
                         <DraggableCard key={inf.id} id={inf.id} disabled={!canApprove}>
                           {renderCard(inf)}
@@ -1765,7 +1791,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                 const col   = columns.find((c) => c.key === "not-interested")!
                 const items = getItemsByColumn(col.key)
                 return (
-                  <DroppableColumn id={col.key}>
+                  <DroppableColumn id={col.key} height={columnHeight}>
                     <div className="bg-red-100 text-red-700 border border-red-200 rounded-lg px-3 py-2 text-sm font-semibold flex items-center justify-between">
                       <span
                         onClick={() => handleColumnClick(col)}
@@ -1779,7 +1805,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                       </div>
                     </div>
 
-                    <div className="flex flex-col gap-2 min-h-[400px] mt-2">
+                    <div className="flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto mt-2 pr-1">
                       {items.map((inf) => (
                         <DraggableCard key={inf.id} id={inf.id} disabled={!canApprove}>
                           {renderCard(inf)}
