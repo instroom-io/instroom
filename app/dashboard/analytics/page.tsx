@@ -32,6 +32,10 @@ interface AnalyticsInfluencer {
   /** True when an outreach log recorded a reply. */
   hasResponse: boolean
   isDeclined: boolean
+  /** True only when a decline happened AFTER genuine engagement (In
+   *  Conversation or later) — see the API route's own comment on why
+   *  pipelineStatus alone ("Rejected") cannot distinguish this. */
+  declinedAfterResponse: boolean
   outreachCount: number
   rejectionReason: string | null
   rejectionBucket: "hard" | "soft" | null
@@ -782,38 +786,71 @@ function AnalyticsPageContent() {
     // A funnel stage must count everyone who reached it OR PASSED THROUGH it:
     //   responded ⊇ closed, so closing rate can no longer exceed 100% by
     //   construction — no clamping involved.
-    // Responded is an UMBRELLA: every influencer who moved beyond "reached out
-    // but nothing came back". In this page's vocabulary (resolveAnalyticsStatus)
-    // that is Reached Out (= Contacted), In Conversation, Onboarded (= Deal
-    // Agreed, plus everything downstream of it) and Rejected (= Not Interested).
+    // Outreach and Responded are both ranges over derivePipelineStatus's own
+    // funnel order — the same source of truth the Pipeline board renders from —
+    // NOT a second, independently-chosen list:
     //
-    // Deal Agreed and Not Interested are both INSIDE the umbrella, not carved
-    // out of it: agreeing a deal and declining are both things that only happen
-    // after the influencer engaged, so subtracting either understated the
-    // response count.
-    const RESPONDED_OR_BEYOND = ["Reached Out", "In Conversation", "Onboarded", "In Transit", "Content Pending", "Posted", "Rejected"]
+    //   For Outreach < Contacted < In Conversation < Deal Agreed/For Order Creation
+    //
+    // with Not Interested as a terminal exit reachable only after contact, so it
+    // sits inside BOTH ranges below (declining is something that only happens
+    // after the influencer was reached, and — for Responded specifically — after
+    // they were reached AND something came back, since a decline is itself a
+    // reply).
+    //
+    //   Outreach  = Contacted through Not Interested   (excludes only "For Outreach")
+    //   Responded = In Conversation through Not Interested (excludes "For Outreach" AND "Contacted")
+    //
+    // "Contacted" (resolveAnalyticsStatus: "Reached Out") used to be INSIDE
+    // Responded, which counted an influencer as having responded the moment they
+    // were merely reached out to — the reported bug: 4 at Contacted, 3 of whom
+    // had progressed further, showed Responded = 4 instead of 3. It is written
+    // here in resolveAnalyticsStatus's vocabulary because that is what
+    // `pipelineStatus` already holds per row (it wraps derivePipelineStatus, see
+    // the route) and the post-order stages (In Transit, Posted, …) only exist in
+    // that extended vocabulary — but the range boundaries are
+    // derivePipelineStatus's, not a separately invented list.
+    const RESPONDED_OR_BEYOND = ["In Conversation", "Onboarded", "In Transit", "Content Pending", "Posted", "Rejected"]
     // Closed stays a strict SUBSET of responded, and counts Deal Agreed only —
     // "Onboarded" is what Deal Agreed resolves to, together with the stages it
     // can only be reached through.
     const CLOSED_OR_BEYOND    = ["Onboarded", "In Transit", "Content Pending", "Posted"]
 
     const totalOutreach = dataToUse.length
-    // Responded = anyone with a recorded reply (hasResponse: an OutreachLog
-    // response, or a contact_status the inbox writes off a real thread) OR
-    // anyone whose resolved stage is inside the umbrella above.
+    // Responded = anyone whose resolved pipeline stage is In Conversation or
+    // beyond. `hasResponse` is deliberately NOT OR-ed in any more: it is set
+    // from `contact_status` directly ("responded"/"replied"), and
+    // derivePipelineStatus can place a row with that exact contact_status at
+    // "Contacted" (its fallback switch, when `stage` disagrees or is null) — the
+    // same stage-vs-column disagreement `hasOutreach` was already fixed for.
+    // OR-ing it in would have let a merely-Contacted row slip back into
+    // Responded through the side door this fix just closed in front.
     //
     // The previous version excluded declines (`!i.isDeclined`) on the grounds
     // that Not Interested can be recorded without the influencer answering.
     // Responded is now defined as the umbrella metric it is named after, so a
     // decline counts like any other post-outreach outcome and the exclusion is
-    // gone.
+    // gone — but only a decline that ACTUALLY happened after engaging.
+    // "Rejected" is resolveAnalyticsStatus's one string for every decline,
+    // whether it happened after In Conversation or straight out of a merely-
+    // Contacted row that never answered at all, so pipelineStatus alone
+    // cannot be trusted for that one case — declinedAfterResponse is read
+    // directly off stage/contact_status instead (see the API route's own
+    // comment). Every other member of RESPONDED_OR_BEYOND is unambiguous on
+    // pipelineStatus alone and needs no such check.
     const responded = dataToUse.filter(
-      i => i.hasResponse || RESPONDED_OR_BEYOND.includes(i.pipelineStatus)
+      i => i.pipelineStatus === "Rejected"
+        ? i.declinedAfterResponse
+        : RESPONDED_OR_BEYOND.includes(i.pipelineStatus)
     ).length
     const closed = dataToUse.filter(i => CLOSED_OR_BEYOND.includes(i.pipelineStatus)).length
-    // Reported on its own as well as inside `responded` — it is a breakdown of
-    // the umbrella, not a step outside it.
-    const notInterested = dataToUse.filter(i => i.pipelineStatus === "Rejected").length
+    // A strict subset of `responded` by construction: `declinedAfterResponse`
+    // is exactly the condition that keeps a merely-Contacted decline out of
+    // `responded` above, so requiring it here too cannot introduce a Not
+    // Interested that responded excluded.
+    const notInterested = dataToUse.filter(
+      i => i.pipelineStatus === "Rejected" && i.declinedAfterResponse
+    ).length
     const responseRate = totalOutreach > 0 ? (responded / totalOutreach) * 100 : 0
     const closingRate = responded > 0 ? (closed / responded) * 100 : 0
 

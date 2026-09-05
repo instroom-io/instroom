@@ -1948,6 +1948,19 @@ export default function TableSheet({
         // Each new row enters the existing enrichment flow, with its existing
         // per-row debounce and already-requested guard.
         created.forEach((r) => scheduleAutoFetch(r.id, r.handle, r.platform))
+        // ...and persisted as a draft, the same as `addRow` does for a row added
+        // by hand. Without this, a row inserted here had no draft behind it: it
+        // showed on screen (this is local state) but was lost on refresh, and
+        // if the enrichment above neither succeeded nor failed by then — still
+        // in flight, or the request never returned — there was nothing to fall
+        // back to. Nothing is saved AS the typed handle here: `is_draft` is
+        // true and the handle stays a placeholder server-side until this row's
+        // own lookup resolves, exactly like every other draft.
+        created.forEach((r) => {
+          void onCreateDraft?.(r.id).then(realId => {
+            if (realId) creatingDraftIds.current.add(realId)
+          })
+        })
       }, 0)
     }
 
@@ -1955,7 +1968,7 @@ export default function TableSheet({
       "success",
       `${unique.length} handle${unique.length === 1 ? "" : "s"} pasted${skipped ? ` · ${skipped} already in the list` : ""}`
     )
-  }, [filteredRows, applyCellValue, customCols, onRowsChange, scheduleAutoFetch, addToast])
+  }, [filteredRows, applyCellValue, customCols, onRowsChange, scheduleAutoFetch, addToast, onCreateDraft])
 
   const cancelEdit = useCallback(() => { setEditCell(null); setPopupCell(null) }, [])
 

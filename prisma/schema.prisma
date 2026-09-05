@@ -44,6 +44,7 @@ model User {
   subscription UserSubscription?
   brandMembers BrandMember[]
   activityLogs ActivityLog[]
+  pollVotes    CommunityPollVote[]
 
   // Discord account linkage. Populated by the OAuth link flow; read on every
   // Discord request to compute which channels this user may see.
@@ -110,9 +111,14 @@ model VerificationToken {
 model Onboarding {
   id                 String    @id @default(cuid()) @db.VarChar(30)
   user_id            String    @unique @db.VarChar(30)
-  operator_type      String?   @db.VarChar(20)
-  business_type      String?   @db.VarChar(20)
-  campaign_goal      String?   @db.VarChar(20)
+  // 60, not 20: every option in components/onboarding-form.tsx starts with an
+  // emoji, and the longest real option per field is 31/28/27 chars —
+  // confirmed by writing one through /api/onboarding and reading it back,
+  // which silently truncated at the old varchar(20). influencer_count's
+  // longest option is well inside 30 and was left as-is.
+  operator_type      String?   @db.VarChar(60)
+  business_type      String?   @db.VarChar(60)
+  campaign_goal      String?   @db.VarChar(60)
   influencer_count   String?   @db.VarChar(30)
   acquisition_source Json?
   completed_at       DateTime?
@@ -983,4 +989,52 @@ model BrandDiscordConnection {
   // attaching to a server someone else already connected.
   @@unique([guild_id])
   @@index([status])
+}
+
+// Per-user votes on a Community poll.
+//
+// ── Why this table exists when "Discord is the backend, nothing here is
+//    mirrored" everywhere else in Community ──
+//
+// A poll's QUESTION, OPTIONS, expiry and layout are never stored here — those
+// still come from Discord's own `message.poll` object on every read, exactly
+// like every other message field (see normaliseMessage). This table holds
+// only the one thing Discord's poll API structurally cannot give a
+// multi-Instroom-user app: who voted for what.
+//
+// Discord's poll vote is tracked per DISCORD ACCOUNT, and the bot is the only
+// Discord account this app holds (the same constraint already accepted for
+// messages, reactions and pins — see sendMessage's and toggleReaction's own
+// comments). If two different Instroom users voted through the bot, the
+// second vote would overwrite or be indistinguishable from the first in
+// Discord's own tally, which cannot satisfy "results update correctly for all
+// users" for more than one voter. So this table is the real vote store the UI
+// reads and writes; the bot's own vote on the live Discord poll is kept in
+// sync best-effort so the object still reads correctly if opened directly in
+// Discord, but is not what Instroom's UI counts from.
+model CommunityPollVote {
+  id String @id @default(cuid()) @db.VarChar(30)
+
+  // The Discord message id carrying the poll — not a local id, matching the
+  // rest of this integration's convention of keying on Discord's own ids
+  // rather than mirroring a message table that doesn't exist here.
+  message_id String @db.VarChar(30)
+  brand_id   String @db.VarChar(30)
+  user_id    String @db.VarChar(30)
+  // Discord's own answer_id (a small integer, 1-10) for the option chosen.
+  answer_id  Int
+
+  created_at DateTime @default(now())
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  // One row per (user, option) they picked — this is what makes multi-select
+  // possible: a single-select poll simply never has more than one row per
+  // (message_id, user_id), enforced in the route, not the schema, since a
+  // poll's allow_multiselect is a Discord-side setting that can only be read
+  // at request time.
+  @@unique([message_id, user_id, answer_id])
+  @@index([message_id])
+  @@index([brand_id])
+  @@index([user_id])
 }

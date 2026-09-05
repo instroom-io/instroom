@@ -86,6 +86,14 @@ export async function GET(
       redirectUris,
       /** Which Discord account is linked, for the "Connected Account" row. */
       discordUsername: guard.discordUsername,
+      /**
+       * The `**DisplayName**: ` prefix every message THIS user sends carries —
+       * see sendMessage's own comment. The client uses it only to decide
+       * whether to SHOW the edit/delete actions on a message; the server
+       * re-derives and re-checks the same thing independently in
+       * isOwnMessage before either action is actually allowed to run.
+       */
+      displayName: guard.displayName,
       /** Retained for existing callers. */
       botConfigured: configured,
       discordLinked: accountLinked,

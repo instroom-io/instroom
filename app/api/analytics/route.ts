@@ -198,6 +198,28 @@ export async function GET(req: Request) {
         // keep a decline out of the response count regardless of which stage the
         // row is currently rendered in.
         isDeclined:       r.approval_status === "Declined" || r.contact_status === "not_interested",
+        // Did this decline happen AFTER the influencer had already engaged
+        // (In Conversation or later), rather than while merely Contacted?
+        // resolveAnalyticsStatus maps every decline to the same "Rejected"
+        // string regardless of which stage it happened at, so that string
+        // alone cannot tell the two apart.
+        //
+        // Answered by asking derivePipelineStatus itself what this row's
+        // stage would resolve to with the decline fields temporarily unset —
+        // the WHAT-IT-WAS-BEFORE-THE-DECLINE read, using the exact same
+        // stage/contact_status precedence the pipeline already applies
+        // everywhere else, rather than reimplementing a piece of it (which
+        // previously missed the legacy contact_status-only path, e.g.
+        // "negotiating" with stage left null).
+        declinedAfterResponse:
+          (r.approval_status === "Declined" || r.contact_status === "not_interested") &&
+          ["In Conversation", "Deal Agreed", "For Order Creation"].includes(
+            derivePipelineStatus(
+              r.contact_status === "not_interested" ? "" : r.contact_status,
+              r.stage,
+              null
+            )
+          ),
 
         rejectionReason:  r.approval_notes ?? null,
         rejectionBucket:  resolveRejectionBucket(r.approval_notes),
