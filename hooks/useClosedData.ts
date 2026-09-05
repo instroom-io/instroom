@@ -21,6 +21,7 @@ import {
   isLatestRowWrite,
 } from "@/lib/data-cache"
 import { invalidateInfluencerDerivedCaches, closedCacheKey } from "@/lib/cache-invalidation"
+import { parseMetricInput } from "@/lib/post-tracker-status"
 
 /** Stable empty reference used before the first payload arrives. */
 const EMPTY_CLOSED: ClosedInfluencer[] = []
@@ -146,6 +147,18 @@ export interface OrderDetailsFields {
   deliverables?: string
 }
 
+export interface PostDetailsFields {
+  postUrl?: string
+  postedAt?: string
+  likes?: string
+  comments?: string
+  engagement?: string
+  internalRating?: string
+  /** Rollup applied to every deliverable — see the route's own comment. */
+  scriptStatus?: string
+  contentStatus?: string
+}
+
 interface UseClosedDataReturn {
   data: ClosedInfluencer[]
   isLoading: boolean
@@ -159,6 +172,19 @@ interface UseClosedDataReturn {
   updateCampaignType: (id: string, campaignType: string) => Promise<boolean>
   updatePostUrl: (id: string, postUrl: string) => Promise<boolean>
   updateOrderDetails: (id: string, fields: OrderDetailsFields) => Promise<boolean>
+  /**
+   * Post tab's Save: persists every manual post field in one write, and — when
+   * `markPosted` is set and a post URL is present (this call's own field or
+   * whatever is already stored) — moves closedStatus to "Posted" in the SAME
+   * request, through the identical stage-mapping the Stage dropdown uses. One
+   * request means one place either both happen or neither does; the server's
+   * "Posted needs proof of a post" / "Posted is terminal" guards still apply.
+   */
+  updatePostDetails: (
+    id: string,
+    fields: PostDetailsFields,
+    options?: { markPosted?: boolean }
+  ) => Promise<UpdateColumnResult>
   /** True while at least one write is in flight — drives the saving indicator. */
   isSaving: boolean
   /** True when the write that just finished failed, so the pill skips "Saved". */
@@ -477,8 +503,11 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
           const body = await res.json().catch(() => ({}))
           return {
             ok: false,
-            // 409 = the row is Posted and Posted is terminal.
-            terminal: res.status === 409 || Boolean(body.terminalState),
+            // A 409 also covers "Posted needs proof of a post"
+            // (body.needsPostEvidence) when moving TO Posted — that's a
+            // distinct, recoverable failure, not the row already being
+            // Posted. Only body.terminalState means the row is terminal.
+            terminal: Boolean(body.terminalState),
             forbidden: res.status === 403,
             error: body.error || "Failed to move",
           }
@@ -770,6 +799,133 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
     [brandId, cacheKey, setDataCached, beginWrite, endWrite]
   )
 
+  // ── Update Post Details (optimistic) ──────────────────────────────────────
+  // Everything the Post Tracker's "Post" tab Save button covers, including —
+  // when the caller asks for it — the move to Posted. Bundled into the one
+  // PATCH request applyColumnChange's "Posted" case would otherwise need a
+  // second call for, so a Save can never persist the fields but silently skip
+  // the status flip (or vice versa) because the second request happened to
+  // fail on its own.
+  const updatePostDetails = useCallback(
+    async (
+      id: string,
+      fields: PostDetailsFields,
+      options?: { markPosted?: boolean }
+    ): Promise<UpdateColumnResult> => {
+      if (!brandId) return { ok: false, error: "No brand selected" }
+
+      // Claim this row's newest write and open the write window BEFORE the
+      // optimistic change — see the note in usePipelineData.updateStatus.
+      const writeSeq = cacheKey ? beginRowWrite(cacheKey, id) : 0
+      beginWrite(options?.markPosted ? "Updating…" : undefined)
+
+      // Per-row rollback — see updateColumn.
+      let previous: ClosedInfluencer | undefined
+
+      setDataCached((prev) => {
+        previous = prev.find((item) => item.id === id)
+        return prev.map((item) => {
+          if (item.id !== id) return item
+          const withFields: ClosedInfluencer = {
+            ...item,
+            ...(fields.postUrl !== undefined && { postUrl: fields.postUrl.trim() || null }),
+            ...(fields.postedAt !== undefined && { postedAt: fields.postedAt || null }),
+            // parseMetricInput matches the server's own parsing exactly (see
+            // lib/post-tracker-status.ts) — "10K"/"1.5M"/"25%" shorthand and a
+            // guaranteed finite whole number, so the optimistic render never
+            // shows a raw NaN before the server round-trip resolves.
+            ...(fields.likes !== undefined && { likesCount: parseMetricInput(fields.likes) }),
+            ...(fields.comments !== undefined && { commentsCount: parseMetricInput(fields.comments) }),
+            ...(fields.engagement !== undefined && { engagementCount: parseMetricInput(fields.engagement) }),
+            ...(fields.internalRating !== undefined && {
+              internalRating: fields.internalRating === "" ? null : Number(fields.internalRating),
+            }),
+          }
+          const withDeliverables =
+            fields.scriptStatus !== undefined || fields.contentStatus !== undefined
+              ? (() => {
+                  const existing = withFields.paidCollabData?.deliverables ?? []
+                  const nextDeliverables: CollabDeliverable[] = existing.length
+                    ? existing.map((d) => ({
+                        ...d,
+                        ...(fields.scriptStatus !== undefined && { scriptStatus: fields.scriptStatus }),
+                        ...(fields.contentStatus !== undefined && { contentStatus: fields.contentStatus }),
+                      }))
+                    : [
+                        {
+                          id: 1,
+                          name: "",
+                          scriptStatus: fields.scriptStatus ?? "pending",
+                          scriptLink: "",
+                          scriptRevs: [],
+                          contentStatus: fields.contentStatus ?? "pending",
+                          contentLink: "",
+                          contentRevs: [],
+                        },
+                      ]
+                  const paidCollabData: PaidCollabData = {
+                    ...(withFields.paidCollabData ?? ({} as PaidCollabData)),
+                    deliverables: nextDeliverables,
+                  }
+                  return { paidCollabData, ...inferContentStatuses({ paidCollabData }) }
+                })()
+              : {}
+          const merged = { ...withFields, ...withDeliverables }
+          return options?.markPosted ? applyColumnChange(merged, "Posted") : merged
+        })
+      })
+
+      // Flipped by `rollback`, which every failure path calls and no success
+      // path does. `endWrite(writeOk)` then keeps the previous "updated" time
+      // on a failed save instead of stamping a refresh that did not happen.
+      let writeOk = true
+      const rollback = () => {
+        writeOk = false
+        // A later change to this row has already been applied, so this
+        // snapshot is out of date: restoring it would undo the newer value.
+        // See beginRowWrite in lib/data-cache.
+        if (cacheKey && !isLatestRowWrite(cacheKey, id, writeSeq)) return
+        if (!previous) return
+        setDataCached((prev) => prev.map((item) => (item.id === id ? previous! : item)))
+      }
+
+      try {
+        const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
+          method:  "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({
+            ...fields,
+            ...(options?.markPosted ? { closedStatus: "Posted" } : {}),
+          }),
+        })
+
+        if (!res.ok) {
+          rollback()
+          const body = await res.json().catch(() => ({}))
+          return {
+            // A 409 also covers "Posted needs proof of a post"
+            // (body.needsPostEvidence) — that is a distinct, non-terminal
+            // failure the caller can recover from by supplying a Post URL, not
+            // the row already being Posted. Only body.terminalState means that.
+            ok: false,
+            terminal: Boolean(body.terminalState),
+            forbidden: res.status === 403,
+            error: body.error || "Failed to save post details",
+          }
+        }
+
+        invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId!)])
+        return { ok: true }
+      } catch {
+        rollback()
+        return { ok: false, error: "Network error" }
+      } finally {
+        endWrite(writeOk)
+      }
+    },
+    [brandId, cacheKey, setDataCached, beginWrite, endWrite]
+  )
+
   return {
     data,
     isLoading: Boolean(brandId) && isLoading,
@@ -779,6 +935,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
     updateCampaignType,
     updatePostUrl,
     updateOrderDetails,
+    updatePostDetails,
     isSaving: pendingWrites > 0,
     saveFailed,
     saveMessage,

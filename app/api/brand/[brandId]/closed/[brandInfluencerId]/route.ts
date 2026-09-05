@@ -5,7 +5,7 @@ import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma, timeStep } from "@/lib/prisma"
 import { hasBrandCapability } from "@/lib/permissions"
-import { mapClosedToPipelineFields, type ClosedColumn } from "@/lib/post-tracker-status"
+import { mapClosedToPipelineFields, parseMetricInput, type ClosedColumn } from "@/lib/post-tracker-status"
 
 // ✅ Safe JSON parse
 function safeParse(value: string | null) {
@@ -61,6 +61,18 @@ export async function PATCH(
       // JSON blob (alongside closedStatus/paidCollab/campaignType above);
       // the rest are their own BrandInfluencer columns.
       note, trackingNumber, shippedAt, deliveredAt, deadline, currency, deliverables,
+      // Post tab fields — each has its own BrandInfluencer column, same as the
+      // Order tab fields above. postedAt/likes/comments/engagement/
+      // internalRating were previously typed into the drawer's local state but
+      // never sent to this route at all — only postUrl was.
+      postedAt, likes, comments, engagement, internalRating,
+      // scriptStatus/contentStatus are NOT their own columns — they are the
+      // aggregate `inferContentStatuses` in useClosedData.ts computes from
+      // paidCollabData.deliverables[].{scriptStatus,contentStatus}. Setting
+      // one from the Post tab is handled as a bulk-set across every existing
+      // deliverable (or a single placeholder one if there are none yet) —
+      // see the dedicated block below, not a new column.
+      scriptStatus, contentStatus,
     } = body
 
     // ✅ Validate closedStatus
@@ -117,7 +129,13 @@ export async function PATCH(
     // to Delivered and to every earlier stage are untouched — those need no post,
     // which is the point of Delivered.
     if (closedStatus === "Posted") {
-      const hasUrl = Boolean(record.post_url && record.post_url.trim())
+      // A Post URL submitted in THIS same request (the Post tab's Save button
+      // sends the URL and the Posted move together) is evidence too — `record`
+      // was read before this request's body was merged in, so checking only
+      // `record.post_url` would 409 a save that is itself supplying the very
+      // URL the guard is asking for.
+      const hasUrl = Boolean(record.post_url && record.post_url.trim()) ||
+        Boolean(typeof postUrl === "string" && postUrl.trim())
       const detected = hasUrl
         ? 0
         : await prisma.detectedPost.count({
@@ -193,6 +211,51 @@ export async function PATCH(
       productDetails.trackingNumber = trackingNumber
     }
 
+    // ✅ Script/Content Status — a bulk-set across paidCollab.deliverables[],
+    // not a column of their own. useClosedData's inferContentStatuses reads
+    // these back as an "approved" / "pending" / null rollup over the whole
+    // array, so the Post tab's one dropdown per field is exactly that rollup
+    // control: setting it to a value applies that value to EVERY deliverable
+    // (there is no per-deliverable UI on this tab — that lives in the
+    // Influencer Profile's own Paid Collaboration editor, untouched here).
+    //
+    // Skipped entirely when `paidCollabData` was ALSO sent in this same
+    // request (the Paid Collaboration editor's own save) — that payload is
+    // already the full, authoritative deliverables array for this write, and
+    // applying a rollup on top of it here would race the very save that just
+    // set it.
+    //
+    // With zero deliverables yet (true for every row in this database today),
+    // a single placeholder deliverable is created to hold the value — the same
+    // shape components/table-sheet/profile-sidebar.tsx's own "add one more"
+    // uses, so the Paid Collaboration editor reads back exactly what the Post
+    // tab wrote if it's opened afterwards.
+    if (paidCollabData === undefined && (scriptStatus !== undefined || contentStatus !== undefined)) {
+      const existingPaid = (productDetails.paidCollab ?? {}) as Record<string, unknown>
+      const existingDeliverables: Record<string, unknown>[] = Array.isArray(existingPaid.deliverables)
+        ? (existingPaid.deliverables as Record<string, unknown>[])
+        : []
+      const nextDeliverables = existingDeliverables.length
+        ? existingDeliverables.map((d) => ({
+            ...d,
+            ...(scriptStatus !== undefined ? { scriptStatus } : {}),
+            ...(contentStatus !== undefined ? { contentStatus } : {}),
+          }))
+        : [
+            {
+              id: 1,
+              name: "",
+              scriptStatus: scriptStatus ?? "pending",
+              scriptLink: "",
+              scriptRevs: [],
+              contentStatus: contentStatus ?? "pending",
+              contentLink: "",
+              contentRevs: [],
+            },
+          ]
+      productDetails.paidCollab = { ...existingPaid, deliverables: nextDeliverables }
+    }
+
     // ✅ Validate postUrl
     if (postUrl !== undefined && postUrl !== null && typeof postUrl !== "string") {
       return NextResponse.json({ error: "Invalid postUrl" }, { status: 400 })
@@ -227,9 +290,45 @@ export async function PATCH(
       updateData.deliverables = deliverables || null
     }
 
+    // ✅ Post tab fields with their own columns — an empty string/blank clears
+    // them, same convention as the Order tab fields above.
+    if (postedAt !== undefined) {
+      updateData.posted_at = postedAt ? new Date(postedAt) : null
+    }
+    // likes/comments/engagement come from a free-text input, so a human can
+    // type shorthand ("10K", "1.5M", "25%") instead of a plain integer.
+    // parseMetricInput handles that shorthand and always returns a finite
+    // whole number (0 for blank/unparseable) — see its own comment in
+    // lib/post-tracker-status.ts for why this must be shared with the
+    // client's optimistic update in useClosedData.ts.
+    if (likes !== undefined) {
+      updateData.likes_count = parseMetricInput(likes)
+    }
+    if (comments !== undefined) {
+      updateData.comments_count = parseMetricInput(comments)
+    }
+    if (engagement !== undefined) {
+      updateData.engagement_count = parseMetricInput(engagement)
+    }
+    if (internalRating !== undefined) {
+      updateData.internal_rating = internalRating === "" || internalRating === null ? null : Number(internalRating)
+    }
+
     // ✅ Apply pipeline mapping
+    //
+    // mapClosedToPipelineFields's "Posted" case keeps `currentRecord.posted_at`
+    // when the row already has one, else stamps `new Date()` — it has no way to
+    // know about a `postedAt` this SAME request just set above, so without this
+    // it would silently overwrite a manually-typed Posted At with "now" on the
+    // very save that's meant to persist it. Feeding the resolved value back
+    // into the record the mapper reads keeps mapClosedToPipelineFields as the
+    // one place stage-derived fields are computed, rather than overriding its
+    // output afterwards.
     if (closedStatus !== undefined) {
-      const mapped = mapClosedToPipelineFields(closedStatus, record)
+      const recordForMapping = updateData.posted_at !== undefined
+        ? { ...record, posted_at: updateData.posted_at }
+        : record
+      const mapped = mapClosedToPipelineFields(closedStatus, recordForMapping)
       Object.assign(updateData, mapped)
     }
 
