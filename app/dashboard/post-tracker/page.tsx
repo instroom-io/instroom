@@ -22,7 +22,8 @@ import {
   IconLayoutKanban, IconList, IconFilter, IconLocation,
   IconLayoutList, IconLink, IconArrowRight, IconAlertTriangle,
 } from "@tabler/icons-react"
-import { useClosedData, type ClosedInfluencer, type ClosedColumn, type OrderDetailsFields } from "@/hooks/useClosedData"
+import { useClosedData, type ClosedInfluencer, type ClosedColumn, type OrderDetailsFields, type PostDetailsFields, type UpdateColumnResult } from "@/hooks/useClosedData"
+import { parseMetricInput, formatEngagementPercent } from "@/lib/post-tracker-status"
 import { invalidateInfluencerDerivedCaches, closedCacheKey } from "@/lib/cache-invalidation"
 import { DataSyncStatus } from "@/components/data-sync-status"
 import { ProfilePicture, PlatformIcon } from "@/components/table-sheet/ui-atoms"
@@ -585,7 +586,7 @@ const STAGE_TO_ORDER_STATUS: Partial<Record<ClosedColumn, string>> = {
  */
 const BULK_CONCURRENCY = 2
 
-function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onCollabTypeChange, onPostUrlChange, onOrderDetailsChange, canApproveInfluencers, subscriptionStatus, initialTab = 0, focusPostUrl = false }: {
+function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onCollabTypeChange, onPostDetailsChange, onOrderDetailsChange, canApproveInfluencers, subscriptionStatus, initialTab = 0, focusPostUrl = false }: {
   inf: ClosedInfluencer; brandId?: string; onClose: () => void
   /**
    * Report a save through the PAGE's notification dock.
@@ -600,7 +601,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
   onNotify: (msg: string, type?: "success" | "error") => void
   onColumnChange: (id: string, col: ClosedColumn) => Promise<boolean>
   onCollabTypeChange: (id: string, type: string) => Promise<boolean>
-  onPostUrlChange: (id: string, postUrl: string) => Promise<boolean>
+  onPostDetailsChange: (id: string, fields: PostDetailsFields, options?: { markPosted?: boolean }) => Promise<UpdateColumnResult>
   onOrderDetailsChange: (id: string, fields: OrderDetailsFields) => Promise<boolean>
   canApproveInfluencers: boolean
   subscriptionStatus?: string
@@ -622,7 +623,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
   const postUrlValueRef = useRef("")
   // Forwarded to the page's dock — see onNotify above. Same call sites, same
   // messages, same timing; only where it renders changed.
-  const showToast = (msg: string) => onNotify(msg)
+  const showToast = (msg: string, type?: "success" | "error") => onNotify(msg, type)
 
   // Land the user directly on the Post URL field when sent here from the
   // "Cannot Move to Posted" warning.
@@ -800,10 +801,37 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
   }
   const handleSavePost = async () => {
     setSavingPost(true)
-    const ok = await onPostUrlChange(inf.id, postData.postUrl)
+    const trimmedUrl = postData.postUrl.trim()
+    // Save moves this influencer straight to Posted once there's evidence of a
+    // published post — the same requirement handleMove's manual Stage move
+    // enforces (hasPostEvidence), and still re-checked by the server's own
+    // "Posted needs proof of a post" guard either way. Already-Posted rows are
+    // left alone: the server's "Posted is terminal" guard would 409 a redundant
+    // closedStatus:"Posted" anyway, so it's simply not sent.
+    const markPosted = inf.closedStatus !== "Posted" && (Boolean(trimmedUrl) || hasPostEvidence(inf))
+    const res = await onPostDetailsChange(
+      inf.id,
+      {
+        postUrl: postData.postUrl,
+        postedAt: postData.postedAt,
+        likes: postData.likes,
+        comments: postData.comments,
+        engagement: postData.engagement,
+        internalRating: postData.internalRating,
+        scriptStatus: postData.scriptStatus,
+        contentStatus: postData.contentStatus,
+      },
+      { markPosted }
+    )
     setSavingPost(false)
-    if (ok) setPostUrlOrigin("stored")
-    showToast(ok ? "Post details saved" : "Failed to save post details")
+    if (res.ok) {
+      setPostUrlOrigin("stored")
+      showToast(markPosted ? "Post details saved — moved to Posted" : "Post details saved")
+    } else if (res.terminal) {
+      showToast("This influencer has already Posted.", "error")
+    } else {
+      showToast(res.error || "Failed to save post details", "error")
+    }
   }
   const handleSaveOrder = async () => {
     setSavingOrder(true)
@@ -992,9 +1020,9 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
               <div>
                 <div className="section-label">Avg Metrics</div>
                 <div className="avg-row">
-                  <div className="avg-card"><div className="avg-val">{inf.likesCount?.toLocaleString() ?? "—"}</div><div className="avg-lbl">Likes</div></div>
-                  <div className="avg-card"><div className="avg-val">{inf.commentsCount?.toLocaleString() ?? "—"}</div><div className="avg-lbl">Comments</div></div>
-                  <div className="avg-card"><div className="avg-val">{inf.engagementCount?.toLocaleString() ?? "—"}</div><div className="avg-lbl">Engagement</div></div>
+                  <div className="avg-card"><div className="avg-val">{Number.isFinite(inf.likesCount) ? inf.likesCount.toLocaleString() : "—"}</div><div className="avg-lbl">Likes</div></div>
+                  <div className="avg-card"><div className="avg-val">{Number.isFinite(inf.commentsCount) ? inf.commentsCount.toLocaleString() : "—"}</div><div className="avg-lbl">Comments</div></div>
+                  <div className="avg-card"><div className="avg-val">{formatEngagementPercent(inf.engagementCount)}</div><div className="avg-lbl">Engagement</div></div>
                 </div>
               </div>
               <div className="fgrd">
@@ -1248,9 +1276,9 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
               <div className="skg">
                 <div className="skc"><div className="skv-dark">{inf.followers}</div><div className="skl">Followers</div></div>
                 <div className="skc"><div className="skv-blue">{inf.engagementRate || "—"}</div><div className="skl">Eng. rate</div></div>
-                <div className="skc"><div className="skv-dark">{inf.likesCount?.toLocaleString() ?? "—"}</div><div className="skl">Likes</div></div>
-                <div className="skc"><div className="skv-dark">{inf.commentsCount?.toLocaleString() ?? "—"}</div><div className="skl">Comments</div></div>
-                <div className="skc"><div className="skv-dark">{inf.engagementCount?.toLocaleString() ?? "—"}</div><div className="skl">Total engagement</div></div>
+                <div className="skc"><div className="skv-dark">{Number.isFinite(inf.likesCount) ? inf.likesCount.toLocaleString() : "—"}</div><div className="skl">Likes</div></div>
+                <div className="skc"><div className="skv-dark">{Number.isFinite(inf.commentsCount) ? inf.commentsCount.toLocaleString() : "—"}</div><div className="skl">Comments</div></div>
+                <div className="skc"><div className="skv-dark">{Number.isFinite(inf.engagementCount) ? inf.engagementCount.toLocaleString() : "—"}</div><div className="skl">Total engagement</div></div>
                 <div className="skc"><div className="skv-green">{fmtMoney(inf.agreedRate)}</div><div className="skl">Rate</div></div>
               </div>
               <div className="stit">Timeline</div>
@@ -1349,7 +1377,7 @@ function PostTrackerContent() {
   // feature for free-tier users. A cached answer resolves on mount instead.
   const { isSubscribed, status: subscriptionStatus } = useSubscriptionGate(brandId)
 
-  const { data, isLoading, error, updateColumn, updateCampaignType, updatePostUrl, updateOrderDetails, isSaving, saveFailed, saveMessage, refetch } = useClosedData(brandId)
+  const { data, isLoading, error, updateColumn, updateCampaignType, updatePostDetails, updateOrderDetails, isSaving, saveFailed, saveMessage, refetch } = useClosedData(brandId)
 
   const [view,                 setView]                 = useState<"Board"|"list">("Board")
   const [search,               setSearch]               = useState("")
@@ -1586,11 +1614,34 @@ function PostTrackerContent() {
     await handleMove(id, newCol)
   }
 
-  const handlePostUrlChange = useCallback(async (id: string, postUrl: string): Promise<boolean> => {
-    const ok = await updatePostUrl(id, postUrl)
-    if (ok) setSelectedInf(p => (p?.id === id ? { ...p, postUrl: postUrl.trim() || null } : p))
-    return ok
-  }, [updatePostUrl])
+  const handlePostDetailsChange = useCallback(async (
+    id: string,
+    fields: PostDetailsFields,
+    options?: { markPosted?: boolean }
+  ): Promise<UpdateColumnResult> => {
+    const res = await updatePostDetails(id, fields, options)
+    if (res.ok) {
+      setSelectedInf(p => {
+        if (p?.id !== id) return p
+        const next: ClosedInfluencer = {
+          ...p,
+          ...(fields.postUrl !== undefined && { postUrl: fields.postUrl.trim() || null }),
+          ...(fields.postedAt !== undefined && { postedAt: fields.postedAt || null }),
+          ...(fields.likes !== undefined && { likesCount: parseMetricInput(fields.likes) }),
+          ...(fields.comments !== undefined && { commentsCount: parseMetricInput(fields.comments) }),
+          ...(fields.engagement !== undefined && { engagementCount: parseMetricInput(fields.engagement) }),
+          ...(fields.internalRating !== undefined && {
+            internalRating: fields.internalRating === "" ? null : Number(fields.internalRating),
+          }),
+          ...(fields.scriptStatus !== undefined && { scriptStatus: fields.scriptStatus }),
+          ...(fields.contentStatus !== undefined && { contentStatus: fields.contentStatus }),
+          ...(options?.markPosted && { closedStatus: "Posted" as ClosedColumn }),
+        }
+        return next
+      })
+    }
+    return res
+  }, [updatePostDetails])
 
   const handleOrderDetailsChange = useCallback(async (id: string, fields: OrderDetailsFields): Promise<boolean> => {
     const ok = await updateOrderDetails(id, fields)
@@ -1719,7 +1770,7 @@ function PostTrackerContent() {
           onClose={()=>{ setSelectedInf(null); setDrawerFocusPostUrl(false) }}
           onNotify={showToast}
           onColumnChange={handleMove} onCollabTypeChange={handleCollabTypeChange}
-          onPostUrlChange={handlePostUrlChange} onOrderDetailsChange={handleOrderDetailsChange}
+          onPostDetailsChange={handlePostDetailsChange} onOrderDetailsChange={handleOrderDetailsChange}
           canApproveInfluencers={canApprove}
           subscriptionStatus={subscriptionStatus}
           initialTab={drawerFocusPostUrl ? 2 : 0} focusPostUrl={drawerFocusPostUrl}/>

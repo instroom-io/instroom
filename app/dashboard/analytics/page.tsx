@@ -818,39 +818,28 @@ function AnalyticsPageContent() {
 
     const totalOutreach = dataToUse.length
     // Responded = anyone whose resolved pipeline stage is In Conversation or
-    // beyond. `hasResponse` is deliberately NOT OR-ed in any more: it is set
-    // from `contact_status` directly ("responded"/"replied"), and
-    // derivePipelineStatus can place a row with that exact contact_status at
-    // "Contacted" (its fallback switch, when `stage` disagrees or is null) — the
-    // same stage-vs-column disagreement `hasOutreach` was already fixed for.
-    // OR-ing it in would have let a merely-Contacted row slip back into
-    // Responded through the side door this fix just closed in front.
+    // beyond, INCLUDING Not Interested — a decline is itself a reply, so it
+    // belongs inside the umbrella like every other post-outreach outcome.
     //
-    // The previous version excluded declines (`!i.isDeclined`) on the grounds
-    // that Not Interested can be recorded without the influencer answering.
-    // Responded is now defined as the umbrella metric it is named after, so a
-    // decline counts like any other post-outreach outcome and the exclusion is
-    // gone — but only a decline that ACTUALLY happened after engaging.
-    // "Rejected" is resolveAnalyticsStatus's one string for every decline,
-    // whether it happened after In Conversation or straight out of a merely-
-    // Contacted row that never answered at all, so pipelineStatus alone
-    // cannot be trusted for that one case — declinedAfterResponse is read
-    // directly off stage/contact_status instead (see the API route's own
-    // comment). Every other member of RESPONDED_OR_BEYOND is unambiguous on
-    // pipelineStatus alone and needs no such check.
-    const responded = dataToUse.filter(
-      i => i.pipelineStatus === "Rejected"
-        ? i.declinedAfterResponse
-        : RESPONDED_OR_BEYOND.includes(i.pipelineStatus)
-    ).length
+    // This used to also require `declinedAfterResponse` before counting a
+    // "Rejected" row here, on the theory that a decline straight out of a
+    // merely-Contacted row (one that never actually answered) shouldn't count
+    // as a response. That distinction cannot be made from real data: both the
+    // client (usePipelineData.ts) and the server
+    // (pipeline/[brandInfluencerId]/route.ts) unconditionally reset `stage: 0`
+    // and `contact_status: "not_interested"` on EVERY decline, with no
+    // exception — so the "was this In Conversation before declining?" question
+    // `declinedAfterResponse` tried to answer is unanswerable after the fact,
+    // and the flag was never true for any real row (confirmed: it hid all 3 of
+    // a brand's real declines from both Responded and Not Interested). Every
+    // decline now counts, matching how every other member of
+    // RESPONDED_OR_BEYOND is already counted unconditionally.
+    const responded = dataToUse.filter(i => RESPONDED_OR_BEYOND.includes(i.pipelineStatus)).length
     const closed = dataToUse.filter(i => CLOSED_OR_BEYOND.includes(i.pipelineStatus)).length
-    // A strict subset of `responded` by construction: `declinedAfterResponse`
-    // is exactly the condition that keeps a merely-Contacted decline out of
-    // `responded` above, so requiring it here too cannot introduce a Not
-    // Interested that responded excluded.
-    const notInterested = dataToUse.filter(
-      i => i.pipelineStatus === "Rejected" && i.declinedAfterResponse
-    ).length
+    // A subset of `responded` by construction: "Rejected" is one of the
+    // literal entries in RESPONDED_OR_BEYOND above, so every row counted here
+    // is already counted there.
+    const notInterested = dataToUse.filter(i => i.pipelineStatus === "Rejected").length
     const responseRate = totalOutreach > 0 ? (responded / totalOutreach) * 100 : 0
     const closingRate = responded > 0 ? (closed / responded) * 100 : 0
 
@@ -1506,7 +1495,14 @@ function AnalyticsPageContent() {
                   dropOff={metrics.totalOutreach > 0 ? `▼ ${Math.round((1 - metrics.responded / metrics.totalOutreach) * 100)}% drop-off` : undefined} />
                 <FunnelStep index={3} name="Closed collaboration" value={metrics.closed} total={metrics.responded} color="#5BC98A"
                   dropOff={metrics.responded > 0 ? `▼ ${Math.round((1 - metrics.closed / metrics.responded) * 100)}% closing drop-off` : undefined} />
-                <FunnelStep index={4} name="Not interested" value={metrics.notInterested} total={metrics.totalOutreach} color="#E24B4A" isLast />
+                {/* total is `responded`, not `totalOutreach`: Not Interested is
+                    a subset of Responded (a decline is itself a reply — see
+                    metrics.responded's own comment), so its percentage has to
+                    read "of responded" like Closed collaboration's does, not
+                    "of reached out" as if it sat at the same funnel depth as
+                    Responded itself. The COUNT was already correct; only the
+                    denominator this step displayed against was wrong. */}
+                <FunnelStep index={4} name="Not interested" value={metrics.notInterested} total={metrics.responded} color="#E24B4A" isLast />
               </SectionCard>
 
               {/* Reasons not interested */}
