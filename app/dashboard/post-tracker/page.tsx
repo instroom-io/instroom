@@ -909,10 +909,26 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
       <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.3)", zIndex: 400, cursor: "pointer" }} />
 
       <div className="pp">
+        {/* Pinned to the panel's top-right corner, independent of the header's
+            own content — it used to sit inside the Stage/Collaboration Type
+            row and wrap onto its own line whenever that row ran out of width,
+            landing disconnected from the header at narrower drawer widths. */}
+        <button onClick={onClose} title="Close" className="close-btn">✕</button>
         {/* ── Header ── */}
         <div className="pph">
-          <div className="ppt">Influencer Profile</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+          {/* paddingRight reserves room for the close button, which is pinned
+              absolutely to the panel's top-right corner and no longer part of
+              this row's own flex layout — without it, the Stage/Collaboration
+              Type selects could grow into the same corner. */}
+          <div className="ppt" style={{ paddingRight: 40 }}>Influencer Profile</div>
+          {/* flexWrap here, not just on the selects group below: without it, a
+              long username refuses to shrink past its own text width (a flex
+              item's default min-width), so the Stage/Collaboration Type
+              selects were the only thing left to give — squeezed into
+              whatever sliver of the row remained and stacking on top of each
+              other there, rather than the pair simply dropping to their own
+              full-width line under the avatar/name. */}
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, marginBottom: 12, paddingRight: 40 }}>
             {/* The persisted avatar — the permanent Cloudinary URL the Influencer
                 List stores on the Influencer record, carried here by the closed
                 route's own `profileImageUrl`. Rendered through the shared
@@ -926,7 +942,13 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                 inf.influencer.charAt(0).toUpperCase()
               )}
             </div>
-            <div style={{ flex: 1 }}>
+            {/* flexShrink:0 — the name must never be the thing that gives.
+                When the row doesn't have room for everyone, flexWrap on the
+                row above is what should move Stage/Collaboration Type to
+                their own line below; the ellipsis rules on .pnm/.phd stay
+                only as a last-resort safety net for a screen too narrow to
+                fit even the avatar and name alone. */}
+            <div style={{ flexGrow: 1, flexShrink: 0, flexBasis: "auto" }}>
               <div className="pnm">{inf.influencer}</div>
               <div className="phd">@{inf.handle}</div>
             </div>
@@ -971,7 +993,6 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                 </select>
               </div>
 
-              <button onClick={onClose} title="Close" className="close-btn">✕</button>
             </div>
           </div>
 
@@ -1154,9 +1175,8 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                   padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
                 }}
               >
-                <button className="btn-secondary" onClick={() => setOrderData(buildOrderData())}>Cancel</button>
                 <button className="btn-primary" onClick={handleSaveOrder} disabled={savingOrder} style={{ opacity: savingOrder ? 0.6 : 1 }}>
-                  {savingOrder ? "Saving…" : "Save"}
+                  {savingOrder ? "Updating…" : "Update"}
                 </button>
               </div>
             </div>
@@ -1221,11 +1241,11 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                   <div className="text-[10px] text-[#0F6B3E] mt-1">Drop to use this post URL</div>
                 ) : postUrlOrigin === "detected" ? (
                   <div className="text-[10px] text-gray-400 mt-1">
-                    Filled from Automatic Post Detection — Save to keep it.
+                    Filled from Automatic Post Detection — Update to keep it.
                   </div>
                 ) : postUrlOrigin === "dropped" ? (
                   <div className="text-[10px] text-gray-400 mt-1">
-                    Dropped from a detected post — Save to keep it.
+                    Dropped from a detected post — Update to keep it.
                   </div>
                 ) : null}
               </div>
@@ -1261,8 +1281,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                   padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
                 }}
               >
-                <button className="btn-secondary" onClick={() => { setPostData(d => ({ ...d, postUrl: inf.postUrl || "" })); setPostUrlOrigin("stored") }}>Cancel</button>
-                <button className="btn-primary" onClick={handleSavePost} disabled={savingPost}>{savingPost ? "Saving…" : "Save"}</button>
+                <button className="btn-primary" onClick={handleSavePost} disabled={savingPost}>{savingPost ? "Updating…" : "Update"}</button>
               </div>
                 </>
               )}
@@ -1307,11 +1326,18 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
           .pph { padding:16px 20px; border-bottom:1px solid #f0f0f0; }
           .ppt { font-size:11px; font-weight:600; color:#9ca3af; letter-spacing:.1em; text-transform:uppercase; margin-bottom:12px; }
           .pav { width:44px; height:44px; border-radius:50%; background:#1fae5b; display:flex; align-items:center; justify-content:center; font-size:18px; font-weight:700; color:#fff; flex-shrink:0; box-shadow:0 0 0 3px #dcfce7; }
-          .pnm { font-size:15px; font-weight:700; color:#111827; }
-          .phd { font-size:12px; color:#6b7280; margin-top:2px; }
-          .ssel { font-size:11px; padding:5px 10px; border-radius:8px; border:.5px solid #f4b740; background:#fffbeb; color:#854f0b; cursor:pointer; font-family:inherit; font-weight:500; transition:all .15s; }
-          .csel { font-size:11px; padding:5px 10px; border-radius:8px; border:1px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; font-family:inherit; font-weight:600; transition:all .15s; min-width:130px; }
-          .close-btn { width:30px; height:30px; border-radius:50%; border:1.5px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; flex-shrink:0; line-height:1; margin-top:14px; transition:background .15s,border-color .15s,color .15s; }
+          .pnm { font-size:15px; font-weight:700; color:#111827; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+          .phd { font-size:12px; color:#6b7280; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+          /* Fixed width, not min-width: a native select otherwise resizes to fit
+             whichever option is currently selected — "Posted" is short but "For
+             Order Creation" / "TikTok Shop + Paid" are not, so the row's total
+             width (and therefore whether it wraps) used to change depending on
+             what was picked, not just on screen size. overflow/ellipsis lets a
+             longer label clip cleanly inside that fixed box instead of forcing
+             it wider. */
+          .ssel { font-size:11px; padding:5px 10px; border-radius:8px; border:.5px solid #f4b740; background:#fffbeb; color:#854f0b; cursor:pointer; font-family:inherit; font-weight:500; transition:all .15s; width:115px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+          .csel { font-size:11px; padding:5px 10px; border-radius:8px; border:1px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; font-family:inherit; font-weight:600; transition:all .15s; width:115px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+          .close-btn { position:absolute; top:16px; right:20px; z-index:1; width:30px; height:30px; border-radius:50%; border:1.5px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; line-height:1; transition:background .15s,border-color .15s,color .15s; }
           .close-btn:hover { background:#fee2e2; color:#dc2626; border-color:#fca5a5; }
           .atag { font-size:12px; font-weight:500; padding:6px 14px; border-radius:20px; cursor:pointer; border:1px solid #e5e7eb; background:#f9fafb; color:#555; }
           .atag.plat { background:#1fae5b; color:#fff; border-color:#1fae5b; }

@@ -496,17 +496,17 @@ export default function InfluencerProfileSidebar({
           sparkAds: orderData.sparkAds || null,
         }),
       })
-      if (!res.ok) throw new Error("Failed to save")
+      if (!res.ok) throw new Error("Failed to update")
       const json = await res.json()
       setAttributionSaveState("saved")
       if (json.goAffPro?.synced === false && json.goAffPro?.reason) {
-        setAttributionSaveMessage(`Saved — GoAffPro sync skipped: ${json.goAffPro.reason}`)
+        setAttributionSaveMessage(`Updated — GoAffPro sync skipped: ${json.goAffPro.reason}`)
       } else if (json.goAffPro?.synced) {
-        setAttributionSaveMessage("Saved and synced to GoAffPro")
+        setAttributionSaveMessage("Updated and synced to GoAffPro")
       }
     } catch {
       setAttributionSaveState("error")
-      setAttributionSaveMessage("Failed to save")
+      setAttributionSaveMessage("Failed to update")
     } finally {
       setTimeout(() => setAttributionSaveState("idle"), 3000)
     }
@@ -763,8 +763,7 @@ export default function InfluencerProfileSidebar({
                   padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
                 }}
               >
-                <button className="btn-secondary">Cancel</button>
-                <button className="btn-primary">Save</button>
+                <button className="btn-primary">Update</button>
               </div>
             </div>
           )}
@@ -789,7 +788,7 @@ export default function InfluencerProfileSidebar({
                   disabled={attributionSaveState === "saving"}
                   style={{ opacity: attributionSaveState === "saving" ? 0.6 : 1 }}
                 >
-                  {attributionSaveState === "saving" ? "Saving…" : attributionSaveState === "saved" ? "Saved" : "Save"}
+                  {attributionSaveState === "saving" ? "Updating…" : attributionSaveState === "saved" ? "Updated" : "Update"}
                 </button>
               </div>
             </div>
@@ -829,8 +828,7 @@ export default function InfluencerProfileSidebar({
                   padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
                 }}
               >
-                <button className="btn-secondary">Cancel</button>
-                <button className="btn-primary">Save</button>
+                <button className="btn-primary">Update</button>
               </div>
             </div>
           )}
