@@ -31,7 +31,7 @@ import { getPlatformLabel } from "@/components/table-sheet/utils"
 import { SaveStatusPill } from "@/components/save-status-pill"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { SubscriptionGate } from "@/components/ui/subscription-gate"
-import { HistoryTab } from "@/components/InfluencerProfileSidebar"
+import { HistoryTab, LastEditedBy } from "@/components/InfluencerProfileSidebar"
 import { PaidCollabTab } from "@/components/table-sheet/profile-sidebar"
 import { BoardSkeleton } from "@/components/shared/skeletons"
 import { StageDropdown, type StageOption } from "@/components/shared/stage-dropdown"
@@ -668,6 +668,10 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
   })
   const [orderData, setOrderData] = useState(buildOrderData)
   const [savingOrder, setSavingOrder] = useState(false)
+
+  // Notes reuses updateOrderDetails' PATCH path for its optimistic-update/rollback handling.
+  const [notesValue, setNotesValue] = useState(inf.notes || "")
+  const [savingNotes, setSavingNotes] = useState(false)
   const [postData, setPostData] = useState({
     postUrl: inf.postUrl || "", postedAt: inf.postedAt ? inf.postedAt.slice(0,10) : "",
     likes: inf.likesCount ? String(inf.likesCount) : "", comments: inf.commentsCount ? String(inf.commentsCount) : "",
@@ -846,6 +850,12 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
     })
     setSavingOrder(false)
     showToast(ok ? "Order details saved" : "Failed to save order details")
+  }
+  const handleSaveNotes = async () => {
+    setSavingNotes(true)
+    const ok = await onOrderDetailsChange(inf.id, { notes: notesValue })
+    setSavingNotes(false)
+    showToast(ok ? "Notes updated" : "Failed to update notes")
   }
 
   // ── Automatic Post Detection → Post URL ───────────────────────────────────
@@ -1032,6 +1042,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
           {/* ════ BASIC TAB ════ */}
           {profileTab === 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <LastEditedBy brandId={brandId} biId={inf.id} />
               <div className="sr4">
                 <div className="sbox"><div className="slb">Followers</div><div className="svl">{inf.followers}</div></div>
                 <div className="sbox"><div className="slb">Eng Rate</div><div className="svl" style={{ color: "#2c8ec4" }}>{inf.engagementRate || "—"}</div></div>
@@ -1058,7 +1069,18 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
               </div>
               <div>
                 <div style={{ fontSize: 10, color: "#888", marginBottom: 6 }}>Notes</div>
-                <textarea className="pfi" style={{ minHeight: 80, resize: "vertical" }} placeholder="Add notes..." defaultValue={inf.notes || ""} />
+                <textarea
+                  className="pfi"
+                  style={{ minHeight: 80, resize: "vertical" }}
+                  placeholder="Add notes..."
+                  value={notesValue}
+                  onChange={(e) => setNotesValue(e.target.value)}
+                />
+                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+                  <button className="btn-primary" onClick={handleSaveNotes} disabled={savingNotes} style={{ opacity: savingNotes ? 0.6 : 1 }}>
+                    {savingNotes ? "Updating…" : "Update"}
+                  </button>
+                </div>
               </div>
             </div>
           )}

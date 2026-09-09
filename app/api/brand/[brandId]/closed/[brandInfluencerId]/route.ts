@@ -57,6 +57,7 @@ export async function PATCH(
     const body = await req.json()
     const {
       closedStatus, paidCollabData, campaignType, postUrl, resetWorkflow,
+      notes, // BrandInfluencer.notes — unrelated to `note` (singular) below
       // Order tab fields — note/trackingNumber live inside the product_details
       // JSON blob (alongside closedStatus/paidCollab/campaignType above);
       // the rest are their own BrandInfluencer columns.
@@ -271,6 +272,10 @@ export async function PATCH(
     // published post. An empty string clears it.
     if (postUrl !== undefined) {
       updateData.post_url = typeof postUrl === "string" ? (postUrl.trim() || null) : null
+    }
+
+    if (notes !== undefined) {
+      updateData.notes = typeof notes === "string" ? (notes || null) : null
     }
 
     // ✅ Order tab fields with their own columns — an empty string clears them.
