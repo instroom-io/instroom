@@ -145,6 +145,8 @@ export interface OrderDetailsFields {
   deadline?: string
   currency?: string
   deliverables?: string
+  /** BrandInfluencer.notes — unrelated to `note` (singular) above. */
+  notes?: string
 }
 
 export interface PostDetailsFields {
@@ -753,6 +755,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
             ...(fields.deadline !== undefined && { deadline: fields.deadline || null }),
             ...(fields.currency !== undefined && { currency: fields.currency || null }),
             ...(fields.deliverables !== undefined && { deliverables: fields.deliverables || null }),
+            ...(fields.notes !== undefined && { notes: fields.notes || "" }),
           }
         })
       })
