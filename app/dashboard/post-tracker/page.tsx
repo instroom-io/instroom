@@ -29,6 +29,7 @@ import { DataSyncStatus } from "@/components/data-sync-status"
 import { ProfilePicture, PlatformIcon } from "@/components/table-sheet/ui-atoms"
 import { getPlatformLabel } from "@/components/table-sheet/utils"
 import { SaveStatusPill } from "@/components/save-status-pill"
+import { StaleDataNotice } from "@/components/stale-data-notice"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { SubscriptionGate } from "@/components/ui/subscription-gate"
 import { HistoryTab } from "@/components/InfluencerProfileSidebar"
@@ -163,8 +164,26 @@ const hasPostEvidence = (inf: Pick<ClosedInfluencer, "postUrl" | "detectedPostCo
  */
 const POST_FIELD_STAGES: ClosedColumn[] = ["Delivered", "Posted", "No post"]
 
-/** Should the post fields be offered for this influencer? */
-const canTrackPost = (status: ClosedColumn) => POST_FIELD_STAGES.includes(status)
+/**
+ * Should the post fields be offered for this influencer?
+ *
+ * The stage gate above covers a row that has never held post data. It is NOT
+ * the whole rule, because a stage move can go backwards: an influencer marked
+ * Delivered by mistake (or moved back for any other reason) keeps whatever
+ * Post URL was already saved — mapClosedToPipelineFields clears
+ * content_posted/posted_at on the way back but deliberately does not delete
+ * the URL itself, since that is real data the user entered.
+ *
+ * Hiding the fields on such a row stranded that data: it stayed in the
+ * database, still counted as evidence of a post, and there was no way to see,
+ * correct or clear it until the row happened to reach Delivered again. So a
+ * row that ALREADY has post data keeps its fields at any stage — the fields
+ * are shown to fix what is there, not to invent a post that cannot exist yet,
+ * which is what the stage gate is guarding against.
+ */
+const canTrackPost = (
+  inf: Pick<ClosedInfluencer, "closedStatus" | "postUrl" | "detectedPostCount">
+) => POST_FIELD_STAGES.includes(inf.closedStatus) || hasPostEvidence(inf)
 
 /**
  * Stages where Automatic Post Detection runs.
@@ -1180,8 +1199,10 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                   not offered — an empty Post URL / Posted At / Likes form on an
                   order that has not arrived invites entering data for a post
                   that cannot exist. Nothing is created or defaulted either way;
-                  this only changes what is shown. */}
-              {!canTrackPost(inf.closedStatus) && (
+                  this only changes what is shown. A row that already HAS post
+                  data keeps its fields at any stage so that data stays
+                  correctable — see canTrackPost. */}
+              {!canTrackPost(inf) && (
                 <div className="pfg">
                   <div className="pfl">Post details</div>
                   <div style={{ fontSize: 12, color: "#888", lineHeight: 1.5 }}>
@@ -1192,7 +1213,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                 </div>
               )}
 
-              {canTrackPost(inf.closedStatus) && (
+              {canTrackPost(inf) && (
                 <>
               {/* Post URL — typed, auto-filled from detection, or dropped from
                   the detected posts list above. All three end up as the same
@@ -1728,7 +1749,11 @@ function PostTrackerContent() {
   }
 
   if (isLoading) return <BoardSkeleton label="Fetching data..." />
-  if (error) return <div className="flex flex-col items-center justify-center h-64 gap-3"><p className="text-red-500 text-sm">{error}</p><button onClick={refetch} className="text-[13px] px-4 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 transition">Retry</button></div>
+  // Only take over the page when there is genuinely nothing to show. A failed
+  // BACKGROUND refresh on a board that already has rows used to replace the
+  // whole board with this screen, throwing away data that was still perfectly
+  // good — the inline notice below the toolbar reports that case instead.
+  if (error && data.length === 0) return <div className="flex flex-col items-center justify-center h-64 gap-3"><p className="text-gray-600 text-sm">{error}</p><button onClick={refetch} className="text-[13px] px-4 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 transition">Retry</button></div>
 
   return (
     <SubscriptionGate isSubscribed={isSubscribed} status={subscriptionStatus} featureName="Post Tracker">
@@ -1752,6 +1777,12 @@ function PostTrackerContent() {
           </div>
         )}
       </div>
+
+      {/* A refresh failed but the board still has its last good rows — say so
+          inline instead of replacing the board (see the error gate above). */}
+      {error && data.length > 0 && (
+        <StaleDataNotice message={error} onRetry={refetch} />
+      )}
 
       {postUrlBlocked.length>0&&(
         <PostUrlRequiredDialog

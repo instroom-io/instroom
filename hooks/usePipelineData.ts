@@ -411,7 +411,10 @@ export async function fetchPipelineRows(brandId: string): Promise<PipelineInflue
   const res = await fetch(`/api/brand/${brandId}/pipeline`)
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || "Failed to fetch pipeline data")
+    // Status included so isTransientError (lib/user-facing-error) can spot a
+    // 503 from databaseCapacityResponse() and schedule a retry. Logs and
+    // classification only — useCachedFetch sanitises what the UI shows.
+    throw new Error(`[${res.status}] ${err.error || "Failed to fetch pipeline data"}`)
   }
   const json = await res.json()
   return (json.data || []).map(mapItem)

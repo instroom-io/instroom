@@ -53,6 +53,7 @@ import { usePipelineData, type PipelineInfluencer } from "@/hooks/usePipelineDat
 import { invalidateInfluencerDerivedCaches, pipelineCacheKey } from "@/lib/cache-invalidation"
 import { DataSyncStatus } from "@/components/data-sync-status"
 import { SaveStatusPill } from "@/components/save-status-pill"
+import { StaleDataNotice } from "@/components/stale-data-notice"
 import { ProfilePicture, PlatformIcon } from "@/components/table-sheet/ui-atoms"
 import { getPlatformLabel } from "@/components/table-sheet/utils"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
@@ -247,6 +248,26 @@ function ColumnInfoTooltip({ status, variant }: { status: string; variant: "ligh
 
 const isTerminal            = (status: string) => status === "Not Interested" || status === "For Order Creation"
 const getStatusFromColumnKey = (key: string)   => columns.find((c) => c.key === key)?.status ?? key
+
+/**
+ * Does an influencer belong under `columnStatus` on this board?
+ *
+ * Deal Agreed is the one status that is wider than a plain equality check.
+ * Confirming a Collaboration Type sends the row straight to Post Tracker's
+ * entry stage, so derivePipelineStatus (app/api/brand/[brandId]/pipeline)
+ * reports it as "For Order Creation" — a column this board does not show.
+ * Deal Agreed therefore covers both: the deal IS agreed either way, and the
+ * later stage is where the order lives, not a different outcome.
+ *
+ * Shared by every view so they cannot disagree. The board column applied this
+ * widening and the list view did not, so clicking the Deal Agreed header —
+ * which switches to the list — filtered on the narrow status and showed
+ * "0 influencers" for a column that had just rendered cards.
+ */
+const matchesColumnStatus = (pipelineStatus: string, columnStatus: string) =>
+  columnStatus === "Deal Agreed"
+    ? pipelineStatus === "Deal Agreed" || pipelineStatus === "For Order Creation"
+    : pipelineStatus === columnStatus
 
 /**
  * The column title a status is shown as on the board.
@@ -1187,6 +1208,42 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     setPendingCollabId(null)
   }
 
+  // ── Stage change from the profile sidebar's Stage dropdown ────────────────
+  // Deliberately routed through the SAME handlers a column move uses, rather
+  // than writing its own update: the dropdown previously had no handler wired
+  // at all, so it changed only the sidebar's local state — the value snapped
+  // back on reopen and nothing was ever persisted or moved on the board.
+  //
+  // Not Interested is the one case that cannot call handleStatusUpdate: that
+  // opens the BOARD's reason modal, and the sidebar has already collected the
+  // reason through its own. It goes straight to the same `updateStatus` the
+  // board's own handleNiConfirm calls, with the reason the sidebar captured,
+  // so both paths still write identically.
+  //
+  // Every other stage — forward or backward — goes through handleStatusUpdate,
+  // which owns the permission check, the Deal Agreed collaboration-type modal,
+  // the optimistic move and the toast.
+  const handlePipelineStatusChangeFromSidebar = async (
+    biId: string,
+    newStatus: string,
+    niReason?: string
+  ) => {
+    if (newStatus === "Not Interested") {
+      if (!canApprove) {
+        toast("Only Owners and Managers can approve influencers", 2500, "error")
+        return
+      }
+      const influencer = data.find((i) => i.id === biId)
+      const success = await updateStatus(biId, "Not Interested", { niReason })
+      toast(success
+        ? `${influencer?.influencer} marked as Not Interested${niReason ? ` · ${niReason}` : ""}`
+        : `Failed to update ${influencer?.influencer}`, 3000, success ? "success" : "error")
+      return
+    }
+
+    await handleStatusUpdate(biId, newStatus)
+  }
+
   const handleDragStart = (event: DragStartEvent) => setActiveId(event.active.id as string)
 
   const handleDragEnd = async (event: DragEndEvent) => {
@@ -1395,6 +1452,24 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     setSidebarOpen(true)
   }, [brandId])
 
+  // The partner actually rendered in the sidebar, rebuilt from the live row
+  // whenever that row changes.
+  //
+  // `selectedPartner` is a snapshot taken when the panel opened, so it went
+  // stale the moment anything moved the influencer — the Stage dropdown, a
+  // drag behind the panel, a card button or a bulk move all update `data`
+  // only. Re-deriving from `data` means the panel always shows the persisted
+  // stage, which is also what lets the dropdown roll back when a move does
+  // not commit (a cancelled Deal Agreed modal, or a failed write).
+  //
+  // Falls back to the snapshot if the row is gone from the current dataset
+  // (e.g. filtered out mid-session), so the panel never blanks out.
+  const sidebarPartner = useMemo(() => {
+    if (!selectedPartner) return null
+    const live = data.find((d) => d.id === selectedPartner.brandInfluencerId)
+    return live ? influencerToPartner(live, brandId) : selectedPartner
+  }, [selectedPartner, data, brandId])
+
   const handleColumnClick = (column: typeof columns[0]) => {
     setSelectedColumnStatus(column.status)
     setView("list")
@@ -1416,11 +1491,16 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
         d.influencer.toLowerCase().includes(search.toLowerCase()) ||
         d.instagramHandle.toLowerCase().includes(search.toLowerCase())
       )
-      .filter((d) => selectedColumnStatus ? d.pipelineStatus === selectedColumnStatus : true)
+      // matchesColumnStatus, not a plain equality — the Deal Agreed column
+      // covers "For Order Creation" rows too, and this list is what its header
+      // opens. See matchesColumnStatus.
+      .filter((d) => selectedColumnStatus ? matchesColumnStatus(d.pipelineStatus, selectedColumnStatus) : true)
 
     if (filters.locations.length > 0) result = result.filter((p) => filters.locations.includes(p.location ?? ""))
     if (filters.niches.length > 0)    result = result.filter((p) => filters.niches.includes(p.niche ?? ""))
-    if (filters.stages.length > 0)    result = result.filter((p) => filters.stages.includes(p.pipelineStatus))
+    // Same widening as the column/list filter above: ticking "Deal Agreed" in
+    // the filter panel has to find the same rows the Deal Agreed column shows.
+    if (filters.stages.length > 0)    result = result.filter((p) => filters.stages.some((s) => matchesColumnStatus(p.pipelineStatus, s)))
     // A row with no approval decision yet reads as Pending
     if (filters.approvals.length > 0) result = result.filter((p) => filters.approvals.includes(p.approvalStatus ?? "Pending"))
     result = [...result].sort((a, b) => {
@@ -1486,20 +1566,13 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   const activeInfluencer   = activeId ? data.find((item) => item.id === activeId) : null
   const selectedColumnInfo = selectedColumnStatus ? columns.find((col) => col.status === selectedColumnStatus) : null
 
-  // Confirming a Collaboration Type sends the row straight to Post Tracker's
-  // entry stage ("For Order Creation"), whose column is hidden on this board —
-  // so the card vanished and Deal Agreed read as empty even though the deal had
-  // just been closed. Display-only: the row keeps rendering under Deal Agreed,
-  // with its collaboration details, while the persisted stage (and Post Tracker)
-  // stay exactly as they are. One record, two views.
+  // Display-only: a row keeps rendering under Deal Agreed while the persisted
+  // stage (and Post Tracker) stay exactly as they are. One record, two views —
+  // see matchesColumnStatus, which the list view and filter panel share so all
+  // three agree on what Deal Agreed contains.
   const getItemsByColumn = (columnKey: string) => {
     const status = getStatusFromColumnKey(columnKey)
-    if (status === "Deal Agreed") {
-      return filteredData.filter(
-        (item) => item.pipelineStatus === "Deal Agreed" || item.pipelineStatus === "For Order Creation"
-      )
-    }
-    return filteredData.filter((item) => item.pipelineStatus === status)
+    return filteredData.filter((item) => matchesColumnStatus(item.pipelineStatus, status))
   }
 
   const renderCard = (inf: PipelineInfluencer) => (
@@ -1515,16 +1588,26 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
 
   if (isLoading) return <BoardSkeleton columns={visibleColumns.length || 4} label="Fetching data..." />
 
-  if (error) return (
+  // Only take over the page when there is genuinely nothing to show. A failed
+  // BACKGROUND refresh on a board that already has cards used to replace the
+  // whole board with this screen, discarding data that was still good — the
+  // inline notice below reports that case and leaves the cards alone.
+  if (error && data.length === 0) return (
     <div className="flex flex-col items-center justify-center gap-3 p-12">
-      <IconAlertCircle size={32} className="text-red-500" />
-      <span className="text-sm text-red-600">{error}</span>
+      <IconAlertCircle size={32} className="text-gray-400" />
+      <span className="text-sm text-gray-600">{error}</span>
       <button onClick={() => refetch()} className="px-4 py-2 bg-[#1FAE5B] text-white rounded-lg text-sm hover:bg-[#178a48] transition">Retry</button>
     </div>
   )
 
   return (
     <div className="flex flex-col gap-4 p-6">
+      {/* A refresh failed but the board still has its last good cards — say so
+          inline instead of replacing the board (see the error gate above). */}
+      {error && data.length > 0 && (
+        <StaleDataNotice message={error} onRetry={() => refetch()} />
+      )}
+
       {niModalInfluencer && (
         <NotInterestedModal influencer={niModalInfluencer} onConfirm={handleNiConfirm} onCancel={handleNiCancel} />
       )}
@@ -1577,12 +1660,13 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
         )}
       </div>
 
-      {sidebarOpen && selectedPartner && (
+      {sidebarOpen && sidebarPartner && (
         <InfluencerProfileSidebar
-          partner={selectedPartner}
+          partner={sidebarPartner}
           campaigns={[] as Campaign[]}
           allPartners={[]}
           onClose={() => setSidebarOpen(false)}
+          onPipelineStatusChange={handlePipelineStatusChangeFromSidebar}
           onCollabTypeChange={handleCollabTypeChangeFromSidebar}
         />
       )}
