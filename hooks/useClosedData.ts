@@ -22,6 +22,7 @@ import {
 } from "@/lib/data-cache"
 import { invalidateInfluencerDerivedCaches, closedCacheKey } from "@/lib/cache-invalidation"
 import { parseMetricInput } from "@/lib/post-tracker-status"
+import { mutationErrorMessage } from "@/lib/user-facing-error"
 
 /** Stable empty reference used before the first payload arrives. */
 const EMPTY_CLOSED: ClosedInfluencer[] = []
@@ -358,7 +359,11 @@ export async function fetchClosedRows(brandId: string): Promise<ClosedInfluencer
   const res = await fetch(`/api/brand/${brandId}/closed`)
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || "Fetch failed")
+    // The status is included so isTransientError (lib/user-facing-error) can
+    // recognise a 503 from databaseCapacityResponse() and schedule a retry.
+    // This text is for logs and that classification only — useCachedFetch
+    // replaces it with a user-facing sentence before anything renders it.
+    throw new Error(`[${res.status}] ${err.error || "Fetch failed"}`)
   }
   const json = await res.json()
   return (json.data || []).map(mapItem)
@@ -511,7 +516,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
             // Posted. Only body.terminalState means the row is terminal.
             terminal: Boolean(body.terminalState),
             forbidden: res.status === 403,
-            error: body.error || "Failed to move",
+            error: mutationErrorMessage(res, body, "Failed to move"),
           }
         }
 
@@ -913,7 +918,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
             ok: false,
             terminal: Boolean(body.terminalState),
             forbidden: res.status === 403,
-            error: body.error || "Failed to save post details",
+            error: mutationErrorMessage(res, body, "Failed to save post details"),
           }
         }
 

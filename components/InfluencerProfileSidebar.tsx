@@ -475,7 +475,21 @@ export default function InfluencerProfileSidebar({
   const [prevStatus,     setPrevStatus]     = useState(partner.commSt || "For Outreach")
   const [showEmailModal, setShowEmailModal] = useState(false)
 
-  // Kept the name orderData for the Attribution PATCH body's field names.
+  // Follow the persisted stage whenever it changes underneath this panel.
+  //
+  // The dropdown sets `pipelineStatus` optimistically so it responds instantly,
+  // but the parent is the one that actually persists the move, and it can end
+  // up somewhere other than what was picked: moving to Deal Agreed opens a
+  // collaboration-type modal that the user can cancel, and any write can fail
+  // and roll back. Without this the dropdown would keep displaying a stage the
+  // record never reached. Re-syncing from the parent's value also keeps the
+  // panel correct when the same influencer is moved from the board behind it.
+  useEffect(() => {
+    const persisted = partner.commSt || "For Outreach"
+    setPipelineStatus(persisted)
+    setPrevStatus(persisted)
+  }, [partner.commSt])
+
   const [orderData, setOrderData] = useState({
     discountCode: partner.coupon || partner.ref_code || "CODE" + partner.firstName.toUpperCase(),
     affiliateLink: partner.affiliate_link || "https://instroom.io/ref/" + partner.firstName.toLowerCase(),

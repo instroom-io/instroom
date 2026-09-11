@@ -15,10 +15,27 @@ export async function GET(
 
     const { brandId } = await params
 
-    // Verify user owns or is member of the brand
-    const brand = await prisma.brand.findUnique({
-      where: { id: brandId },
-    })
+    // Verify user owns or is member of the brand.
+    //
+    // These two are independent — the membership row is looked up by
+    // (brand_id, user_id) from the URL and the session, neither of which comes
+    // from the brand record — so they run together. On the remote database
+    // this deployment uses, a round trip is ~500ms and dominates the query
+    // cost itself, so awaiting them in sequence spent ~500ms for nothing.
+    //
+    // `select` rather than the whole row: only these four fields are read
+    // below, and the full record drags in logo_url, which holds an inline
+    // data-URL logo on branded workspaces.
+    const [brand, isMember] = await Promise.all([
+      prisma.brand.findUnique({
+        where: { id: brandId },
+        select: { id: true, owner_id: true, is_active: true, name: true, logo_url: true, website_url: true },
+      }),
+      prisma.brandMember.findUnique({
+        where: { brand_id_user_id: { brand_id: brandId, user_id: session.user.id } },
+        select: { id: true },
+      }),
+    ])
 
     if (!brand) {
       return NextResponse.json(
@@ -26,11 +43,6 @@ export async function GET(
         { status: 404 }
       )
     }
-
-    // Check if user is owner or member (not just owner)
-    const isMember = await prisma.brandMember.findUnique({
-      where: { brand_id_user_id: { brand_id: brandId, user_id: session.user.id } },
-    })
 
     if (brand.owner_id !== session.user.id && !isMember) {
       return NextResponse.json(
@@ -49,24 +61,36 @@ export async function GET(
       )
     }
 
-    // Get owner
-    const owner = await prisma.user.findUnique({
-      where: { id: brand.owner_id },
-      select: { id: true, email: true, name: true, image: true },
-    })
+    // Owner and member list are independent of each other, so they overlap
+    // rather than costing a round trip each (see the note above).
+    //
+    // The members query keeps its "fetch members, then their users" shape
+    // rather than an `include`, which is what makes it resilient to an
+    // orphaned member row pointing at a deleted user — the filter below
+    // depends on that. Only the columns actually read are selected.
+    const [owner, allMembers] = await Promise.all([
+      prisma.user.findUnique({
+        where: { id: brand.owner_id },
+        select: { id: true, email: true, name: true, image: true },
+      }),
+      prisma.brandMember.findMany({
+        where: { brand_id: brandId },
+        orderBy: { joined_at: "desc" },
+        select: { user_id: true, role: true, joined_at: true },
+      }),
+    ])
 
-    // Get collaborators - fetch without including user first to avoid null errors
-    const allMembers = await prisma.brandMember.findMany({
-      where: { brand_id: brandId },
-      orderBy: { joined_at: "desc" },
-    })
-
-    // Fetch users separately - only for members that have valid user_ids
+    // Fetch users separately - only for members that have valid user_ids.
+    // Skipped entirely when there are no members: an empty `in` list is a
+    // guaranteed-empty result, and on this database that pointless round trip
+    // costs as much as a real one. Solo workspaces are the common case.
     const userIds = allMembers.map((m) => m.user_id)
-    const users = await prisma.user.findMany({
-      where: { id: { in: userIds } },
-      select: { id: true, email: true, name: true, image: true },
-    })
+    const users = userIds.length
+      ? await prisma.user.findMany({
+          where: { id: { in: userIds } },
+          select: { id: true, email: true, name: true, image: true },
+        })
+      : []
 
     // Create a map of user IDs to user data
     const userMap = new Map(users.map((u) => [u.id, u]))

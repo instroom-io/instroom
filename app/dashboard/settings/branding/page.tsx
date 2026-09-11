@@ -268,33 +268,75 @@ function BrandingContent() {
           </div>
 
           <CardContent className="pt-5">
-            <div className="flex flex-col sm:flex-row max-w-2xl gap-6">
+            {/* items-start so the logo column keeps its own height instead of
+                stretching to match the taller fields column — the two share a
+                top edge, which is what lines the "Brand logo" and "Brand name"
+                labels up with each other. */}
+            <div className="flex max-w-2xl flex-col gap-6 sm:flex-row sm:items-start">
               {/* Logo */}
-              <div className="w-[120px] flex-shrink-0">
+              {/* The column is exactly the thumbnail's width, so everything in
+                  it (label, preview, remove action) shares one left edge and
+                  one right edge — the remove button used to be an unconstrained
+                  block that ran wider than the 120px preview above it, which is
+                  what made it read as detached from the thumbnail. */}
+              <div className="flex w-[120px] flex-shrink-0 flex-col">
                 <Label className="mb-2 block text-[11px] uppercase tracking-wide text-muted-foreground">
                   Brand logo
                 </Label>
-                <label
-                  htmlFor="logo-input"
-                  className="flex aspect-square w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-lg border border-dashed border-border bg-muted/50 p-2 text-center transition-colors hover:bg-muted"
-                >
-                  {logoPreview ? (
-                    <img src={logoPreview} alt="Logo preview" className="h-full w-full object-cover" />
-                  ) : currentLogo ? (
-                    <img src={currentLogo} alt="Current logo" className="h-full w-full object-cover" />
-                  ) : (
-                    <>
-                      <Palette className="mb-1 h-6 w-6 text-muted-foreground" />
-                      <span className="text-[11px] leading-tight text-muted-foreground">
-                        Upload logo
-                        <br />
-                        PNG, JPG, SVG, WebP
-                        <br />
-                        max 5MB
-                      </span>
-                    </>
-                  )}
-                </label>
+                {(() => {
+                  // One source of truth for "is there a logo to show" — the
+                  // preview (a just-picked file) wins over the saved one, which
+                  // is the same precedence the markup already used.
+                  const shownLogo = logoPreview || currentLogo
+                  return (
+                    <label
+                      htmlFor="logo-input"
+                      title={shownLogo ? "Click to replace logo" : "Click to upload a logo"}
+                      className={cn(
+                        "group relative flex aspect-square w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-lg p-2 text-center transition-colors",
+                        // A filled preview gets a solid border on a plain
+                        // surface: the dashed dropzone styling stayed after
+                        // upload, so a logo that was already set still read as
+                        // an empty "drop something here" target.
+                        shownLogo
+                          ? "border border-border bg-background hover:bg-muted/40"
+                          : "border border-dashed border-border bg-muted/50 hover:bg-muted"
+                      )}
+                    >
+                      {shownLogo ? (
+                        <>
+                          {/* object-contain, not object-cover — a logo is not a
+                              photo, and cover cropped non-square marks to their
+                              centre. Contain shows the whole mark inside the
+                              same square frame. */}
+                          <img
+                            src={shownLogo}
+                            alt={logoPreview ? "Logo preview" : "Current logo"}
+                            className="h-full w-full object-contain"
+                          />
+                          {/* The filled thumbnail stays clickable to replace the
+                              logo, but nothing said so once the dashed
+                              affordance was gone. Pointer-events-none so it
+                              never intercepts the click it is advertising. */}
+                          <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-foreground/60 text-[10px] font-medium text-background opacity-0 transition-opacity group-hover:opacity-100">
+                            Replace
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <Palette className="mb-1 h-6 w-6 text-muted-foreground" />
+                          <span className="text-[11px] leading-tight text-muted-foreground">
+                            Upload logo
+                            <br />
+                            PNG, JPG, SVG, WebP
+                            <br />
+                            max 5MB
+                          </span>
+                        </>
+                      )}
+                    </label>
+                  )
+                })()}
                 <input
                   id="logo-input"
                   type="file"
@@ -305,9 +347,13 @@ function BrandingContent() {
                 />
                 {(currentLogo || logoPreview) && (
                   <button
+                    type="button"
                     onClick={handleRemoveLogo}
                     disabled={savingBranding}
-                    className="mt-1.5 text-[10px] text-muted-foreground transition hover:text-red-500 disabled:opacity-50"
+                    // w-full + centered text keeps the action inside the
+                    // thumbnail's own column and centred under it, instead of
+                    // sitting flush-left and overflowing past its edges.
+                    className="mt-2 w-full rounded-md py-1 text-center text-[11px] leading-none text-muted-foreground transition hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Remove logo
                   </button>

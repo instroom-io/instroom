@@ -44,20 +44,89 @@ function shouldFetch(key: string): boolean {
 }
 
 /**
- * Start the fetch for every Settings section at once.
+ * Which cache keys the section at `pathname` fetches for itself on mount.
+ *
+ * Prefetching these is worse than useless: the section issues its own request
+ * the moment it mounts, so the speculative copy only competes with it for one
+ * of the browser's ~6 connections per origin. With every section prefetched at
+ * once that is up to 12 requests in flight, and on a remote database where a
+ * single round trip is ~500ms, the page's OWN data ends up queued behind
+ * speculative work for sections the user may never open.
+ *
+ * So the active section is skipped here and left to fetch for itself, and
+ * everything else is deferred until the browser is idle (see below).
+ */
+function keysOwnedByRoute(
+  pathname: string,
+  userId: string | null | undefined,
+  brandId: string | null | undefined
+): string[] {
+  // Longest-prefix first: "/settings" is a prefix of every other route.
+  if (pathname.includes("/settings/security"))      return ["/api/settings/security/2fa"]
+  if (pathname.includes("/settings/notifications")) return ["/api/settings/notifications"]
+  if (pathname.includes("/settings/signature"))     return ["/api/settings/signature"]
+  if (pathname.includes("/settings/branding"))      return [
+    "/api/subscription/branding-access",
+    ...(brandId ? [`/api/brand/${brandId}/collaborators`] : []),
+  ]
+  if (pathname.includes("/settings/collaborators")) return brandId ? [`/api/brand/${brandId}/collaborators`] : []
+  if (pathname.includes("/settings/integrations"))  return brandId ? [`/api/settings/integrations?brandId=${brandId}`] : []
+  if (pathname.includes("/settings/billing"))       return [
+    "/api/user/brand-usage",
+    "/api/subscription/payment-method",
+    "/api/subscription/payment-history",
+    ...(userId ? [`/api/subscription/check?user=${userId}`] : []),
+  ]
+  // The Settings index is the Profile section.
+  return ["/api/settings/profile", "/api/settings/preferences"]
+}
+
+/**
+ * Run `fn` once the browser has spare time, so speculative work never competes
+ * with the current page's own requests or its first paint.
+ *
+ * requestIdleCallback where it exists; a short timeout elsewhere (Safari).
+ * Returns a canceller so a navigation that happens first can drop the work.
+ */
+function whenIdle(fn: () => void): () => void {
+  const w = window as unknown as {
+    requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
+    cancelIdleCallback?: (handle: number) => void
+  }
+  if (typeof w.requestIdleCallback === "function") {
+    const handle = w.requestIdleCallback(fn, { timeout: 3000 })
+    return () => w.cancelIdleCallback?.(handle)
+  }
+  const handle = window.setTimeout(fn, 1200)
+  return () => window.clearTimeout(handle)
+}
+
+/**
+ * Warm the OTHER Settings sections, so moving between them renders from cache.
  *
  * `userId` keys the subscription entry (Billing builds its key from the session
  * user); `brandId` keys the brand-scoped sections. Either being absent simply
  * drops the entries that need it — the section still loads for itself, exactly
  * as it did before.
  *
- * Runs in parallel, settles independently, and reports nothing: this is
- * speculative work, and each section keeps its own loading and error state.
+ * Two rules keep this from slowing down the page it is supposed to help:
+ *
+ *   * the section the user is actually ON is never prefetched (it fetches for
+ *     itself, and a duplicate would only take a connection from it);
+ *   * everything else waits for browser idle, so the current page's requests
+ *     and first paint go first.
+ *
+ * Settles independently and reports nothing: this is speculative work, and each
+ * section keeps its own loading and error state. Returns a canceller so the
+ * caller can drop pending work when the route changes or it unmounts.
  */
 export function prefetchSettings(
   userId: string | null | undefined,
-  brandId: string | null | undefined
-): void {
+  brandId: string | null | undefined,
+  pathname: string
+): () => void {
+  const owned = new Set(keysOwnedByRoute(pathname, userId, brandId))
+
   const tasks: PrefetchTask[] = [
     // Profile — the two entries app/dashboard/settings/page.tsx reads.
     { key: "/api/settings/profile", run: () => getJson("/api/settings/profile") },
@@ -117,10 +186,19 @@ export function prefetchSettings(
     })
   }
 
-  for (const task of tasks) {
-    if (!shouldFetch(task.key)) continue
-    // Swallowed on purpose: the section that owns the entry reports its own
-    // failure when it is actually opened.
-    void fetchCached(task.key, task.run).catch(() => {})
-  }
+  // Decided now (cheap, synchronous) but RUN at idle, so the current section's
+  // own requests and first paint are never queued behind speculative ones.
+  const pending = tasks.filter((task) => !owned.has(task.key) && shouldFetch(task.key))
+  if (pending.length === 0) return () => {}
+
+  return whenIdle(() => {
+    for (const task of pending) {
+      // Re-checked at run time: the user may have navigated during the idle
+      // wait, and that section will have started its own request.
+      if (!shouldFetch(task.key)) continue
+      // Swallowed on purpose: the section that owns the entry reports its own
+      // failure when it is actually opened.
+      void fetchCached(task.key, task.run).catch(() => {})
+    }
+  })
 }

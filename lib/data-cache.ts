@@ -22,6 +22,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
+import { isTransientError, toUserFacingError } from "@/lib/user-facing-error"
 
 type CacheEntry = {
   data: unknown
@@ -422,6 +423,21 @@ export function hydrateCacheFromStorage(): void {
 /** How long a cached entry is considered fresh before a background refresh. */
 export const DEFAULT_TTL = 30_000
 
+/**
+ * Backoff for automatically retrying a TRANSIENT read failure, in ms.
+ *
+ * Three attempts, then it stops and leaves the page's own Retry control to the
+ * user. Deliberately short and deliberately finite: these failures are usually
+ * the connection pool being momentarily full, so a brief wait genuinely
+ * recovers — but an unbounded or tight retry loop would keep hammering a pool
+ * that is already saturated and make the outage worse for everyone on it.
+ *
+ * Read failures only. A failed MUTATION is never retried automatically: the
+ * user must be told it did not complete, and a write is not safe to repeat on
+ * its own.
+ */
+const TRANSIENT_RETRY_DELAYS = [1_000, 3_000, 6_000]
+
 function notify(key: string) {
   subscribers.get(key)?.forEach((cb) => cb())
 }
@@ -650,6 +666,12 @@ export function useCachedFetch<T>(
   const [error, setError] = useState<string | null>(null)
   const [isValidating, setIsValidating] = useState(false)
 
+  // Bounded retry bookkeeping for transient failures — see the catch in `run`.
+  // Reset on success and whenever the key changes, so a recovered read starts
+  // its next failure from a clean budget rather than an exhausted one.
+  const retriesRef = useRef(0)
+  const retryTimerRef = useRef<number | null>(null)
+
   // The fetcher is usually an inline closure; keeping it in a ref means a new
   // identity on every render cannot retrigger the effect (one of the sources of
   // the duplicate requests this replaces).
@@ -674,6 +696,19 @@ export function useCachedFetch<T>(
     return subscribe(key, () => forceRender((n) => n + 1))
   }, [key])
 
+  // Drop any scheduled transient retry when the key changes or this unmounts,
+  // so a pending timer cannot fire for a key nothing is reading any more (and
+  // cannot carry one key's retry budget over to the next).
+  useEffect(() => {
+    retriesRef.current = 0
+    return () => {
+      if (retryTimerRef.current !== null) {
+        window.clearTimeout(retryTimerRef.current)
+        retryTimerRef.current = null
+      }
+    }
+  }, [key])
+
   const run = useCallback(
     async (force: boolean) => {
       if (!key || !enabled) return undefined
@@ -683,10 +718,37 @@ export function useCachedFetch<T>(
       try {
         const result = await fetchCached<T>(key, () => fetcherRef.current(), { ttl, force })
         setError(null)
+        retriesRef.current = 0
         return result
       } catch (err) {
+        // The technical detail stays here, in full, for debugging — this is the
+        // one place every cached read's failure passes through, so it is also
+        // the one place the raw text is guaranteed to be recorded.
         console.error(`[data-cache] fetch failed for ${key}:`, err)
-        setError(err instanceof Error ? err.message : "Unknown error")
+
+        // ...but what reaches the UI is a sentence, never "P2024" or
+        // "Failed to fetch". Consumers render this string directly.
+        setError(toUserFacingError(err))
+
+        // A transient failure gets a small, bounded retry rather than a dead
+        // end. Bounded and backed off on purpose: retrying hard into an
+        // exhausted connection pool is what deepens the exhaustion, which is
+        // the very condition this is reacting to.
+        //
+        // Only ONE retry chain per key can exist, because `fetchCached` dedupes
+        // in-flight requests by key and this timer is cleared on unmount — so
+        // several components sharing a key cannot each start their own.
+        if (isTransientError(err) && retriesRef.current < TRANSIENT_RETRY_DELAYS.length) {
+          const attempt = retriesRef.current
+          retriesRef.current = attempt + 1
+          if (retryTimerRef.current !== null) window.clearTimeout(retryTimerRef.current)
+          retryTimerRef.current = window.setTimeout(() => {
+            retryTimerRef.current = null
+            // `force`, so the retry is not skipped as "still fresh" — the
+            // cached entry it would read may be the very thing that is stale.
+            void run(true)
+          }, TRANSIENT_RETRY_DELAYS[attempt])
+        }
         return undefined
       } finally {
         setIsValidating(false)
