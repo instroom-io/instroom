@@ -391,6 +391,7 @@ function influencerToPartner(inf: PipelineInfluencer, brandId?: string): Partner
     brandId:            brandId,
     brandInfluencerId:  inf.id,
     collabType:         inf.collabType,
+    notes:              inf.notes,
   }
 }
 

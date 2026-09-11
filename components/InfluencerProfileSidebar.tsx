@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react"
 import { EmailModal } from "@/components/shared/email-modal"
 import { ProfilePicture } from "@/components/table-sheet/ui-atoms"
+import { getProfileUrl } from "@/components/table-sheet/utils"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface MonthlyData {
@@ -58,6 +59,8 @@ export interface Partner {
   /** Collaboration Type — same value persisted in product_details.campaignType,
    *  shared with the Pipeline board and Post Tracker so all three stay in sync. */
   collabType?: string
+  /** Basic tab's free-text notes — BrandInfluencer.notes. */
+  notes?: string
 }
 
 interface Deliverable { name: string; posted: boolean }
@@ -211,7 +214,8 @@ export function HistoryTab({ brandId, biId }: { brandId?: string; biId?: string 
 }
 
 // ─── LastEditedBy — compact "who touched this last" strip for the Basic tab ───
-function LastEditedBy({ brandId, biId }: { brandId?: string; biId?: string }) {
+// Exported: Post Tracker's Basic tab reuses this, same as HistoryTab below.
+export function LastEditedBy({ brandId, biId }: { brandId?: string; biId?: string }) {
   const [log, setLog]         = useState<ActivityLog | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -487,12 +491,9 @@ export default function InfluencerProfileSidebar({
   }, [partner.commSt])
 
   const [orderData, setOrderData] = useState({
-    firstName: partner.firstName, lastName: partner.lastName, contactNumber: "",
-    productName: "", orderNumber: "", productCost: "",
     discountCode: partner.coupon || partner.ref_code || "CODE" + partner.firstName.toUpperCase(),
     affiliateLink: partner.affiliate_link || "https://instroom.io/ref/" + partner.firstName.toLowerCase(),
     sparkAds: partner.spark_ads || "",
-    shippingAddress: "", trackingLink: "",
   })
   const [attributionSaveState, setAttributionSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle")
   const [attributionSaveMessage, setAttributionSaveMessage] = useState<string | null>(null)
@@ -511,29 +512,45 @@ export default function InfluencerProfileSidebar({
           sparkAds: orderData.sparkAds || null,
         }),
       })
-      if (!res.ok) throw new Error("Failed to save")
+      if (!res.ok) throw new Error("Failed to update")
       const json = await res.json()
       setAttributionSaveState("saved")
       if (json.goAffPro?.synced === false && json.goAffPro?.reason) {
-        setAttributionSaveMessage(`Saved — GoAffPro sync skipped: ${json.goAffPro.reason}`)
+        setAttributionSaveMessage(`Updated — GoAffPro sync skipped: ${json.goAffPro.reason}`)
       } else if (json.goAffPro?.synced) {
-        setAttributionSaveMessage("Saved and synced to GoAffPro")
+        setAttributionSaveMessage("Updated and synced to GoAffPro")
       }
     } catch {
       setAttributionSaveState("error")
-      setAttributionSaveMessage("Failed to save")
+      setAttributionSaveMessage("Failed to update")
     } finally {
       setTimeout(() => setAttributionSaveState("idle"), 3000)
     }
   }
-  const [postData, setPostData] = useState({
-    postLink: "", likes: "", sales: "", driveLink: "",
-    comments: "", amount: "", usageRights: "", views: "", clicks: "",
-  })
 
-  const tier    = partner.tierOverride || autoTier(partner.rev)
-  const postCVR = postData.clicks && parseFloat(postData.clicks) > 0
-    ? ((parseFloat(postData.sales || "0") / parseFloat(postData.clicks)) * 100).toFixed(2) + "%" : ""
+  // Notes uses the same pipeline route the Stage/Collaboration Type dropdowns use.
+  const [notesValue, setNotesValue] = useState(partner.notes ?? "")
+  const [notesSaveState, setNotesSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle")
+
+  const handleNotesSave = async () => {
+    if (!partner.brandId || !partner.brandInfluencerId) return
+    setNotesSaveState("saving")
+    try {
+      const res = await fetch(`/api/brand/${partner.brandId}/pipeline/${partner.brandInfluencerId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notes: notesValue }),
+      })
+      if (!res.ok) throw new Error("Failed to update")
+      setNotesSaveState("saved")
+    } catch {
+      setNotesSaveState("error")
+    } finally {
+      setTimeout(() => setNotesSaveState("idle"), 3000)
+    }
+  }
+
+  const tier = partner.tierOverride || autoTier(partner.rev)
 
   const now  = new Date("2026-04-01")
   const bday = partner.birthday ? new Date(partner.birthday) : null
@@ -555,7 +572,8 @@ export default function InfluencerProfileSidebar({
   const engRate     = partner.engagement_rate != null ? `${partner.engagement_rate}%`
                     : partner.eng != null ? `${partner.eng}%` : "—"
 
-  const TABS = ["Basic", "Order", "Attribution", "Post", "Stats", "History"]
+  // Order and Post tabs removed — never worked; the real version is in Post Tracker.
+  const TABS = ["Basic", "Attribution", "Stats", "History"]
 
   const collabColors = COLLAB_COLORS[collabType] ?? { bg: "#f9fafb", color: "#374151", border: "#e5e7eb" }
 
@@ -703,7 +721,16 @@ export default function InfluencerProfileSidebar({
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
             <button className="atag plat">{partner.plat}</button>
             <button className="atag" onClick={() => setShowEmailModal(true)}>Send Email</button>
-            <button className="atag">Send DM</button>
+            <button
+              className="atag"
+              onClick={() => {
+                // getProfileUrl's map is keyed lowercase; partner.plat is capitalised here.
+                const url = getProfileUrl(partner.plat?.toLowerCase() ?? "", partner.handle)
+                if (url) window.open(url, "_blank", "noopener,noreferrer")
+              }}
+            >
+              Send DM
+            </button>
             <button className="atag">Follow up</button>
           </div>
         </div>
@@ -753,39 +780,29 @@ export default function InfluencerProfileSidebar({
               </div>
               <div>
                 <div style={{ fontSize: 10, color: "#888", marginBottom: 6 }}>Notes</div>
-                <textarea className="pfi" style={{ minHeight: 80, resize: "vertical" }} placeholder="Add notes..." />
-              </div>
-            </div>
-          )}
-
-          {/* ════ ORDER TAB ════ */}
-          {profileTab === 1 && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <div className="pfr">
-                <div className="pfg"><div className="pfl">First name</div><input className="pfi" value={orderData.firstName} onChange={e => setOrderData(d => ({ ...d, firstName: e.target.value }))} /></div>
-                <div className="pfg"><div className="pfl">Last name</div><input className="pfi" value={orderData.lastName} onChange={e => setOrderData(d => ({ ...d, lastName: e.target.value }))} /></div>
-              </div>
-              <div className="pfg"><div className="pfl">Contact Number</div><input className="pfi" value={orderData.contactNumber} onChange={e => setOrderData(d => ({ ...d, contactNumber: e.target.value }))} placeholder="Contact Number" /></div>
-              <div className="pfg"><div className="pfl">Product Name</div><input className="pfi" value={orderData.productName} onChange={e => setOrderData(d => ({ ...d, productName: e.target.value }))} placeholder="Product Name" /></div>
-              <div className="pfg"><div className="pfl">Order Number</div><input className="pfi" value={orderData.orderNumber} onChange={e => setOrderData(d => ({ ...d, orderNumber: e.target.value }))} placeholder="Order Number" /></div>
-              <div className="pfg"><div className="pfl">Product Cost</div><input className="pfi" value={orderData.productCost} onChange={e => setOrderData(d => ({ ...d, productCost: e.target.value }))} /></div>
-              <div className="pfg"><div className="pfl">Shipping Address</div><input className="pfi" value={orderData.shippingAddress} onChange={e => setOrderData(d => ({ ...d, shippingAddress: e.target.value }))} placeholder="Shipping Address" /></div>
-              <div className="pfg"><div className="pfl">Tracking Link</div><input className="pfi" value={orderData.trackingLink} onChange={e => setOrderData(d => ({ ...d, trackingLink: e.target.value }))} placeholder="Tracking Link" /></div>
-              <div
-                style={{
-                  display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8,
-                  position: "sticky", bottom: -18, margin: "8px -20px -18px",
-                  padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
-                }}
-              >
-                <button className="btn-secondary">Cancel</button>
-                <button className="btn-primary">Save</button>
+                <textarea
+                  className="pfi"
+                  style={{ minHeight: 80, resize: "vertical" }}
+                  placeholder="Add notes..."
+                  value={notesValue}
+                  onChange={(e) => setNotesValue(e.target.value)}
+                />
+                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+                  <button
+                    className="btn-primary"
+                    onClick={handleNotesSave}
+                    disabled={notesSaveState === "saving"}
+                    style={{ opacity: notesSaveState === "saving" ? 0.6 : 1 }}
+                  >
+                    {notesSaveState === "saving" ? "Updating…" : notesSaveState === "saved" ? "Updated" : "Update"}
+                  </button>
+                </div>
               </div>
             </div>
           )}
 
           {/* ════ ATTRIBUTION TAB ════ */}
-          {profileTab === 2 && (
+          {profileTab === 1 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <div className="pfr">
                 <div className="pfg"><div className="pfl">Discount Code</div><input className="pfi" value={orderData.discountCode} onChange={e => setOrderData(d => ({ ...d, discountCode: e.target.value }))} /></div>
@@ -804,54 +821,14 @@ export default function InfluencerProfileSidebar({
                   disabled={attributionSaveState === "saving"}
                   style={{ opacity: attributionSaveState === "saving" ? 0.6 : 1 }}
                 >
-                  {attributionSaveState === "saving" ? "Saving…" : attributionSaveState === "saved" ? "Saved" : "Save"}
+                  {attributionSaveState === "saving" ? "Updating…" : attributionSaveState === "saved" ? "Updated" : "Update"}
                 </button>
               </div>
             </div>
           )}
 
-          {/* ════ POST TAB ════ */}
-          {profileTab === 3 && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <div className="pfr">
-                <div className="pfg"><div className="pfl">Post Link</div><input className="pfi" value={postData.postLink} onChange={e => setPostData(d => ({ ...d, postLink: e.target.value }))} placeholder="Post Link" /></div>
-                <div className="pfg"><div className="pfl">Likes</div><input className="pfi" value={postData.likes} onChange={e => setPostData(d => ({ ...d, likes: e.target.value }))} /></div>
-              </div>
-              <div className="pfr">
-                <div className="pfg"><div className="pfl">Sales</div><input className="pfi" value={postData.sales} onChange={e => setPostData(d => ({ ...d, sales: e.target.value }))} /></div>
-                <div className="pfg"><div className="pfl">Drive Link</div><input className="pfi" value={postData.driveLink} onChange={e => setPostData(d => ({ ...d, driveLink: e.target.value }))} /></div>
-              </div>
-              <div className="pfr">
-                <div className="pfg"><div className="pfl">Comments</div><input className="pfi" value={postData.comments} onChange={e => setPostData(d => ({ ...d, comments: e.target.value }))} /></div>
-                <div className="pfg"><div className="pfl">Amount ($)</div><input className="pfi" value={postData.amount} onChange={e => setPostData(d => ({ ...d, amount: e.target.value }))} /></div>
-              </div>
-              <div className="pfr">
-                <div className="pfg"><div className="pfl">Usage Rights</div>
-                  <select className="pfi" value={postData.usageRights} onChange={e => setPostData(d => ({ ...d, usageRights: e.target.value }))}>
-                    <option value="">Select...</option><option>Granted</option><option>Not Granted</option><option>Pending</option>
-                  </select>
-                </div>
-                <div className="pfg"><div className="pfl">Views</div><input className="pfi" value={postData.views} onChange={e => setPostData(d => ({ ...d, views: e.target.value }))} /></div>
-              </div>
-              <div className="pfr">
-                <div className="pfg"><div className="pfl">Clicks</div><input className="pfi" value={postData.clicks} onChange={e => setPostData(d => ({ ...d, clicks: e.target.value }))} /></div>
-                <div className="pfg"><div className="pfl">CVR (auto)</div><input className="pfi" readOnly style={{ background: "#f0fdf4", color: "#1fae5b", fontWeight: 600 }} value={postCVR || "—"} /></div>
-              </div>
-              <div
-                style={{
-                  display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8,
-                  position: "sticky", bottom: -18, margin: "8px -20px -18px",
-                  padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
-                }}
-              >
-                <button className="btn-secondary">Cancel</button>
-                <button className="btn-primary">Save</button>
-              </div>
-            </div>
-          )}
-
           {/* ════ STATS TAB ════ */}
-          {profileTab === 4 && (
+          {profileTab === 2 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
               <div className="stit">Performance — all campaigns combined</div>
               <div className="skg">
@@ -896,7 +873,7 @@ export default function InfluencerProfileSidebar({
           )}
 
           {/* ════ HISTORY TAB ════ */}
-          {profileTab === 5 && (
+          {profileTab === 3 && (
             <HistoryTab brandId={partner.brandId} biId={partner.brandInfluencerId} />
           )}
 

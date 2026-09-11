@@ -73,10 +73,35 @@ export async function PATCH(
     const { brandId, brandInfluencerId } = await params
 
     const body = await req.json()
-    const { pipelineStatus, niReason, collaborationType } = body as {
+    const { pipelineStatus, niReason, collaborationType, notes } = body as {
       pipelineStatus?: string
       niReason?: string
       collaborationType?: string
+      notes?: string
+    }
+
+    // Notes aren't a stage transition, so they use manageInfluencers (not the
+    // stricter approveInfluencers gate below) and return early.
+    if (notes !== undefined && pipelineStatus === undefined) {
+      const [activeCount, canManage] = await Promise.all([
+        prisma.brand.count({ where: { id: brandId, is_active: true } }),
+        hasBrandCapability(brandId, session.user.id, "manageInfluencers"),
+      ])
+      if (activeCount === 0) {
+        return NextResponse.json({ error: "Not found" }, { status: 403 })
+      }
+      if (!canManage) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+      }
+
+      const notesResult = await prisma.brandInfluencer.updateMany({
+        where: { id: brandInfluencerId, brand_id: brandId },
+        data: { notes: typeof notes === "string" ? (notes || null) : null },
+      })
+      if (notesResult.count === 0) {
+        return NextResponse.json({ error: "Record not found" }, { status: 404 })
+      }
+      return NextResponse.json({ success: true })
     }
 
     if (!pipelineStatus) {
