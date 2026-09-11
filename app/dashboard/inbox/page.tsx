@@ -2209,13 +2209,17 @@ function InboxContent() {
                         style={{ contentVisibility: "auto", containIntrinsicSize: "auto 68px" }}
                         onClick={() => openEmail(email)}
                         className={`flex items-start gap-3 px-4 py-3.5 sm:py-3 min-h-[68px] sm:min-h-0 cursor-pointer transition-colors duration-150 active:bg-gray-100 ${
-                          selectedEmail?.id === email.id ? "bg-gray-100 shadow-[inset_3px_0_0_#1FAE5B]" : "hover:bg-gray-50"
-                        } ${!email.read ? "bg-blue-50/40" : ""}`}
+                          selectedEmail?.id === email.id
+                            ? "bg-gray-100 shadow-[inset_3px_0_0_#1FAE5B]"
+                            : !email.read
+                            ? "bg-blue-50/60 hover:bg-gray-50"
+                            : "bg-white hover:bg-gray-50"
+                        }`}
                       >
                         <div className="relative flex-shrink-0">
                           <img src={email.avatar} alt="" className="w-11 h-11 sm:w-10 sm:h-10 rounded-full object-cover" />
                           {!email.read && (
-                            <div className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-[#1FAE5B] rounded-full ring-2 ring-white" />
+                            <div className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-blue-500 rounded-full ring-2 ring-white" />
                           )}
                         </div>
 
