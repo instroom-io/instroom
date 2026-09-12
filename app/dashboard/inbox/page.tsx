@@ -745,6 +745,7 @@ function InboxContent() {
   }
   const [searchQuery, setSearchQuery] = useState("")
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("")
+  const [readFilter, setReadFilter] = useState<"all" | "unread" | "read">("all")
   const [updateStageModal, setUpdateStageModal] = useState<{ open: boolean; email: Email | null }>({ open: false, email: null })
 
   // ── Connected mailboxes ───────────────────────────────────────────────────
@@ -1555,14 +1556,16 @@ function InboxContent() {
           email.name.toLowerCase().includes(query) ||
           email.handle.toLowerCase().includes(query) ||
           email.subject.toLowerCase().includes(query)
-        return matchesStage && matchesSearch
+        const matchesRead =
+          readFilter === "all" || (readFilter === "unread" ? !email.read : email.read)
+        return matchesStage && matchesSearch && matchesRead
       })
       // `emails` is built by concatenating Gmail and Outlook batches as each
       // provider finishes loading (see setEmails call sites below) — never
       // merged by date. Sort here, once, at the single point everything
       // actually renders from, rather than at every fetch call site.
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-  }, [emails, selectedStage, debouncedSearchQuery])
+  }, [emails, selectedStage, debouncedSearchQuery, readFilter])
 
   // Pipeline-stage tabs count distinct contacts, not threads — "In
   // Conversation: 1" means one influencer at that stage, even if there are
@@ -2190,6 +2193,22 @@ function InboxContent() {
                     // zooms the page on focus. sm:text-sm restores desktop size.
                     className="h-11 sm:h-9 w-full pl-10 pr-4 text-base sm:text-sm bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#1FAE5B]/20 focus:border-[#1FAE5B] transition-all"
                   />
+                </div>
+
+                <div className="flex items-center gap-1.5 mt-2.5">
+                  {(["all", "unread", "read"] as const).map((option) => (
+                    <button
+                      key={option}
+                      onClick={() => setReadFilter(option)}
+                      className={`px-2.5 py-1 text-xs font-medium rounded-full border transition-colors ${
+                        readFilter === option
+                          ? "bg-[#1FAE5B] text-white border-[#1FAE5B]"
+                          : "bg-white text-gray-500 border-gray-200 hover:bg-gray-50"
+                      }`}
+                    >
+                      {option === "all" ? "All" : option === "unread" ? "Unread" : "Read"}
+                    </button>
+                  ))}
                 </div>
               </div>
 
