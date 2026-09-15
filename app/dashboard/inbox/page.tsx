@@ -185,6 +185,10 @@ type Email = {
   // message body loaded yet. Opening it triggers a lazy fetch (see
   // loadFullGmailThread) that replaces the entry with real content.
   isLightweight?: boolean
+  // The optimistic row shown right after sendCompose, before the next real
+  // refresh replaces it — its id/gmailThreadId are locally generated, not a
+  // real Gmail thread id, so nothing should call the Gmail API with them.
+  isLocalPending?: boolean
 }
 
 type StageConfig = {
@@ -1614,7 +1618,7 @@ function InboxContent() {
             0,
             selectedGmailAccountId()
           )
-          setEmails((prev) => [placeholder, ...prev])
+          setEmails((prev) => [{ ...placeholder, isLocalPending: true }, ...prev])
         }
         setComposeSent(true)
         setTimeout(() => {
@@ -1727,7 +1731,7 @@ function InboxContent() {
     // stays UNREAD and reverts on next fetch. Fire-and-forget: shouldn't
     // block opening the thread, but errors are logged, not swallowed
     // silently (a silent failure is what hid the missing scope bug before).
-    if (email.source === "gmail" && email.gmailThreadId) {
+    if (email.source === "gmail" && email.gmailThreadId && !email.isLocalPending) {
       fetch("/api/gmail/mark-read", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1741,7 +1745,7 @@ function InboxContent() {
         })
         .catch((err) => console.error("[gmail mark-read] network error:", err))
     }
-    if (!email.isLightweight || !email.gmailThreadId) return
+    if (!email.isLightweight || !email.gmailThreadId || email.isLocalPending) return
 
     setLoadingThreadId(email.id)
     try {
