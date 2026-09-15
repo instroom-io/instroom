@@ -151,53 +151,6 @@ export function AddRowsModal({
     </div>
   )
 }
-// ── DeclineConfirmationModal ──────────────────────────────────────────────────
-
-export function DeclineConfirmationModal({ isOpen, onClose, onConfirm, influencerName }: {
-  isOpen: boolean; onClose: () => void; onConfirm: (reason: string) => void; influencerName: string
-}) {
-  const [declineReason, setDeclineReason] = useState("")
-  const [error, setError] = useState("")
-  const inputRef = useRef<HTMLTextAreaElement>(null)
-  useEffect(() => { if (isOpen) { setDeclineReason(""); setError(""); setTimeout(() => inputRef.current?.focus(), 100) } }, [isOpen])
-  if (!isOpen) return null
-  const handleConfirm = () => {
-    if (!declineReason.trim()) { setError("Please provide a reason"); return }
-    onConfirm(declineReason.trim()); onClose()
-  }
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="bg-white rounded-xl shadow-xl w-[420px] max-w-[90vw] p-5">
-        <div className="flex items-center gap-2.5 mb-3">
-          <div className="p-2 bg-red-100 rounded-full"><IconAlertTriangle size={20} className="text-red-600" /></div>
-          <div>
-            <h3 className="text-base font-semibold text-gray-900">Decline Influencer</h3>
-            <p className="text-sm text-gray-500">Declining <span className="font-medium text-gray-700">{influencerName}</span></p>
-          </div>
-        </div>
-        <div className="space-y-2.5">
-          <div>
-            <label className="block text-xs font-medium text-gray-700 mb-2">Reason <span className="text-red-500">*</span></label>
-            <textarea ref={inputRef} value={declineReason} onChange={e => { setDeclineReason(e.target.value); setError("") }}
-              onKeyDown={e => { if (e.key === "Enter" && e.ctrlKey) { e.preventDefault(); handleConfirm() }; if (e.key === "Escape") onClose() }}
-              placeholder="e.g., Budget constraints…" rows={4}
-              className={`w-full px-2.5 py-1.5 text-xs border rounded-lg focus:ring-2 focus:ring-red-400 outline-none resize-none ${error ? "border-red-300 bg-red-50" : "border-gray-200"}`} />
-            {error && <p className="text-xs text-red-500 mt-1"><IconAlertCircle size={12} /> {error}</p>}
-          </div>
-          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
-            <p className="text-xs text-amber-800"><strong>Note:</strong> Declining disables outreach fields and clears outreach data.</p>
-          </div>
-        </div>
-        <div className="flex gap-3 mt-3">
-          <button onClick={() => { onConfirm(""); onClose() }} className="px-4 py-2 text-sm text-gray-500 hover:bg-gray-50 rounded-lg transition">Skip</button>
-          <button onClick={onClose} className="flex-1 px-4 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 transition">Cancel</button>
-          <button onClick={handleConfirm} className="flex-1 px-4 py-2 rounded-lg bg-red-600 text-white text-sm hover:bg-red-700 transition">Confirm Decline</button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 // ── ManageOptionsModal ────────────────────────────────────────────────────────
 
 export function ManageOptionsModal({ isOpen, onClose, title, options, onAdd, onRemove }: {

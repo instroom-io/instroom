@@ -1398,7 +1398,7 @@ function PostTrackerContent() {
   // feature for free-tier users. A cached answer resolves on mount instead.
   const { isSubscribed, status: subscriptionStatus } = useSubscriptionGate(brandId)
 
-  const { data, isLoading, error, updateColumn, updateCampaignType, updatePostDetails, updateOrderDetails, isSaving, saveFailed, saveMessage, refetch } = useClosedData(brandId)
+  const { data, isLoading, error, hasGivenUp, updateColumn, updateCampaignType, updatePostDetails, updateOrderDetails, isSaving, saveFailed, saveMessage, refetch } = useClosedData(brandId)
 
   // Same approach and constant as the Pipeline board (kanban/kanban-board.tsx)
   // — see there for why it's measured rather than a flat vh, and why this
@@ -1749,11 +1749,19 @@ function PostTrackerContent() {
   }
 
   if (isLoading) return <BoardSkeleton label="Fetching data..." />
-  // Only take over the page when there is genuinely nothing to show. A failed
-  // BACKGROUND refresh on a board that already has rows used to replace the
-  // whole board with this screen, throwing away data that was still perfectly
-  // good — the inline notice below the toolbar reports that case instead.
-  if (error && data.length === 0) return <div className="flex flex-col items-center justify-center h-64 gap-3"><p className="text-gray-600 text-sm">{error}</p><button onClick={refetch} className="text-[13px] px-4 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 transition">Retry</button></div>
+  // Two conditions, both required, before the page is given over to a fallback:
+  //
+  //   data.length === 0  there is genuinely nothing to show. A failed
+  //                      BACKGROUND refresh on a board that already has rows
+  //                      keeps the rows and reports itself through the inline
+  //                      notice below the toolbar instead.
+  //   hasGivenUp         no automatic retry is still coming. A transient blip
+  //                      (a dropped connection, a moment of pool exhaustion)
+  //                      is retried silently and keeps the skeleton above —
+  //                      gating on `error` alone is what put a bare
+  //                      "Failed to fetch" screen in front of the user for a
+  //                      failure that resolved itself a second later.
+  if (hasGivenUp && data.length === 0) return <div className="flex flex-col items-center justify-center h-64 gap-3"><p className="text-gray-600 text-sm">{error}</p><button onClick={refetch} className="text-[13px] px-4 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 transition">Retry</button></div>
 
   return (
     <SubscriptionGate isSubscribed={isSubscribed} status={subscriptionStatus} featureName="Post Tracker">
@@ -1779,9 +1787,11 @@ function PostTrackerContent() {
       </div>
 
       {/* A refresh failed but the board still has its last good rows — say so
-          inline instead of replacing the board (see the error gate above). */}
-      {error && data.length > 0 && (
-        <StaleDataNotice message={error} onRetry={refetch} />
+          inline instead of replacing the board (see the error gate above).
+          hasGivenUp, not error: while the bounded retry is still running there
+          is nothing for the user to do, so the board just stays as it is. */}
+      {hasGivenUp && data.length > 0 && (
+        <StaleDataNotice message={error ?? ""} onRetry={refetch} />
       )}
 
       {postUrlBlocked.length>0&&(

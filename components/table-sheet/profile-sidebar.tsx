@@ -7,7 +7,7 @@ import { platforms } from "./constants"
 import { STATUS_LABEL, JOURNEY_STATUSES, getJourneyStatus, journeyStatusToFields, type JourneyStatus } from "./constants"
 import { getProfileUrl, handleApprovalChange, formatFollowers } from "./utils"
 import { ProfilePicture } from "./ui-atoms"
-import { DeclineConfirmationModal } from "./modals"
+import { DeclineModal } from "@/components/shared/decline-modal"
 import { EmailModal } from "@/components/shared/email-modal"
 
 // Instagram's official "message me" shortlink opens a DM composer directly.
@@ -908,9 +908,31 @@ export default function ProfileSidebar({
 
   return (
     <>
-      <DeclineConfirmationModal isOpen={showDeclineModal} onClose={() => setShowDeclineModal(false)}
-        onConfirm={r => { if (editedRow) setEditedRow(handleApprovalChange(editedRow, "Declined", r)) }}
-        influencerName={editedRow.full_name || editedRow.handle || "this influencer"} />
+      {/* The SAME modal and reason list the Pipeline board uses — see
+          components/shared/decline-modal.tsx. */}
+      {showDeclineModal && (
+        <DeclineModal
+          name={editedRow.full_name || editedRow.handle || "this influencer"}
+          handle={editedRow.handle}
+          profileImageUrl={editedRow.profile_image_url}
+          /* Above S.panel's zIndex 500 — otherwise the sidebar stays painted
+             over the modal's right-hand reason column. */
+          zIndex={600}
+          onCancel={() => setShowDeclineModal(false)}
+          onConfirm={r => {
+            setShowDeclineModal(false)
+            if (!editedRow) return
+            // Confirm is the final action, exactly as it is on the Pipeline
+            // board — commit straight through the table's save pipeline and
+            // close the panel, rather than staging the change and leaving the
+            // sidebar open waiting for a Save Changes the user has no reason
+            // to expect. The row is declined and off the active list, so
+            // there is nothing left to edit in it.
+            onUpdate(handleApprovalChange(editedRow, "Declined", r))
+            onClose()
+          }}
+        />
+      )}
 
       {showEmailModal && (
         <EmailModal

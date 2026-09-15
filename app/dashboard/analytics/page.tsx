@@ -12,6 +12,7 @@ import { useCachedFetch } from "@/lib/data-cache"
 import { toXlsx, downloadBlob, exportStamp, type ExportLine } from "@/lib/analytics-export"
 import { DataSyncStatus } from "@/components/data-sync-status"
 import { PlatformBadge } from "@/components/shared/platform-icon"
+import { HARD_PASS_REASONS, SOFT_PASS_REASONS } from "@/lib/decline-reasons"
 
 // ============================================================
 // Types
@@ -844,12 +845,11 @@ function AnalyticsPageContent() {
     const closingRate = responded > 0 ? (closed / responded) * 100 : 0
 
     // Hard/Soft pass breakdown
-    const hardPassReasons = [
-      'Fee too low / unpaid', 'Brief too scripted', "Won't allow content reuse",
-      'Working with a competitor', "Product doesn't fit their brand",
-      'Wrong audience fit', 'Seen bad reviews about us', 'Others'
-    ]
-    const softPassReasons = ['Fully booked', "Temporarily unavailable / can't shoot", "Can't ship to their location", 'Ghosted / no longer active', 'Rate / deadline too tight']
+    // Straight from the shared decline vocabulary the Pipeline board and the
+    // Influencer List both write (lib/decline-reasons.ts), so a reason added
+    // there is bucketed here without a second list to keep in step.
+    const hardPassReasons = HARD_PASS_REASONS
+    const softPassReasons = SOFT_PASS_REASONS
 
     const reasonsBreakdown: Record<string, number> = {}
     const allReasons = [...hardPassReasons, ...softPassReasons]

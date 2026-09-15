@@ -246,8 +246,13 @@ export async function PUT(
     // 0 = Not Interested, 1-5 = pipeline columns, 6-8 = Post Tracker stages
     // (lib/post-tracker-status.ts). Clamping at 5 demoted a Delivered/Posted row
     // to For Order Creation whenever it was saved from the Influencer List.
-    if (data.stage !== undefined)
-      bi.stage = Math.max(0, Math.min(8, parseInt(String(data.stage)) || 1))
+    // `|| 1` promoted stage 0 — Not Interested — to 1, so a decline saved from
+    // the Influencer List landed the row back in For Outreach instead of the
+    // Pipeline's Not Interested column. Only an unparseable stage defaults.
+    if (data.stage !== undefined) {
+      const parsedStage = parseInt(String(data.stage))
+      bi.stage = Math.max(0, Math.min(8, Number.isFinite(parsedStage) ? parsedStage : 1))
+    }
     if (data.agreed_rate !== undefined)
       bi.agreed_rate = data.agreed_rate ? parseFloat(String(data.agreed_rate)) : null
     if (data.notes !== undefined) bi.notes = data.notes || null
