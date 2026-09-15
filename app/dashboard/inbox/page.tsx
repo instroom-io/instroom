@@ -745,6 +745,7 @@ function InboxContent() {
   }
   const [searchQuery, setSearchQuery] = useState("")
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("")
+  const [readFilter, setReadFilter] = useState<"all" | "unread" | "read">("all")
   const [updateStageModal, setUpdateStageModal] = useState<{ open: boolean; email: Email | null }>({ open: false, email: null })
 
   // ── Connected mailboxes ───────────────────────────────────────────────────
@@ -1555,14 +1556,16 @@ function InboxContent() {
           email.name.toLowerCase().includes(query) ||
           email.handle.toLowerCase().includes(query) ||
           email.subject.toLowerCase().includes(query)
-        return matchesStage && matchesSearch
+        const matchesRead =
+          readFilter === "all" || (readFilter === "unread" ? !email.read : email.read)
+        return matchesStage && matchesSearch && matchesRead
       })
       // `emails` is built by concatenating Gmail and Outlook batches as each
       // provider finishes loading (see setEmails call sites below) — never
       // merged by date. Sort here, once, at the single point everything
       // actually renders from, rather than at every fetch call site.
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-  }, [emails, selectedStage, debouncedSearchQuery])
+  }, [emails, selectedStage, debouncedSearchQuery, readFilter])
 
   // Pipeline-stage tabs count distinct contacts, not threads — "In
   // Conversation: 1" means one influencer at that stage, even if there are
@@ -2191,6 +2194,22 @@ function InboxContent() {
                     className="h-11 sm:h-9 w-full pl-10 pr-4 text-base sm:text-sm bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#1FAE5B]/20 focus:border-[#1FAE5B] transition-all"
                   />
                 </div>
+
+                <div className="flex items-center gap-1.5 mt-2.5">
+                  {(["all", "unread", "read"] as const).map((option) => (
+                    <button
+                      key={option}
+                      onClick={() => setReadFilter(option)}
+                      className={`px-2.5 py-1 text-xs font-medium rounded-full border transition-colors ${
+                        readFilter === option
+                          ? "bg-[#1FAE5B] text-white border-[#1FAE5B]"
+                          : "bg-white text-gray-500 border-gray-200 hover:bg-gray-50"
+                      }`}
+                    >
+                      {option === "all" ? "All" : option === "unread" ? "Unread" : "Read"}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div className="flex-1 overflow-y-auto">
@@ -2209,13 +2228,17 @@ function InboxContent() {
                         style={{ contentVisibility: "auto", containIntrinsicSize: "auto 68px" }}
                         onClick={() => openEmail(email)}
                         className={`flex items-start gap-3 px-4 py-3.5 sm:py-3 min-h-[68px] sm:min-h-0 cursor-pointer transition-colors duration-150 active:bg-gray-100 ${
-                          selectedEmail?.id === email.id ? "bg-gray-100 shadow-[inset_3px_0_0_#1FAE5B]" : "hover:bg-gray-50"
-                        } ${!email.read ? "bg-blue-50/40" : ""}`}
+                          selectedEmail?.id === email.id
+                            ? "bg-gray-100 shadow-[inset_3px_0_0_#1FAE5B]"
+                            : !email.read
+                            ? "bg-blue-50/60 hover:bg-gray-50"
+                            : "bg-white hover:bg-gray-50"
+                        }`}
                       >
                         <div className="relative flex-shrink-0">
                           <img src={email.avatar} alt="" className="w-11 h-11 sm:w-10 sm:h-10 rounded-full object-cover" />
                           {!email.read && (
-                            <div className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-[#1FAE5B] rounded-full ring-2 ring-white" />
+                            <div className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-blue-500 rounded-full ring-2 ring-white" />
                           )}
                         </div>
 
