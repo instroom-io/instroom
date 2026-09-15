@@ -480,9 +480,24 @@ export function handleApprovalChange(
   } else if (newStatus !== "Approved") {
     r.transferred_date = ""
   }
+  // A decline must land the row in exactly the state a Pipeline "Mark as not
+  // interested" lands it in — contact_status "not_interested" and stage 0, the
+  // pair pipelineStatusToFields() writes for "Not Interested" (see
+  // app/api/brand/[brandId]/pipeline/[brandInfluencerId]/route.ts). It used to
+  // write "not_contacted"/stage 1 here, so a decline made from the Influencer
+  // List left the row sitting in For Outreach: the Pipeline board never showed
+  // it under Not Interested, and Analytics counted it as un-contacted rather
+  // than as a decline.
   if (newStatus === "Declined" && row.approval_status !== "Declined") {
-    r.contact_status = "not_contacted"; r.stage = "1"; r.agreed_rate = ""; r.notes = ""
+    r.contact_status = "not_interested"; r.stage = "0"; r.agreed_rate = ""; r.notes = ""
     if (declineReason) { r.approval_notes = declineReason; r.decline_reason = declineReason }
+  }
+  // Un-declining puts the row back at the head of the pipeline — the same
+  // For Outreach (stage 1) landing a re-approval gets on the board. Without
+  // this the row kept stage 0 and stayed invisible on the Pipeline.
+  if (newStatus !== "Declined" && row.approval_status === "Declined") {
+    r.contact_status = "not_contacted"; r.stage = "1"
+    r.approval_notes = ""; r.decline_reason = ""
   }
   r.approval_status = newStatus as "Approved" | "Declined" | "Pending"
   return r

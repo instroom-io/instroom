@@ -75,6 +75,12 @@ interface UsePipelineDataReturn {
   data: PipelineInfluencer[]
   isLoading: boolean
   error: string | null
+  /**
+   * True only once a read has failed AND no automatic retry is still coming.
+   * Gate any visible fallback on this, not on `error` — a transient blip that
+   * is still being retried should leave the page's own neutral state alone.
+   */
+  hasGivenUp: boolean
   updateStatus: (
     id: string,
     newStatus: string,
@@ -488,7 +494,7 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
     [brandId]
   )
 
-  const { data: cached, error, isLoading, refetch } = useCachedFetch<PipelineInfluencer[]>(
+  const { data: cached, error, isLoading, hasGivenUp, refetch } = useCachedFetch<PipelineInfluencer[]>(
     cacheKey,
     fetchPipeline
   )
@@ -678,6 +684,11 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
     // board on screen.
     isLoading: Boolean(brandId) && isLoading,
     error,
+    /**
+     * True only once a read has failed AND no automatic retry is still coming.
+     * Gate any visible fallback on this, not on `error`.
+     */
+    hasGivenUp,
     updateStatus,
     isSaving: pendingWrites > 0,
     saveFailed,

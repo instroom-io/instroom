@@ -29,10 +29,11 @@ import { useToast } from "./hooks"
 import { ProfilePicture, PlatformIcon, StatusBadge, ApprovalBadge, MultiSelectDisplay } from "./ui-atoms"
 import { FloatingPopup, DropdownEditor, MultiSelectEditor, DatePicker, PlatformEditor } from "./cell-editors"
 import {
-  ConfirmationDialog, AddRowsModal, DeclineConfirmationModal,
+  ConfirmationDialog, AddRowsModal,
   ManageOptionsModal, AddColumnModal, FilterPopover,
 } from "./modals"
 import { MobileRowCards } from "./mobile-row-cards"
+import { DeclineModal } from "@/components/shared/decline-modal"
 import { ToastContainer } from "./toast"
 import { DataSyncStatus } from "@/components/data-sync-status"
 import ProfileSidebar from "./profile-sidebar"
@@ -1692,7 +1693,12 @@ export default function TableSheet({
     if (pendingDeclineRowIdx === null) return
     const ar = filteredRows[pendingDeclineRowIdx]; const ai = rows.findIndex(r => r.id === ar.id); if (ai === -1) return
     setRows(prev => { const n = [...prev]; n[ai] = handleApprovalChange(prev[ai], "Declined", reason); onRowsChange?.(n); return n })
-    setShowDeclineModal(false); setPendingDeclineRowIdx(null); containerRef.current?.focus()
+    setShowDeclineModal(false); setPendingDeclineRowIdx(null)
+    // Close the profile panel if it is showing the row just declined — it is
+    // off the active list now, so leaving it open next to the grid invites
+    // edits to a record the user has finished with.
+    if (sidebarRowId === ar.id) setSidebarRowId(null)
+    containerRef.current?.focus()
   }
 
   /**
@@ -2614,6 +2620,23 @@ export default function TableSheet({
       )}
 
       <AddRowsModal isOpen={showAddRowsModal} onClose={() => setShowAddRowsModal(false)} onAdd={handleAddMultipleRows} selectedCount={selectedRowIds.size} />
+
+      {/* Decline — the SAME modal the Pipeline board opens for "Mark as not
+          interested", over the same reason list, so a decline made here is
+          recorded identically (components/shared/decline-modal.tsx). */}
+      {showDeclineModal && pendingDeclineRowIdx !== null && filteredRows[pendingDeclineRowIdx] && (
+        <DeclineModal
+          name={filteredRows[pendingDeclineRowIdx].full_name?.trim() || filteredRows[pendingDeclineRowIdx].handle || "Influencer"}
+          handle={filteredRows[pendingDeclineRowIdx].handle}
+          profileImageUrl={filteredRows[pendingDeclineRowIdx].profile_image_url}
+          /* Above the profile sidebar's zIndex 500 — the sidebar can be open
+             behind this (its Status dropdown is one way in), and at the default
+             z-50 it stayed painted over the modal. */
+          zIndex={600}
+          onConfirm={handleDeclineConfirm}
+          onCancel={() => { setShowDeclineModal(false); setPendingDeclineRowIdx(null); containerRef.current?.focus() }}
+        />
+      )}
 
       {sidebarRow && (
         <ProfileSidebar row={sidebarRow} customCols={customCols} onUpdate={handleUpdateRow} onClose={() => setSidebarRowId(null)}

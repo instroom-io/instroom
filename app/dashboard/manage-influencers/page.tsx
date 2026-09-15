@@ -158,7 +158,10 @@ function buildUpdatePayload(row: InfluencerRow) {
     avg_comments: parseInt(String(row.avg_comments)) || 0,
     avg_views: parseInt(String(row.avg_views)) || 0,
     contact_status: row.contact_status,
-    stage: parseInt(String(row.stage)) || 1,
+    // `|| 1` would have turned stage 0 — Not Interested — back into 1, so a
+    // decline made here never persisted its pipeline position. Only a
+    // genuinely unparseable stage falls back to 1.
+    stage: Number.isFinite(parseInt(String(row.stage))) ? parseInt(String(row.stage)) : 1,
     agreed_rate: row.agreed_rate || null,
     notes: row.notes || null,
     approval_status: row.approval_status,

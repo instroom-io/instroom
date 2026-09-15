@@ -35,6 +35,7 @@ import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import { checkBrandAccess } from "@/lib/brand-access"
 import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
+import { declineBucket } from "@/lib/decline-reasons"
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions)
@@ -472,17 +473,18 @@ function resolveAnalyticsStatus(
   }
 }
 
-const SOFT_PASS_REASONS = new Set([
-  "Fully booked",
-  "Temporarily unavailable / can't shoot",
-  "Can't ship to their location",
-  "Ghosted / no longer active",
-  "Rate / deadline too tight",
-])
-
+/**
+ * Which pass bucket a stored decline note belongs to.
+ *
+ * Delegates to the shared decline vocabulary (lib/decline-reasons.ts) that the
+ * Pipeline board and the Influencer List both write, rather than keeping its
+ * own copy of the soft-pass list — the copy here and the one in the Analytics
+ * page had to be edited in lockstep with the modal's, and a reason added to one
+ * silently fell into "hard" everywhere else.
+ */
 function resolveRejectionBucket(notes: unknown): "hard" | "soft" | null {
   if (typeof notes !== "string" || !notes) return null
-  return SOFT_PASS_REASONS.has(notes) ? "soft" : "hard"
+  return declineBucket(notes)
 }
 
 function resolveDeliveredDaysAgo(raw: Date | null): number | null {

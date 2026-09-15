@@ -293,55 +293,60 @@ export function BrandSelector() {
         position: "fixed",
         top: dropdownPos.top,
         right: dropdownPos.right,
-        width: 260,
+        width: 268,
         zIndex: 9999,
       }}
-      className="bg-white rounded-xl shadow-2xl border border-gray-100 overflow-hidden"
+      className="bg-white rounded-xl border border-gray-200 shadow-lg overflow-hidden"
     >
-      {/* Current plan + upgrade shortcut */}
+      {/* Current plan + upgrade shortcut.
+          px-4 to match every row below it — this was px-6 while the rows were
+          effectively px-6 too (px-3 wrapper + px-3 button), but the plan row
+          had no wrapper, so the two never actually lined up. */}
       {planInfo && (
         <>
-          <div className="px-6 py-2.5 flex items-center justify-between">
-            <span className="text-sm font-medium text-gray-700">{planInfo.displayName} Plan</span>
+          <div className="flex items-center justify-between gap-2 px-4 pt-3 pb-2.5">
+            <span className="text-[13px] font-semibold text-gray-900">{planInfo.displayName} Plan</span>
             {planInfo.name !== "team" && (
               <button
                 onClick={() => { router.push("/pricing"); setDropdownOpen(false) }}
-                className="text-xs font-semibold text-[#0F6B3E] bg-[#0F6B3E]/10 hover:bg-[#0F6B3E]/15 px-2.5 py-1 rounded-full transition-colors"
+                className="text-[11px] font-semibold text-[#0F6B3E] bg-[#0F6B3E]/10 hover:bg-[#0F6B3E]/15 px-2 py-0.5 rounded-md transition-colors"
               >
                 Upgrade
               </button>
             )}
           </div>
-          <div className="h-px bg-gray-100 mx-3" />
+          <div className="h-px bg-gray-100" />
         </>
       )}
 
       {/* Team */}
-      <div className="px-3 py-2">
+      <div className="p-1.5">
         <button
           onClick={() => { router.push("/dashboard/settings/collaborators"); setDropdownOpen(false) }}
-          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-gray-50 transition-colors"
+          className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-gray-50 transition-colors"
         >
-          <div className="h-8 w-8 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0">
-            <Users className="h-4 w-4 text-gray-500" />
+          <div className="h-7 w-7 rounded-md bg-gray-100 flex items-center justify-center flex-shrink-0">
+            <Users className="h-3.5 w-3.5 text-gray-500" />
           </div>
-          <div className="text-left">
-            <p className="text-sm font-medium text-gray-900">Team</p>
-            <p className="text-xs text-gray-400">Team settings</p>
+          <div className="text-left leading-tight">
+            <p className="text-[13px] font-medium text-gray-900">Team</p>
+            <p className="text-[11px] text-gray-400">Team settings</p>
           </div>
         </button>
       </div>
 
-      <div className="h-px bg-gray-100 mx-3" />
+      <div className="h-px bg-gray-100" />
 
       {/* Owned Workspaces */}
       {ownedBrands.length > 0 && (
-        <div className="px-3 py-2">
-          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-3 pb-1">
+        <div className="p-1.5">
+          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-2.5 pt-1 pb-1.5">
             Workspaces
           </p>
-          <div className="space-y-0.5">
-            {ownedBrands.map((brand) => (
+          <div className="space-y-px">
+            {ownedBrands.map((brand) => {
+              const isSelected = brand.id === selectedBrandId
+              return (
               <button
                 key={brand.id}
                 onClick={() => {
@@ -355,50 +360,67 @@ export function BrandSelector() {
                   setDropdownOpen(false)
                 }}
                 disabled={!brand.subscriptionActive && !brand.isOwner}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${
+                // The selected row carries a tinted background AND a brand-green
+                // left rule, not just the trailing check: at a glance the check
+                // alone was easy to miss against a list of identically-styled
+                // rows, which is the whole job this control has to do.
+                className={`relative w-full flex items-center gap-2.5 rounded-lg py-2 pr-2.5 transition-colors ${
+                  isSelected ? "bg-[#0F6B3E]/[0.07] pl-3.5" : "pl-2.5"
+                } ${
                   !brand.subscriptionActive && !brand.isOwner
                     ? "opacity-50 cursor-not-allowed"
-                    : "hover:bg-gray-50"
+                    : isSelected ? "" : "hover:bg-gray-50"
                 }`}
               >
+                {isSelected && (
+                  <span
+                    aria-hidden="true"
+                    className="absolute left-1 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-[#0F6B3E]"
+                  />
+                )}
                 {brand.logo_url ? (
                   <img src={brand.logo_url} alt={brand.name}
-                    className={`h-8 w-8 rounded-md flex-shrink-0 object-cover ${!brand.subscriptionActive && !brand.isOwner ? "grayscale" : ""}`}
+                    className={`h-7 w-7 rounded-md flex-shrink-0 object-cover ${!brand.subscriptionActive && !brand.isOwner ? "grayscale" : ""}`}
                   />
                 ) : (
-                  <Avatar className="h-8 w-8 rounded-md flex-shrink-0">
-                    <AvatarFallback className="rounded-md text-xs font-bold bg-gray-100 text-gray-700">
+                  <Avatar className="h-7 w-7 rounded-md flex-shrink-0">
+                    <AvatarFallback className="rounded-md text-[11px] font-bold bg-gray-100 text-gray-700">
                       {getInitials(brand.name)}
                     </AvatarFallback>
                   </Avatar>
                 )}
-                <div className="flex-1 text-left min-w-0">
-                  <p className="text-sm font-medium text-gray-900 truncate">{brand.name}</p>
-                  <p className="text-xs text-gray-400">
+                <div className="flex-1 text-left min-w-0 leading-tight">
+                  <p className={`text-[13px] truncate ${isSelected ? "font-semibold text-gray-900" : "font-medium text-gray-900"}`}>
+                    {brand.name}
+                  </p>
+                  <p className={`text-[11px] ${isSelected ? "text-[#0F6B3E]" : "text-gray-400"}`}>
                     {!brand.subscriptionActive && !brand.isOwner ? "⚠️ Unavailable" : "Owner"}
                   </p>
                 </div>
-                {brand.id === selectedBrandId && (
-                  <Check className="h-4 w-4 text-[#0F6B3E] flex-shrink-0" />
+                {isSelected && (
+                  <Check className="h-3.5 w-3.5 text-[#0F6B3E] flex-shrink-0" strokeWidth={3} />
                 )}
               </button>
-            ))}
+              )
+            })}
           </div>
         </div>
       )}
 
-      {/* Add Workspace */}
-      <div className={`px-3 ${ownedBrands.length > 0 ? "pb-2" : "py-2"}`}>
+      {/* Add Workspace — a secondary action, so it reads lighter than the
+          workspace rows above rather than competing with them: a small inline
+          icon tile instead of a full 28px dashed avatar. */}
+      <div className={`px-1.5 ${ownedBrands.length > 0 ? "pb-1.5" : "py-1.5"}`}>
         <button
           onClick={() => { checkBrandLimitAndBuy(); setDropdownOpen(false) }}
-          className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 transition-colors"
+          className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg hover:bg-gray-50 transition-colors group"
         >
-          <div className="h-8 w-8 rounded-md border-2 border-dashed border-gray-200 flex items-center justify-center flex-shrink-0">
-            <Plus className="h-3.5 w-3.5 text-gray-400" />
+          <div className="h-7 w-7 rounded-md border border-dashed border-gray-300 flex items-center justify-center flex-shrink-0 transition-colors group-hover:border-gray-400">
+            <Plus className="h-3.5 w-3.5 text-gray-400 transition-colors group-hover:text-gray-600" />
           </div>
-          <span className="text-sm font-medium text-gray-500">Add Workspace</span>
+          <span className="text-[13px] font-medium text-gray-600">Add Workspace</span>
           {upgradeRequired && (
-            <span className="ml-auto text-[10px] font-semibold text-[#0F6B3E] bg-[#0F6B3E]/10 px-2 py-0.5 rounded-full">
+            <span className="ml-auto text-[10px] font-semibold text-[#0F6B3E] bg-[#0F6B3E]/10 px-1.5 py-0.5 rounded">
               Upgrade
             </span>
           )}
@@ -408,13 +430,15 @@ export function BrandSelector() {
       {/* Shared Workspaces */}
       {sharedBrands.length > 0 && (
         <>
-          <div className="h-px bg-gray-100 mx-3" />
-          <div className="px-3 py-2">
-            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-3 pb-1">
+          <div className="h-px bg-gray-100" />
+          <div className="p-1.5">
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-2.5 pt-1 pb-1.5">
               Shared Workspaces
             </p>
-            <div className="space-y-0.5">
-              {sharedBrands.map((brand) => (
+            <div className="space-y-px">
+              {sharedBrands.map((brand) => {
+                const isSelected = brand.id === selectedBrandId
+                return (
                 <button
                   key={brand.id}
                   onClick={() => {
@@ -428,61 +452,82 @@ export function BrandSelector() {
                     setDropdownOpen(false)
                   }}
                   disabled={!brand.subscriptionActive}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${
-                    !brand.subscriptionActive ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-50"
+                  // Same selected treatment as the owned list above, so the
+                  // active workspace looks identical wherever it appears.
+                  className={`relative w-full flex items-center gap-2.5 rounded-lg py-2 pr-2.5 transition-colors ${
+                    isSelected ? "bg-[#0F6B3E]/[0.07] pl-3.5" : "pl-2.5"
+                  } ${
+                    !brand.subscriptionActive
+                      ? "opacity-50 cursor-not-allowed"
+                      : isSelected ? "" : "hover:bg-gray-50"
                   }`}
                 >
+                  {isSelected && (
+                    <span
+                      aria-hidden="true"
+                      className="absolute left-1 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-[#0F6B3E]"
+                    />
+                  )}
                   {brand.logo_url ? (
                     <img src={brand.logo_url} alt={brand.name}
-                      className={`h-8 w-8 rounded-md flex-shrink-0 object-cover ${!brand.subscriptionActive ? "grayscale" : ""}`}
+                      className={`h-7 w-7 rounded-md flex-shrink-0 object-cover ${!brand.subscriptionActive ? "grayscale" : ""}`}
                     />
                   ) : (
-                    <Avatar className="h-8 w-8 rounded-md flex-shrink-0">
-                      <AvatarFallback className="rounded-md text-xs font-bold bg-gray-100 text-gray-700">
+                    <Avatar className="h-7 w-7 rounded-md flex-shrink-0">
+                      <AvatarFallback className="rounded-md text-[11px] font-bold bg-gray-100 text-gray-700">
                         {getInitials(brand.name)}
                       </AvatarFallback>
                     </Avatar>
                   )}
-                  <div className="flex-1 text-left min-w-0">
-                    <p className="text-sm font-medium text-gray-900 truncate">{brand.name}</p>
-                    <p className="text-xs text-gray-400">
+                  <div className="flex-1 text-left min-w-0 leading-tight">
+                    <p className={`text-[13px] truncate ${isSelected ? "font-semibold text-gray-900" : "font-medium text-gray-900"}`}>
+                      {brand.name}
+                    </p>
+                    <p className={`text-[11px] ${isSelected ? "text-[#0F6B3E]" : "text-gray-400"}`}>
                       {!brand.subscriptionActive ? "⚠️ Unavailable" : "Member"}
                     </p>
                   </div>
-                  {brand.id === selectedBrandId && (
-                    <Check className="h-4 w-4 text-[#0F6B3E] flex-shrink-0" />
+                  {isSelected && (
+                    <Check className="h-3.5 w-3.5 text-[#0F6B3E] flex-shrink-0" strokeWidth={3} />
                   )}
                 </button>
-              ))}
+                )
+              })}
             </div>
           </div>
         </>
       )}
 
-      {/* Account + Logout */}
-      <div className="h-px bg-gray-100" />
-      <div className="px-3 py-2">
+      {/* Account + Logout.
+          Everything above this line is about WORKSPACES; everything below is
+          about the person signed in. A tinted footer (rather than one more
+          hairline in a menu that already has several) is what makes that
+          split read at a glance. */}
+      <div className="h-px bg-gray-200" />
+      <div className="bg-gray-50/70 p-1.5">
         <button
           onClick={() => { router.push("/dashboard/settings"); setDropdownOpen(false) }}
-          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-gray-50 transition-colors"
+          className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white transition-colors"
         >
-          <Avatar className="h-8 w-8 rounded-full flex-shrink-0">
+          <Avatar className="h-7 w-7 rounded-full flex-shrink-0">
             <AvatarImage src={userAvatar} alt={userName} />
-            <AvatarFallback className="text-xs font-bold bg-gray-100 text-gray-700">
+            <AvatarFallback className="text-[11px] font-bold bg-gray-200 text-gray-700">
               {getInitials(userName)}
             </AvatarFallback>
           </Avatar>
-          <div className="flex-1 text-left min-w-0">
-            <p className="text-sm font-medium text-gray-900 truncate">{userName}</p>
-            <p className="text-xs text-[#0F6B3E] font-medium">Account settings</p>
+          <div className="flex-1 text-left min-w-0 leading-tight">
+            <p className="text-[13px] font-medium text-gray-900 truncate">{userName}</p>
+            <p className="text-[11px] font-medium text-[#0F6B3E]">Account settings</p>
           </div>
         </button>
         <button
           onClick={() => signOutEverywhere()}
-          className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-red-50 transition-colors mt-0.5"
+          className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-red-50 transition-colors"
         >
-          <LogOut className="h-4 w-4 text-red-500" />
-          <span className="text-sm font-medium text-red-500">Log out</span>
+          <span className="flex h-7 w-7 items-center justify-center flex-shrink-0">
+            <LogOut className="h-3.5 w-3.5 text-red-500" />
+          </span>
+          <span className="text-[13px] font-medium text-red-500">Log out</span>
         </button>
       </div>
     </div>

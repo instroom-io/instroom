@@ -639,10 +639,28 @@ export function useRestoredCache<T>(key: string | null, onRestore: (data: T) => 
 export type CachedFetchResult<T> = {
   data: T | undefined
   error: string | null
-  /** True only when there is no cached data to show yet. */
+  /**
+   * True only when there is no cached data to show yet.
+   *
+   * Also true while a TRANSIENT first load is still being retried in the
+   * background, so a dropped connection keeps the page's own neutral/skeleton
+   * state instead of flashing an error screen at the user for something that
+   * is about to resolve itself. `error` is still set throughout (and the raw
+   * failure is still logged), so a consumer that wants to react can — this
+   * only decides what "we have nothing yet" looks like by default.
+   */
   isLoading: boolean
   /** True while a background refresh is running over existing data. */
   isValidating: boolean
+  /**
+   * True when a read failed and no further automatic retry is coming — the
+   * bounded budget is spent, or the failure was never transient.
+   *
+   * This is what separates "still trying, say nothing" from "this is not
+   * going to fix itself, offer the user a Retry". Consumers that show a
+   * fallback should gate it on this rather than on `error`.
+   */
+  hasGivenUp: boolean
   refetch: () => Promise<T | undefined>
   /** Write data straight into the cache (optimistic updates). */
   mutate: (data: T) => void
@@ -671,6 +689,9 @@ export function useCachedFetch<T>(
   // its next failure from a clean budget rather than an exhausted one.
   const retriesRef = useRef(0)
   const retryTimerRef = useRef<number | null>(null)
+  // Whether another automatic attempt is still coming. Drives `hasGivenUp`,
+  // which is how consumers tell "quietly retrying" from "this needs the user".
+  const [retryPending, setRetryPending] = useState(false)
 
   // The fetcher is usually an inline closure; keeping it in a ref means a new
   // identity on every render cannot retrigger the effect (one of the sources of
@@ -719,6 +740,7 @@ export function useCachedFetch<T>(
         const result = await fetchCached<T>(key, () => fetcherRef.current(), { ttl, force })
         setError(null)
         retriesRef.current = 0
+        setRetryPending(false)
         return result
       } catch (err) {
         // The technical detail stays here, in full, for debugging — this is the
@@ -741,6 +763,7 @@ export function useCachedFetch<T>(
         if (isTransientError(err) && retriesRef.current < TRANSIENT_RETRY_DELAYS.length) {
           const attempt = retriesRef.current
           retriesRef.current = attempt + 1
+          setRetryPending(true)
           if (retryTimerRef.current !== null) window.clearTimeout(retryTimerRef.current)
           retryTimerRef.current = window.setTimeout(() => {
             retryTimerRef.current = null
@@ -748,6 +771,10 @@ export function useCachedFetch<T>(
             // cached entry it would read may be the very thing that is stale.
             void run(true)
           }, TRANSIENT_RETRY_DELAYS[attempt])
+        } else {
+          // Either not transient, or the retry budget is spent. Nothing further
+          // is coming on its own, so consumers may now surface a fallback.
+          setRetryPending(false)
         }
         return undefined
       } finally {
@@ -786,8 +813,15 @@ export function useCachedFetch<T>(
   return {
     data,
     error,
-    isLoading: active && data === undefined,
+    // Nothing cached yet counts as loading — and so does a transient first
+    // load that is still being retried. Without the second clause a dropped
+    // connection flipped straight from skeleton to an error screen, then back
+    // to content a second later when the retry succeeded; the page now simply
+    // stays in its own neutral state until there is something to show or the
+    // retries are spent.
+    isLoading: active && data === undefined && (isValidating || retryPending || error === null),
     isValidating,
+    hasGivenUp: error !== null && !retryPending,
     refetch,
     mutate,
   }

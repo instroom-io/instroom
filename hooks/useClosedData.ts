@@ -166,6 +166,12 @@ interface UseClosedDataReturn {
   data: ClosedInfluencer[]
   isLoading: boolean
   error: string | null
+  /**
+   * True only once a read has failed AND no automatic retry is still coming.
+   * Gate any visible fallback on this, not on `error` — a transient blip that
+   * is still being retried should leave the page's own neutral state alone.
+   */
+  hasGivenUp: boolean
   updateColumn: (
     id: string,
     newColumn: ClosedColumn,
@@ -422,7 +428,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
   // ── Fetch ─────────────────────────────────────────────────────────────────
   const fetchClosed = useCallback(() => fetchClosedRows(brandId!), [brandId])
 
-  const { data: cached, error, isLoading, refetch } = useCachedFetch<ClosedInfluencer[]>(
+  const { data: cached, error, isLoading, hasGivenUp, refetch } = useCachedFetch<ClosedInfluencer[]>(
     cacheKey,
     fetchClosed
   )
@@ -938,6 +944,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
     data,
     isLoading: Boolean(brandId) && isLoading,
     error,
+    hasGivenUp,
     updateColumn,
     updatePaidCollab,
     updateCampaignType,
