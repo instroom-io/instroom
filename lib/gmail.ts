@@ -185,10 +185,14 @@ function extractPart(payload: any, mimeType: string): string {
 // all formatting and runs everything together with no line breaks, which is
 // why a signature showed up as one garbled line instead of its real layout.
 function extractBody(payload: any): { body: string; isHtml: boolean } {
-  const plain = extractPart(payload, "text/plain")
-  if (plain) return { body: plain, isHtml: false }
+  // HTML preferred over plain text: Gmail's own auto-generated text/plain
+  // alternative for an HTML message is lossy (bold becomes literal
+  // "*asterisks*", adjacent lines run together) — renders via the sandboxed
+  // HtmlMessageFrame either way, so there's no safety reason to prefer text.
   const html = extractPart(payload, "text/html")
   if (html) return { body: html, isHtml: true }
+  const plain = extractPart(payload, "text/plain")
+  if (plain) return { body: plain, isHtml: false }
   return { body: "", isHtml: false }
 }
 
@@ -227,6 +231,30 @@ function extractAttachments(payload: any): GmailAttachmentMeta[] {
   return results
 }
 
+type GmailInlineImage = { contentId: string; attachmentId: string; mimeType: string }
+
+// Inline images (embedded logos etc.) referenced by "cid:" in the HTML —
+// angle brackets stripped from Content-ID so it matches the bare cid: value.
+function extractInlineImages(payload: any): GmailInlineImage[] {
+  if (!payload) return []
+  const results: GmailInlineImage[] = []
+  if (payload.body?.attachmentId && isInlinePart(payload)) {
+    const headers: { name: string; value: string }[] = payload.headers || []
+    const contentId = getHeader(headers, "Content-ID").replace(/^<|>$/g, "")
+    if (contentId) {
+      results.push({
+        contentId,
+        attachmentId: payload.body.attachmentId,
+        mimeType: payload.mimeType || "application/octet-stream",
+      })
+    }
+  }
+  if (payload.parts) {
+    for (const part of payload.parts) results.push(...extractInlineImages(part))
+  }
+  return results
+}
+
 /** Strip anything that isn't safe as a bare (non-encoded) MIME/download
  *  filename — full RFC 2231 filename* encoding for non-ASCII names is
  *  skipped for v1. Shared by the outgoing (gmail/send) and incoming
@@ -260,8 +288,18 @@ export type ShapedGmailThread = {
 export function shapeGmailThread(thread: any): ShapedGmailThread {
   const messages = (thread.messages || []).map((msg: any) => {
     const headers = msg.payload?.headers || []
-    const { body, isHtml } = extractBody(msg.payload)
+    let { body, isHtml } = extractBody(msg.payload)
     const attachments = extractAttachments(msg.payload)
+
+    // A "cid:" reference only resolves inside the original MIME structure —
+    // rewritten here to the existing attachment route so it actually loads.
+    if (isHtml && body.includes("cid:")) {
+      for (const img of extractInlineImages(msg.payload)) {
+        const src = `/api/gmail/attachment/${msg.id}/${img.attachmentId}?mimeType=${encodeURIComponent(img.mimeType)}`
+        body = body.split(`cid:${img.contentId}`).join(src)
+      }
+    }
+
     return {
       id: msg.id,
       from: getHeader(headers, "From"),
@@ -277,11 +315,8 @@ export function shapeGmailThread(thread: any): ShapedGmailThread {
   })
 
   const firstMsg = messages[0] || {}
-  const labelIds: string[] = thread.messages?.[0]?.labelIds || []
+  const isUnread = messages.some((m: any) => (m.labelIds || []).includes("UNREAD"))
 
-  // messages[0] is the oldest message in the thread, which is often the outbound
-  // message the user sent (cold outreach) rather than something from the contact.
-  // Prefer the first message that isn't one the user sent.
   const contactMsg = messages.find((m: any) => !(m.labelIds || []).includes("SENT"))
 
   const fromHeader: string = contactMsg ? contactMsg.from || "" : firstMsg.to || firstMsg.from || ""
@@ -292,7 +327,7 @@ export function shapeGmailThread(thread: any): ShapedGmailThread {
     id: thread.id,
     subject: firstMsg.subject || "(No subject)",
     snippet: thread.snippet || firstMsg.snippet || "",
-    unread: labelIds.includes("UNREAD"),
+    unread: isUnread,
     messages,
     senderEmail,
     hasReply: Boolean(contactMsg),

@@ -29,6 +29,7 @@ export async function GET(req: NextRequest) {
       "profile",
       "https://www.googleapis.com/auth/gmail.readonly",
       "https://www.googleapis.com/auth/gmail.send",
+      "https://www.googleapis.com/auth/gmail.modify", // needed to remove UNREAD (see /api/gmail/mark-read)
     ].join(" "),
     access_type: "offline",
     // "consent" guarantees a refresh_token every time; "select_account" forces

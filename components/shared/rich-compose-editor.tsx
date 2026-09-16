@@ -15,6 +15,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react"
 import {
   IconBold, IconItalic, IconLink, IconMoodSmile, IconPaperclip, IconPhoto, IconX, IconFile,
+  IconSignature, IconSignatureOff,
 } from "@tabler/icons-react"
 import { EmojiPicker } from "@/components/shared/emoji-picker"
 
@@ -136,6 +137,40 @@ export function AttachmentChipReadOnly({
   )
 }
 
+/** Shown instead of toggling when the user has no signature content saved
+ *  yet — toggling on/off would be a no-op either way, so this points them
+ *  at Settings instead. Opens in a new tab so the in-progress draft here
+ *  isn't lost by navigating away. */
+function SignatureSetupPopover({ onClose }: { onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function onDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
+    }
+    document.addEventListener("mousedown", onDown)
+    return () => document.removeEventListener("mousedown", onDown)
+  }, [onClose])
+
+  return (
+    <div
+      ref={ref}
+      className="absolute left-0 top-full z-40 mt-1 w-64 rounded-lg border border-gray-200 bg-white p-2.5 shadow-lg"
+    >
+      <p className="text-[12px] text-gray-600">You haven't set up a signature yet.</p>
+      <a
+        href="/dashboard/settings/signature"
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={onClose}
+        className="mt-1.5 inline-block text-[12px] font-medium text-[#0F6B3E] hover:underline"
+      >
+        Add one in Settings →
+      </a>
+    </div>
+  )
+}
+
 function LinkPopover({ onSubmit, onClose }: { onSubmit: (url: string) => void; onClose: () => void }) {
   const [url, setUrl] = useState("")
   const inputRef = useRef<HTMLInputElement>(null)
@@ -211,11 +246,19 @@ export const RichComposeEditor = forwardRef<RichComposeEditorHandle, {
    *  near the bottom of the screen, so it wants "top" instead — otherwise
    *  the picker gets pushed down past the visible viewport. */
   emojiPickerSide?: "top" | "bottom"
+  /** Per-send signature toggle, shown next to the photo icon. Omit both props
+   *  to hide the toggle entirely (defaults to on with no way to disable it). */
+  signatureEnabled?: boolean
+  onToggleSignature?: () => void
+  /** False when the user has no signature content saved — toggling would be
+   *  a no-op, so the button opens SignatureSetupPopover instead. Defaults to
+   *  true so callers that don't pass it keep the normal toggle behavior. */
+  signatureAvailable?: boolean
 }>(function RichComposeEditor(
   {
     html, onHtmlChange, files, onAddFiles, onRemoveFile, disabled = false, maxTotalBytes,
     placeholder = "Write your message…", onKeyDown, minHeightPx = 140, maxHeightPx = 320,
-    emojiPickerSide = "bottom",
+    emojiPickerSide = "bottom", signatureEnabled, onToggleSignature, signatureAvailable = true,
   },
   ref
 ) {
@@ -226,6 +269,7 @@ export const RichComposeEditor = forwardRef<RichComposeEditorHandle, {
 
   const [showLink, setShowLink] = useState(false)
   const [showEmoji, setShowEmoji] = useState(false)
+  const [showSignaturePrompt, setShowSignaturePrompt] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [sizeError, setSizeError] = useState<string | null>(null)
   const [isEmpty, setIsEmpty] = useState(html.trim().length === 0)
@@ -383,6 +427,21 @@ export const RichComposeEditor = forwardRef<RichComposeEditorHandle, {
           disabled={disabled || files.length >= MAX_FILES}
           onClick={() => photoInputRef.current?.click()}
         />
+        {onToggleSignature && (
+          <div className="relative">
+            <ToolbarButton
+              icon={signatureAvailable && signatureEnabled ? IconSignature : IconSignatureOff}
+              label={
+                !signatureAvailable
+                  ? "No signature set up yet"
+                  : signatureEnabled ? "Signature will be included" : "Signature is off"
+              }
+              active={signatureAvailable && signatureEnabled}
+              onClick={() => (signatureAvailable ? onToggleSignature() : setShowSignaturePrompt((v) => !v))}
+            />
+            {showSignaturePrompt && <SignatureSetupPopover onClose={() => setShowSignaturePrompt(false)} />}
+          </div>
+        )}
         {disabled && (
           <span className="ml-auto pr-1 text-[11px] text-gray-400">Attachments and formatting aren't available here</span>
         )}

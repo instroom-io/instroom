@@ -185,6 +185,10 @@ type Email = {
   // message body loaded yet. Opening it triggers a lazy fetch (see
   // loadFullGmailThread) that replaces the entry with real content.
   isLightweight?: boolean
+  // The optimistic row shown right after sendCompose, before the next real
+  // refresh replaces it — its id/gmailThreadId are locally generated, not a
+  // real Gmail thread id, so nothing should call the Gmail API with them.
+  isLocalPending?: boolean
 }
 
 type StageConfig = {
@@ -431,47 +435,139 @@ function formatRelativeDate(timestamp: string): string {
   }
 }
 
-// Renders untrusted HTML email content (e.g. a Gmail message whose body is
-// text/html, including our own signature-bearing sends) inside a sandboxed
-// iframe rather than dangerouslySetInnerHTML — inbound mail can come from
-// anyone, and raw HTML from a third party is a script/XSS vector if rendered
-// directly into the page. `allow-same-origin` (without `allow-scripts`) lets
-// this component measure the rendered content's height to auto-size the
-// iframe; scripts still cannot execute either way.
+// Renders untrusted HTML email content inside a sandboxed iframe rather than
+// dangerouslySetInnerHTML — inbound mail can come from anyone, and raw HTML
+// from a third party is a script/XSS vector otherwise. `allow-same-origin`
+// (without `allow-scripts`) lets this component measure the rendered
+// content's real size to auto-size the iframe; scripts still can't execute.
+//
+// Callers must pass `key={html}` (both call sites below do) — otherwise
+// React can reuse this instance with different content when switching
+// threads and back, inheriting a stale narrow `size` instead of starting
+// wide again.
 function HtmlMessageFrame({ html }: { html: string }) {
-  const [height, setHeight] = useState(80)
+  // Starts wide, not narrow: `overflow-wrap: anywhere` below force-wraps
+  // text to whatever width it's currently given, so measuring from a narrow
+  // start only measures "how tall once wrapped small" and never recovers
+  // the real width. Starting wide lets content lay out naturally; it shrinks
+  // down on measurement if it needs less.
+  const [size, setSize] = useState({ width: 520, height: 80 })
   const doc = `<!doctype html><html><head><meta charset="utf-8">` +
-    `<style>body{margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;font-size:14px;overflow-wrap:anywhere;}</style>` +
+    `<style>html,body{overflow:hidden;}body{margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;font-size:14px;overflow-wrap:anywhere;display:inline-block;max-width:520px;}</style>` +
     `</head><body>${html}</body></html>`
 
   return (
     <iframe
       srcDoc={doc}
       sandbox="allow-same-origin"
-      style={{ width: "100%", border: 0, height }}
+      scrolling="no"
+      style={{ width: size.width, maxWidth: "100%", border: 0, height: size.height, display: "block" }}
       onLoad={(e) => {
         const body = e.currentTarget.contentWindow?.document?.body
-        if (body) setHeight(body.scrollHeight + 8)
+        if (body) {
+          setSize({
+            width: Math.min(Math.max(body.scrollWidth, 160), 520),
+            height: body.scrollHeight + 8,
+          })
+        }
       }}
     />
   )
+}
+
+// Splits HTML into new content and quoted history using the real markup
+// Gmail/most clients wrap quotes in, rather than guessing from text like
+// splitQuotedText does. Removing the actual node (vs. assuming a position)
+// also means a trailing signature after the quote just stays in `main`.
+function splitHtmlQuote(html: string): { main: string; quoted: string | null } {
+  if (typeof document === "undefined") return { main: html, quoted: null }
+  const container = document.createElement("div")
+  container.innerHTML = html
+  const quoteNode = container.querySelector(".gmail_quote, blockquote")
+  if (!quoteNode) return { main: html, quoted: null }
+  quoteNode.remove()
+  return { main: container.innerHTML.trim() || html, quoted: (quoteNode as HTMLElement).outerHTML }
+}
+
+/** Moves remote `<img>` src to `data-blocked-src` until the viewer opts in —
+ *  a classic tracking-pixel vector, same as Gmail/Outlook's own image gate. */
+// cdn.jsdelivr.net: our own signature template's social icons — static,
+// non-personalized, not a tracking vector.
+const TRUSTED_IMAGE_HOSTS = new Set(["cdn.jsdelivr.net"])
+
+function blockRemoteImages(html: string): { html: string; hadBlocked: boolean } {
+  if (typeof document === "undefined") return { html, hadBlocked: false }
+  const container = document.createElement("div")
+  container.innerHTML = html
+  let hadBlocked = false
+  container.querySelectorAll("img[src]").forEach((img) => {
+    const src = img.getAttribute("src") || ""
+    if (!/^https?:\/\//i.test(src)) return
+    try {
+      if (TRUSTED_IMAGE_HOSTS.has(new URL(src).hostname)) return
+    } catch {
+      // Unparseable src — fall through and block it rather than guess.
+    }
+    img.setAttribute("data-blocked-src", src)
+    img.removeAttribute("src")
+    hadBlocked = true
+  })
+  return { html: container.innerHTML, hadBlocked }
 }
 
 // Splits a plain-text email body into the new reply text and the quoted
 // history beneath it (e.g. "On ... wrote:" followed by "> " lines), so the
 // quoted part can be collapsed behind a toggle instead of always shown.
 function splitQuotedText(body: string): { main: string; quoted: string | null } {
+  let main: string
+  let quoted: string | null
+
   const onWroteMatch = body.match(/\n?On [\s\S]*?wrote:\s*\n?/)
   if (onWroteMatch && onWroteMatch.index !== undefined) {
     const idx = onWroteMatch.index
-    return { main: body.slice(0, idx).trim(), quoted: body.slice(idx).trim() }
+    main = body.slice(0, idx).trim()
+    quoted = body.slice(idx).trim()
+  } else {
+    // No "On ... wrote:" line — real quoted history is a run of several ">"
+    // lines, so require two in a row rather than treating one stray ">"
+    // (e.g. inside a signature) as the start of a quote.
+    const lines = body.split("\n")
+    let quoteStartLine = -1
+    let run = 0
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].startsWith(">")) {
+        run++
+        if (run === 2) { quoteStartLine = i - 1; break }
+      } else {
+        run = 0
+      }
+    }
+    if (quoteStartLine === -1) return { main: body, quoted: null }
+    const idx = lines.slice(0, quoteStartLine).join("\n").length
+    main = body.slice(0, idx).trim()
+    quoted = body.slice(idx).trim()
   }
-  const quoteLineMatch = body.match(/^>.*$/m)
-  if (quoteLineMatch && quoteLineMatch.index !== undefined) {
-    const idx = quoteLineMatch.index
-    return { main: body.slice(0, idx).trim(), quoted: body.slice(idx).trim() }
+
+  // Some accounts' signature lands after the quoted history in the raw text
+  // rather than before it — pull any trailing non-">" lines back into `main`
+  // (matching real Gmail, which keeps that block outside its own collapse).
+  const quotedLines = quoted.split("\n")
+  let trailingStart = quotedLines.length
+  for (let i = quotedLines.length - 1; i >= 0; i--) {
+    if (quotedLines[i].trim() === "" || !quotedLines[i].startsWith(">")) {
+      trailingStart = i
+    } else {
+      break
+    }
   }
-  return { main: body, quoted: null }
+  if (trailingStart < quotedLines.length) {
+    const trailing = quotedLines.slice(trailingStart).join("\n").trim()
+    const remaining = quotedLines.slice(0, trailingStart).join("\n").trim()
+    if (trailing) main = main ? `${main}\n\n${trailing}` : trailing
+    quoted = remaining || null
+  }
+
+  return { main, quoted }
 }
 
 // Separates the "On ... wrote:" attribution line (which may itself be wrapped
@@ -798,6 +894,36 @@ function InboxContent() {
   const [composeSource, setComposeSource] = useState<"gmail" | "outlook">("gmail")
   const [expandedQuotes, setExpandedQuotes] = useState<Set<string>>(new Set())
 
+  // Signature include/exclude — defaults to the Settings → Email Signature
+  // toggle, overridable per compose/reply via the toolbar button. `null`
+  // means "use the default"; an explicit true/false is a per-send override.
+  const [signatureDefaultEnabled, setSignatureDefaultEnabled] = useState(true)
+  // Whether the user has actually filled in any signature field — mirrors
+  // renderSignatureHtml's own "hasContent" check (lib/signature.ts). With
+  // nothing saved, the toggle would just be a no-op either way, so the
+  // toolbar button points to Settings instead of toggling.
+  const [signatureConfigured, setSignatureConfigured] = useState(true)
+  useEffect(() => {
+    fetch("/api/settings/signature")
+      .then((res) => res.json())
+      .then((data) => {
+        setSignatureDefaultEnabled(data?.is_enabled ?? true)
+        setSignatureConfigured(
+          Boolean(
+            data?.full_name || data?.title || data?.company || data?.phone || data?.email || data?.website ||
+            Object.values(data?.social_links ?? {}).some(Boolean)
+          )
+        )
+      })
+      .catch(() => {})
+  }, [])
+  const [composeSignatureOverride, setComposeSignatureOverride] = useState<boolean | null>(null)
+  const [replySignatureOverride, setReplySignatureOverride] = useState<boolean | null>(null)
+  const composeIncludeSignature = composeSignatureOverride ?? signatureDefaultEnabled
+  const replyIncludeSignature = replySignatureOverride ?? signatureDefaultEnabled
+  /** Per-message opt-in to load remote images — keyed like expandedQuotes. */
+  const [imagesAllowed, setImagesAllowed] = useState<Set<string>>(new Set())
+
   // Compose modal state
   const [composeTo, setComposeTo] = useState("")
   const [composeSubject, setComposeSubject] = useState("")
@@ -1017,6 +1143,7 @@ function InboxContent() {
 
   useEffect(() => {
     setExpandedQuotes(new Set())
+    setReplySignatureOverride(null)
   }, [selectedEmail?.id])
 
   // Debounce the search input so filtering doesn't run on every keystroke.
@@ -1450,6 +1577,7 @@ function InboxContent() {
         form.append("subject", composeSubject.trim() || "(No subject)")
         form.append("body", composeBody)
         form.append("isHtmlBody", "true")
+        form.append("includeSignature", String(composeIncludeSignature))
         if (brandId) form.append("brandId", brandId)
         composeAttachments.forEach((a) => form.append("attachments", a.file, a.file.name))
         // No Content-Type header — fetch generates the multipart boundary itself.
@@ -1464,6 +1592,7 @@ function InboxContent() {
             body: composeBody,
             brandId,
             isHtmlBody: true,
+            includeSignature: composeIncludeSignature,
           }),
         })
       }
@@ -1489,7 +1618,7 @@ function InboxContent() {
             0,
             selectedGmailAccountId()
           )
-          setEmails((prev) => [placeholder, ...prev])
+          setEmails((prev) => [{ ...placeholder, isLocalPending: true }, ...prev])
         }
         setComposeSent(true)
         setTimeout(() => {
@@ -1503,6 +1632,7 @@ function InboxContent() {
           setSavingComposeAsTemplate(false)
           setComposeTemplateName("")
           setSaveComposeTemplateError(undefined)
+          setComposeSignatureOverride(null)
         }, 1500)
       }
     } catch {
@@ -1597,7 +1727,25 @@ function InboxContent() {
   const openEmail = async (email: Email) => {
     setSelectedEmail(email)
     markAsRead(email.id)
-    if (!email.isLightweight || !email.gmailThreadId) return
+    // Also tells Gmail, not just local state — otherwise the real message
+    // stays UNREAD and reverts on next fetch. Fire-and-forget: shouldn't
+    // block opening the thread, but errors are logged, not swallowed
+    // silently (a silent failure is what hid the missing scope bug before).
+    if (email.source === "gmail" && email.gmailThreadId && !email.isLocalPending) {
+      fetch("/api/gmail/mark-read", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ threadId: email.gmailThreadId }),
+      })
+        .then(async (res) => {
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}))
+            console.error("[gmail mark-read] failed:", res.status, body?.error)
+          }
+        })
+        .catch((err) => console.error("[gmail mark-read] network error:", err))
+    }
+    if (!email.isLightweight || !email.gmailThreadId || email.isLocalPending) return
 
     setLoadingThreadId(email.id)
     try {
@@ -1760,6 +1908,7 @@ function InboxContent() {
         form.append("subject", selectedEmail.subject)
         form.append("body", htmlBody)
         form.append("isHtmlBody", "true")
+        form.append("includeSignature", String(replyIncludeSignature))
         if (brandId) form.append("brandId", brandId)
         if (!isOutlookThread && selectedEmail.gmailThreadId) form.append("threadId", selectedEmail.gmailThreadId)
         attachmentsToSend.forEach((a) => form.append("attachments", a.file, a.file.name))
@@ -1771,6 +1920,7 @@ function InboxContent() {
           body: htmlBody,
           brandId,
           isHtmlBody: true,
+          includeSignature: replyIncludeSignature,
         }
         if (!isOutlookThread) replyPayload.threadId = selectedEmail.gmailThreadId
 
@@ -2173,7 +2323,7 @@ function InboxContent() {
                       <IconTemplate size={16} />
                     </button>
                     <button
-                      onClick={() => { setComposeSource(gmailConnected ? "gmail" : outlookConnected ? "outlook" : "gmail"); setOpenCompose(true) }}
+                      onClick={() => { setComposeSource(gmailConnected ? "gmail" : outlookConnected ? "outlook" : "gmail"); setComposeSignatureOverride(null); setOpenCompose(true) }}
                       className="flex h-11 w-11 sm:h-9 sm:w-9 shrink-0 items-center justify-center rounded-xl bg-[#1FAE5B] text-white hover:bg-[#0F6B3E] active:bg-[#0F6B3E] transition-colors shadow-sm"
                       title="New Message"
                     >
@@ -2427,17 +2577,52 @@ function InboxContent() {
                           </div>
                           <div className={`flex flex-col gap-1 ${group.isUser ? "items-end" : "items-start"}`}>
                             {group.items.map((msg, mIdx) => {
-                              // HTML messages (e.g. a signature-bearing send) skip the
-                              // plain-text quote-splitting entirely — "On ... wrote:"/">"
-                              // heuristics don't apply to markup, and the quoted portion
-                              // of an HTML email is already part of its own rendered layout.
+                              // HTML messages use splitHtmlQuote (real markup) and
+                              // gate remote images, instead of the plain-text path below.
                               if (msg.isHtml) {
+                                const { main, quoted } = splitHtmlQuote(msg.message)
+                                const quoteKey = `${gIdx}-${mIdx}`
+                                const isExpanded = expandedQuotes.has(quoteKey)
+                                const imagesOn = imagesAllowed.has(quoteKey)
+                                const mainBlocked = blockRemoteImages(main)
+                                const quotedBlocked = quoted ? blockRemoteImages(quoted) : null
+                                const hasRemoteImages = mainBlocked.hadBlocked || Boolean(quotedBlocked?.hadBlocked)
                                 return (
                                   <div
                                     key={mIdx}
                                     className={`rounded-2xl px-4 md:px-5 py-3 shadow-sm overflow-hidden ${group.isUser ? "bg-gray-100 border border-gray-200 rounded-tr-none" : "bg-white border border-gray-100 rounded-tl-none"}`}
                                   >
-                                    <HtmlMessageFrame html={msg.message} />
+                                    {hasRemoteImages && !imagesOn && (
+                                      <button
+                                        onClick={() => setImagesAllowed((prev) => new Set(prev).add(quoteKey))}
+                                        className="mb-2 text-xs underline underline-offset-2 text-gray-400 hover:text-gray-600"
+                                      >
+                                        Display images below
+                                      </button>
+                                    )}
+                                    <HtmlMessageFrame key={imagesOn ? main : mainBlocked.html} html={imagesOn ? main : mainBlocked.html} />
+                                    {quoted && (
+                                      <div className="mt-2">
+                                        <button
+                                          onClick={() =>
+                                            setExpandedQuotes((prev) => {
+                                              const next = new Set(prev)
+                                              if (next.has(quoteKey)) next.delete(quoteKey)
+                                              else next.add(quoteKey)
+                                              return next
+                                            })
+                                          }
+                                          className="text-xs underline underline-offset-2 text-gray-400 hover:text-gray-600"
+                                        >
+                                          {isExpanded ? "Hide quoted text" : "Show quoted text"}
+                                        </button>
+                                        {isExpanded && (
+                                          <div className="mt-2 rounded-lg px-3 py-2 bg-gray-50 border border-gray-100">
+                                            <HtmlMessageFrame key={imagesOn ? quoted : quotedBlocked!.html} html={imagesOn ? quoted : quotedBlocked!.html} />
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
                                     {msg.attachments && msg.attachments.length > 0 && (
                                       <div className="mt-2 flex flex-wrap gap-2">
                                         {msg.attachments.map((att) => (
@@ -2548,8 +2733,11 @@ function InboxContent() {
                       placeholder={`Reply to ${selectedEmail.name.split(" ")[0]}…`}
                       onKeyDown={handleKeyDown}
                       minHeightPx={44}
-                      maxHeightPx={160}
+                      maxHeightPx={320}
                       emojiPickerSide="top"
+                      signatureEnabled={replyIncludeSignature}
+                      onToggleSignature={() => setReplySignatureOverride(!replyIncludeSignature)}
+                      signatureAvailable={signatureConfigured}
                     />
                     <div className="flex items-center justify-between mt-2">
                       {sendError
@@ -2790,6 +2978,9 @@ function InboxContent() {
                     onAddFiles={handleAddComposeFiles}
                     onRemoveFile={handleRemoveComposeFile}
                     maxTotalBytes={MAX_TOTAL_ATTACHMENT_BYTES}
+                    signatureEnabled={composeIncludeSignature}
+                    onToggleSignature={() => setComposeSignatureOverride(!composeIncludeSignature)}
+                    signatureAvailable={signatureConfigured}
                   />
                 </div>
 
@@ -2802,7 +2993,7 @@ function InboxContent() {
 
                 <div className="flex justify-between items-center mt-4 pt-4 border-t border-gray-100">
                   <button
-                    onClick={() => { setOpenCompose(false); setComposeTo(""); setComposeSubject(""); setComposeBody(""); clearComposeAttachments(); setComposeError(undefined); setSavingComposeAsTemplate(false); setComposeTemplateName(""); setSaveComposeTemplateError(undefined) }}
+                    onClick={() => { setOpenCompose(false); setComposeTo(""); setComposeSubject(""); setComposeBody(""); clearComposeAttachments(); setComposeError(undefined); setSavingComposeAsTemplate(false); setComposeTemplateName(""); setSaveComposeTemplateError(undefined); setComposeSignatureOverride(null) }}
                     className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 transition"
                   >
                     Discard

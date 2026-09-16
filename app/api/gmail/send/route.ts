@@ -136,6 +136,7 @@ export async function POST(req: NextRequest) {
   let to: string, from: string | undefined, subject: string | undefined, body: string
   let threadId: string | undefined, inReplyTo: string | undefined, brandId: string | undefined
   let isHtmlBody = false
+  let includeSignature = true
   const attachments: Attachment[] = []
 
   const contentType = req.headers.get("content-type") || ""
@@ -148,6 +149,7 @@ export async function POST(req: NextRequest) {
     brandId = form.get("brandId") ? String(form.get("brandId")) : undefined
     threadId = form.get("threadId") ? String(form.get("threadId")) : undefined
     isHtmlBody = form.get("isHtmlBody") === "true"
+    includeSignature = form.get("includeSignature") !== "false"
 
     const files = form.getAll("attachments").filter((v): v is File => v instanceof File)
     const totalBytes = files.reduce((sum, f) => sum + f.size, 0)
@@ -174,6 +176,7 @@ export async function POST(req: NextRequest) {
     inReplyTo = jsonBody.inReplyTo
     brandId = jsonBody.brandId
     isHtmlBody = Boolean(jsonBody.isHtmlBody)
+    includeSignature = jsonBody.includeSignature !== false
   }
 
   if (!to || !body) {
@@ -181,7 +184,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const signatureHtml = await getUserSignatureHtml(session.user.id)
+    const signatureHtml = includeSignature ? await getUserSignatureHtml(session.user.id) : null
     const raw = buildRawEmail({
       to,
       from: from || "",
