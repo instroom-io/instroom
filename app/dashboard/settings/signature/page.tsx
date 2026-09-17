@@ -161,9 +161,6 @@ export default function SignaturePage() {
     }
   }
 
-  // Shared by the Save button and the Gmail checkbox (which saves itself
-  // immediately). Overrides let a caller send a value before its own setState
-  // has committed, e.g. the checkbox persisting use_gmail_signature right away.
   async function persistSignature(overrides: Record<string, unknown> = {}) {
     const res = await fetch("/api/settings/signature", {
       method: "PUT",
@@ -213,8 +210,6 @@ export default function SignaturePage() {
   function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
-
-    // accept= only filters the OS picker, not drag-and-drop — same as branding's logo upload.
     if (!ALLOWED_PHOTO_TYPES.includes(file.type)) {
       setPhotoError("That file type isn't supported. Please upload a PNG, JPG, SVG, or WebP image.")
       e.target.value = ""
@@ -464,7 +459,8 @@ export default function SignaturePage() {
             <div className="rounded-lg border border-border bg-muted/30 p-4 font-sans">
               {useGmailSignature ? (
                 gmailSignatureHtml ? (
-                  <GmailSignaturePreviewFrame html={gmailSignatureHtml} />
+                  // "-- " prefix matches what actually gets sent — see lib/signature.ts.
+                  <GmailSignaturePreviewFrame html={`<div>-- </div>${gmailSignatureHtml}`} />
                 ) : (
                   <p className="text-xs text-muted-foreground">Fetching your Gmail signature…</p>
                 )

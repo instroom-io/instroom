@@ -125,16 +125,11 @@ export function renderSignatureHtml(sig: Signature): string | null {
           `style="display:inline-block;vertical-align:middle;border:0;" /></a>`
     )
   if (socialLinks.length) {
-    // padding-right, not just the last icon's own margin: a trailing child
-    // margin isn't counted in scrollWidth, so the auto-sizing bubble in the
-    // inbox measured short and clipped the last icon.
     rows.push(`<div style="font-size:12px;margin-top:4px;white-space:nowrap;padding-right:8px;">${socialLinks.join("")}</div>`)
   }
 
   const textBlock = rows.join("")
 
-  // <table>, not flexbox — Outlook's Word rendering engine barely supports
-  // flexbox. No height attribute on the image, so its aspect ratio holds.
   const body = sig.photo_url
     ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>` +
         `<td style="padding-right:12px;vertical-align:top;">` +
@@ -144,6 +139,11 @@ export function renderSignatureHtml(sig: Signature): string | null {
       `</tr></table>`
     : textBlock
 
+  return wrapSignature(body)
+}
+
+/** The divider line + spacing every signature sits inside, built or imported. */
+function wrapSignature(body: string): string {
   return (
     `<div style="border-top:1px solid #E5E7EB;margin-top:16px;padding-top:12px;font-family:Arial,Helvetica,sans-serif;">` +
       body +
@@ -151,14 +151,14 @@ export function renderSignatureHtml(sig: Signature): string | null {
   )
 }
 
-/** Fetches the current user's signature and renders it, or returns null if
- *  none exists, it's disabled, or it has no content. */
 export async function getUserSignatureHtml(userId: string): Promise<string | null> {
   const signature = await prisma.signature.findUnique({ where: { user_id: userId } })
   if (!signature || !signature.is_enabled) return null
 
-  // Imported as-is — not run through renderSignatureHtml, which only builds from fields.
-  if (signature.use_gmail_signature) return signature.gmail_signature_html || null
+  if (signature.use_gmail_signature) {
+    if (!signature.gmail_signature_html) return null
+    return wrapSignature(`<div>-- </div>${signature.gmail_signature_html}`)
+  }
 
   return renderSignatureHtml(signature)
 }
