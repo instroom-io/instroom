@@ -249,9 +249,13 @@ export async function PUT(
     // `|| 1` promoted stage 0 — Not Interested — to 1, so a decline saved from
     // the Influencer List landed the row back in For Outreach instead of the
     // Pipeline's Not Interested column. Only an unparseable stage defaults.
+    // Upper bound is 9, not 8: Post Tracker's "Issues" column stores stage 9
+    // (see mapClosedToPipelineFields). Clamping at 8 silently demoted such a
+    // row to Posted whenever it was saved from the Influencer List — the same
+    // class of bug the Delivered/Posted note above describes, one stage higher.
     if (data.stage !== undefined) {
       const parsedStage = parseInt(String(data.stage))
-      bi.stage = Math.max(0, Math.min(8, Number.isFinite(parsedStage) ? parsedStage : 1))
+      bi.stage = Math.max(0, Math.min(9, Number.isFinite(parsedStage) ? parsedStage : 1))
     }
     if (data.agreed_rate !== undefined)
       bi.agreed_rate = data.agreed_rate ? parseFloat(String(data.agreed_rate)) : null
@@ -261,6 +265,14 @@ export async function PUT(
         ? data.approval_status
         : null
     if (data.approval_notes !== undefined) bi.approval_notes = data.approval_notes || null
+    // Free-text explanation for an "Others" decline. Kept separate from
+    // approval_notes, which Analytics matches exactly against the reason list.
+    // Empty or whitespace-only stores as NULL — "nothing typed" and "spaces
+    // typed" are the same fact, and only NULL distinguishes "no note".
+    if (data.decline_notes !== undefined)
+      bi.decline_notes = typeof data.decline_notes === "string" && data.decline_notes.trim()
+        ? data.decline_notes.trim()
+        : null
     if (data.transferred_date !== undefined)
       bi.transferred_date = data.transferred_date ? new Date(data.transferred_date) : null
 

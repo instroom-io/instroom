@@ -17,6 +17,7 @@ import {
   DEFAULT_NICHES, DEFAULT_LOCATIONS, DEFAULT_GENDERS, DEFAULT_CONTACT_STATUSES,
   OUTREACH_FIELDS, platforms, STATUS_STYLE, APPROVAL_STYLE,
   INSTROOM_API_BASE_URL, INSTROOM_PROFILE_ENDPOINTS, isInstroomApiConfigured,
+  PROFILE_LOOKUP_TIMEOUT_MS,
 } from "./constants"
 import {
   cleanHandle, getProfileUrl, sortRows, newEmptyRow, getStaticCols,
@@ -540,15 +541,6 @@ export default function TableSheet({
     onConfirm: () => void; variant: "danger" | "warning" | "info"
   }>({ isOpen: false, title: "", message: "", onConfirm: () => {}, variant: "danger" })
 
-  const [apiErrorModal, setApiErrorModal] = useState<{
-    open: boolean
-    platform?: string
-    handle?: string
-    rowId?: string
-    /** The real failure, shown verbatim so a genuine API error isn't hidden. */
-    reason?: string
-  }>({ open: false })
-
   const [selectedRowId, setSelectedRowId]   = useState<string | null>(null)
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set())
   const [sidebarRowId, setSidebarRowId]     = useState<string | null>(null)
@@ -635,6 +627,32 @@ export default function TableSheet({
     addLocalToast(type, message)
   }, [onNotify, addLocalToast])
 
+  /**
+   * A failed profile lookup, reported without interrupting anyone.
+   *
+   * This replaces a blocking "Couldn't fetch this profile" dialog with Retry
+   * and Continue-manually buttons. The dialog had to be dismissed before the
+   * user could touch the sheet again, and it fired on the ordinary cases —
+   * a private account, a momentary hiccup, an unreachable API — so adding a
+   * handful of influencers meant clearing a modal between each one.
+   *
+   * Neither button is missed. "Continue manually" only closed the dialog, and
+   * the row is already editable underneath it; retry happens on its own,
+   * because editing the handle re-arms the lookup (scheduleAutoFetch) and
+   * `requestedPairsRef` only suppresses a REPEAT of the identical pair.
+   *
+   * De-duplicated per handle: several rows pasted at once against a downed API
+   * would otherwise stack one toast per row. The caller still gets `null`, so
+   * nothing downstream treats a failure as a success.
+   */
+  const notifiedLookupFailures = useRef<Set<string>>(new Set())
+  const notifyLookupFailed = useCallback((cleanHandleValue: string) => {
+    const key = cleanHandleValue.toLowerCase()
+    if (notifiedLookupFailures.current.has(key)) return
+    notifiedLookupFailures.current.add(key)
+    addToast("warning", lookupFailureMessage(cleanHandleValue))
+  }, [addToast])
+
   // Documented profile-lookup endpoints, defined once in constants.ts.
   const INSTROOM_API = INSTROOM_PROFILE_ENDPOINTS
 
@@ -658,27 +676,16 @@ export default function TableSheet({
     // Fail fast on missing configuration instead of firing a request that cannot
     // succeed. Without this, an unset INSTROOM_API_BASE_URL produced a request to
     // a non-resolvable host and a `TypeError: Failed to fetch` on every handle
-    // edit. Reported through the same modal — Retry and manual-add both still
-    // work — but it names configuration as the cause rather than implying a
-    // network fault or a bad username.
+    // edit. The env var name stays in the console error — it is for whoever
+    // deploys the app, not for the person adding an influencer, who gets the
+    // same one-line toast every other lookup failure produces.
     if (!isInstroomApiConfigured()) {
       console.error(
         "Influencer API is not configured: INSTROOM_API_BASE_URL is unset or blank, so no lookup " +
           "request was made. Set it in .env to the deployed API's public URL and restart the dev " +
           "server — it is inlined into the client bundle at build time via next.config.ts."
       )
-      setApiErrorModal({
-        open: true,
-        platform,
-        handle: clean,
-        // A CONFIRMED service-side problem — no request could even be made — so
-        // unlike a private or unavailable profile this one may say so. The env
-        // var name stays in the console error above, not here: it is for
-        // whoever deploys the app, not for the person adding an influencer.
-        reason:
-          "Profile lookup isn't available right now, so no data could be fetched. " +
-          "You can still add this influencer manually.",
-      })
+      notifyLookupFailed(clean)
       return null
     }
 
@@ -687,6 +694,12 @@ export default function TableSheet({
       const res = await fetch(requestUrl, {
         method: "GET",
         headers: { Accept: "application/json" },
+        // A lookup that never answers used to hang until the browser gave up —
+        // minutes, on a black-holed host — and the row spun for all of it
+        // because the spinner is only cleared when this resolves. The abort
+        // surfaces as an AbortError in the catch below, where it is reported
+        // like any other unreachable-backend failure.
+        signal: AbortSignal.timeout(PROFILE_LOOKUP_TIMEOUT_MS),
       })
 
       // A non-2xx response used to `return null`, which the caller reports as
@@ -712,18 +725,13 @@ export default function TableSheet({
         if (failure.notFound) return null
 
         // The classified cause and the technical detail go to the CONSOLE; the
-        // modal gets the one neutral line. A private or restricted profile is an
+        // user gets the one neutral line. A private or restricted profile is an
         // ordinary fetch limitation, not an outage, so nothing here tells the
         // user an API is down — and no HTTP code or provider name is shown.
         console.warn(
           `Influencer lookup failed for @${clean} on ${platform} [cause=${failure.cause}]: ${failure.reason}`
         )
-        setApiErrorModal({
-          open: true,
-          platform,
-          handle: clean,
-          reason: lookupFailureMessage(clean),
-        })
+        notifyLookupFailed(clean)
         return null
       }
 
@@ -748,33 +756,31 @@ export default function TableSheet({
         avg_views: parseFormattedNumber(d.avg_video_views || d.avg_views),
       }
     } catch (err) {
-      // `TypeError: Failed to fetch`. The browser refuses to say which of DNS
-      // failure, TLS failure, refused connection, timeout or a blocked
-      // cross-origin response occurred, so the message names them rather than
-      // implying the username is at fault. The request URL is logged because it
-      // is the one piece that makes a host/base-URL mistake identifiable.
+      // Everything that stops the request completing lands here: a DNS or TLS
+      // failure, a refused connection, a blocked cross-origin response and the
+      // timeout above all surface as `TypeError: Failed to fetch` or an
+      // AbortError, and the browser refuses to say which. The request URL and
+      // base URL are logged because they are the pieces that make a host or
+      // base-URL mistake identifiable.
       //
-      // Logged as a STRING, not as the Error object: this failure is handled (the
-      // modal below owns it), but passing the raw Error to console.error makes
-      // Next's dev overlay present a caught network error as an uncaught
-      // "Console TypeError" with a stack into this function. The cause is still
-      // reported in full — nothing is swallowed.
+      // Logged as a STRING, not as the Error object: this failure is handled,
+      // but passing the raw Error to console.error makes Next's dev overlay
+      // present a caught network error as an uncaught "Console TypeError" with
+      // a stack into this function. The cause is still reported in full —
+      // nothing is swallowed.
       const cause = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+      const timedOut = err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")
       console.error(
         `Influencer API request failed for @${clean} on ${platform} — ${requestUrl} — ${cause}. ` +
-          `The request never completed, so the API was not reached (DNS, network, TLS or CORS).`
+          (timedOut
+            ? `No response within ${PROFILE_LOOKUP_TIMEOUT_MS}ms, so the request was aborted.`
+            : `The request never completed, so the API was not reached (DNS, network, TLS or CORS).`) +
+          ` Base URL: ${INSTROOM_API_BASE_URL || "(unset)"}.`
       )
-      setApiErrorModal({
-        open: true,
-        platform,
-        handle: clean,
-        reason:
-          `The request to ${INSTROOM_API_BASE_URL} never completed, so the API was not reached ` +
-          `(DNS, network, TLS or CORS). This is not a problem with the username.`,
-      })
+      notifyLookupFailed(clean)
       return null
     }
-  }, [])
+  }, [notifyLookupFailed])
 
   const getEffectiveGroup = useCallback((cc: CustomColumn) => cc.assignedGroup, [])
   const STATIC_COLS = getStaticCols(nicheOptions, locationOptions)
@@ -1385,8 +1391,14 @@ export default function TableSheet({
       // A miss here is the ONLY case that reaches the provider, which is what
       // makes the enrichment call the exception rather than the default.
       let data: Partial<InfluencerRow> | null = null
+      // Bounded like the provider call below: this one already degrades to null
+      // on any error (falling through to the provider, which is the correct
+      // answer when we cannot tell whether we know this creator), but without a
+      // timeout a stalled request held the row's spinner open indefinitely
+      // before it ever got that far.
       const known = await fetch(
-        `/api/brand/${brandId}/influencers/find?handle=${encodeURIComponent(clean)}&platform=${encodeURIComponent(platform)}`
+        `/api/brand/${brandId}/influencers/find?handle=${encodeURIComponent(clean)}&platform=${encodeURIComponent(platform)}`,
+        { signal: AbortSignal.timeout(PROFILE_LOOKUP_TIMEOUT_MS) }
       ).then(r => (r.ok ? r.json() : null)).catch(() => null)
 
       if (known?.id) {
@@ -1416,13 +1428,34 @@ export default function TableSheet({
         requestedPairsRef.current.add(pairKey)
         data = await fetchInfluencerFromAPI(handle, platform)
       }
-      // Nothing came back: not found, an API error, or no API host configured
-      // (fetchInfluencerFromAPI has already raised the modal or the toast for
-      // each). Hand the row to the page as manually-completable — see
-      // onLookupFailed. Nothing is saved by this; the row is written only once
-      // the user actually edits it.
+      // ── Stale response guard ─────────────────────────────────────────────
+      // The row is re-read AFTER the await. A lookup can take seconds, and the
+      // user is free to keep typing during it — correcting a typo in the
+      // handle, or switching the platform — which arms a second lookup for the
+      // new pair. Without this check the FIRST response still merged its
+      // details onto the row and saved them, so the row ended up holding the
+      // profile of whoever the user had already moved on from.
+      //
+      // Dropped silently: this is not a failure, it is an answer to a question
+      // that is no longer being asked. The lookup for what the row says now is
+      // either in flight or already armed, and it owns the row from here.
+      const rowNow = rowsRef.current.find(r => r.id === rowId)
+      if (!rowNow) return
+      if (cleanHandle(rowNow.handle).trim().toLowerCase() !== clean || rowNow.platform !== platform) return
+
+      // Nothing came back: not found, an API error, or no API host configured.
+      // A genuine not-found is announced here; every other cause has already
+      // raised its own non-blocking toast inside fetchInfluencerFromAPI, so
+      // this one stays quiet rather than also calling it "not found" — which
+      // was never true of a private profile or an unreachable API.
+      //
+      // Either way the row is handed to the page as manually-completable (see
+      // onLookupFailed) and left fully editable. Nothing is saved by this; the
+      // row is written only once the user actually edits it.
       if (!data) {
-        addToast("error", `${clean} not found on ${platform}`)
+        if (!notifiedLookupFailures.current.has(clean)) {
+          addToast("error", `${clean} not found on ${platform}`)
+        }
         onLookupFailed?.(rowId)
         return
       }
@@ -1689,10 +1722,10 @@ export default function TableSheet({
     return OUTREACH_FIELDS.has(colKey)
   }, [customCols])
 
-  const handleDeclineConfirm = (reason: string) => {
+  const handleDeclineConfirm = (reason: string, declineNotes?: string) => {
     if (pendingDeclineRowIdx === null) return
     const ar = filteredRows[pendingDeclineRowIdx]; const ai = rows.findIndex(r => r.id === ar.id); if (ai === -1) return
-    setRows(prev => { const n = [...prev]; n[ai] = handleApprovalChange(prev[ai], "Declined", reason); onRowsChange?.(n); return n })
+    setRows(prev => { const n = [...prev]; n[ai] = handleApprovalChange(prev[ai], "Declined", reason, declineNotes); onRowsChange?.(n); return n })
     setShowDeclineModal(false); setPendingDeclineRowIdx(null)
     // Close the profile panel if it is showing the row just declined — it is
     // off the active list now, so leaving it open next to the grid invites
@@ -2306,57 +2339,6 @@ export default function TableSheet({
         onConfirm={() => { confirmDialog.onConfirm(); setConfirmDialog(p => ({ ...p, isOpen: false })) }}
         onClose={() => setConfirmDialog(p => ({ ...p, isOpen: false }))} variant={confirmDialog.variant}
       />
-
-      {/* API Error Modal */}
-      {apiErrorModal.open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={e => { if (e.target === e.currentTarget) setApiErrorModal({ open: false }) }}>
-          <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-lg relative">
-            <button type="button" aria-label="Cancel and delete row" title="Cancel and delete row"
-              className="absolute top-3 right-3 p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition"
-              onClick={() => {
-                const { rowId } = apiErrorModal
-                setApiErrorModal({ open: false })
-                if (rowId) deleteRow(rowId)
-              }}>
-              <IconX size={16} />
-            </button>
-            <div className="flex items-start gap-3">
-              <div className="flex-shrink-0 p-1.5 bg-red-100 rounded-full">
-                <IconAlertTriangle size={20} className="text-red-600" />
-              </div>
-              <div className="flex-1">
-                {/* Neutral heading and body.
-                    "Influencer API unavailable" was wrong for most of the cases
-                    that land here — a private account, a restricted or removed
-                    profile, or a momentary hiccup are not outages, and blaming
-                    the API sent users chasing a problem that was not theirs and
-                    was not ours. The classified cause is in the console for us;
-                    the user gets the two things they can act on, which the
-                    buttons below provide. */}
-                <h2 className="text-base font-semibold text-gray-900">Couldn&apos;t fetch this profile</h2>
-                <p className="mt-2 text-sm text-gray-600">
-                  {apiErrorModal.reason
-                    ?? `We couldn't fetch data for @${apiErrorModal.handle ?? ""}. The profile may be private, unavailable, or temporarily unable to be accessed. You can retry or continue adding the influencer manually.`}
-                </p>
-              </div>
-            </div>
-            <div className="mt-6 flex justify-end gap-2">
-              <button type="button" className="px-4 py-2 text-sm font-medium border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition" onClick={() => setApiErrorModal({ open: false })}>Continue manually</button>
-              <button type="button" className="px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
-                onClick={() => {
-                  const { handle, platform, rowId } = apiErrorModal
-                  setApiErrorModal({ open: false })
-                  if (handle && platform && rowId) {
-                    // Deliberate re-ask: drop the "already requested" key so the
-                    // guard in autoFetchInfluencer lets this one through.
-                    requestedPairsRef.current.delete(fetchPairKey(handle, platform))
-                    autoFetchInfluencer(rowId, handle, platform)
-                  }
-                }}>Retry</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {pendingDuplicateInfo && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={e => {

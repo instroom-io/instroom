@@ -51,6 +51,28 @@ export type ClosedColumn =
   | "Delivered"
   | "Posted"
   | "No post"
+  | "Issues"
+
+/**
+ * Every valid ClosedColumn value, as data.
+ *
+ * The type alone cannot be checked at runtime, so the PATCH route and the read
+ * route each kept their own hardcoded copy of this list — adding a column meant
+ * remembering both, and a miss showed up as a 400 "Invalid closedStatus" on a
+ * column the UI was already rendering. Derived from one place now.
+ */
+export const CLOSED_COLUMNS: readonly ClosedColumn[] = [
+  "For Order Creation",
+  "In-Transit",
+  "Delivered",
+  "Posted",
+  "No post",
+  "Issues",
+] as const
+
+export function isClosedColumn(value: unknown): value is ClosedColumn {
+  return typeof value === "string" && (CLOSED_COLUMNS as readonly string[]).includes(value)
+}
 
 // Ranks only cover the automated forward-progress states — "Posted" and
 // "No post" are terminal/human-decided and are never targeted by sync.
@@ -141,6 +163,36 @@ export function mapClosedToPipelineFields(
 
         approval_status: "Declined",
         approval_notes: "No content published - exited",
+      }
+
+    // Delivery problems: a failed or returned delivery, a wrong address, a
+    // damaged item, or any other campaign issue that has stalled the row.
+    //
+    // NOT an exit, unlike "No post" — the influencer is still in the campaign
+    // and the expectation is that the issue gets resolved and the row moves
+    // back into the flow. So this keeps contact_status "for_order_creation"
+    // and an Approved approval_status, exactly like the active stages, rather
+    // than the not_interested/Declined pair that marks a row as finished.
+    //
+    // stage 9 sits above Posted (8): it is outside the linear fulfilment
+    // sequence rather than a step within it, and a number below 5 would drop
+    // the row out of the closed route's `stage >= 5` fetch. The dates are
+    // preserved, not cleared — a delivery that failed still shipped, and
+    // discarding shipped_at/delivered_at would lose the history the issue is
+    // about.
+    case "Issues":
+      return {
+        contact_status: "for_order_creation",
+        stage: 9,
+        order_status: currentRecord.order_status ?? null,
+
+        shipped_at: currentRecord.shipped_at || null,
+        delivered_at: currentRecord.delivered_at || null,
+
+        content_posted: false,
+        posted_at: null,
+
+        approval_status: "Approved",
       }
 
     default:

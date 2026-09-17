@@ -19,6 +19,15 @@ function getDmUrl(platform: string, handle: string): string {
   return getProfileUrl(platform, handle)
 }
 
+/**
+ * How long the History tab waits for its activity log before giving up.
+ *
+ * Shorter than the profile lookup's 15s: this is a same-origin read of our own
+ * database behind an already-open panel, so a slow answer is a problem, and the
+ * tab has a perfectly good error state to fall back to.
+ */
+const HISTORY_FETCH_TIMEOUT_MS = 10_000
+
 // ─── Activity log types ───────────────────────────────────────────────────────
 interface ActivityLog {
   id: string
@@ -86,13 +95,34 @@ function HistoryTab({ brandId, biId }: { brandId?: string; biId: string }) {
     }
     setLoading(true)
     setError(null)
-    fetch(`/api/brand/${brandId}/influencers/${biId}/activity`)
+    // Aborted on cleanup, so switching influencer (or closing the panel) drops
+    // the previous request instead of letting it land on the new one's tab —
+    // and the timeout stops an unreachable backend leaving this stuck on
+    // "loading" forever. Both failures are contained in this tab: an inline
+    // line of text, never a dialog over the sheet.
+    const controller = new AbortController()
+    // `cancelled` separates the two reasons this request can abort. Both raise
+    // an AbortError, but only one of them should stay silent: a cleanup abort
+    // means the component moved on and setting state would flash an error onto
+    // the influencer the user just switched to, while a TIMEOUT abort is a real
+    // failure the tab has to report — swallowing it would leave the panel
+    // spinning forever.
+    let cancelled = false
+    const timeout = setTimeout(() => controller.abort(), HISTORY_FETCH_TIMEOUT_MS)
+    fetch(`/api/brand/${brandId}/influencers/${biId}/activity`, { signal: controller.signal })
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.json()
       })
-      .then(d => { setLogs(d.logs ?? []); setLoading(false) })
-      .catch(err => { console.error("[HistoryTab]", err); setError("Failed to load history"); setLoading(false) })
+      .then(d => { if (!cancelled) { setLogs(d.logs ?? []); setLoading(false) } })
+      .catch(err => {
+        if (cancelled) return
+        console.error("[HistoryTab]", err)
+        setError("Failed to load history")
+        setLoading(false)
+      })
+      .finally(() => clearTimeout(timeout))
+    return () => { cancelled = true; clearTimeout(timeout); controller.abort() }
   }, [brandId, biId])
 
   if (!brandId) {
@@ -919,7 +949,7 @@ export default function ProfileSidebar({
              over the modal's right-hand reason column. */
           zIndex={600}
           onCancel={() => setShowDeclineModal(false)}
-          onConfirm={r => {
+          onConfirm={(r, declineNotes) => {
             setShowDeclineModal(false)
             if (!editedRow) return
             // Confirm is the final action, exactly as it is on the Pipeline
@@ -928,7 +958,7 @@ export default function ProfileSidebar({
             // sidebar open waiting for a Save Changes the user has no reason
             // to expect. The row is declined and off the active list, so
             // there is nothing left to edit in it.
-            onUpdate(handleApprovalChange(editedRow, "Declined", r))
+            onUpdate(handleApprovalChange(editedRow, "Declined", r, declineNotes))
             onClose()
           }}
         />

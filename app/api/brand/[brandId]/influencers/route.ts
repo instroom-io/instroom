@@ -290,6 +290,7 @@ export async function GET(
           internal_rating: bi.internal_rating ? bi.internal_rating.toString() : null,
           approval_status: bi.approval_status,
           approval_notes: bi.approval_notes,
+          decline_notes:  bi.decline_notes,
           transferred_date: bi.transferred_date?.toISOString() ?? null,
           affiliate_id: bi.attribution?.affiliate_id   ?? null,
           ref_code: bi.attribution?.ref_code           ?? null,

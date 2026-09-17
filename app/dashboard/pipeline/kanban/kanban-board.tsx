@@ -59,6 +59,13 @@ import { getPlatformLabel } from "@/components/table-sheet/utils"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { BoardSkeleton } from "@/components/shared/skeletons"
 import { DeclineModal } from "@/components/shared/decline-modal"
+import { StageActionButton } from "@/components/shared/stage-action-button"
+import {
+  allowedTransitions,
+  isTerminalStage,
+  isTransitionAllowed,
+  transitionRefusalReason,
+} from "@/lib/pipeline-transitions"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const NICHES    = ["Beauty", "Fitness", "Lifestyle", "Food", "Tech", "Fashion", "Travel"]
@@ -231,7 +238,8 @@ function ColumnInfoTooltip({ status, variant }: { status: string; variant: "ligh
   )
 }
 
-const isTerminal            = (status: string) => status === "Not Interested" || status === "For Order Creation"
+// Same terminal set the shared transition rules use — see isTerminalStage.
+const isTerminal            = isTerminalStage
 const getStatusFromColumnKey = (key: string)   => columns.find((c) => c.key === key)?.status ?? key
 
 /**
@@ -285,30 +293,14 @@ const getAvatarColor    = (name: string) => {
   return colors[name.charCodeAt(0) % colors.length]
 }
 
-// ─── Sequential pipeline: each stage only moves to the NEXT stage + Not Interested ──
-// For Outreach    → Contacted (no NI shortcut — see below)
-// Contacted       → In Conversation + Not Interested
-// In Conversation → Deal Agreed (triggers collab type modal) + Not Interested
-// Deal Agreed     → (only Move to Post Tracker button, + Not Interested)
-// Terminal stages → nothing
+// ─── Sequential pipeline ──────────────────────────────────────────────────────
+// The rule itself now lives in lib/pipeline-transitions.ts, shared with the
+// Influencer Details dropdown and — crucially — with the PATCH route, so the
+// board, the panel and the server cannot disagree about what is allowed.
 //
-// "Not Interested" is a destructive, terminal move, so the card shortcut is
-// hidden at For Outreach — nobody has been contacted yet, so there's nothing to
-// decline, and a stray click would drop the influencer out of the pipeline. The
-// status is still reachable there from the profile drawer, the list-view status
-// dropdown and by dragging onto the Not Interested column.
-const getNextStages = (currentStatus: string): string[] => {
-  if (isTerminal(currentStatus)) return []
-  const sequence: Record<string, string> = {
-    "For Outreach":    "Contacted",
-    "Contacted":       "In Conversation",
-    "In Conversation": "Deal Agreed",
-  }
-  const next = sequence[currentStatus]
-  if (!next) return ["Not Interested"] // Deal Agreed: only NI (move to PT is a dedicated button)
-  if (currentStatus === "For Outreach") return [next]
-  return [next, "Not Interested"]
-}
+// It used to live only here, which is exactly how the dropdown was able to
+// bypass it: the panel listed all six stages and called straight through.
+const getNextStages = allowedTransitions
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const MONTHS = ["Nov", "Dec", "Jan", "Feb", "Mar", "Apr"]
@@ -741,10 +733,19 @@ function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApprov
           <span>{influencer.engagementRate || "—"} eng</span>
         </div>
 
-        {/* NI reason pill */}
+        {/* NI reason pill, plus the free-text note when there is one.
+            The note only ever accompanies an "Others" decline, so nothing is
+            rendered for the predefined reasons that explain themselves. */}
         {influencer.pipelineStatus === "Not Interested" && influencer.niReason && (
-          <div className="mt-2 text-[10px] text-red-500 bg-red-50 rounded-full px-2.5 py-1 inline-block font-medium">
-            {influencer.niReason}
+          <div className="mt-2">
+            <div className="text-[10px] text-red-500 bg-red-50 rounded-full px-2.5 py-1 inline-block font-medium">
+              {influencer.niReason}
+            </div>
+            {influencer.declineNotes && (
+              <p className="mt-1 text-[10px] text-gray-500 leading-snug break-words">
+                {influencer.declineNotes}
+              </p>
+            )}
           </div>
         )}
 
@@ -787,22 +788,25 @@ function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApprov
         })()}
       </div>
 
-      {/* Quick-move buttons — only for non-terminal cards */}
+      {/* Quick-move buttons — only for non-terminal cards.
+          Solid StageActionButton, shared with the Post Tracker board. The
+          destination comes from getNextStages, so the tooltip always names the
+          stage this card would actually land in rather than a fixed string. */}
       {nextStages.length > 0 && !terminal && (
         <div className="flex gap-1.5 mt-2.5 pt-2 border-t border-gray-100 flex-nowrap">
           {nextStages.map((stage) => (
-            <button key={stage}
-              onClick={(e) => { e.stopPropagation(); if (!canApproveInfluencers) return; onStatusChange(influencer.id, stage) }}
+            <StageActionButton
+              key={stage}
+              destination={stage}
+              label={`Move influencer to ${stage}`}
+              tone={stage === "Not Interested" ? "danger" : "forward"}
               disabled={!canApproveInfluencers}
-              title={!canApproveInfluencers ? "Only Owners and Managers can approve influencers" : undefined}
-              className={`text-[11px] font-medium px-2 py-1 rounded-full border transition flex items-center gap-1 min-w-0 flex-1 justify-center disabled:opacity-40 disabled:cursor-not-allowed ${
-                stage === "Not Interested"
-                  ? "bg-red-50 text-red-600 border-red-200 hover:bg-red-100"
-                  : "bg-[#EAF7EF] text-[#0F6B3E] border-[#bfe5cf] hover:bg-[#d7f0e0]"
-              }`}>
-              {stage === "Not Interested" ? <IconX size={11} className="flex-shrink-0" /> : <IconArrowRight size={11} className="flex-shrink-0" />}
-              <span className="truncate">{stage}</span>
-            </button>
+              disabledReason="Only Owners and Managers can approve influencers"
+              icon={stage === "Not Interested"
+                ? <IconX size={11} className="flex-shrink-0" />
+                : <IconArrowRight size={11} className="flex-shrink-0" />}
+              onClick={(e) => { e.stopPropagation(); if (!canApproveInfluencers) return; onStatusChange(influencer.id, stage) }}
+            />
           ))}
         </div>
       )}
@@ -855,18 +859,39 @@ function StatusDropdown({ currentStatus, onStatusChange, canApproveInfluencers }
     return () => document.removeEventListener("mousedown", handler)
   }, [isOpen])
 
-  const visibleColumns = columns.filter((c) => c.visible)
+  // Only the stages this row may actually move to, plus the one it is in.
+  // This offered every visible column, so the list view presented the same
+  // stage-skipping jumps the Details panel did. handleStatusUpdate would now
+  // refuse them anyway — but offering a move only to reject it is worse than
+  // not offering it.
+  const allowed = allowedTransitions(currentStatus)
+  const visibleColumns = columns.filter(
+    (c) => c.visible && (c.status === currentStatus || allowed.includes(c.status))
+  )
 
   const dropdown = isOpen ? (
     <div id="status-dropdown-portal" style={dropdownStyle} className="bg-white border border-gray-200 rounded-lg shadow-xl overflow-hidden">
-      {visibleColumns.map((col, index) => (
-        <div key={col.status}
-          onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); onStatusChange(col.status); setIsOpen(false) }}
-          className={`px-3 py-2 text-xs cursor-pointer hover:bg-gray-50 flex items-center gap-2 ${index !== visibleColumns.length - 1 ? "border-b border-gray-100" : ""} ${currentStatus === col.status ? "bg-gray-50 font-semibold" : ""}`}>
-          <div className={`w-2 h-2 rounded-full flex-shrink-0 ${getOptionDotColor(col.status)}`} />
-          <span className="text-gray-700 whitespace-nowrap">{col.title}</span>
+      {visibleColumns.map((col, index) => {
+        const isCurrent = currentStatus === col.status
+        return (
+          <div key={col.status}
+            onMouseDown={(e) => {
+              e.stopPropagation(); e.preventDefault()
+              // Re-selecting the current stage is a no-op, not a move.
+              if (!isCurrent) onStatusChange(col.status)
+              setIsOpen(false)
+            }}
+            className={`px-3 py-2 text-xs flex items-center gap-2 ${isCurrent ? "cursor-default bg-gray-50 font-semibold" : "cursor-pointer hover:bg-gray-50"} ${index !== visibleColumns.length - 1 ? "border-b border-gray-100" : ""}`}>
+            <div className={`w-2 h-2 rounded-full flex-shrink-0 ${getOptionDotColor(col.status)}`} />
+            <span className="text-gray-700 whitespace-nowrap">{col.title}</span>
+          </div>
+        )
+      })}
+      {visibleColumns.length <= 1 && (
+        <div className="px-3 py-2 text-[11px] text-gray-400 border-t border-gray-100">
+          No further moves from {currentStatus}.
         </div>
-      ))}
+      )}
     </div>
   ) : null
 
@@ -978,7 +1003,20 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   const bulkBtnRef   = useRef<HTMLButtonElement>(null)
   const selectAllRef = useRef<HTMLInputElement>(null)
 
-  const { data, isLoading, error, hasGivenUp, updateStatus, isSaving, saveFailed, saveMessage, refetch } = usePipelineData(brandId)
+  const { data, isLoading, error, hasGivenUp, updateStatus, lastUpdateError, isSaving, saveFailed, saveMessage, refetch } = usePipelineData(brandId)
+
+  /**
+   * The message for a move that failed.
+   *
+   * Prefers the server's own sentence — a 409 names the stage the row must
+   * move through first, a 503 says the database is momentarily out of
+   * connections and to retry — and falls back to the generic line only when
+   * the request never reached the server (a network drop).
+   */
+  const moveFailureMessage = useCallback((who: string | undefined) =>
+    lastUpdateError.current || `Failed to move ${who ?? "influencer"}`,
+  [lastUpdateError])
+
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
   const { canApproveInfluencers, loading: capabilitiesLoading } = useBrandCapabilities(brandId)
@@ -1071,7 +1109,8 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   const handlePipelineStatusChangeFromSidebar = async (
     biId: string,
     newStatus: string,
-    niReason?: string
+    niReason?: string,
+    declineNotes?: string
   ) => {
     if (newStatus === "Not Interested") {
       if (!canApprove) {
@@ -1079,10 +1118,19 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
         return
       }
       const influencer = data.find((i) => i.id === biId)
-      const success = await updateStatus(biId, "Not Interested", { niReason })
+      // The same transition rule handleStatusUpdate applies. This branch does
+      // not go through it (the sidebar has already collected the reason, so it
+      // must not re-open the board's modal), which means the check has to be
+      // repeated here or declining would be the one move the panel could still
+      // make from a stage that forbids it.
+      if (influencer && !isTransitionAllowed(influencer.pipelineStatus, "Not Interested")) {
+        toast(transitionRefusalReason(influencer.pipelineStatus, "Not Interested"), 3500, "error")
+        return
+      }
+      const success = await updateStatus(biId, "Not Interested", { niReason, declineNotes })
       toast(success
         ? `${influencer?.influencer} marked as Not Interested${niReason ? ` · ${niReason}` : ""}`
-        : `Failed to update ${influencer?.influencer}`, 3000, success ? "success" : "error")
+        : moveFailureMessage(influencer?.influencer), 3500, success ? "success" : "error")
       return
     }
 
@@ -1120,6 +1168,14 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
       return
     }
 
+    // The same transition rule the buttons and dropdowns use. Dragging only
+    // checked "is the source terminal", so a card could be dropped onto any
+    // column — the third way to skip stages, alongside the two dropdowns.
+    if (!isTransitionAllowed(dragged.pipelineStatus, newStatus)) {
+      toast(transitionRefusalReason(dragged.pipelineStatus, newStatus), 3500, "error")
+      return
+    }
+
     // Drag to Deal Agreed (or directly to the hidden For Order Creation column)
     // → open the collab type modal first. Confirming it both agrees the deal
     // and cascades straight into Post Tracker — there's no manual move step.
@@ -1140,12 +1196,12 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     toast(success ? `${dragged.influencer} moved to ${colTitle}` : `Failed to move ${dragged.influencer}`, 3000, success ? "success" : "error")
   }
 
-  const handleNiConfirm = async (reason: string) => {
+  const handleNiConfirm = async (reason: string, declineNotes?: string) => {
     if (!pendingNiId || !niModalInfluencer) return
-    const success = await updateStatus(pendingNiId, "Not Interested", { niReason: reason })
+    const success = await updateStatus(pendingNiId, "Not Interested", { niReason: reason, declineNotes })
     toast(success
       ? `${niModalInfluencer.influencer} marked as Not Interested · ${reason}`
-      : `Failed to update ${niModalInfluencer.influencer}`, 3000, success ? "success" : "error")
+      : moveFailureMessage(niModalInfluencer.influencer), 3500, success ? "success" : "error")
     setNiModalInfluencer(null)
     setPendingNiId(null)
   }
@@ -1156,6 +1212,18 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   const handleStatusUpdate = useCallback(async (id: string, newStatus: string) => {
     if (!canApprove) {
       toast("Only Owners and Managers can approve influencers", 2500, "error")
+      return
+    }
+    // ── Transition check ──────────────────────────────────────────────────
+    // Every movement control funnels through here — card quick-move buttons,
+    // the list-view status dropdown and the Details panel's stage dropdown —
+    // so this is the one client-side place the rule has to hold. It is the
+    // same rule the server enforces (lib/pipeline-transitions.ts); this copy
+    // exists to give an immediate, specific message instead of a round trip
+    // ending in a 409, not to be the enforcement.
+    const current = data.find((i) => i.id === id)
+    if (current && !isTransitionAllowed(current.pipelineStatus, newStatus)) {
+      toast(transitionRefusalReason(current.pipelineStatus, newStatus), 3500, "error")
       return
     }
     if (newStatus === "Not Interested") {
@@ -1176,8 +1244,8 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     const success = await updateStatus(id, newStatus)
     toast(success
       ? `${influencer?.influencer} moved to ${newStatus}`
-      : `Failed to move ${influencer?.influencer}`, 2000, success ? "success" : "error")
-  }, [data, canApprove, updateStatus, toast])
+      : moveFailureMessage(influencer?.influencer), success ? 2000 : 3500, success ? "success" : "error")
+  }, [data, canApprove, updateStatus, toast, moveFailureMessage])
 
   // ── Bulk selection helpers ────────────────────────────────────────────────
   const clearSelection = () => setSelectedIds(new Set())
@@ -1207,7 +1275,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   // Two at a time leaves a connection free for whatever the user does next.
   const runBulkUpdate = async (
     newStatus: string,
-    extra?: { niReason?: string; collaborationType?: string }
+    extra?: { niReason?: string; declineNotes?: string; collaborationType?: string }
   ) => {
     const selected = data.filter((d) => selectedIds.has(d.id))
     // Same guards the single-row paths apply: terminal rows can't move, and
@@ -1282,9 +1350,10 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     void runBulkUpdate(newStatus)
   }
 
-  const handleBulkNiConfirm = async (reason: string) => {
+  const handleBulkNiConfirm = async (reason: string, declineNotes?: string) => {
     setBulkNiOpen(false)
-    await runBulkUpdate("Not Interested", { niReason: reason })
+    // One note applies to the whole selection, the same way one reason does.
+    await runBulkUpdate("Not Interested", { niReason: reason, declineNotes })
   }
 
   const handleBulkCollabConfirm = async (collabType: CollabType) => {
@@ -1895,7 +1964,12 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                           <div>
                             <span className="font-medium">{inf.influencer}</span>
                             {inf.pipelineStatus === "Not Interested" && inf.niReason && (
+                              <>
                               <p className="text-[11px] text-red-500 mt-0.5">{inf.niReason}</p>
+                              {inf.declineNotes && (
+                                <p className="text-[10px] text-gray-500 mt-0.5 leading-snug">{inf.declineNotes}</p>
+                              )}
+                              </>
                             )}
                             {inf.pipelineStatus === "For Order Creation" && (
                               <>

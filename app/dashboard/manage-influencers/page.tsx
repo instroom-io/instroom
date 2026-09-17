@@ -166,6 +166,7 @@ function buildUpdatePayload(row: InfluencerRow) {
     notes: row.notes || null,
     approval_status: row.approval_status,
     approval_notes: row.approval_notes || null,
+    decline_notes: row.decline_notes || null,
     transferred_date: row.transferred_date || null,
   }
 }

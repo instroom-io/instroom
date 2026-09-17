@@ -104,6 +104,7 @@ export async function fetchInfluencerPayload(brandId: string): Promise<Influence
             | "Declined"
             | "Pending",
           approval_notes: item.approval_notes ?? "",
+          decline_notes: item.decline_notes ?? "",
           transferred_date: item.transferred_date
             ? new Date(item.transferred_date).toISOString().split("T")[0]
             : "",

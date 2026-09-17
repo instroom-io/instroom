@@ -6,13 +6,10 @@ import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
+// The canonical union — redeclared locally before, so adding a column meant
+// editing the same list in three files and the route silently disagreeing.
+import { CLOSED_COLUMNS, type ClosedColumn } from "@/lib/post-tracker-status"
 
-type ClosedColumn =
-  | "For Order Creation"
-  | "In-Transit"
-  | "Delivered"
-  | "Posted"
-  | "No post"
 
 function deriveClosedStatus(
   contactStatus: string,
@@ -21,13 +18,8 @@ function deriveClosedStatus(
   approvalStatus: string | null,
   storedClosedStatus: string | null
 ): ClosedColumn {
-  const valid: ClosedColumn[] = [
-    "For Order Creation",
-    "In-Transit",
-    "Delivered",
-    "Posted",
-    "No post",
-  ]
+  // The canonical list, not a copy — see CLOSED_COLUMNS.
+  const valid = CLOSED_COLUMNS
 
   // 1. The saved stage ALWAYS wins.
   //
@@ -107,7 +99,7 @@ export async function GET(
     //   A) contact_status = 'for_order_creation'  → For Order Creation column
     //   B) stage >= 6                              → In-Transit / Delivered / Posted
     //      (stage 5 = For Order Creation, set by pipeline PATCH)
-    //      (stage 6 = In-Transit, 7 = Delivered, 8 = Posted)
+    //      (stage 6 = In-Transit, 7 = Delivered, 8 = Posted, 9 = Issues)
     //   C) content_posted = true                  → Posted column
     //   D) order_status IN shipped/delivered       → In-Transit or Delivered
     //

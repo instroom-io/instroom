@@ -8,6 +8,8 @@ export type InfluencerRow = {
   gender?: string; location?: string; social_link?: string; first_name?: string;
   contact_info?: string; approval_status?: "Approved" | "Declined" | "Pending";
   transferred_date?: string; approval_notes?: string; decline_reason?: string;
+  /** Free-text explanation stored with an "Others" decline. */
+  decline_notes?: string;
   tier?: string; community_status?: string; bio?: string; profile_image_url?: string;
   /** A persisted blank row the user added but has not filled in yet. */
   is_draft?: boolean;

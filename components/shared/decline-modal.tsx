@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { IconX } from "@tabler/icons-react"
-import { DECLINE_REASONS } from "@/lib/decline-reasons"
+import { DECLINE_REASONS, OTHER_REASON } from "@/lib/decline-reasons"
 
 /**
  * The one decline modal.
@@ -22,8 +22,17 @@ export interface DeclineModalProps {
   name: string
   handle?: string
   profileImageUrl?: string | null
-  /** Receives the chosen reason text, exactly as stored in `approval_notes`. */
-  onConfirm: (reason: string) => void
+  /**
+   * Receives the chosen reason text, exactly as stored in `approval_notes`,
+   * and — only for "Others" — the free-text explanation typed alongside it.
+   *
+   * `notes` is a SEPARATE argument rather than being folded into the reason
+   * string: Analytics buckets declines by matching `approval_notes` exactly
+   * against the reason list, so appending prose to it would drop the row out
+   * of the breakdown. It is undefined unless the user actually typed
+   * something (whitespace-only is discarded here, not downstream).
+   */
+  onConfirm: (reason: string, notes?: string) => void
   onCancel: () => void
   /** Set when the modal drives a bulk move — the single-influencer card is
    *  swapped for a "N influencers" summary and one reason applies to all. */
@@ -41,13 +50,75 @@ export interface DeclineModalProps {
   zIndex?: number
 }
 
+/**
+ * One labelled column of reason buttons.
+ *
+ * Extracted because the Hard pass and Soft pass columns were identical markup
+ * differing only in two colour classes, and adding a third category would have
+ * made that three copies to keep in step. The button styling is unchanged from
+ * what both columns already rendered.
+ */
+function ReasonGroup({
+  label, note, labelClass, selectedClass, tickClass, reasons, selectedReason, onPick,
+}: {
+  label: string
+  note: string
+  labelClass: string
+  selectedClass: string
+  tickClass: string
+  reasons: typeof DECLINE_REASONS
+  selectedReason: string | null
+  onPick: (reason: string) => void
+}) {
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-2.5">
+        <span className={`text-[10px] font-bold uppercase tracking-widest ${labelClass}`}>{label}</span>
+        <span className="text-[10px] text-gray-400">{note}</span>
+      </div>
+      <div className="flex flex-col gap-2">
+        {reasons.map((reason) => (
+          <button key={reason.r} type="button" onClick={() => onPick(reason.r)}
+            aria-pressed={selectedReason === reason.r}
+            className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl border text-left transition-all w-full ${selectedReason === reason.r ? selectedClass : "border-gray-100 hover:border-gray-200 hover:bg-gray-50"}`}>
+            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: reason.color }} />
+            <span className="text-sm text-gray-700 flex-1 leading-snug">{reason.r}</span>
+            {selectedReason === reason.r && (
+              <span className={`w-4 h-4 rounded-full flex items-center justify-center flex-shrink-0 ${tickClass}`}>
+                <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 4L3.2 5.7L6.5 2.3" stroke="white" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function DeclineModal({ name, handle, profileImageUrl, onConfirm, onCancel, bulkCount, zIndex }: DeclineModalProps) {
   const [selectedReason, setSelectedReason] = useState<string | null>(null)
-  const hardReasons = DECLINE_REASONS.filter((r) => r.bucket === "hard")
-  const softReasons = DECLINE_REASONS.filter((r) => r.bucket === "soft")
+  const [notes, setNotes] = useState("")
+  const hardReasons  = DECLINE_REASONS.filter((r) => r.bucket === "hard")
+  const softReasons  = DECLINE_REASONS.filter((r) => r.bucket === "soft")
+  const otherReasons = DECLINE_REASONS.filter((r) => r.bucket === "other")
   const initials = (name || "?").split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()
 
   const selected = DECLINE_REASONS.find((r) => r.r === selectedReason)
+  const isOther  = selectedReason === OTHER_REASON
+  const trimmedNotes = notes.trim()
+
+  /**
+   * Picking a reason.
+   *
+   * Moving OFF "Others" clears whatever was typed, so a note can never be
+   * submitted against a predefined reason that has no use for it — the field
+   * is hidden at that point, and carrying invisible text into the confirm
+   * would store an explanation the user can no longer see.
+   */
+  const pickReason = (reason: string) => {
+    setSelectedReason(reason)
+    if (reason !== OTHER_REASON) setNotes("")
+  }
 
   // Same shell, padding rhythm and footer as the Collaboration Type ("Deal
   // Agreed") modal; the card scrolls when the two reason columns run long.
@@ -101,58 +172,68 @@ export function DeclineModal({ name, handle, profileImageUrl, onConfirm, onCance
                 <p className="text-[11px] text-gray-400 mt-0.5">
                   {selected.bucket === "soft"
                     ? "Can be re-approached in a future campaign"
-                    : "Should not be contacted again soon"}
+                    : selected.bucket === "other"
+                      // "Others" says nothing either way about re-approaching,
+                      // so it must not borrow the hard pass warning.
+                      ? "Add a note so the team knows what happened"
+                      : "Should not be contacted again soon"}
                 </p>
               </div>
             )}
           </div>
         </div>
 
-        {/* Reasons */}
+        {/* Reasons — Hard pass / Soft pass / Other.
+            "Others" used to sit at the bottom of the Hard pass column, which
+            asserted "don't reach out soon" about a decline nobody had actually
+            classified. It has its own category now, and it is the one reason
+            that opens a free-text field (below). */}
         <div className="px-4 sm:px-6 pt-4 sm:pt-5 pb-3">
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Reason</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-5">
-            <div>
-              <div className="flex items-center gap-2 mb-2.5">
-                <span className="text-[10px] font-bold uppercase tracking-widest text-red-700">Hard pass</span>
-                <span className="text-[10px] text-gray-400">&mdash; don&apos;t reach out soon</span>
-              </div>
-              <div className="flex flex-col gap-2">
-                {hardReasons.map((reason) => (
-                  <button key={reason.r} onClick={() => setSelectedReason(reason.r)}
-                    className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl border text-left transition-all w-full ${selectedReason === reason.r ? "border-red-400 bg-red-50" : "border-gray-100 hover:border-gray-200 hover:bg-gray-50"}`}>
-                    <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: reason.color }} />
-                    <span className="text-sm text-gray-700 flex-1 leading-snug">{reason.r}</span>
-                    {selectedReason === reason.r && (
-                      <span className="w-4 h-4 rounded-full bg-red-500 flex items-center justify-center flex-shrink-0">
-                        <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 4L3.2 5.7L6.5 2.3" stroke="white" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                      </span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div>
-              <div className="flex items-center gap-2 mb-2.5">
-                <span className="text-[10px] font-bold uppercase tracking-widest text-blue-700">Soft pass</span>
-                <span className="text-[10px] text-gray-400">&mdash; follow up next campaign</span>
-              </div>
-              <div className="flex flex-col gap-2">
-                {softReasons.map((reason) => (
-                  <button key={reason.r} onClick={() => setSelectedReason(reason.r)}
-                    className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl border text-left transition-all w-full ${selectedReason === reason.r ? "border-blue-400 bg-blue-50" : "border-gray-100 hover:border-gray-200 hover:bg-gray-50"}`}>
-                    <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: reason.color }} />
-                    <span className="text-sm text-gray-700 flex-1 leading-snug">{reason.r}</span>
-                    {selectedReason === reason.r && (
-                      <span className="w-4 h-4 rounded-full bg-blue-500 flex items-center justify-center flex-shrink-0">
-                        <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 4L3.2 5.7L6.5 2.3" stroke="white" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                      </span>
-                    )}
-                  </button>
-                ))}
-              </div>
+            <ReasonGroup
+              label="Hard pass" note="— don’t reach out soon" labelClass="text-red-700"
+              selectedClass="border-red-400 bg-red-50" tickClass="bg-red-500"
+              reasons={hardReasons} selectedReason={selectedReason} onPick={pickReason}
+            />
+            <ReasonGroup
+              label="Soft pass" note="— follow up next campaign" labelClass="text-blue-700"
+              selectedClass="border-blue-400 bg-blue-50" tickClass="bg-blue-500"
+              reasons={softReasons} selectedReason={selectedReason} onPick={pickReason}
+            />
+            {/* Third category, spanning both columns so the single "Others"
+                row sits under the two lists rather than stranded beside one. */}
+            <div className="sm:col-span-2">
+              <ReasonGroup
+                label="Other" note="— tell us what happened" labelClass="text-gray-600"
+                selectedClass="border-gray-400 bg-gray-50" tickClass="bg-gray-500"
+                reasons={otherReasons} selectedReason={selectedReason} onPick={pickReason}
+              />
             </div>
           </div>
+
+          {/* Free-text notes — only for "Others", which is the only reason that
+              does not explain itself. Not required: a decline should never be
+              blocked on prose, so Confirm stays enabled and an empty or
+              whitespace-only box is simply not stored. */}
+          {isOther && (
+            <div className="mt-4">
+              <label htmlFor="decline-notes" className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                Additional notes <span className="normal-case tracking-normal font-normal text-gray-400">(optional)</span>
+              </label>
+              <textarea
+                id="decline-notes"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                rows={3}
+                autoFocus
+                placeholder="Tell us why this influencer is not interested..."
+                className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-sm text-gray-700 leading-snug
+                  placeholder:text-gray-400 resize-y min-h-[72px]
+                  focus:outline-none focus:border-gray-400 focus:ring-2 focus:ring-gray-200 transition"
+              />
+            </div>
+          )}
         </div>
 
         {/* Footer — caption on the left, actions on the right */}
@@ -162,7 +243,7 @@ export function DeclineModal({ name, handle, profileImageUrl, onConfirm, onCance
           </span>
           <div className="flex items-center justify-end gap-2">
             <button onClick={onCancel} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 rounded-lg border border-gray-200 hover:bg-gray-50 transition bg-white">Cancel</button>
-            <button onClick={() => selectedReason && onConfirm(selectedReason)} disabled={!selectedReason}
+            <button onClick={() => selectedReason && onConfirm(selectedReason, isOther && trimmedNotes ? trimmedNotes : undefined)} disabled={!selectedReason}
               className="px-4 sm:px-6 py-2 text-sm font-medium text-white bg-red-500 rounded-lg hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap">Confirm</button>
           </div>
         </div>

@@ -28,6 +28,11 @@ import { sendNotification } from "@/lib/notifications"
 import type { NotifType } from "@/emails/notification"
 import { provisionGoAffProAffiliate } from "@/lib/goaffpro-provision"
 import { hasBrandCapability } from "@/lib/permissions"
+import {
+  derivePipelineStage,
+  isTransitionAllowed,
+  transitionRefusalReason,
+} from "@/lib/pipeline-transitions"
 
 // ─── Status → DB field mapping ────────────────────────────────────────────────
 function pipelineStatusToFields(pipelineStatus: string, collaborationType?: string): {
@@ -73,11 +78,20 @@ export async function PATCH(
     const { brandId, brandInfluencerId } = await params
 
     const body = await req.json()
-    const { pipelineStatus, niReason, collaborationType } = body as {
+    const { pipelineStatus, niReason, declineNotes, collaborationType } = body as {
       pipelineStatus?: string
       niReason?: string
+      /** Free-text explanation, sent only with an "Others" decline. */
+      declineNotes?: string
       collaborationType?: string
     }
+
+    // Trimmed here rather than trusted from the client, and an empty or
+    // whitespace-only note is stored as NULL — "the user typed nothing" and
+    // "the user typed three spaces" are the same fact, and only NULL lets a
+    // reader tell "no note" from "an empty note".
+    const cleanDeclineNotes =
+      typeof declineNotes === "string" && declineNotes.trim() ? declineNotes.trim() : null
 
     if (!pipelineStatus) {
       return NextResponse.json(
@@ -96,7 +110,7 @@ export async function PATCH(
       hasBrandCapability(brandId, session.user.id, "approveInfluencers"),
       prisma.brandInfluencer.findUnique({
         where: { id: brandInfluencerId, brand_id: brandId },
-        select: { contact_status: true, stage: true, product_details: true },
+        select: { contact_status: true, stage: true, product_details: true, approval_status: true },
       }),
     ]))
 
@@ -106,6 +120,37 @@ export async function PATCH(
 
     if (!canApprove) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
+
+    // ── Transition check ───────────────────────────────────────────────────
+    // The SAME rule the card's quick-move buttons and the Details panel's
+    // stage dropdown use (lib/pipeline-transitions.ts), applied here so it
+    // cannot be bypassed by any client.
+    //
+    // This route previously validated WHO was asking but never WHAT they were
+    // asking for, so a request could set any stage from any stage. That is how
+    // the Details dropdown — which listed all six stages unconditionally —
+    // moved a row from "For Outreach" straight to "For Order Creation",
+    // skipping the intermediate stages and the Deal Agreed collaboration-type
+    // step that is supposed to cascade a row into Post Tracker.
+    //
+    // `before` is null only for a row that does not exist; that is left to the
+    // write below, which already answers it with a 404.
+    if (before) {
+      const currentStage = derivePipelineStage(
+        before.contact_status,
+        before.stage,
+        before.approval_status
+      )
+      if (!isTransitionAllowed(currentStage, pipelineStatus)) {
+        return NextResponse.json(
+          {
+            error: transitionRefusalReason(currentStage, pipelineStatus),
+            currentStage,
+          },
+          { status: 409 }
+        )
+      }
     }
 
     // ── Compute DB fields from pipeline status ───────────────────────────────
@@ -152,9 +197,21 @@ export async function PATCH(
         stage:           fields.stage,
         approval_status: fields.approval_status,
         ...(productDetailsJson !== undefined ? { product_details: productDetailsJson } : {}),
-        // Only write approval_notes for NI moves — don't overwrite on others
+        // Only write approval_notes for NI moves — don't overwrite on others.
+        //
+        // decline_notes is written on the SAME branch, and unconditionally
+        // within it, so moving a row to Not Interested a second time with a
+        // predefined reason clears a stale "Others" explanation rather than
+        // leaving prose attached to a reason that no longer mentions it.
+        //
+        // The reason itself stays alone in approval_notes: Analytics matches
+        // that column exactly against the reason list, so appending the note
+        // would drop the row out of the breakdown.
         ...(pipelineStatus === "Not Interested"
-          ? { approval_notes: niReason || "Not interested" }
+          ? {
+              approval_notes: niReason || "Not interested",
+              decline_notes:  cleanDeclineNotes,
+            }
           : {}),
       },
     }))
@@ -197,6 +254,9 @@ export async function PATCH(
           from: before.contact_status,
           to: fields.contact_status,
           ...(pipelineStatus === "Not Interested" && niReason ? { ni_reason: niReason } : {}),
+          ...(pipelineStatus === "Not Interested" && cleanDeclineNotes
+            ? { decline_notes: cleanDeclineNotes }
+            : {}),
         },
       }).catch(console.error)
     }

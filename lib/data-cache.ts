@@ -746,7 +746,25 @@ export function useCachedFetch<T>(
         // The technical detail stays here, in full, for debugging — this is the
         // one place every cached read's failure passes through, so it is also
         // the one place the raw text is guaranteed to be recorded.
-        console.error(`[data-cache] fetch failed for ${key}:`, err)
+        //
+        // Severity is split, though. A transient failure with retries still to
+        // come is an EXPECTED, self-clearing condition — the database being
+        // momentarily out of connections — and logging it as an error made
+        // every such blip look like a fault, three red entries per page load
+        // (pipeline, brands, subscription) for something that resolved itself
+        // moments later. It is still logged, in full, just as a warning; the
+        // final attempt and every non-transient failure remain console.error,
+        // so a genuine problem is not quietened.
+        const willRetry =
+          isTransientError(err) && retriesRef.current < TRANSIENT_RETRY_DELAYS.length
+        if (willRetry) {
+          console.warn(
+            `[data-cache] transient fetch failure for ${key} (retrying):`,
+            err
+          )
+        } else {
+          console.error(`[data-cache] fetch failed for ${key}:`, err)
+        }
 
         // ...but what reaches the UI is a sentence, never "P2024" or
         // "Failed to fetch". Consumers render this string directly.
@@ -760,7 +778,7 @@ export function useCachedFetch<T>(
         // Only ONE retry chain per key can exist, because `fetchCached` dedupes
         // in-flight requests by key and this timer is cleared on unmount — so
         // several components sharing a key cannot each start their own.
-        if (isTransientError(err) && retriesRef.current < TRANSIENT_RETRY_DELAYS.length) {
+        if (willRetry) {
           const attempt = retriesRef.current
           retriesRef.current = attempt + 1
           setRetryPending(true)

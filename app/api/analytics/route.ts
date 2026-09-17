@@ -35,7 +35,7 @@ import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import { checkBrandAccess } from "@/lib/brand-access"
 import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
-import { declineBucket } from "@/lib/decline-reasons"
+import { declineBucket, type DeclineBucket } from "@/lib/decline-reasons"
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions)
@@ -325,7 +325,7 @@ function buildDateFilter(dateRange: string): Record<string, Date> | null {
      deriveClosedStatus    app/api/brand/[brandId]/closed/route.ts
    ------------------------------------------------------------------------ */
 
-const CLOSED_COLUMNS = ["For Order Creation", "In-Transit", "Delivered", "Posted", "No post"]
+const CLOSED_COLUMNS = ["For Order Creation", "In-Transit", "Delivered", "Posted", "No post", "Issues"]
 
 /**
  * Statuses the app only ever writes AFTER a real contact action.
@@ -459,6 +459,10 @@ function resolveAnalyticsStatus(
       case "Delivered":          return "Content Pending"
       case "Posted":             return "Posted"
       case "No post":            return "Rejected"
+      // Post Tracker's Issues column — a stalled delivery, a returned package,
+      // a wrong address. Analytics already had a "Delivery Problem" bucket
+      // that nothing ever wrote to; this is what it was for.
+      case "Issues":             return "Delivery Problem"
     }
   }
 
@@ -482,7 +486,7 @@ function resolveAnalyticsStatus(
  * page had to be edited in lockstep with the modal's, and a reason added to one
  * silently fell into "hard" everywhere else.
  */
-function resolveRejectionBucket(notes: unknown): "hard" | "soft" | null {
+function resolveRejectionBucket(notes: unknown): DeclineBucket | null {
   if (typeof notes !== "string" || !notes) return null
   return declineBucket(notes)
 }

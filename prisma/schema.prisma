@@ -400,6 +400,10 @@ model BrandInfluencer {
   internal_rating  Decimal?
   approval_status  String?   @db.VarChar(20)
   approval_notes   String?   @db.Text
+  // Free-text explanation accompanying an "Others" decline. Kept OUT of
+  // approval_notes because Analytics matches that column exactly against the
+  // reason list — see prisma/migrations/20260916_add_decline_notes.
+  decline_notes    String?   @db.Text
   transferred_date DateTime?
   created_at       DateTime  @default(now())
   updated_at       DateTime  @updatedAt

@@ -12,7 +12,7 @@ import { useCachedFetch } from "@/lib/data-cache"
 import { toXlsx, downloadBlob, exportStamp, type ExportLine } from "@/lib/analytics-export"
 import { DataSyncStatus } from "@/components/data-sync-status"
 import { PlatformBadge } from "@/components/shared/platform-icon"
-import { HARD_PASS_REASONS, SOFT_PASS_REASONS } from "@/lib/decline-reasons"
+import { HARD_PASS_REASONS, SOFT_PASS_REASONS, OTHER_PASS_REASONS, OTHER_REASON, declineBucket, type DeclineBucket } from "@/lib/decline-reasons"
 
 // ============================================================
 // Types
@@ -39,7 +39,7 @@ interface AnalyticsInfluencer {
   declinedAfterResponse: boolean
   outreachCount: number
   rejectionReason: string | null
-  rejectionBucket: "hard" | "soft" | null
+  rejectionBucket: DeclineBucket | null
   views: number
   likes: number
   comments: number
@@ -410,12 +410,12 @@ const ReasonRow = ({ name, count, total, max, color }: { name: string; count: nu
   )
 }
 
-/** Hard pass / Soft pass heading: a colour dot instead of an emoji. */
-const ReasonGroupHeading = ({ tone, label, note, total }: { tone: 'hard' | 'soft'; label: string; note: string; total: number }) => (
+/** Hard pass / Soft pass / Other heading: a colour dot instead of an emoji. */
+const ReasonGroupHeading = ({ tone, label, note, total }: { tone: 'hard' | 'soft' | 'other'; label: string; note: string; total: number }) => (
   <div className="mb-1.5 flex items-baseline justify-between gap-3">
     <span className="flex items-center gap-1.5">
-      <span className={`h-1.5 w-1.5 rounded-full ${tone === 'hard' ? 'bg-rose-500' : 'bg-sky-500'}`} />
-      <span className={`text-[11px] font-semibold uppercase tracking-wide ${tone === 'hard' ? 'text-rose-700' : 'text-sky-700'}`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${tone === 'hard' ? 'bg-rose-500' : tone === 'soft' ? 'bg-sky-500' : 'bg-gray-400'}`} />
+      <span className={`text-[11px] font-semibold uppercase tracking-wide ${tone === 'hard' ? 'text-rose-700' : tone === 'soft' ? 'text-sky-700' : 'text-gray-600'}`}>
         {label}
       </span>
       {/* The explanatory clause moves to a title attribute: it was the single
@@ -844,27 +844,35 @@ function AnalyticsPageContent() {
     const responseRate = totalOutreach > 0 ? (responded / totalOutreach) * 100 : 0
     const closingRate = responded > 0 ? (closed / responded) * 100 : 0
 
-    // Hard/Soft pass breakdown
+    // Hard/Soft/Other pass breakdown
     // Straight from the shared decline vocabulary the Pipeline board and the
     // Influencer List both write (lib/decline-reasons.ts), so a reason added
     // there is bucketed here without a second list to keep in step.
-    const hardPassReasons = HARD_PASS_REASONS
-    const softPassReasons = SOFT_PASS_REASONS
+    //
+    // "Others" moved out of Hard pass into its own category: it says nothing
+    // about whether the influencer can be approached again, so counting it as
+    // a hard pass overstated the "do not contact" total by every
+    // miscellaneous decline. It still absorbs anything unrecognised — a legacy
+    // free-text note from the old Influencer List modal lands here too.
+    const hardPassReasons  = HARD_PASS_REASONS
+    const softPassReasons  = SOFT_PASS_REASONS
+    const otherPassReasons = OTHER_PASS_REASONS
 
     const reasonsBreakdown: Record<string, number> = {}
-    const allReasons = [...hardPassReasons, ...softPassReasons]
+    const allReasons = [...hardPassReasons, ...softPassReasons, ...otherPassReasons]
     allReasons.forEach(r => { reasonsBreakdown[r] = 0 })
 
     dataToUse.filter(i => i.rejectionReason).forEach(i => {
-      const reason = i.rejectionReason || 'Others'
+      const reason = i.rejectionReason || OTHER_REASON
       if (allReasons.includes(reason)) {
         reasonsBreakdown[reason] = (reasonsBreakdown[reason] || 0) + 1
       }
-      else reasonsBreakdown['Others'] = (reasonsBreakdown['Others'] || 0) + 1
+      else reasonsBreakdown[OTHER_REASON] = (reasonsBreakdown[OTHER_REASON] || 0) + 1
     })
 
-    const hardTotal = hardPassReasons.reduce((sum, r) => sum + (reasonsBreakdown[r] || 0), 0)
-    const softTotal = softPassReasons.reduce((sum, r) => sum + (reasonsBreakdown[r] || 0), 0)
+    const hardTotal  = hardPassReasons.reduce((sum, r) => sum + (reasonsBreakdown[r] || 0), 0)
+    const softTotal  = softPassReasons.reduce((sum, r) => sum + (reasonsBreakdown[r] || 0), 0)
+    const otherTotal = otherPassReasons.reduce((sum, r) => sum + (reasonsBreakdown[r] || 0), 0)
 
     const noOrderYet = dataToUse.filter(i => i.pipelineStatus === "Prospect" || i.pipelineStatus === "Reached Out").length
     const inTransit = dataToUse.filter(i => i.pipelineStatus === "In Transit").length
@@ -960,7 +968,7 @@ function AnalyticsPageContent() {
 
     return {
       totalOutreach, responded, closed, notInterested, responseRate, closingRate,
-      reasonsBreakdown, hardTotal, softTotal, noOrderYet, inTransit, deliveryProblem,
+      reasonsBreakdown, hardTotal, softTotal, otherTotal, noOrderYet, inTransit, deliveryProblem,
       noPost, posted, closedCollaborations, receivedProduct, postRate, platformStats,
       platformEMV, totalViews, totalLikes, totalComments, engagementRate, totalEMV,
       totalClicks, totalSalesQty, totalRevenue, conversionRate, aov, avgSalePerInfluencer,
@@ -1095,13 +1103,16 @@ function AnalyticsPageContent() {
 
     section('REASONS NOT INTERESTED')
     header('Bucket', 'Reason', 'Count', 'Percent of declines')
-    hardPassReasonsList.filter(r => (metrics.reasonsBreakdown[r] || 0) > 0).forEach(r =>
+    HARD_PASS_REASONS.filter(r => (metrics.reasonsBreakdown[r] || 0) > 0).forEach(r =>
       row('Hard pass', r, metrics.reasonsBreakdown[r] || 0, pctOf(metrics.reasonsBreakdown[r] || 0, metrics.notInterested)))
-    softPassReasonsList.filter(r => (metrics.reasonsBreakdown[r] || 0) > 0).forEach(r =>
+    SOFT_PASS_REASONS.filter(r => (metrics.reasonsBreakdown[r] || 0) > 0).forEach(r =>
       row('Soft pass', r, metrics.reasonsBreakdown[r] || 0, pctOf(metrics.reasonsBreakdown[r] || 0, metrics.notInterested)))
+    OTHER_PASS_REASONS.filter(r => (metrics.reasonsBreakdown[r] || 0) > 0).forEach(r =>
+      row('Other', r, metrics.reasonsBreakdown[r] || 0, pctOf(metrics.reasonsBreakdown[r] || 0, metrics.notInterested)))
     row('Total', 'All declines', metrics.notInterested, '')
     row('Total', 'Hard pass', metrics.hardTotal, pctOf(metrics.hardTotal, metrics.notInterested))
     row('Total', 'Soft pass (re-approachable)', metrics.softTotal, pctOf(metrics.softTotal, metrics.notInterested))
+    row('Total', 'Other', metrics.otherTotal, pctOf(metrics.otherTotal, metrics.notInterested))
 
     // ── Post Summary ───────────────────────────────────────────────────────
     section('POST SUMMARY')
@@ -1260,15 +1271,12 @@ function AnalyticsPageContent() {
     { value: "AU", label: "Australia" }
   ]
 
-  const hardPassReasonsList = [
-    'Fee too low / unpaid', 'Brief too scripted', "Won't allow content reuse",
-    'Working with a competitor', "Product doesn't fit their brand",
-    'Wrong audience fit', 'Seen bad reviews about us', 'Others'
-  ]
-  const softPassReasonsList = ['Fully booked', "Temporarily unavailable / can't shoot", "Can't ship to their location", 'Ghosted / no longer active', 'Rate / deadline too tight']
-
-  const visibleHardReasons = hardPassReasonsList.filter(r => (metrics.reasonsBreakdown[r] || 0) > 0)
-  const visibleSoftReasons = softPassReasonsList.filter(r => (metrics.reasonsBreakdown[r] || 0) > 0)
+  // The shared vocabulary, not a local copy: these were hardcoded lists that
+  // had to be edited in lockstep with the modal's, and still carried "Others"
+  // under Hard pass after it moved to its own category.
+  const visibleHardReasons  = HARD_PASS_REASONS.filter(r => (metrics.reasonsBreakdown[r] || 0) > 0)
+  const visibleSoftReasons  = SOFT_PASS_REASONS.filter(r => (metrics.reasonsBreakdown[r] || 0) > 0)
+  const visibleOtherReasons = OTHER_PASS_REASONS.filter(r => (metrics.reasonsBreakdown[r] || 0) > 0)
   // Same selection as before — hoisted out of the JSX so the card can tell
   // whether it has anything to show before it starts rendering rows.
   // Highest platform EMV — the shared scale for the EMV bars.
@@ -1276,7 +1284,7 @@ function AnalyticsPageContent() {
   // Largest single reason count on the card — the shared scale for its bars.
   const maxReasonCount = Math.max(
     0,
-    ...[...visibleHardReasons, ...visibleSoftReasons].map(r => metrics.reasonsBreakdown[r] || 0)
+    ...[...visibleHardReasons, ...visibleSoftReasons, ...visibleOtherReasons].map(r => metrics.reasonsBreakdown[r] || 0)
   )
   const topRejectionReasons = Object.entries(metrics.reasonsBreakdown)
     .filter(([_, count]) => count > 0)
@@ -1523,6 +1531,11 @@ function AnalyticsPageContent() {
                       <span className={`text-xs text-gray-500 ${NUM}`}>
                         <span className="font-semibold text-sky-700">{metrics.softTotal}</span> soft pass
                       </span>
+                      {metrics.otherTotal > 0 && (
+                        <span className={`text-xs text-gray-500 ${NUM}`}>
+                          <span className="font-semibold text-gray-700">{metrics.otherTotal}</span> other
+                        </span>
+                      )}
                     </div>
                   ) : undefined
                 }
@@ -1549,6 +1562,19 @@ function AnalyticsPageContent() {
                       <EmptyState>None in current filter.</EmptyState>
                     )}
                   </div>
+
+                  {/* Other — rendered only when it has something in it, unlike
+                      the two passes above. It holds one reason ("Others") plus
+                      anything unrecognised, so an empty-state row for it would
+                      be noise on most boards. */}
+                  {visibleOtherReasons.length > 0 && (
+                    <div className="border-t border-gray-100 pt-3">
+                      <ReasonGroupHeading tone="other" label="Other" note="— miscellaneous; see the note on each decline" total={metrics.otherTotal} />
+                      {visibleOtherReasons.map(reason => (
+                        <ReasonRow key={reason} name={reason} count={metrics.reasonsBreakdown[reason] || 0} total={metrics.notInterested} max={maxReasonCount} color={reasonColors[reason]} />
+                      ))}
+                    </div>
+                  )}
                 </div>
               </SectionCard>
             </div>
@@ -1576,8 +1602,13 @@ function AnalyticsPageContent() {
                       <div key={reason} className="flex min-w-0 items-center gap-2.5 rounded-lg bg-gray-50 px-2.5 py-2">
                         <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: reasonColors[reason] || '#888' }} />
                         <span className="min-w-0 flex-1 truncate text-sm text-gray-700">{reason}</span>
-                        <span className={`shrink-0 text-[10px] font-semibold uppercase ${hardPassReasonsList.includes(reason) ? 'text-rose-600' : 'text-sky-600'}`}>
-                          {hardPassReasonsList.includes(reason) ? 'Hard' : 'Soft'}
+                        {/* declineBucket is the same classifier the modal and
+                            the API use, so this tag cannot drift from them. */}
+                        <span className={`shrink-0 text-[10px] font-semibold uppercase ${
+                          declineBucket(reason) === 'hard' ? 'text-rose-600'
+                            : declineBucket(reason) === 'soft' ? 'text-sky-600' : 'text-gray-500'
+                        }`}>
+                          {declineBucket(reason) === 'hard' ? 'Hard' : declineBucket(reason) === 'soft' ? 'Soft' : 'Other'}
                         </span>
                         <span className={`w-8 shrink-0 text-right text-sm font-semibold text-gray-900 ${NUM}`}>{count}</span>
                       </div>
