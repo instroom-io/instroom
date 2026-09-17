@@ -136,6 +136,14 @@ export async function PATCH(
     //
     // `before` is null only for a row that does not exist; that is left to the
     // write below, which already answers it with a 404.
+    // Is this move undoing a decline? Read before the write, used below to
+    // clear the decline reason that would otherwise outlive it.
+    const wasDeclined =
+      before !== null &&
+      derivePipelineStage(before.contact_status, before.stage, before.approval_status) ===
+        "Not Interested" &&
+      pipelineStatus !== "Not Interested"
+
     if (before) {
       const currentStage = derivePipelineStage(
         before.contact_status,
@@ -207,12 +215,22 @@ export async function PATCH(
         // The reason itself stays alone in approval_notes: Analytics matches
         // that column exactly against the reason list, so appending the note
         // would drop the row out of the breakdown.
+        //
+        // Reopening a declined row CLEARS both. A row moved out of Not
+        // Interested is no longer declined — approval_status above is already
+        // rewritten to "Approved" — so leaving the reason behind would keep a
+        // stale "Fee too low / unpaid" pill on the card and keep counting the
+        // influencer in Analytics' decline breakdown after the decline was
+        // undone. Only that ONE direction clears them; every other move still
+        // leaves the columns untouched, as before.
         ...(pipelineStatus === "Not Interested"
           ? {
               approval_notes: niReason || "Not interested",
               decline_notes:  cleanDeclineNotes,
             }
-          : {}),
+          : wasDeclined
+            ? { approval_notes: null, decline_notes: null }
+            : {}),
       },
     }))
 

@@ -178,23 +178,33 @@ function applyStatusChange(
 ): PipelineInfluencer {
   const collab = collaborationType !== undefined ? { collabType: collaborationType } : {}
 
+  // Undoing a decline clears the decline reason, mirroring what the PATCH route
+  // writes. Without this the row keeps `niReason`/`declineNotes` through the
+  // spread in every branch below, so the card kept showing its old "Fee too
+  // low / unpaid" pill after being moved back into the funnel — until the next
+  // refetch replaced it with the server's (correctly cleared) value.
+  const clearedDecline =
+    item.pipelineStatus === "Not Interested" && newStatus !== "Not Interested"
+      ? { approvalNotes: null, niReason: undefined, declineNotes: null }
+      : {}
+
   switch (newStatus) {
     case "For Outreach":
-      return { ...item, pipelineStatus: newStatus, ...collab, contactStatus: "pending",           stage: 1, approvalStatus: "Approved" }
+      return { ...item, pipelineStatus: newStatus, ...collab, ...clearedDecline, contactStatus: "pending",           stage: 1, approvalStatus: "Approved" }
     case "Contacted":
-      return { ...item, pipelineStatus: newStatus, ...collab, contactStatus: "contacted",         stage: 2, approvalStatus: "Approved" }
+      return { ...item, pipelineStatus: newStatus, ...collab, ...clearedDecline, contactStatus: "contacted",         stage: 2, approvalStatus: "Approved" }
     case "In Conversation":
-      return { ...item, pipelineStatus: newStatus, ...collab, contactStatus: "negotiating",       stage: 3, approvalStatus: "Approved" }
+      return { ...item, pipelineStatus: newStatus, ...collab, ...clearedDecline, contactStatus: "negotiating",       stage: 3, approvalStatus: "Approved" }
     case "Deal Agreed":
       // A Collaboration Type is only ever sent alongside "Deal Agreed" once
       // the user confirms it in the modal — at that point the deal cascades
       // straight through to Post Tracker's default status (stage 5), matching
       // what the server now does, instead of resting at "Deal Agreed" first.
       return collaborationType !== undefined
-        ? { ...item, pipelineStatus: "For Order Creation", ...collab, contactStatus: "for_order_creation", stage: 5, approvalStatus: "Approved" }
-        : { ...item, pipelineStatus: newStatus, contactStatus: "agreed", stage: 4, approvalStatus: "Approved" }
+        ? { ...item, pipelineStatus: "For Order Creation", ...collab, ...clearedDecline, contactStatus: "for_order_creation", stage: 5, approvalStatus: "Approved" }
+        : { ...item, pipelineStatus: newStatus, ...clearedDecline, contactStatus: "agreed", stage: 4, approvalStatus: "Approved" }
     case "For Order Creation":
-      return { ...item, pipelineStatus: newStatus, ...collab, contactStatus: "for_order_creation",stage: 5, approvalStatus: "Approved" }
+      return { ...item, pipelineStatus: newStatus, ...collab, ...clearedDecline, contactStatus: "for_order_creation",stage: 5, approvalStatus: "Approved" }
     case "Not Interested":
       return {
         ...item, pipelineStatus: newStatus,

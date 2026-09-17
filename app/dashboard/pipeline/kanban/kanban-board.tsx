@@ -64,6 +64,7 @@ import {
   allowedTransitions,
   isTerminalStage,
   isTransitionAllowed,
+  suggestedTransitions,
   transitionRefusalReason,
 } from "@/lib/pipeline-transitions"
 
@@ -300,7 +301,12 @@ const getAvatarColor    = (name: string) => {
 //
 // It used to live only here, which is exactly how the dropdown was able to
 // bypass it: the panel listed all six stages and called straight through.
-const getNextStages = allowedTransitions
+//
+// SUGGESTED, not allowed: the card shows the obvious next step (one forward,
+// plus declining), while the dropdowns offer every permitted move and
+// isTransitionAllowed decides what is actually permitted. Pointing this at
+// allowedTransitions would put a button for every stage on every card.
+const getNextStages = suggestedTransitions
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const MONTHS = ["Nov", "Dec", "Jan", "Feb", "Mar", "Apr"]
@@ -681,9 +687,11 @@ function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApprov
   onStatusChange: (id: string, newStatus: string) => void
   canApproveInfluencers: boolean
 }) {
-  // See getNextStages: [next stage] at For Outreach, [next stage, "Not Interested"]
-  // for the middle stages, ["Not Interested"] at Deal Agreed, [] when terminal
+  // See getNextStages: one forward step plus declining for the active stages,
+  // ["For Outreach"] to reopen a declined row, [] for For Order Creation.
   const nextStages = getNextStages(influencer.pipelineStatus)
+  // Only "For Order Creation" now — a declined row keeps its buttons so it can
+  // be put back into the funnel from the card itself.
   const terminal   = isTerminal(influencer.pipelineStatus)
 
   return (
@@ -1157,20 +1165,13 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     const newStatus = getStatusFromColumnKey(destKey)
     if (dragged.pipelineStatus === newStatus) return
 
-    if (isTerminal(dragged.pipelineStatus)) {
-      // Names the stage the user actually dropped onto — `newStatus`, captured
-      // above, before this check. It used to name only the stage the card was
-      // ALREADY in, so dragging a card onto Not Interested reported the source
-      // stage instead and read as a refusal to move somewhere nobody had asked
-      // to go. Looked up through getStatusTitle so it matches the column
-      // heading exactly.
-      toast(`Cannot move to ${getStatusTitle(newStatus)}`, 2000, "error")
-      return
-    }
-
-    // The same transition rule the buttons and dropdowns use. Dragging only
-    // checked "is the source terminal", so a card could be dropped onto any
-    // column — the third way to skip stages, alongside the two dropdowns.
+    // One check, the same rule the buttons and dropdowns use.
+    //
+    // A separate `isTerminal(source)` branch used to sit above this and emit
+    // "Cannot move to <destination>" — which named the stage the user picked
+    // when the actual cause was the stage the card came FROM. It is gone: this
+    // check already covers a terminal source, and transitionRefusalReason
+    // names the source, so the message says what is really wrong.
     if (!isTransitionAllowed(dragged.pipelineStatus, newStatus)) {
       toast(transitionRefusalReason(dragged.pipelineStatus, newStatus), 3500, "error")
       return
@@ -1278,9 +1279,13 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     extra?: { niReason?: string; declineNotes?: string; collaborationType?: string }
   ) => {
     const selected = data.filter((d) => selectedIds.has(d.id))
-    // Same guards the single-row paths apply: terminal rows can't move, and
-    // rows already in the target stage are a no-op.
-    const targets = selected.filter((d) => !isTerminal(d.pipelineStatus) && d.pipelineStatus !== newStatus)
+    // Same rule the single-row paths apply, asked the same way: a row is a
+    // target only if this exact move is permitted from where it currently is.
+    // (`isTransitionAllowed` returns true for a no-op, so the second clause
+    // still excludes rows already in the target stage.)
+    const targets = selected.filter(
+      (d) => isTransitionAllowed(d.pipelineStatus, newStatus) && d.pipelineStatus !== newStatus
+    )
     const skipped = selected.length - targets.length
     const stageTitle = getStatusTitle(newStatus)
 

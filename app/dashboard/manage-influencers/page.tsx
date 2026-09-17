@@ -427,7 +427,7 @@ function InfluencersContent() {
   const rawBrandId = searchParams.get("brandId")
   const brandId = rawBrandId?.trim() || null
 
-  const { rows, customColumns, isLoading, error, refetch, setRows, setCustomColumns } =
+  const { rows, customColumns, isLoading, error, hasGivenUp, refetch, setRows, setCustomColumns } =
     useInfluencerData(brandId)
   const { canManageInfluencers, canApproveInfluencers } = useBrandCapabilities(brandId)
 
@@ -681,13 +681,50 @@ function InfluencersContent() {
    * Only a real error takes the red state. Warnings and info are still
    * information, not failures, so they read as the standard toast.
    */
-  const notify = useCallback((type: "success" | "error" | "warning" | "info", message: string) => {
+  const notify = useCallback((
+    type: "success" | "error" | "warning" | "info",
+    message: string,
+    /**
+     * Keep this notice on screen until something replaces or dismisses it.
+     *
+     * For the load-failure notice only: it carries a Retry button, and the
+     * 3s auto-dismiss would take that away before the user could reach it.
+     * Every existing caller omits this and keeps the timed behaviour.
+     */
+    opts?: { persist?: boolean }
+  ) => {
     if (noticeTimer.current) { clearTimeout(noticeTimer.current); noticeTimer.current = null }
     setNotice({ message, type: type === "error" ? "error" : "success" })
-    noticeTimer.current = setTimeout(() => setNotice(null), 3000)
+    if (!opts?.persist) {
+      noticeTimer.current = setTimeout(() => setNotice(null), 3000)
+    }
   }, [])
 
   useEffect(() => () => { if (noticeTimer.current) clearTimeout(noticeTimer.current) }, [])
+
+  /**
+   * Report a failed influencer load through the page's own top notification.
+   *
+   * This replaces a full-page error screen that used to take over the whole
+   * route — toolbar, search, filters and table included — for what is usually
+   * a transient 503 from the connection pool.
+   *
+   * `hasGivenUp`, not `error`: while the cache's bounded retry is still
+   * running there is nothing for the user to do, and toasting a blip that
+   * clears itself a second later is noise. Fires once per distinct failure —
+   * `lastNotifiedError` keeps a re-render from re-raising the same message,
+   * and clears on success so a later failure is reported again.
+   */
+  const lastNotifiedError = useRef<string | null>(null)
+  useEffect(() => {
+    if (hasGivenUp && error) {
+      if (lastNotifiedError.current === error) return
+      lastNotifiedError.current = error
+      notify("error", error, { persist: true })
+      return
+    }
+    if (!error) lastNotifiedError.current = null
+  }, [hasGivenUp, error, notify])
 
   // ── Queues and timers ─────────────────────────────────────────────────────
   // brandIdRef, not brandId: the queue is created once and must read the brand
@@ -1834,26 +1871,6 @@ function InfluencersContent() {
 
   if (error) {
     const isSubscriptionExpired = error.toLowerCase().includes("subscription expired")
-    /**
-     * Is this the database refusing another connection, rather than a fault?
-     *
-     * The read routes report capacity as a retryable 503 whose message is
-     * "The database is temporarily out of connections…" (lib/db-capacity), and
-     * the raw driver text can also reach here when a failure surfaces from
-     * somewhere without that handling. Matched on the message, the same way the
-     * two states above are — this is a transient, self-clearing condition, so
-     * it gets wording that says "wait" rather than "something broke".
-     */
-    const isAtCapacity = (() => {
-      const text = error.toLowerCase()
-      return (
-        text.includes("out of connections") ||
-        text.includes("too many database connections") ||
-        text.includes("max_user_connections") ||
-        text.includes("too many clients") ||
-        text.includes("timed out fetching a new connection")
-      )
-    })()
     const isWorkspaceUnavailable =
       error.toLowerCase().includes("workspace is unavailable") ||
       error.toLowerCase().includes("subscription is inactive")
@@ -1904,41 +1921,19 @@ function InfluencersContent() {
       )
     }
 
-    // A Retry button, matching the Post Tracker's error state. Without it this
-    // screen was a dead end for a failure that is usually transient — the
-    // database refusing another connection, which the route now reports as a
-    // retryable 503 — and the only way out was a full page reload.
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="flex flex-col items-center text-center">
-          {/* Capacity is transient and nothing is lost, so it reads as the
-              table's own empty state — same 15px/13px pair and grey palette as
-              "No influencers yet" — rather than as a red fault. A genuine
-              failure keeps the red heading it has always had. */}
-          {isAtCapacity ? (
-            <>
-              <p className="text-[15px] font-medium text-gray-900 mb-1.5">
-                We&apos;re having trouble loading your influencers
-              </p>
-              <p className="text-[13px] text-gray-500 max-w-xs leading-relaxed">
-                The server is temporarily busy. Your data is safe. Please try again in a moment.
-              </p>
-            </>
-          ) : (
-            <>
-              <p className="text-red-600 mb-2 font-medium">Failed to load influencers</p>
-              <p className="text-sm text-gray-500">{error}</p>
-            </>
-          )}
-          <button
-            onClick={refetch}
-            className="mt-4 text-[13px] px-4 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 transition"
-          >
-            Retry
-          </button>
-        </div>
-      </div>
-    )
+    // NO full-page error screen for a generic load failure.
+    //
+    // This used to return a centred "Failed to load influencers" panel that
+    // replaced the entire page — the toolbar, the search box, the filters and
+    // the table all disappeared for what is usually a transient 503 from the
+    // connection pool. The two states above still take over the page, because
+    // an expired subscription and an unavailable workspace genuinely block
+    // work; an ordinary fetch failure does not.
+    //
+    // It is reported through the page's existing top notification instead (see
+    // the `notice` effect below), which is the same pattern the Post Tracker
+    // and Pipeline use. Falling through to the normal render keeps the page
+    // usable and lets the cache's own bounded retry refill the table.
   }
 
   return (
@@ -2008,8 +2003,19 @@ function InfluencersContent() {
           wording and dismissal are untouched. */}
       <div className="notice-dock-top">
         {notice && (
-          <div className={`flex h-9 max-w-full items-center rounded-lg px-3 shadow-lg text-white text-sm font-medium whitespace-nowrap animate-in slide-in-from-top-2 ${notice.type === "error" ? "bg-red-600" : "bg-[#1FAE5B]"}`}>
+          <div className={`flex h-9 max-w-full items-center gap-2 rounded-lg px-3 shadow-lg text-white text-sm font-medium whitespace-nowrap animate-in slide-in-from-top-2 ${notice.type === "error" ? "bg-red-600" : "bg-[#1FAE5B]"}`}>
             <span className="truncate">{notice.message}</span>
+            {/* Retry, inline — the affordance the removed error screen had.
+                Shown only for a load failure that has stopped retrying on its
+                own, so an ordinary save toast is unchanged. */}
+            {notice.type === "error" && hasGivenUp && error && (
+              <button
+                onClick={() => { setNotice(null); void refetch() }}
+                className="shrink-0 rounded border border-white/40 px-2 py-0.5 text-xs font-semibold hover:bg-white/15 transition"
+              >
+                Retry
+              </button>
+            )}
           </div>
         )}
       </div>

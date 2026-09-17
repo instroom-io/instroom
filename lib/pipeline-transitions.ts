@@ -29,16 +29,36 @@ export const PIPELINE_STAGES = [
 export type PipelineStage = (typeof PIPELINE_STAGES)[number]
 
 /**
- * Stages a row cannot move OUT of through the board.
+ * Stages a row cannot move OUT of through the Pipeline board.
  *
- * "For Order Creation" has handed the row to Post Tracker, which owns it from
- * there; "Not Interested" is a terminal decline. Re-opening either is a
- * deliberate act done from the Influencer List's approval control, not a
- * casual stage change.
+ * ONLY "For Order Creation". That stage hands the row to Post Tracker, which
+ * fetches everything at `stage >= 5` and owns it from then on — moving it
+ * backward from here would pull a row out from under the other board while it
+ * is being worked, so it stays one-way and Post Tracker's own controls govern
+ * it from that point.
+ *
+ * "Not Interested" is NOT terminal. A decline is a decision the brand can
+ * revisit — the influencer replies later, the budget changes, the decline was
+ * a mistake — so a declined row can be moved back to any active stage. It was
+ * grouped with For Order Creation here, which made an ordinary correction
+ * impossible from the board.
  */
-export const TERMINAL_STAGES: readonly string[] = ["Not Interested", "For Order Creation"]
+export const TERMINAL_STAGES: readonly string[] = ["For Order Creation"]
 
 export const isTerminalStage = (stage: string): boolean => TERMINAL_STAGES.includes(stage)
+
+/**
+ * Stages a row can be moved to from anywhere it is allowed to move at all.
+ *
+ * Everything except "For Order Creation", which is not a destination a user
+ * picks: it is reached by confirming a collaboration type on "Deal Agreed",
+ * which cascades there and seeds Post Tracker (see pipelineStatusToFields).
+ * Offering it as a plain move would land a row on Post Tracker with no
+ * collaboration type set.
+ */
+const SELECTABLE_STAGES: readonly string[] = PIPELINE_STAGES.filter(
+  (s) => s !== "For Order Creation"
+)
 
 /**
  * The forward path. Each stage advances to exactly one next stage.
@@ -54,33 +74,59 @@ const NEXT_STAGE: Record<string, string> = {
 }
 
 /**
- * The stages a row at `currentStatus` may move to.
+ * The moves a card's quick-move BUTTONS suggest — the obvious next step.
  *
- * This is what the card's quick-move buttons render, what the Details
- * dropdown offers, and what the server checks — so all three agree by
- * construction rather than by three lists being kept in step by hand.
+ * This is a UI affordance, NOT the rule. It answers "what would this user most
+ * likely do next", which is why it is deliberately narrow: one forward step,
+ * plus declining. It is what `getNextStages` renders on each card.
  *
- * "Not Interested" is reachable from every non-terminal stage EXCEPT "For
- * Outreach": nobody has been contacted yet there, so there is nothing to
- * decline. (The card additionally hides that button at For Outreach; the rule
- * is the same, it is simply the rule rather than a separate UI decision.)
+ * Use `isTransitionAllowed` to decide whether a move is PERMITTED. The two were
+ * previously the same function, which is what made every backward move and
+ * every correction of a decline impossible: the buttons' narrow suggestion list
+ * was being enforced as the system's rule, on the client and the server.
+ *
+ * "Not Interested" is suggested from every stage EXCEPT "For Outreach": nobody
+ * has been contacted yet there, so there is nothing to decline. It remains
+ * reachable there through the dropdown — not suggested is not the same as not
+ * allowed.
  */
-export function allowedTransitions(currentStatus: string): string[] {
+export function suggestedTransitions(currentStatus: string): string[] {
   if (isTerminalStage(currentStatus)) return []
+
+  // A declined row's obvious next step is being put BACK into the funnel, not
+  // declining again. Without this it fell through to the generic branch below
+  // and suggested "Not Interested" from "Not Interested" — a button that did
+  // nothing.
+  if (currentStatus === "Not Interested") return ["For Outreach"]
 
   const next = NEXT_STAGE[currentStatus]
   if (!next) {
-    // "Deal Agreed" and anything unrecognised: the only move left is declining.
+    // "Deal Agreed" and anything unrecognised: the only step left is declining.
     return ["Not Interested"]
   }
   if (currentStatus === "For Outreach") return [next]
   return [next, "Not Interested"]
 }
 
+/**
+ * Every stage a row at `currentStatus` may move to.
+ *
+ * This is what the stage DROPDOWNS offer and what `isTransitionAllowed`
+ * checks — forward, backward, and out of a decline. Movement between the
+ * active stages is not a funnel that only runs one way: a conversation can
+ * regress, a stage can be set by mistake, and a decline can be reconsidered.
+ *
+ * The one exception is "For Order Creation" — see TERMINAL_STAGES.
+ */
+export function allowedTransitions(currentStatus: string): string[] {
+  if (isTerminalStage(currentStatus)) return []
+  return SELECTABLE_STAGES.filter((s) => s !== currentStatus)
+}
+
 /** Is moving from `from` to `to` permitted? */
 export function isTransitionAllowed(from: string, to: string): boolean {
   // A no-op move is not an error — the UI treats "already there" as nothing to
-  // do, and the server should not 400 a client that raced itself.
+  // do, and the server should not 409 a client that raced itself.
   if (from === to) return true
   return allowedTransitions(from).includes(to)
 }
@@ -93,11 +139,15 @@ export function isTransitionAllowed(from: string, to: string): boolean {
  */
 export function transitionRefusalReason(from: string, to: string): string {
   if (isTerminalStage(from)) {
-    return `${from} is a final stage — this influencer can no longer be moved from the Pipeline.`
+    // Names the SOURCE, which is the actual cause. The drag guard used to
+    // report the destination ("Cannot move to Contacted"), which read as though
+    // the stage the user picked were the problem.
+    return `${from} has moved to Post Tracker — manage this influencer from there.`
   }
-  const allowed = allowedTransitions(from)
-  if (allowed.length === 0) return `Cannot move from ${from} to ${to}.`
-  return `Cannot skip from ${from} to ${to}. Move to ${allowed.join(" or ")} first.`
+  if (to === "For Order Creation") {
+    return `Confirm a collaboration type on Deal Agreed to move ${from} into Post Tracker.`
+  }
+  return `Cannot move from ${from} to ${to}.`
 }
 
 /**
