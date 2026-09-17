@@ -642,6 +642,12 @@ model Signature {
   email        String?  @db.VarChar(150)
   website      String?  @db.VarChar(255)
   social_links Json?
+  photo_url    String?  @db.VarChar(500)
+  accent_color String?  @db.VarChar(7)
+  // If true, getUserSignatureHtml sends gmail_signature_html as-is instead of
+  // the fields above (kept intact so unchecking restores the built version).
+  use_gmail_signature  Boolean @default(false)
+  gmail_signature_html String? @db.Text
   created_at   DateTime @default(now())
   updated_at   DateTime @updatedAt
 

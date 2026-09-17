@@ -22,6 +22,7 @@ import { useSubscriptionGate } from "@/hooks/useSubscriptionGate"
 import { invalidateInfluencerDerivedCaches } from "@/lib/cache-invalidation"
 import {
   IconMailPlus,
+  IconMailOpened,
   IconSearch,
   IconX,
   IconPlus,
@@ -49,7 +50,6 @@ import {
   IconArchive,
   IconTrash,
   IconBell,
-  IconUser,
   IconClock,
   IconLock,
   IconCheck,
@@ -325,7 +325,7 @@ function mapGmailThreadToEmail(thread: any, index: number, accountId?: string | 
     timestamp,
     status,
     read: !thread.unread,
-    starred: false,
+    starred: Boolean(thread.starred),
     from: senderName,
     fromEmail: senderEmail,
     replies,
@@ -413,7 +413,7 @@ function mapOutlookThreadToEmail(thread: any, index: number, accountId?: string 
     timestamp,
     status,
     read: !thread.unread,
-    starred: false,
+    starred: Boolean(thread.starred),
     from: senderName,
     fromEmail: senderEmail,
     replies,
@@ -465,8 +465,10 @@ function HtmlMessageFrame({ html }: { html: string }) {
       onLoad={(e) => {
         const body = e.currentTarget.contentWindow?.document?.body
         if (body) {
+          // +12px buffer: scrollWidth can undercount trailing margins/icons by
+          // a few px, clipping content right at the edge.
           setSize({
-            width: Math.min(Math.max(body.scrollWidth, 160), 520),
+            width: Math.min(Math.max(body.scrollWidth + 12, 160), 520),
             height: body.scrollHeight + 8,
           })
         }
@@ -513,6 +515,21 @@ function blockRemoteImages(html: string): { html: string; hadBlocked: boolean } 
     hadBlocked = true
   })
   return { html: container.innerHTML, hadBlocked }
+}
+
+// "Always show images from this sender" list, kept in localStorage per user.
+function trustedImageSendersKey(userId: string): string {
+  return `instroom:trusted-image-senders:${userId}`
+}
+
+function loadTrustedImageSenders(userId: string | undefined): Set<string> {
+  if (typeof window === "undefined" || !userId) return new Set()
+  try {
+    const raw = window.localStorage.getItem(trustedImageSendersKey(userId))
+    return new Set(raw ? JSON.parse(raw) : [])
+  } catch {
+    return new Set()
+  }
 }
 
 // Splits a plain-text email body into the new reply text and the quoted
@@ -707,8 +724,32 @@ function DraggableEmailRow({ id, children }: { id: string; children: React.React
 
 function InboxContent() {
   const { data: session } = useSession()
+  const userId = session?.user?.id as string | undefined
   const searchParams = useSearchParams()
   const brandId = searchParams.get("brandId")
+
+  const [trustedImageSenders, setTrustedImageSenders] = useState<Set<string>>(() => loadTrustedImageSenders(userId))
+  // Reloads once userId resolves — lazy init above can miss it on first render.
+  useEffect(() => {
+    if (userId) setTrustedImageSenders(loadTrustedImageSenders(userId))
+  }, [userId])
+
+  const isImageSenderTrusted = (email?: string) => Boolean(email && trustedImageSenders.has(email.toLowerCase()))
+
+  const trustImageSender = (email?: string) => {
+    if (!email || !userId) return
+    const key = email.toLowerCase()
+    setTrustedImageSenders((prev) => {
+      if (prev.has(key)) return prev
+      const next = new Set(prev).add(key)
+      try {
+        window.localStorage.setItem(trustedImageSendersKey(userId), JSON.stringify([...next]))
+      } catch {
+        // Storage unavailable — trust just won't persist.
+      }
+      return next
+    })
+  }
 
   // ── Subscription gate ──────────────────────────────────────────────────────
   // Served from the shared cache, so a return visit resolves on mount instead
@@ -872,6 +913,9 @@ function InboxContent() {
   const [showPipelineBar, setShowPipelineBar] = useState(false)
   const [activeDragId, setActiveDragId] = useState<string | null>(null)
   const [showActions, setShowActions] = useState(false)
+  const [deleteConversationTarget, setDeleteConversationTarget] = useState<Email | null>(null)
+  const [deletingConversation, setDeletingConversation] = useState(false)
+  const [deleteConversationError, setDeleteConversationError] = useState<string | undefined>()
   const [isMobile, setIsMobile] = useState(false)
 
   // "checking" only when this mailbox has nothing cached — a cached mailbox was
@@ -921,8 +965,6 @@ function InboxContent() {
   const [replySignatureOverride, setReplySignatureOverride] = useState<boolean | null>(null)
   const composeIncludeSignature = composeSignatureOverride ?? signatureDefaultEnabled
   const replyIncludeSignature = replySignatureOverride ?? signatureDefaultEnabled
-  /** Per-message opt-in to load remote images — keyed like expandedQuotes. */
-  const [imagesAllowed, setImagesAllowed] = useState<Set<string>>(new Set())
 
   // Compose modal state
   const [composeTo, setComposeTo] = useState("")
@@ -1713,9 +1755,42 @@ function InboxContent() {
     return handles.size
   }
 
-  const toggleStar = (id: number | string, e: React.MouseEvent) => {
+  // Keyed on `uid`, not `id` — see updateEmailStage below for why.
+  const toggleStar = (email: Email, e: React.MouseEvent) => {
     e.stopPropagation()
-    setEmails((prev) => prev.map((email) => (email.id === id ? { ...email, starred: !email.starred } : email)))
+    const nextStarred = !email.starred
+    setEmails((prev) => prev.map((e2) => (e2.uid === email.uid ? { ...e2, starred: nextStarred } : e2)))
+    setSelectedEmail((prev) => (prev?.uid === email.uid ? { ...prev, starred: nextStarred } : prev))
+    if (email.isLocalPending) return
+
+    if (email.source === "gmail" && email.gmailThreadId) {
+      fetch("/api/gmail/star", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ threadId: email.gmailThreadId, starred: nextStarred }),
+      })
+        .then(async (res) => {
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}))
+            console.error("[gmail star] failed:", res.status, body?.error)
+          }
+        })
+        .catch((err) => console.error("[gmail star] network error:", err))
+    } else if (email.source === "outlook") {
+      const accountId = selectedOutlookAccountId()
+      fetch(`/api/outlook/star${accountId ? `?accountId=${encodeURIComponent(accountId)}` : ""}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversationId: email.id, starred: nextStarred }),
+      })
+        .then(async (res) => {
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}))
+            console.error("[outlook star] failed:", res.status, body?.error)
+          }
+        })
+        .catch((err) => console.error("[outlook star] network error:", err))
+    }
   }
 
   const markAsRead = (id: number | string) => {
@@ -1770,6 +1845,87 @@ function InboxContent() {
       // Leave the lightweight entry as-is — the snippet is still shown.
     } finally {
       setLoadingThreadId((prev) => (prev === email.id ? null : prev))
+    }
+  }
+
+  // Mirrors openEmail's mark-read call, just re-adding UNREAD instead.
+  const markAsUnread = (email: Email) => {
+    setEmails((prev) => prev.map((e) => (e.uid === email.uid ? { ...e, read: false } : e)))
+    setSelectedEmail((prev) => (prev?.uid === email.uid ? { ...prev, read: false } : prev))
+    setShowActions(false)
+    if (email.isLocalPending) return // synthetic row, nothing real to tell either provider
+
+    if (email.source === "gmail" && email.gmailThreadId) {
+      fetch("/api/gmail/mark-read", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ threadId: email.gmailThreadId, read: false }),
+      })
+        .then(async (res) => {
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}))
+            console.error("[gmail mark-unread] failed:", res.status, body?.error)
+          }
+        })
+        .catch((err) => console.error("[gmail mark-unread] network error:", err))
+    } else if (email.source === "outlook") {
+      const accountId = selectedOutlookAccountId()
+      fetch(`/api/outlook/mark-unread${accountId ? `?accountId=${encodeURIComponent(accountId)}` : ""}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversationId: email.id }),
+      })
+        .then(async (res) => {
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}))
+            console.error("[outlook mark-unread] failed:", res.status, body?.error)
+          }
+        })
+        .catch((err) => console.error("[outlook mark-unread] network error:", err))
+    }
+  }
+
+  const confirmDeleteConversation = async () => {
+    const email = deleteConversationTarget
+    if (!email) return
+
+    // No real thread server-side for this placeholder — just drop it locally.
+    if (email.isLocalPending) {
+      setEmails((prev) => prev.filter((e) => e.uid !== email.uid))
+      setSelectedEmail((prev) => (prev?.uid === email.uid ? null : prev))
+      setDeleteConversationTarget(null)
+      return
+    }
+
+    setDeletingConversation(true)
+    setDeleteConversationError(undefined)
+    try {
+      let res: Response
+      if (email.source === "outlook") {
+        const accountId = selectedOutlookAccountId()
+        res = await fetch(`/api/outlook/trash${accountId ? `?accountId=${encodeURIComponent(accountId)}` : ""}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ conversationId: email.id }),
+        })
+      } else {
+        res = await fetch("/api/gmail/trash", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ threadId: email.gmailThreadId }),
+        })
+      }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data?.error || "Failed to delete conversation")
+      }
+      setEmails((prev) => prev.filter((e) => e.uid !== email.uid))
+      setSelectedEmail((prev) => (prev?.uid === email.uid ? null : prev))
+      setDeleteConversationTarget(null)
+    } catch (err: any) {
+      setDeleteConversationError(err.message || "Failed to delete conversation")
+    } finally {
+      setDeletingConversation(false)
     }
   }
 
@@ -2417,7 +2573,7 @@ function InboxContent() {
                           {getStatusBadge(email.status) && <div className="mt-1.5">{getStatusBadge(email.status)}</div>}
                         </div>
 
-                        <button onClick={(e) => toggleStar(email.id, e)} className="flex-shrink-0 mt-0.5 transition-opacity hover:opacity-80">
+                        <button onClick={(e) => toggleStar(email, e)} className="flex-shrink-0 mt-0.5 transition-opacity hover:opacity-80">
                           {email.starred ? (
                             <IconStarFilled size={14} className="text-yellow-500" />
                           ) : (
@@ -2492,20 +2648,37 @@ function InboxContent() {
                       </button>
                     )
                   })()}
-                </div>
 
-                {showActions && (
-                  <>
-                    <div className="fixed inset-0 z-10" onClick={() => setShowActions(false)} />
-                    <div className="absolute right-4 md:right-6 mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20">
-                      <button className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2"><IconUser size={14} />View Profile</button>
-                      <button className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2"><IconStar size={14} />Star Conversation</button>
-                      <button className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2"><IconCheck size={14} />Mark as Read</button>
-                      <div className="border-t border-gray-100 my-1" />
-                      <button className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"><IconTrash size={14} />Delete Conversation</button>
-                    </div>
-                  </>
-                )}
+                  <div className="relative ml-auto">
+                    <button
+                      onClick={() => setShowActions((v) => !v)}
+                      className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 transition-colors"
+                      title="More actions"
+                    >
+                      <IconDotsVertical size={18} />
+                    </button>
+                    {showActions && (
+                      <>
+                        <div className="fixed inset-0 z-10" onClick={() => setShowActions(false)} />
+                        <div className="absolute right-0 top-full mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20">
+                          <button
+                            onClick={() => markAsUnread(selectedEmail)}
+                            className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
+                          >
+                            <IconMailOpened size={14} />Mark as Unread
+                          </button>
+                          <div className="border-t border-gray-100 my-1" />
+                          <button
+                            onClick={() => { setShowActions(false); setDeleteConversationError(undefined); setDeleteConversationTarget(selectedEmail) }}
+                            className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+                          >
+                            <IconTrash size={14} />Delete Conversation
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
               </div>
 
               {/* Order Info Bar */}
@@ -2583,7 +2756,7 @@ function InboxContent() {
                                 const { main, quoted } = splitHtmlQuote(msg.message)
                                 const quoteKey = `${gIdx}-${mIdx}`
                                 const isExpanded = expandedQuotes.has(quoteKey)
-                                const imagesOn = imagesAllowed.has(quoteKey)
+                                const imagesOn = isImageSenderTrusted(selectedEmail.fromEmail)
                                 const mainBlocked = blockRemoteImages(main)
                                 const quotedBlocked = quoted ? blockRemoteImages(quoted) : null
                                 const hasRemoteImages = mainBlocked.hadBlocked || Boolean(quotedBlocked?.hadBlocked)
@@ -2594,7 +2767,7 @@ function InboxContent() {
                                   >
                                     {hasRemoteImages && !imagesOn && (
                                       <button
-                                        onClick={() => setImagesAllowed((prev) => new Set(prev).add(quoteKey))}
+                                        onClick={() => trustImageSender(selectedEmail.fromEmail)}
                                         className="mb-2 text-xs underline underline-offset-2 text-gray-400 hover:text-gray-600"
                                       >
                                         Display images below
@@ -2772,7 +2945,6 @@ function InboxContent() {
       </div>
 
       {/* ── REMOVE ACCOUNT CONFIRMATION ── */}
-      {/* Same shell as the stage and compose modals in this file. */}
       {removeAccount && (
         <div className="fixed inset-0 z-50 flex items-center justify-center animate-fadeIn p-4">
           <div className="absolute inset-0 bg-black/50" onClick={() => { if (!accountBusy) setRemoveAccount(null) }} />
@@ -2810,6 +2982,47 @@ function InboxContent() {
                 className="h-9 px-4 rounded-lg text-sm font-medium bg-red-600 text-white hover:bg-red-700 transition disabled:opacity-50"
               >
                 {accountBusy ? "Removing…" : "Remove account"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── DELETE CONVERSATION CONFIRMATION ── */}
+      {deleteConversationTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center animate-fadeIn p-4">
+          <div className="absolute inset-0 bg-black/50" onClick={() => { if (!deletingConversation) setDeleteConversationTarget(null) }} />
+          <div className="relative w-full max-w-[400px] bg-white rounded-2xl shadow-2xl p-6 animate-scaleIn">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="font-semibold text-lg text-gray-900">Delete conversation</h2>
+              <button
+                onClick={() => { if (!deletingConversation) setDeleteConversationTarget(null) }}
+                className="p-1 rounded-lg hover:bg-gray-100 transition"
+              >
+                <IconX size={20} />
+              </button>
+            </div>
+            <p className="text-sm text-gray-600">
+              Move the conversation with{" "}
+              <span className="font-medium text-gray-900">{deleteConversationTarget.name}</span>{" "}
+              to Trash? It will stay recoverable on the{" "}
+              {PROVIDER_LABEL[deleteConversationTarget.source ?? "gmail"]} side for a while, in case you change your mind.
+            </p>
+            {deleteConversationError && <p className="mt-3 text-xs text-red-500">{deleteConversationError}</p>}
+            <div className="flex items-center justify-end gap-2 mt-5">
+              <button
+                onClick={() => setDeleteConversationTarget(null)}
+                disabled={deletingConversation}
+                className="h-9 px-4 rounded-lg text-sm border border-gray-200 text-gray-600 hover:bg-gray-50 transition disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDeleteConversation}
+                disabled={deletingConversation}
+                className="h-9 px-4 rounded-lg text-sm font-medium bg-red-600 text-white hover:bg-red-700 transition disabled:opacity-50"
+              >
+                {deletingConversation ? "Deleting…" : "Delete conversation"}
               </button>
             </div>
           </div>
@@ -2917,9 +3130,6 @@ function InboxContent() {
                     recipientEmail={composeTo}
                     onApply={(subject, body) => {
                       setComposeSubject(subject)
-                      // Templates are plain text — imperatively push the
-                      // converted HTML into the mounted editor (setHtml also
-                      // updates composeBody state itself; see rich-compose-editor.tsx).
                       composeEditorRef.current?.setHtml(plainTextToComposeHtml(body))
                     }}
                   />
