@@ -49,6 +49,7 @@ export async function POST(req: NextRequest) {
 
   let to: string, subject: string | undefined, body: string, brandId: string | undefined
   let isHtmlBody = false
+  let includeSignature = true
   const attachments: { name: string; mimeType: string; data: Buffer }[] = []
 
   const contentType = req.headers.get("content-type") || ""
@@ -59,6 +60,7 @@ export async function POST(req: NextRequest) {
     body = String(form.get("body") || "")
     brandId = form.get("brandId") ? String(form.get("brandId")) : undefined
     isHtmlBody = form.get("isHtmlBody") === "true"
+    includeSignature = form.get("includeSignature") !== "false"
 
     const files = form.getAll("attachments").filter((v): v is File => v instanceof File)
     const totalBytes = files.reduce((sum, f) => sum + f.size, 0)
@@ -82,6 +84,7 @@ export async function POST(req: NextRequest) {
     body = jsonBody.body
     brandId = jsonBody.brandId
     isHtmlBody = Boolean(jsonBody.isHtmlBody)
+    includeSignature = jsonBody.includeSignature !== false
   }
 
   if (!to || !body) {
@@ -91,7 +94,7 @@ export async function POST(req: NextRequest) {
   const replySubject = subject?.startsWith("Re:") ? subject : subject ? `Re: ${subject}` : "(No subject)"
 
   try {
-    const signatureHtml = await getUserSignatureHtml(userId)
+    const signatureHtml = includeSignature ? await getUserSignatureHtml(userId) : null
     // The body itself already has real HTML when it came from the rich
     // compose editor (isHtmlBody) — running it through plainTextBodyToHtml
     // would double-escape it.
