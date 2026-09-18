@@ -71,12 +71,6 @@ export async function refreshGmailToken(refresh_token: string, accountId: string
     })
     const data = await res.json()
     if (!res.ok || !data.access_token) return null
-
-    // Target this specific Account row, not every Google account linked to
-    // the user — a user can have more than one (e.g. reconnected Gmail with
-    // a different Google account), and this refresh_token only belongs to
-    // one of them. Updating them all would overwrite unrelated accounts'
-    // tokens with a token that isn't actually theirs.
     await prisma.account.update({
       where: { id: accountId },
       data: {
@@ -94,20 +88,10 @@ export async function refreshGmailToken(refresh_token: string, accountId: string
 }
 
 export async function getGmailAccessToken(userId: string | null | undefined): Promise<string | null> {
-  // NEVER use session.accessToken here — the login-time Google OAuth (see
-  // lib/auth.ts) deliberately requests only "openid email profile", with no
-  // Gmail scopes at all. Gmail access always comes from a separate consent
-  // via /api/gmail/connect, stored in the Account table below.
+
   if (!userId) return null
 
-  // A user can have more than one linked Google account (e.g. reconnected
-  // Gmail with a different account than before) — most recently connected
-  // wins, since that's the one they just told us to use. Ordering by
-  // last_selected_at, not id: reconnecting an account used before updates
-  // its existing row rather than creating a new one, so id alone can't tell
-  // "just reconnected" apart from "connected a while ago." Rows from before
-  // this field existed have it as null and fall back to id ordering among
-  // themselves, same as before.
+
   const account = await prisma.account.findFirst({
     where: { userId, provider: GMAIL_PROVIDER },
     select: { id: true, access_token: true, refresh_token: true, expires_at: true },
@@ -127,10 +111,7 @@ export async function getGmailAccessToken(userId: string | null | undefined): Pr
   return account.access_token
 }
 
-/** The email address of the currently-connected Gmail account, so callers can
- *  tell "a thread with an external contact" apart from "a thread with my own
- *  connected mailbox" (e.g. a self-sent verification/test email). Same
- *  most-recently-connected-wins rule as getGmailAccessToken. */
+
 export async function getGmailAccountEmail(userId: string | null | undefined): Promise<string | null> {
   if (!userId) return null
 
@@ -143,10 +124,7 @@ export async function getGmailAccountEmail(userId: string | null | undefined): P
   return account?.email ?? null
 }
 
-// ─── Thread shaping ───────────────────────────────────────────────────────────
-// Previously inline inside app/api/gmail/threads/route.ts's shaping .map() —
-// extracted so the new single-thread endpoint shapes a raw Gmail thread
-// exactly the same way, instead of a second, potentially-drifting copy.
+
 
 export function getHeader(headers: { name: string; value: string }[], name: string): string {
   return headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value || ""
@@ -175,15 +153,7 @@ function extractPart(payload: any, mimeType: string): string {
   return ""
 }
 
-// Gmail messages can be text/plain, text/html, or (multipart/alternative)
-// both. Plain text is preferred when present since it's simpler to render;
-// HTML-only messages (e.g. our own signature-bearing sends, which are built
-// as a single text/html part — see buildRawEmail in gmail/send/route.ts)
-// previously fell through this function entirely (it only ever checked
-// text/plain), silently returning "" and leaving callers to fall back to
-// Gmail's auto-generated snippet — a plain-text approximation that strips
-// all formatting and runs everything together with no line breaks, which is
-// why a signature showed up as one garbled line instead of its real layout.
+
 function extractBody(payload: any): { body: string; isHtml: boolean } {
   // HTML preferred over plain text: Gmail's own auto-generated text/plain
   // alternative for an HTML message is lossy (bold becomes literal
@@ -255,10 +225,7 @@ function extractInlineImages(payload: any): GmailInlineImage[] {
   return results
 }
 
-/** Strip anything that isn't safe as a bare (non-encoded) MIME/download
- *  filename — full RFC 2231 filename* encoding for non-ASCII names is
- *  skipped for v1. Shared by the outgoing (gmail/send) and incoming
- *  (gmail/attachment) attachment paths so there's one implementation. */
+
 export function sanitizeFilename(name: string): string {
   const safe = name.replace(/[^\x20-\x7E]/g, "").replace(/"/g, "")
   return safe.trim() || "attachment"
@@ -269,6 +236,7 @@ export type ShapedGmailThread = {
   subject: string
   snippet: string
   unread: boolean
+  starred: boolean
   messages: {
     id: string
     from: string
@@ -316,6 +284,7 @@ export function shapeGmailThread(thread: any): ShapedGmailThread {
 
   const firstMsg = messages[0] || {}
   const isUnread = messages.some((m: any) => (m.labelIds || []).includes("UNREAD"))
+  const isStarred = messages.some((m: any) => (m.labelIds || []).includes("STARRED"))
 
   const contactMsg = messages.find((m: any) => !(m.labelIds || []).includes("SENT"))
 
@@ -328,6 +297,7 @@ export function shapeGmailThread(thread: any): ShapedGmailThread {
     subject: firstMsg.subject || "(No subject)",
     snippet: thread.snippet || firstMsg.snippet || "",
     unread: isUnread,
+    starred: isStarred,
     messages,
     senderEmail,
     hasReply: Boolean(contactMsg),

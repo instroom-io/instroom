@@ -25,8 +25,7 @@ export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions) as any
   const { searchParams } = new URL(req.url)
   const brandId = searchParams.get("brandId")
-  // Which connected Outlook mailbox to read. Sent by the inbox account
-  // switcher; absent for older clients, which keeps the previous behaviour.
+
   const requestedAccountId = searchParams.get("accountId")
 
   if (!session) {
@@ -38,10 +37,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "No user session", reauth: true }, { status: 401 })
   }
 
-  // One shared token path, in lib/microsoft-oauth.ts. This route and
-  // /api/outlook/send each used to resolve and refresh the account themselves;
-  // the two copies drifted, so a send could go out from a different mailbox
-  // than the inbox was displaying.
   const tokenResult = await getOutlookAccessToken(userId, "threads", requestedAccountId)
 
   if (!tokenResult.ok) {
@@ -55,31 +50,14 @@ export async function GET(req: NextRequest) {
 
   let accessToken = tokenResult.accessToken
   const accountId = tokenResult.accountId
-  // Echoed on every response below so the client can prove which mailbox the
-  // threads came from and discard a reply that arrived after a switch. Just the
-  // row id and the address — never a token.
   const connectedEmail = tokenResult.email
 
   try {
     // ── Two changes here, both about the ~7s this request took ──────────────
-    //
-    // 1. The Prefer header. `$select` includes `body`, and for 200 messages that
-    //    was 200 full HTML email bodies — by far the largest part of the wall
-    //    clock, and nearly all of it discarded: stripHtml() immediately reduced
-    //    each one to plain text. Asking Graph for text instead moves that
-    //    conversion to Microsoft's side and transfers a fraction of the bytes.
-    //    The shaping below already handles both content types (it only calls
-    //    stripHtml when contentType is "html"), so the body text this route
-    //    returns is the same text either way and the response shape is
-    //    unchanged. Graph falls back to HTML if it cannot honour the header,
-    //    which that same branch still covers.
-    //
-    // 2. Started BEFORE the brand-context query rather than after it — see the
-    //    Promise.all below. The two do not depend on each other.
     const fetchInbox = (token: string) =>
       fetch(
         "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages" +
-          "?$top=200&$select=id,subject,from,toRecipients,body,bodyPreview,receivedDateTime,isRead,conversationId" +
+          "?$top=200&$select=id,subject,from,toRecipients,body,bodyPreview,receivedDateTime,isRead,conversationId,flag" +
           "&$orderby=receivedDateTime+desc",
         {
           headers: {
@@ -91,10 +69,6 @@ export async function GET(req: NextRequest) {
 
     const messagesPromise = fetchInbox(accessToken)
 
-    // Resolve the brand while Graph works. This query only needs `userId`, which
-    // we have had since the top of the request, so waiting for the mailbox first
-    // put a full database round trip on the critical path for nothing — measured
-    // at ~507ms against this deployment's database.
     const brandPromise: Promise<string | null> = brandId
       ? Promise.resolve(brandId)
       : userId
@@ -109,10 +83,6 @@ export async function GET(req: NextRequest) {
 
     let [msgRes, resolvedBrandId] = await Promise.all([messagesPromise, brandPromise])
 
-    // Graph can reject a token that `expires_at` still considers valid — it was
-    // revoked server-side, or this host's clock is behind Microsoft's. One
-    // forced refresh and retry is far cheaper than telling the user to
-    // reconnect a mailbox whose grant is perfectly good.
     if (msgRes.status === 401) {
       console.warn(
         `[outlook] threads: Graph returned 401 for a token still marked valid (account ${accountId}) — forcing a refresh and retrying once.`
@@ -166,10 +136,6 @@ export async function GET(req: NextRequest) {
             ? stripHtml(msg.body.content)
             : msg.body?.content || msg.bodyPreview || ""
 
-        // Only real, user-attached files — never inline images (e.g. a logo
-        // embedded in an HTML signature) or item/reference attachments (a
-        // forwarded email/contact/event, or a OneDrive link), which aren't
-        // downloadable the same way and are out of scope for v1.
         const attachments = (msg.hasAttachments ? msg.attachments || [] : [])
           .filter((a: any) => !a.isInline && (!a["@odata.type"] || a["@odata.type"] === "#microsoft.graph.fileAttachment"))
           .map((a: any) => ({
@@ -196,6 +162,7 @@ export async function GET(req: NextRequest) {
         subject: first.subject || "(No subject)",
         snippet: first.bodyPreview || "",
         unread: msgs.some((m: any) => !m.isRead),
+        starred: msgs.some((m: any) => m.flag?.flagStatus === "flagged"),
         messages: shapedMessages,
         senderEmail,
         senderName,
@@ -245,10 +212,6 @@ export async function GET(req: NextRequest) {
       brandInfluencer: biByEmail.get(senderEmail) ?? null,
     }))
 
-    // Auto-advance influencers who replied to "In Conversation" — fire-and-forget
-    // so it never adds latency to the response. Every thread here comes from the
-    // inbox folder only, so a matched brandInfluencer always means an inbound
-    // message (no per-message SENT-label check exists for Outlook, unlike Gmail).
     const replyBrandInfluencerIds = threads
       .filter((t) => t.brandInfluencer)
       .map((t) => t.brandInfluencer!.id)

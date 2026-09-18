@@ -17,11 +17,10 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  const { threadId, read } = await req.json().catch(() => ({}))
+  const { threadId, starred } = await req.json().catch(() => ({}))
   if (!threadId) {
     return NextResponse.json({ error: "threadId is required" }, { status: 400 })
   }
-  const markAsRead = read !== false
 
   try {
     const res = await fetch(
@@ -33,16 +32,16 @@ export async function POST(req: NextRequest) {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(
-          markAsRead ? { removeLabelIds: ["UNREAD"] } : { addLabelIds: ["UNREAD"] }
+          starred ? { addLabelIds: ["STARRED"] } : { removeLabelIds: ["STARRED"] }
         ),
       }
     )
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
-      throw new Error(err?.error?.message || "Failed to update thread's read state")
+      throw new Error(err?.error?.message || "Failed to update star")
     }
     return NextResponse.json({ success: true })
   } catch (err: any) {
-    return NextResponse.json({ error: err.message || "Failed to update thread's read state" }, { status: 500 })
+    return NextResponse.json({ error: err.message || "Failed to update star" }, { status: 500 })
   }
 }

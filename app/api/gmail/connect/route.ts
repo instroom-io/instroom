@@ -8,10 +8,6 @@ export async function GET(req: NextRequest) {
   if (!session?.user?.id) {
     return NextResponse.redirect(new URL("/login", req.url))
   }
-
-  // Build the Google OAuth URL with Gmail scopes.
-  // We pass the user's internal ID as `state` so the callback
-  // knows which DB user to attach the tokens to.
   const state = Buffer.from(
     JSON.stringify({
       userId: session.user.id,
@@ -29,14 +25,10 @@ export async function GET(req: NextRequest) {
       "profile",
       "https://www.googleapis.com/auth/gmail.readonly",
       "https://www.googleapis.com/auth/gmail.send",
-      "https://www.googleapis.com/auth/gmail.modify", // needed to remove UNREAD (see /api/gmail/mark-read)
+      "https://www.googleapis.com/auth/gmail.modify",
+      "https://www.googleapis.com/auth/gmail.settings.basic", 
     ].join(" "),
     access_type: "offline",
-    // "consent" guarantees a refresh_token every time; "select_account" forces
-    // Google's account chooser even when only one Google session is active in
-    // the browser, so switching which Gmail gets connected is always possible
-    // without first signing out of Google elsewhere. Same reasoning already
-    // applied to the login flow's Google provider — see lib/auth.ts.
     prompt: "consent select_account",
     state,
   })

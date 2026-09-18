@@ -2,9 +2,9 @@ import "server-only"
 import { prisma } from "@/lib/prisma"
 import type { Signature } from "@prisma/client"
 
+// Neutral grays stay fixed; name/link color comes from sig.accent_color, falling back to this.
+const DEFAULT_ACCENT = "#1F2937"
 const colors = {
-  name:  "#1F2937",
-  link:  "#1155CC",
   ink:   "#111827",
   muted: "#6B7280",
 }
@@ -72,6 +72,8 @@ export function renderSignatureHtml(sig: Signature): string | null {
     Object.values(socials).some(Boolean)
   if (!hasContent) return null
 
+  const accent = /^#[0-9a-fA-F]{6}$/.test(sig.accent_color || "") ? sig.accent_color! : DEFAULT_ACCENT
+
   const rows: string[] = []
 
   // Standard signature delimiter ("-- " on its own line) — mail clients that
@@ -81,7 +83,7 @@ export function renderSignatureHtml(sig: Signature): string | null {
 
   if (sig.full_name || sig.title) {
     const nameHtml = sig.full_name
-      ? `<span style="font-weight:700;color:${colors.name};">${escapeHtml(sig.full_name)}</span>`
+      ? `<span style="font-weight:700;color:${accent};">${escapeHtml(sig.full_name)}</span>`
       : ""
     const titleHtml = sig.title
       ? `<span style="font-weight:400;color:${colors.ink};">${sig.full_name ? " | " : ""}${escapeHtml(sig.title)}</span>`
@@ -97,19 +99,19 @@ export function renderSignatureHtml(sig: Signature): string | null {
   if (sig.phone) {
     contactLines.push(
       `<div style="font-size:12px;color:${colors.muted};">mobile: ` +
-        `<a href="tel:${escapeHtml(sig.phone)}" style="color:${colors.link};text-decoration:underline;">${escapeHtml(sig.phone)}</a></div>`
+        `<a href="tel:${escapeHtml(sig.phone)}" style="color:${accent};text-decoration:underline;">${escapeHtml(sig.phone)}</a></div>`
     )
   }
   if (sig.email) {
     contactLines.push(
       `<div style="font-size:12px;color:${colors.muted};">email: ` +
-        `<a href="mailto:${escapeHtml(sig.email)}" style="color:${colors.link};text-decoration:underline;">${escapeHtml(sig.email)}</a></div>`
+        `<a href="mailto:${escapeHtml(sig.email)}" style="color:${accent};text-decoration:underline;">${escapeHtml(sig.email)}</a></div>`
     )
   }
   if (sig.website) {
     contactLines.push(
       `<div style="font-size:12px;color:${colors.muted};">website: ` +
-        `<a href="${escapeHtml(sig.website)}" style="color:${colors.link};text-decoration:underline;">${escapeHtml(sig.website)}</a></div>`
+        `<a href="${escapeHtml(sig.website)}" style="color:${accent};text-decoration:underline;">${escapeHtml(sig.website)}</a></div>`
     )
   }
   if (contactLines.length) rows.push(contactLines.join(""))
@@ -123,20 +125,40 @@ export function renderSignatureHtml(sig: Signature): string | null {
           `style="display:inline-block;vertical-align:middle;border:0;" /></a>`
     )
   if (socialLinks.length) {
-    rows.push(`<div style="font-size:12px;margin-top:4px;">${socialLinks.join("")}</div>`)
+    rows.push(`<div style="font-size:12px;margin-top:4px;white-space:nowrap;padding-right:8px;">${socialLinks.join("")}</div>`)
   }
 
+  const textBlock = rows.join("")
+
+  const body = sig.photo_url
+    ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>` +
+        `<td style="padding-right:12px;vertical-align:top;">` +
+          `<img src="${escapeHtml(sig.photo_url)}" alt="" width="72" style="max-width:72px;height:auto;display:block;border:0;" />` +
+        `</td>` +
+        `<td style="vertical-align:top;">${textBlock}</td>` +
+      `</tr></table>`
+    : textBlock
+
+  return wrapSignature(body)
+}
+
+/** The divider line + spacing every signature sits inside, built or imported. */
+function wrapSignature(body: string): string {
   return (
     `<div style="border-top:1px solid #E5E7EB;margin-top:16px;padding-top:12px;font-family:Arial,Helvetica,sans-serif;">` +
-      rows.join("") +
+      body +
     `</div>`
   )
 }
 
-/** Fetches the current user's signature and renders it, or returns null if
- *  none exists, it's disabled, or it has no content. */
 export async function getUserSignatureHtml(userId: string): Promise<string | null> {
   const signature = await prisma.signature.findUnique({ where: { user_id: userId } })
-  if (!signature) return null
+  if (!signature || !signature.is_enabled) return null
+
+  if (signature.use_gmail_signature) {
+    if (!signature.gmail_signature_html) return null
+    return wrapSignature(`<div>-- </div>${signature.gmail_signature_html}`)
+  }
+
   return renderSignatureHtml(signature)
 }
