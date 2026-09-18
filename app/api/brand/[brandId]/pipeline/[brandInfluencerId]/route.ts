@@ -78,7 +78,7 @@ export async function PATCH(
     const { brandId, brandInfluencerId } = await params
 
     const body = await req.json()
-    const { pipelineStatus, niReason, declineNotes, collaborationType } = body as {
+    const { pipelineStatus, niReason, declineNotes, collaborationType, notes } = body as {
       pipelineStatus?: string
       niReason?: string
       /** Free-text explanation, sent only with an "Others" decline. */

@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react"
 import { EmailModal } from "@/components/shared/email-modal"
 import { ProfilePicture } from "@/components/table-sheet/ui-atoms"
+import { getProfileUrl } from "@/components/table-sheet/utils"
 import { DeclineModal } from "@/components/shared/decline-modal"
 import { allowedTransitions } from "@/lib/pipeline-transitions"
 
