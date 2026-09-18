@@ -27,12 +27,11 @@ import { mutationErrorMessage } from "@/lib/user-facing-error"
 /** Stable empty reference used before the first payload arrives. */
 const EMPTY_CLOSED: ClosedInfluencer[] = []
 
-export type ClosedColumn =
-  | "For Order Creation"
-  | "In-Transit"
-  | "Delivered"
-  | "Posted"
-  | "No post"
+// Re-exported, not redeclared: lib/post-tracker-status.ts owns this union and
+// the mapping that turns each value into DB fields, so a column added there is
+// immediately known here rather than needing the same list edited twice.
+export type { ClosedColumn } from "@/lib/post-tracker-status"
+import { CLOSED_COLUMNS, type ClosedColumn } from "@/lib/post-tracker-status"
 
 export interface ClosedInfluencer {
   id: string
@@ -311,13 +310,15 @@ function applyColumnChange(
   }
 }
 
-const VALID_COLUMNS: ClosedColumn[] = [
-  "For Order Creation",
-  "In-Transit",
-  "Delivered",
-  "Posted",
-  "No post",
-]
+// The canonical list, not a copy.
+//
+// This WAS a hand-written literal, and because `ClosedColumn[]` only constrains
+// each element to be a member of the union — never that every member is
+// present — adding "Issues" to the union left this array silently short and
+// typechecked clean. The guard below then rejected a status the API was
+// legitimately returning. Deriving it from CLOSED_COLUMNS means a column added
+// to the union cannot go missing here again.
+const VALID_COLUMNS = CLOSED_COLUMNS
 
 // ─── Map raw API item to ClosedInfluencer ─────────────────────────────────────
 // The API's closedStatus is authoritative and is used verbatim. There is no

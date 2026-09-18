@@ -91,18 +91,18 @@ export type LookupFailure = {
  *
  * Neutral on purpose. The user cannot tell — and does not need to tell — a
  * private account from a restricted one from a momentary hiccup, and none of
- * those is an API outage. What they need is the two things they can do, which
- * the modal offers: retry, or carry on filling the row in by hand. Identical
- * across Instagram, TikTok, YouTube, X and anything added later, so the message
- * cannot drift per platform.
+ * those is an API outage. Identical across Instagram, TikTok, YouTube, X and
+ * anything added later, so the message cannot drift per platform.
+ *
+ * Kept to ONE short line because this is now a toast, not a modal. It used to
+ * end with "You can retry or continue adding the influencer manually" — advice
+ * that belonged to a blocking dialog with those two buttons. There is no dialog
+ * any more: the row is already editable, so the user simply carries on typing,
+ * and a re-edit of the handle re-runs the lookup on its own.
  */
 export function lookupFailureMessage(handle: string): string {
   const clean = handle.trim().replace(/^@+/, "")
-  return (
-    `We couldn't fetch data for @${clean}. The profile may be private, ` +
-    `unavailable, or temporarily unable to be accessed. You can retry or ` +
-    `continue adding the influencer manually.`
-  )
+  return `Couldn't fetch @${clean} — add the details manually`
 }
 
 /**
@@ -467,7 +467,9 @@ export function normalizeUrl(str: string): string {
 export function handleApprovalChange(
   row: InfluencerRow,
   newStatus: string,
-  declineReason?: string
+  declineReason?: string,
+  /** Free-text explanation, sent only with an "Others" decline. */
+  declineNotes?: string
 ): InfluencerRow {
   const r = { ...row }
   if (newStatus === "Approved" && row.approval_status !== "Approved") {
@@ -491,13 +493,17 @@ export function handleApprovalChange(
   if (newStatus === "Declined" && row.approval_status !== "Declined") {
     r.contact_status = "not_interested"; r.stage = "0"; r.agreed_rate = ""; r.notes = ""
     if (declineReason) { r.approval_notes = declineReason; r.decline_reason = declineReason }
+    // Written on every decline, not only when present, so re-declining with a
+    // predefined reason clears a stale "Others" explanation. The reason itself
+    // stays alone in approval_notes — Analytics matches that column exactly.
+    r.decline_notes = declineNotes?.trim() || ""
   }
   // Un-declining puts the row back at the head of the pipeline — the same
   // For Outreach (stage 1) landing a re-approval gets on the board. Without
   // this the row kept stage 0 and stayed invisible on the Pipeline.
   if (newStatus !== "Declined" && row.approval_status === "Declined") {
     r.contact_status = "not_contacted"; r.stage = "1"
-    r.approval_notes = ""; r.decline_reason = ""
+    r.approval_notes = ""; r.decline_reason = ""; r.decline_notes = ""
   }
   r.approval_status = newStatus as "Approved" | "Declined" | "Pending"
   return r
@@ -539,7 +545,7 @@ export function newEmptyRow(customCols: CustomColumn[]): InfluencerRow {
     follower_count: "", engagement_rate: "", niche: "", contact_status: "not_contacted",
     stage: "1", agreed_rate: "", notes: "", custom, gender: "", location: "",
     social_link: "", first_name: "", contact_info: "", approval_status: "Pending",
-    transferred_date: "", approval_notes: "", decline_reason: "", tier: "Bronze",
+    transferred_date: "", approval_notes: "", decline_reason: "", decline_notes: "", tier: "Bronze",
     community_status: "Pending", profile_image_url: "",
     created_at: new Date().toISOString(),
   }

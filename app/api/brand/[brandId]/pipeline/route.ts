@@ -27,7 +27,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
-import { prisma } from "@/lib/prisma"
+import { prisma, withDbRetry } from "@/lib/prisma"
 import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 
 // ─── Pipeline status derivation ───────────────────────────────────────────────
@@ -110,7 +110,19 @@ export async function GET(
     //
     // MySQL will use the (brand_id, approval_status) composite index for the
     // Approved/Declined branches and (brand_id, contact_status) for the rest.
-    const brandInfluencers = await prisma.brandInfluencer.findMany({
+    // Wrapped in withDbRetry, like /api/brands/me already is.
+    //
+    // This is the heaviest read on the board and it had no retry at all, so a
+    // momentary pool exhaustion — three connections shared with the brands and
+    // subscription reads the same page fires on mount — surfaced immediately as
+    // a 503 and a red console error. Two short in-request retries (150ms, then
+    // 300ms) ride out the common case, where a pooled connection frees up
+    // within a few hundred ms, without the client ever seeing a failure.
+    //
+    // This does NOT paper over a real outage: withDbRetry only retries errors
+    // isTransientDbError recognises, and a genuine exhaustion still exits to
+    // the databaseCapacityResponse() 503 below.
+    const brandInfluencers = await withDbRetry(() => prisma.brandInfluencer.findMany({
       where: {
         brand_id: brandId,
         // ── Embedded auth: only returns rows if this brand belongs to the user ──
@@ -145,6 +157,7 @@ export async function GET(
         product_details: true,
         approval_status: true,
         approval_notes:  true,
+        decline_notes:   true,
         agreed_rate:     true,
         currency:        true,
         deliverables:    true,
@@ -205,7 +218,7 @@ export async function GET(
       ...(cursor
         ? { skip: 1, cursor: { id: cursor } }
         : {}),
-    })
+    }))
 
     if (brandInfluencers.length === 0 && !cursor) {
       const access = await prisma.brand.findFirst({
@@ -283,6 +296,7 @@ export async function GET(
           contentPosted:   bi.content_posted,
           approvalStatus:  bi.approval_status,
           approvalNotes:   bi.approval_notes,   // doubles as NI reason
+          declineNotes:    bi.decline_notes,    // free text, "Others" declines only
 
           agreedRate:      bi.agreed_rate    ? Number(bi.agreed_rate)    : null,
           currency:        bi.currency,

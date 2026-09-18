@@ -52,6 +52,8 @@ export interface PipelineInfluencer {
   approvalStatus: string | null
   approvalNotes: string | null
   niReason?: string
+  /** Free-text explanation stored alongside an "Others" decline. */
+  declineNotes?: string | null
   addressReceived?: boolean
   agreedRate: number | null
   currency: string | null
@@ -86,6 +88,8 @@ interface UsePipelineDataReturn {
     newStatus: string,
     extra?: {
     niReason?: string
+    /** Free-text explanation, sent only with an "Others" decline. */
+    declineNotes?: string
     collaborationType?: string
     /**
      * Skip marking the OTHER views stale after this row succeeds.
@@ -98,6 +102,12 @@ interface UsePipelineDataReturn {
     deferDerivedInvalidation?: boolean
   }
   ) => Promise<boolean>
+  /**
+   * The server's message from the last failed updateStatus, or null.
+   * Read straight after an `updateStatus` that returned false, so the caller
+   * can show the actual reason instead of a flat "Failed to move".
+   */
+  lastUpdateError: { readonly current: string | null }
   /** True while at least one status write is in flight — drives the saving indicator. */
   isSaving: boolean
   /** True when the write that just finished failed, so the pill skips "Saved". */
@@ -136,6 +146,7 @@ function mapItem(item: any): PipelineInfluencer {
     approvalStatus:  item.approvalStatus ?? null,
     approvalNotes:   item.approvalNotes  ?? null,
     niReason:        item.approvalNotes  || undefined,
+    declineNotes:    item.declineNotes   ?? null,
     addressReceived: false,
     agreedRate:      item.agreedRate     ?? null,
     currency:        item.currency       ?? null,
@@ -162,27 +173,38 @@ function applyStatusChange(
   item: PipelineInfluencer,
   newStatus: string,
   niReason?: string,
-  collaborationType?: string
+  collaborationType?: string,
+  declineNotes?: string
 ): PipelineInfluencer {
   const collab = collaborationType !== undefined ? { collabType: collaborationType } : {}
 
+  // Undoing a decline clears the decline reason, mirroring what the PATCH route
+  // writes. Without this the row keeps `niReason`/`declineNotes` through the
+  // spread in every branch below, so the card kept showing its old "Fee too
+  // low / unpaid" pill after being moved back into the funnel — until the next
+  // refetch replaced it with the server's (correctly cleared) value.
+  const clearedDecline =
+    item.pipelineStatus === "Not Interested" && newStatus !== "Not Interested"
+      ? { approvalNotes: null, niReason: undefined, declineNotes: null }
+      : {}
+
   switch (newStatus) {
     case "For Outreach":
-      return { ...item, pipelineStatus: newStatus, ...collab, contactStatus: "pending",           stage: 1, approvalStatus: "Approved" }
+      return { ...item, pipelineStatus: newStatus, ...collab, ...clearedDecline, contactStatus: "pending",           stage: 1, approvalStatus: "Approved" }
     case "Contacted":
-      return { ...item, pipelineStatus: newStatus, ...collab, contactStatus: "contacted",         stage: 2, approvalStatus: "Approved" }
+      return { ...item, pipelineStatus: newStatus, ...collab, ...clearedDecline, contactStatus: "contacted",         stage: 2, approvalStatus: "Approved" }
     case "In Conversation":
-      return { ...item, pipelineStatus: newStatus, ...collab, contactStatus: "negotiating",       stage: 3, approvalStatus: "Approved" }
+      return { ...item, pipelineStatus: newStatus, ...collab, ...clearedDecline, contactStatus: "negotiating",       stage: 3, approvalStatus: "Approved" }
     case "Deal Agreed":
       // A Collaboration Type is only ever sent alongside "Deal Agreed" once
       // the user confirms it in the modal — at that point the deal cascades
       // straight through to Post Tracker's default status (stage 5), matching
       // what the server now does, instead of resting at "Deal Agreed" first.
       return collaborationType !== undefined
-        ? { ...item, pipelineStatus: "For Order Creation", ...collab, contactStatus: "for_order_creation", stage: 5, approvalStatus: "Approved" }
-        : { ...item, pipelineStatus: newStatus, contactStatus: "agreed", stage: 4, approvalStatus: "Approved" }
+        ? { ...item, pipelineStatus: "For Order Creation", ...collab, ...clearedDecline, contactStatus: "for_order_creation", stage: 5, approvalStatus: "Approved" }
+        : { ...item, pipelineStatus: newStatus, ...clearedDecline, contactStatus: "agreed", stage: 4, approvalStatus: "Approved" }
     case "For Order Creation":
-      return { ...item, pipelineStatus: newStatus, ...collab, contactStatus: "for_order_creation",stage: 5, approvalStatus: "Approved" }
+      return { ...item, pipelineStatus: newStatus, ...collab, ...clearedDecline, contactStatus: "for_order_creation",stage: 5, approvalStatus: "Approved" }
     case "Not Interested":
       return {
         ...item, pipelineStatus: newStatus,
@@ -191,6 +213,10 @@ function applyStatusChange(
         approvalStatus: "Declined",
         approvalNotes:  niReason || "Not interested",
         niReason:       niReason || "Not interested",
+        // Mirrors the server: written on every NI move, so re-declining with a
+        // predefined reason clears a stale "Others" explanation rather than
+        // leaving the old prose on screen until the next refetch.
+        declineNotes:   declineNotes?.trim() || null,
       }
     default:
       return { ...item, pipelineStatus: newStatus }
@@ -501,6 +527,15 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
 
   const data = cached ?? EMPTY_PIPELINE
 
+  /**
+   * The server's own message from the most recent failed updateStatus.
+   *
+   * A ref, not state: it is read synchronously right after the awaited call
+   * that set it, and nothing renders from it, so making it state would only
+   * add a render.
+   */
+  const lastUpdateErrorRef = useRef<string | null>(null)
+
   // ── Status update — optimistic, no loading flicker ────────────────────────
   const updateStatus = useCallback(
     async (
@@ -508,6 +543,8 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
       newStatus: string,
       extra?: {
         niReason?: string
+        /** Free-text explanation, sent only with an "Others" decline. */
+        declineNotes?: string
         collaborationType?: string
         /**
          * Skip marking the OTHER views stale after this row succeeds.
@@ -546,7 +583,7 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
         // twice, and it put a side effect inside a function whose only job is
         // to compute the next value.
         return prev.map((item) =>
-          item.id === id ? applyStatusChange(item, newStatus, extra?.niReason, extra?.collaborationType) : item
+          item.id === id ? applyStatusChange(item, newStatus, extra?.niReason, extra?.collaborationType, extra?.declineNotes) : item
         )
       })
 
@@ -631,6 +668,7 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
           body: JSON.stringify({
             pipelineStatus: newStatus,
             ...(extra?.niReason ? { niReason: extra.niReason } : {}),
+            ...(extra?.declineNotes ? { declineNotes: extra.declineNotes } : {}),
             ...(extra?.collaborationType !== undefined ? { collaborationType: extra.collaborationType } : {}),
           }),
         })
@@ -640,9 +678,17 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
           // isn't the only signal the user gets.
           const err = await res.json().catch(() => ({}))
           console.error(`[pipeline] PATCH ${id} → ${newStatus} failed (${res.status}):`, err.error || res.statusText)
+          // Kept for the caller's toast. The boolean this returns cannot carry
+          // WHY, and the two rejections the user can act on read very
+          // differently: a 409 names the stage they must move through first, a
+          // 503 says the database is momentarily busy and to retry. Without
+          // this both surfaced as the same flat "Failed to move".
+          lastUpdateErrorRef.current =
+            typeof err?.error === "string" && err.error ? err.error : null
           rollback()
           return false
         }
+        lastUpdateErrorRef.current = null
 
         // Success — this board's own entry is already correct from the optimistic
         // update, so it is excluded. Every OTHER view of these rows (Influencer
@@ -654,6 +700,7 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
         return true
       } catch (err) {
         console.error(`[pipeline] PATCH ${id} → ${newStatus} failed:`, err)
+        lastUpdateErrorRef.current = null
         rollback()
         return false
       } finally {
@@ -690,6 +737,13 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
      */
     hasGivenUp,
     updateStatus,
+    /**
+     * The server's message from the last failed updateStatus, or null.
+     * Read straight after an `updateStatus` that returned false, so the caller
+     * can show the actual reason (a 409's "move to X first", a 503's "retry in
+     * a moment") instead of a flat "Failed to move".
+     */
+    lastUpdateError: lastUpdateErrorRef,
     isSaving: pendingWrites > 0,
     saveFailed,
     saveMessage,

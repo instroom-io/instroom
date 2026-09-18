@@ -36,6 +36,7 @@ import { HistoryTab, LastEditedBy } from "@/components/InfluencerProfileSidebar"
 import { PaidCollabTab } from "@/components/table-sheet/profile-sidebar"
 import { BoardSkeleton } from "@/components/shared/skeletons"
 import { StageDropdown, type StageOption } from "@/components/shared/stage-dropdown"
+import { StageActionButton } from "@/components/shared/stage-action-button"
 import AutoPostDetectionCard from "./AutoPostDetection"
 import { readDroppedPostUrl, type DetectedPost } from "./DetectedPostsList"
 import { fetchCached } from "@/lib/data-cache"
@@ -81,6 +82,13 @@ const COLUMNS: { key: ClosedColumn; title: string; color: string; description: s
     description: "No content was published. Product was sent but the influencer did not post. Flag for follow-up or mark as a loss.",
     terminal: true,
   },
+  {
+    key:   "Issues",
+    title: "Issues",
+    color: "bg-purple-500",
+    description: "Something has gone wrong with this campaign — a failed or returned delivery, a wrong address, a damaged item, or another blocker. The influencer is still in the campaign; resolve the issue and move them back into the flow.",
+    move: "Move back to the stage the campaign should resume from once the issue is resolved.",
+  },
 ]
 
 // Badge colours for the stage dropdown — the soft 100/800 shades the Pipeline
@@ -92,6 +100,7 @@ const STAGE_BADGE_CLASS: Record<ClosedColumn, string> = {
   "Delivered":          "bg-cyan-100 text-cyan-800 border-cyan-300",
   "Posted":             "bg-emerald-100 text-emerald-900 border-emerald-400",
   "No post":            "bg-red-100 text-red-800 border-red-300",
+  "Issues":             "bg-purple-100 text-purple-800 border-purple-300",
 }
 
 // Options for the shared badge dropdown (same component the Pipeline uses)
@@ -123,6 +132,10 @@ const STAGE_RANK: Record<ClosedColumn, number> = {
   "Delivered":          2,
   "Posted":             3,
   "No post":            4,
+  // Off the linear fulfilment scale — "Issues" is a side state, not a step
+  // further along it. Ranked above the exits so canQuickMarkNoPost stays true
+  // for a row parked here (a stalled delivery can still end as a no-post).
+  "Issues":             5,
 }
 
 // "No post" is only a meaningful outcome once the product has actually landed,
@@ -206,6 +219,10 @@ const NEXT_STAGE: Record<ClosedColumn, ClosedColumn | null> = {
   "Delivered":          "Posted",
   "Posted":             null,
   "No post":            null,
+  // No single forward step: a resolved issue resumes at whichever stage the
+  // campaign had actually reached, which only the user knows. The card shows
+  // no quick-advance button here — the dropdown and drag are the way out.
+  "Issues":             null,
 }
 
 // Canonical Collaboration Type list — same ids/labels as the Pipeline board's
@@ -392,8 +409,14 @@ function ColumnInfoTooltip({ colKey, variant }: { colKey: ClosedColumn; variant:
   const col = COLUMNS.find(c => c.key === colKey)
   if (!col) return null
 
-  const borderColor = variant === "dark" ? "border-white/60" : "border-red-400/60"
-  const textColor   = variant === "dark" ? "text-white"      : "text-red-700"
+  // The "light" variant is used on the two soft-header columns past the Exit
+  // boundary, which are not the same colour — No post is red, Issues purple —
+  // so it takes its tint from the column rather than assuming red.
+  const isIssues    = colKey === "Issues"
+  const borderColor = variant === "dark" ? "border-white/60"
+                    : isIssues ? "border-purple-400/60" : "border-red-400/60"
+  const textColor   = variant === "dark" ? "text-white"
+                    : isIssues ? "text-purple-700" : "text-red-700"
 
   return (
     <div className="relative group/info flex-shrink-0">
@@ -442,12 +465,23 @@ function PostTrackerCardBase({ inf, onOpen, onMove, canApproveInfluencers }: {
 }) {
   const nextStage  = NEXT_STAGE[inf.closedStatus]
   const isExit     = inf.closedStatus === "No post"
+  const isIssue    = inf.closedStatus === "Issues"
+  // "Issues" is deliberately NOT terminal: the row is stalled, not finished,
+  // and the whole point is that it moves back into the flow once resolved. It
+  // simply has no single forward step (NEXT_STAGE is null), so the quick-move
+  // button is absent and the dropdown or a drag is the way out.
   const isTerminal = inf.closedStatus === "Posted" || isExit
   const showNoPost = !isTerminal && canQuickMarkNoPost(inf.closedStatus)
+  // A blocker can appear at any point in fulfilment — a wrong address before
+  // shipping, a failed delivery after — so this is offered from every active
+  // stage, unlike "No post" which only makes sense once the product landed.
+  // Not offered from Issues itself (already there) or the terminal stages.
+  const showIssues = !isTerminal && !isIssue
 
   return (
     <div style={OFFSCREEN_SKIP} className={`bg-white border rounded-lg p-3 hover:shadow-md transition-shadow ${
-      isExit ? "border-red-100 bg-red-50/30" : "border-gray-200"
+      isExit ? "border-red-100 bg-red-50/30" :
+      isIssue ? "border-purple-100 bg-purple-50/30" : "border-gray-200"
     }`}>
       {/* Clickable body — same layout as pipeline card */}
       <div className="cursor-pointer" onClick={() => onOpen(inf)}>
@@ -509,31 +543,56 @@ function PostTrackerCardBase({ inf, onOpen, onMove, canApproveInfluencers }: {
               ✕ No content published
             </span>
           )}
+          {isIssue && (
+            <span className="text-[10px] text-purple-600 bg-purple-50 rounded-full px-2.5 py-1 inline-flex items-center gap-1 font-medium">
+              <IconAlertTriangle size={10}/> Needs attention
+            </span>
+          )}
         </div>
       </div>
 
-      {/* Stage action buttons — same pattern as pipeline cards */}
-      {!isTerminal && (nextStage || showNoPost) && (
-        <div className="flex gap-1.5 mt-2.5 pt-2 border-t border-gray-100 flex-nowrap">
+      {/* Stage action buttons — the shared StageActionButton, same component the
+          pipeline cards use. `nextStage` is computed per card, so the tooltip
+          names the status this post actually advances to.
+
+          flex-wrap, not nowrap: a Delivered card now carries three actions
+          (advance, Issues, No post) and at a 240px column width three
+          truncated labels are unreadable. They wrap to a second line instead,
+          each staying wide enough to read. */}
+      {!isTerminal && (nextStage || showNoPost || showIssues) && (
+        <div className="flex flex-wrap gap-1.5 mt-2.5 pt-2 border-t border-gray-100">
           {nextStage && (
-            <button
-              onClick={e => { e.stopPropagation(); if (!canApproveInfluencers) return; onMove(inf.id, nextStage) }}
+            <StageActionButton
+              destination={nextStage}
+              label={`Move post to ${nextStage}`}
+              tone="forward"
               disabled={!canApproveInfluencers}
-              title={!canApproveInfluencers ? "Only Owners and Managers can update post status" : undefined}
-              className="text-[11px] font-medium px-2 py-1 rounded-full border bg-[#EAF7EF] text-[#0F6B3E] border-[#bfe5cf] hover:bg-[#d7f0e0] transition flex items-center gap-1 min-w-0 flex-1 justify-center disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              <IconArrowRight size={11} className="flex-shrink-0"/> <span className="truncate">{nextStage}</span>
-            </button>
+              disabledReason="Only Owners and Managers can update post status"
+              icon={<IconArrowRight size={11} className="flex-shrink-0"/>}
+              onClick={e => { e.stopPropagation(); if (!canApproveInfluencers) return; onMove(inf.id, nextStage) }}
+            />
+          )}
+          {showIssues && (
+            <StageActionButton
+              destination="Issues"
+              label="Move post to Issues"
+              tone="warning"
+              disabled={!canApproveInfluencers}
+              disabledReason="Only Owners and Managers can update post status"
+              icon={<IconAlertTriangle size={11} className="flex-shrink-0"/>}
+              onClick={e => { e.stopPropagation(); if (!canApproveInfluencers) return; onMove(inf.id, "Issues") }}
+            />
           )}
           {showNoPost && (
-            <button
-              onClick={e => { e.stopPropagation(); if (!canApproveInfluencers) return; onMove(inf.id, "No post") }}
+            <StageActionButton
+              destination="No post"
+              label="Move post to No post"
+              tone="danger"
               disabled={!canApproveInfluencers}
-              title={!canApproveInfluencers ? "Only Owners and Managers can update post status" : undefined}
-              className="text-[11px] font-medium px-2 py-1 rounded-full border bg-red-50 text-red-600 border-red-200 hover:bg-red-100 transition flex items-center gap-1 min-w-0 flex-1 justify-center disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              <IconX size={11} className="flex-shrink-0"/> <span className="truncate">No post</span>
-            </button>
+              disabledReason="Only Owners and Managers can update post status"
+              icon={<IconX size={11} className="flex-shrink-0"/>}
+              onClick={e => { e.stopPropagation(); if (!canApproveInfluencers) return; onMove(inf.id, "No post") }}
+            />
           )}
         </div>
       )}
@@ -576,7 +635,10 @@ function DraggableCard({ id, children, onClick, disabled }: { id: string; childr
 
 // ─── Profile Drawer — structure mirrors Pipeline's InfluencerProfileSidebar ──
 // Tabs: Basic, Order, Post, Stats, History (same names/order/behavior as Pipeline).
-const STAGE_OPTIONS: ClosedColumn[] = ["For Order Creation", "In-Transit", "Delivered", "Posted", "No post"]
+// Derived from COLUMNS rather than hand-listed, so a column added to the board
+// appears in the drawer's dropdown too. It was a separate literal, which is
+// exactly how a new column would have been silently missing here.
+const STAGE_OPTIONS: ClosedColumn[] = COLUMNS.map((c) => c.key)
 const PROFILE_TABS = ["Basic", "Order", "Post", "Stats", "Paid collab details", "History"]
 
 // The Order tab's "Order Status" field is the same underlying stage as the
@@ -991,15 +1053,19 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                   disabled={!canApproveInfluencers}
                   title={!canApproveInfluencers ? "Only Owners and Managers can update post status" : undefined}
                   style={{
-                    borderColor: inf.closedStatus === "No post" ? "#fca5a5" : undefined,
-                    background:  inf.closedStatus === "No post" ? "#fef2f2" : undefined,
-                    color:       inf.closedStatus === "No post" ? "#dc2626" : undefined,
+                    borderColor: inf.closedStatus === "No post" ? "#fca5a5" : inf.closedStatus === "Issues" ? "#d8b4fe" : undefined,
+                    background:  inf.closedStatus === "No post" ? "#fef2f2" : inf.closedStatus === "Issues" ? "#faf5ff" : undefined,
+                    color:       inf.closedStatus === "No post" ? "#dc2626" : inf.closedStatus === "Issues" ? "#7e22ce" : undefined,
                     opacity:     canApproveInfluencers ? undefined : 0.5,
                     cursor:      canApproveInfluencers ? undefined : "not-allowed",
                   }}
                 >
                   {STAGE_OPTIONS.map((s) => (
-                    <option key={s} value={s} style={s === "No post" ? { color: "#dc2626", fontWeight: 600 } : undefined}>
+                    <option key={s} value={s} style={
+                      s === "No post" ? { color: "#dc2626", fontWeight: 600 }
+                      : s === "Issues" ? { color: "#7e22ce", fontWeight: 600 }
+                      : undefined
+                    }>
                       {s}
                     </option>
                   ))}
@@ -2001,7 +2067,9 @@ function PostTrackerContent() {
             <div className="flex gap-4 min-w-max">
 
               {/* Main columns */}
-              {COLUMNS.filter(c=>c.key!=="No post").map((col, colIndex) => {
+              {/* The two hand-placed columns are excluded here and rendered after the
+                  Exit separator below, in order: No post, then Issues. */}
+              {COLUMNS.filter(c=>c.key!=="No post"&&c.key!=="Issues").map((col, colIndex) => {
                 const items = getItemsByColumn(col.key)
                 return (
                   <div key={col.key} className="w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0" style={{ scrollSnapAlign: "start", height: columnHeight ?? undefined }}>
@@ -2067,6 +2135,43 @@ function PostTrackerContent() {
                       <div className="flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto mt-2 pr-1">
                         {items.length===0?(
                           <div className="border-2 border-dashed border-red-200 rounded-lg p-4 text-center text-xs text-gray-400">Drop here</div>
+                        ):items.map(inf=>(
+                          <DraggableCard key={inf.id} id={inf.id} onClick={()=>setSelectedInf(inf)} disabled={!canApprove}>
+                            <PostTrackerCard inf={inf} onOpen={setSelectedInf} onMove={handleMove} canApproveInfluencers={canApprove}/>
+                          </DraggableCard>
+                        ))}
+                      </div>
+                    </DroppableColumn>
+                  </div>
+                )
+              })()}
+
+              {/* Issues — to the right of No post, past the Exit boundary.
+                  Styled like the No post column (soft header, not the solid
+                  bars the active stages use) because both sit outside the
+                  forward flow, but purple rather than red: a row here is
+                  stalled, not finished, and is expected to come back. */}
+              {(()=>{
+                const col   = COLUMNS.find(c=>c.key==="Issues")!
+                const items = getItemsByColumn(col.key)
+                return (
+                  <div className="w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0" style={{ scrollSnapAlign: "start", height: columnHeight ?? undefined }}>
+                    <DroppableColumn id={col.key}>
+                      <div className="bg-purple-100 text-purple-700 border border-purple-200 rounded-lg px-3 py-2 text-sm font-semibold flex items-center justify-between">
+                        <span
+                          onClick={() => handleColumnClick(col)}
+                          className="flex-1 cursor-pointer hover:opacity-90 transition-opacity truncate mr-2"
+                        >
+                          {col.title}
+                        </span>
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          <ColumnInfoTooltip colKey={col.key} variant="light" />
+                          <span className="bg-purple-200 text-purple-700 rounded-full px-2 py-0.5 text-xs">{items.length}</span>
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto mt-2 pr-1">
+                        {items.length===0?(
+                          <div className="border-2 border-dashed border-purple-200 rounded-lg p-4 text-center text-xs text-gray-400">Drop here</div>
                         ):items.map(inf=>(
                           <DraggableCard key={inf.id} id={inf.id} onClick={()=>setSelectedInf(inf)} disabled={!canApprove}>
                             <PostTrackerCard inf={inf} onOpen={setSelectedInf} onMove={handleMove} canApproveInfluencers={canApprove}/>

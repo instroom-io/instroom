@@ -20,6 +20,12 @@ type UseInfluencerDataReturn = {
   customColumns: CustomColumn[]
   isLoading: boolean
   error: string | null
+  /**
+   * True only once a read has failed AND no automatic retry is still coming.
+   * Gate visible failure UI on this, not on `error` — a transient blip is
+   * still being retried silently. Same contract as usePipelineData.
+   */
+  hasGivenUp: boolean
   refetch: () => Promise<void>
   setRows: React.Dispatch<React.SetStateAction<InfluencerRow[]>>
   setCustomColumns: React.Dispatch<React.SetStateAction<CustomColumn[]>>
@@ -104,6 +110,7 @@ export async function fetchInfluencerPayload(brandId: string): Promise<Influence
             | "Declined"
             | "Pending",
           approval_notes: item.approval_notes ?? "",
+          decline_notes: item.decline_notes ?? "",
           transferred_date: item.transferred_date
             ? new Date(item.transferred_date).toISOString().split("T")[0]
             : "",
@@ -152,7 +159,7 @@ export function useInfluencerData(brandId: string | null): UseInfluencerDataRetu
 
   const fetchPayload = useCallback(() => fetchInfluencerPayload(brandId!), [brandId])
 
-  const { data, error, isLoading, refetch } = useCachedFetch<InfluencerPayload>(
+  const { data, error, isLoading, hasGivenUp, refetch } = useCachedFetch<InfluencerPayload>(
     cacheKey,
     fetchPayload
   )
@@ -210,6 +217,15 @@ export function useInfluencerData(brandId: string | null): UseInfluencerDataRetu
     customColumns,
     isLoading,
     error: brandId ? error : "No brand selected",
+    /**
+     * True only once a read has failed AND no automatic retry is still coming.
+     *
+     * Gate any visible failure UI on this rather than on `error`: while the
+     * bounded retry is still running there is nothing for the user to do, and
+     * a transient blip would otherwise flash a message that clears itself.
+     * Same contract as usePipelineData/useClosedData.
+     */
+    hasGivenUp,
     refetch: async () => {
       await refetch()
     },

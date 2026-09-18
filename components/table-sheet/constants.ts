@@ -71,6 +71,20 @@ export const INSTROOM_PROFILE_ENDPOINTS: Record<string, (username: string) => st
   tiktok:    (u) => `${INSTROOM_API_BASE_URL}/${u}/tiktok`,
 }
 
+/**
+ * How long a profile lookup may run before it is abandoned.
+ *
+ * The lookup had no timeout at all, so a host that accepted the connection and
+ * then never answered — an unreachable backend, a hung proxy — left the request
+ * pending for as long as the browser allowed, and the row's spinner with it.
+ *
+ * 15s is generous for this call (the provider normally answers in one to three)
+ * while still bounded. It matches the scale of the other outbound timeouts in
+ * the app: lib/ensembledata.ts and lib/ghl.ts use AbortSignal.timeout the same
+ * way.
+ */
+export const PROFILE_LOOKUP_TIMEOUT_MS = 15_000
+
 export const FIELD_TYPE_INFO: Record<string, { description: string; example: string }> = {
   text:          { description: "Free-form text input for any value",              example: 'e.g., "Prefers email contact"' },
   number:        { description: "Numeric values only — great for metrics",         example: "e.g., CPM rate, post count" },

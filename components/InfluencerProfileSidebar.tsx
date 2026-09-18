@@ -3,7 +3,8 @@
 import { useState, useEffect } from "react"
 import { EmailModal } from "@/components/shared/email-modal"
 import { ProfilePicture } from "@/components/table-sheet/ui-atoms"
-import { getProfileUrl } from "@/components/table-sheet/utils"
+import { DeclineModal } from "@/components/shared/decline-modal"
+import { allowedTransitions } from "@/lib/pipeline-transitions"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface MonthlyData {
@@ -240,23 +241,6 @@ export function LastEditedBy({ brandId, biId }: { brandId?: string; biId?: strin
   )
 }
 
-// ─── NI Reasons ───────────────────────────────────────────────────────────────
-const NI_REASONS = [
-  { r: "Fee too low / unpaid",                  bucket: "hard", color: "#E24B4A" },
-  { r: "Brief too scripted",                    bucket: "hard", color: "#E8724A" },
-  { r: "Won't allow content reuse",             bucket: "hard", color: "#F4A240" },
-  { r: "Working with a competitor",             bucket: "hard", color: "#C97B3A" },
-  { r: "Product doesn't fit their brand",       bucket: "hard", color: "#888780" },
-  { r: "Wrong audience fit",                    bucket: "hard", color: "#6B7F7A" },
-  { r: "Seen bad reviews about us",             bucket: "hard", color: "#A32D2D" },
-  { r: "Fully booked",                          bucket: "soft", color: "#2C8EC4" },
-  { r: "Temporarily unavailable / can't shoot", bucket: "soft", color: "#5BAFD4" },
-  { r: "Can't ship to their location",          bucket: "soft", color: "#7DC4E4" },
-  { r: "Ghosted / no longer active",            bucket: "soft", color: "#B4B2A9" },
-  { r: "Rate / deadline too tight",             bucket: "soft", color: "#F4B740" },
-  { r: "Others",                                bucket: "hard", color: "#D3D1C7" },
-]
-
 // ─── Collaboration Types (from DTC "Final clean list") ────────────────────────
 const COLLAB_TYPES = [
   { value: "Gifting",            implied: "Product sent, no payment, no commission" },
@@ -295,134 +279,6 @@ const COLLAB_COLORS: Record<string, { bg: string; color: string; border: string 
 }
 
 // ─── NI Modal ────────────────────────────────────────────────────────────────
-function NIModal({
-  partnerName,
-  handle,
-  profileImageUrl,
-  onConfirm,
-  onCancel,
-}: {
-  partnerName:      string
-  handle:           string
-  profileImageUrl?: string | null
-  onConfirm:        (reason: string) => void
-  onCancel:         () => void
-}) {
-  const [sel, setSel] = useState<string | null>(null)
-  const hard     = NI_REASONS.filter((r) => r.bucket === "hard")
-  const soft     = NI_REASONS.filter((r) => r.bucket === "soft")
-  const initials = partnerName.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()
-
-  return (
-    <div
-      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 600, display: "flex", alignItems: "center", justifyContent: "center" }}
-      onClick={onCancel}
-    >
-      <div
-        style={{ background: "#fff", borderRadius: 16, boxShadow: "0 20px 60px rgba(0,0,0,0.2)", width: 780, maxWidth: "95vw", maxHeight: "90vh", overflowY: "auto", fontFamily: "'Inter',system-ui,sans-serif" }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", padding: "24px 28px 16px", borderBottom: "1px solid #f3f4f6" }}>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: "#111827" }}>Mark as not interested</div>
-            <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 3 }}>Select the reason why this influencer declined or is not moving forward.</div>
-          </div>
-          <button onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#9ca3af", lineHeight: 1, padding: 4 }}>✕</button>
-        </div>
-
-        {/* Influencer info */}
-        <div style={{ padding: "20px 28px 0" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, background: "#f9fafb", borderRadius: 12, padding: "12px 16px", border: "1px solid #f3f4f6" }}>
-            {profileImageUrl ? (
-              <img src={profileImageUrl} alt={partnerName} style={{ width: 36, height: 36, borderRadius: "50%", objectFit: "cover" }} />
-            ) : (
-              <div style={{ width: 36, height: 36, borderRadius: "50%", background: "#fee2e2", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, color: "#dc2626" }}>
-                {initials}
-              </div>
-            )}
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#111827" }}>{partnerName}</div>
-              <div style={{ fontSize: 12, color: "#9ca3af" }}>{handle}</div>
-            </div>
-          </div>
-        </div>
-
-        {/* Reasons grid */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px", padding: "20px 28px 12px" }}>
-          {/* Hard pass */}
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-              <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "#b91c1c" }}>Hard pass</span>
-              <span style={{ fontSize: 10, color: "#9ca3af" }}>— don't reach out soon</span>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {hard.map((reason) => (
-                <button key={reason.r} onClick={() => setSel(reason.r)}
-                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderRadius: 12, border: sel === reason.r ? "1.5px solid #f87171" : "1px solid #f3f4f6", background: sel === reason.r ? "#fef2f2" : "#fff", cursor: "pointer", textAlign: "left", transition: "all .15s" }}>
-                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: reason.color, flexShrink: 0 }} />
-                  <span style={{ fontSize: 13, color: "#374151", flex: 1, lineHeight: 1.4 }}>{reason.r}</span>
-                  {sel === reason.r && (
-                    <span style={{ width: 16, height: 16, borderRadius: "50%", background: "#ef4444", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                      <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 4L3.2 5.7L6.5 2.3" stroke="white" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Soft pass */}
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-              <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "#1d4ed8" }}>Soft pass</span>
-              <span style={{ fontSize: 10, color: "#9ca3af" }}>— follow up next campaign</span>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {soft.map((reason) => (
-                <button key={reason.r} onClick={() => setSel(reason.r)}
-                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderRadius: 12, border: sel === reason.r ? "1.5px solid #93c5fd" : "1px solid #f3f4f6", background: sel === reason.r ? "#eff6ff" : "#fff", cursor: "pointer", textAlign: "left", transition: "all .15s" }}>
-                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: reason.color, flexShrink: 0 }} />
-                  <span style={{ fontSize: 13, color: "#374151", flex: 1, lineHeight: 1.4 }}>{reason.r}</span>
-                  {sel === reason.r && (
-                    <span style={{ width: 16, height: 16, borderRadius: "50%", background: "#3b82f6", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                      <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 4L3.2 5.7L6.5 2.3" stroke="white" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-
-            {sel && (
-              <div style={{ marginTop: 12, padding: "10px 14px", background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6" }}>
-                <div style={{ fontSize: 10, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 2 }}>Selected reason</div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>{sel}</div>
-                <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
-                  {NI_REASONS.find((r) => r.r === sel)?.bucket === "soft"
-                    ? "This influencer can be re-approached in a future campaign."
-                    : "This influencer should not be contacted again soon."}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "16px 28px", borderTop: "1px solid #f3f4f6" }}>
-          <button onClick={onCancel}
-            style={{ padding: "8px 16px", fontSize: 13, color: "#6b7280", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, cursor: "pointer", fontFamily: "inherit" }}>
-            Cancel
-          </button>
-          <button onClick={() => sel && onConfirm(sel)} disabled={!sel}
-            style={{ padding: "8px 20px", fontSize: 13, fontWeight: 600, color: "#fff", background: sel ? "#ef4444" : "#fca5a5", border: "none", borderRadius: 8, cursor: sel ? "pointer" : "not-allowed", fontFamily: "inherit", transition: "background .15s" }}>
-            Confirm
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function formatMoney(v: number) { return "$" + Math.round(v).toLocaleString() }
 function formatROAS(rev: number, spend: number) { return spend > 0 ? (rev / spend).toFixed(1) + "x" : "—" }
@@ -437,14 +293,7 @@ function fmt(n: number | null | undefined): string {
   return String(num)
 }
 
-const PIPELINE_STAGES = [
-  "For Outreach",
-  "Contacted",
-  "In Conversation",
-  "Deal Agreed",
-  "For Order Creation",
-  "Not Interested",
-]
+
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function InfluencerProfileSidebar({
@@ -459,7 +308,7 @@ export default function InfluencerProfileSidebar({
   campaigns:                Campaign[]
   allPartners:              Partner[]
   onClose:                  () => void
-  onPipelineStatusChange?:  (biId: string, newStatus: string, niReason?: string) => void
+  onPipelineStatusChange?:  (biId: string, newStatus: string, niReason?: string, declineNotes?: string) => void
   /** Optional: called when collab type is changed, so parent can persist the value */
   onCollabTypeChange?:      (biId: string, newType: string) => void
 }) {
@@ -598,11 +447,11 @@ export default function InfluencerProfileSidebar({
     }
   }
 
-  const handleNIConfirm = (reason: string) => {
+  const handleNIConfirm = (reason: string, declineNotes?: string) => {
     setShowNIModal(false)
     setPipelineStatus("Not Interested")
     if (onPipelineStatusChange && partner.brandInfluencerId) {
-      onPipelineStatusChange(partner.brandInfluencerId, "Not Interested", reason)
+      onPipelineStatusChange(partner.brandInfluencerId, "Not Interested", reason, declineNotes)
     }
   }
 
@@ -621,8 +470,8 @@ export default function InfluencerProfileSidebar({
 
       {/* ── NI Modal ── */}
       {showNIModal && (
-        <NIModal
-          partnerName={`${partner.firstName} ${partner.lastName}`.trim() || partner.handle}
+        <DeclineModal
+          name={`${partner.firstName} ${partner.lastName}`.trim() || partner.handle}
           handle={partner.handle}
           profileImageUrl={partner.profileImageUrl ?? null}
           onConfirm={handleNIConfirm}
@@ -681,7 +530,22 @@ export default function InfluencerProfileSidebar({
                     color:       pipelineStatus === "Not Interested" ? "#dc2626" : undefined,
                   }}
                 >
-                  {PIPELINE_STAGES.map((s) => (
+                  {/* The current stage, plus only the stages it may actually
+                      move to (lib/pipeline-transitions.ts) — the same rule the
+                      card's quick-move buttons render and the PATCH route
+                      enforces.
+
+                      This listed all six stages unconditionally, which is how
+                      the panel could move a row from "For Outreach" straight to
+                      "For Order Creation" — a jump the card refuses. The
+                      current stage is always present so the select has a value
+                      to show; it is disabled because re-selecting it is a
+                      no-op. */}
+                  <option value={pipelineStatus} disabled
+                    style={pipelineStatus === "Not Interested" ? { color: "#dc2626", fontWeight: 600 } : undefined}>
+                    {pipelineStatus}
+                  </option>
+                  {allowedTransitions(pipelineStatus).map((s) => (
                     <option key={s} value={s}
                       style={s === "Not Interested" ? { color: "#dc2626", fontWeight: 600 } : undefined}>
                       {s}

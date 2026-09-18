@@ -5,7 +5,7 @@ import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma, timeStep } from "@/lib/prisma"
 import { hasBrandCapability } from "@/lib/permissions"
-import { mapClosedToPipelineFields, parseMetricInput, type ClosedColumn } from "@/lib/post-tracker-status"
+import { mapClosedToPipelineFields, parseMetricInput, isClosedColumn, type ClosedColumn } from "@/lib/post-tracker-status"
 
 // ✅ Safe JSON parse
 function safeParse(value: string | null) {
@@ -76,16 +76,9 @@ export async function PATCH(
       scriptStatus, contentStatus,
     } = body
 
-    // ✅ Validate closedStatus
-    const validStatuses: ClosedColumn[] = [
-      "For Order Creation",
-      "In-Transit",
-      "Delivered",
-      "Posted",
-      "No post",
-    ]
-
-    if (closedStatus && !validStatuses.includes(closedStatus)) {
+    // ✅ Validate closedStatus against the canonical list (post-tracker-status.ts),
+    // not a copy kept here — a column added there is accepted here immediately.
+    if (closedStatus && !isClosedColumn(closedStatus)) {
       return NextResponse.json(
         { error: "Invalid closedStatus" },
         { status: 400 }
