@@ -196,9 +196,46 @@ const TRANSIENT_DB_CODES = new Set([
            // few more chances beyond that before surfacing a 500).
 ])
 
+/**
+ * The same failures as TRANSIENT_DB_CODES, matched on text.
+ *
+ * NOT redundant with the codes above. A P1001 raised while OPENING the
+ * connection arrives as a PrismaClientInitializationError whose `code` is
+ * undefined — measured against this database, where a findUnique against an
+ * unreachable host produced exactly that: `code: undefined`, name
+ * `PrismaClientInitializationError`, message "Can't reach database server at
+ * <host>:3306". So the code-only test below silently never matched the single
+ * most common transient failure this host produces, and withDbRetry never
+ * actually retried the case it was written for.
+ *
+ * lib/db-capacity.ts had already hit this for MySQL 1203 and documents the
+ * same reason for matching on the message there.
+ */
+const TRANSIENT_DB_MESSAGES = [
+  "Can't reach database server",
+  "the database server was closed",
+  "Server has closed the connection",
+]
+
+/**
+ * Is this the connection failing rather than the query being wrong?
+ *
+ * Deliberately narrow: only "we never got to run it" failures. A constraint
+ * violation, a missing column or a validation error is NOT transient and must
+ * keep failing immediately — retrying those just delays the same error.
+ *
+ * Exported so routes can give this a 503 ("try again") instead of a 500
+ * ("you did something wrong") without each one re-deriving the test.
+ */
+export function isDatabaseUnreachableError(error: unknown): boolean {
+  const { code, message } = (error ?? {}) as { code?: unknown; message?: unknown }
+  if (typeof code === "string" && TRANSIENT_DB_CODES.has(code)) return true
+  if (typeof message !== "string") return false
+  return TRANSIENT_DB_MESSAGES.some((fragment) => message.includes(fragment))
+}
+
 function isTransientDbError(error: unknown): boolean {
-  const code = (error as { code?: unknown })?.code
-  return typeof code === "string" && TRANSIENT_DB_CODES.has(code)
+  return isDatabaseUnreachableError(error)
 }
 
 /**

@@ -128,10 +128,19 @@ export function LoginForm({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: formData.email, password: formData.password }),
       })
-      const checkData = await checkResponse.json()
+      // Tolerates a non-JSON body. A server error page is HTML, so parsing it
+      // threw and sent the whole submit into the generic catch below — the
+      // reason an unreachable database read as "An error occurred. Please try
+      // again." instead of the server's actual, retryable message.
+      const checkData = await checkResponse.json().catch(() => ({} as { error?: string }))
 
       if (!checkResponse.ok) {
-        setError(checkData.error || "Invalid email or password")
+        setError(
+          checkData.error ||
+            (checkResponse.status >= 500
+              ? "Can't reach the server right now. Please try again in a moment."
+              : "Invalid email or password")
+        )
         setIsLoading(false)
         return
       }
