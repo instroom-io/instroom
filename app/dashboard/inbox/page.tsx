@@ -20,6 +20,7 @@ import { ListSkeleton } from "@/components/shared/skeletons"
 import { fetchCached, getCachedData, invalidateCache, useCachedFetch, useRestoredCache } from "@/lib/data-cache"
 import { useSubscriptionGate } from "@/hooks/useSubscriptionGate"
 import { invalidateInfluencerDerivedCaches } from "@/lib/cache-invalidation"
+import { usePipelineData } from "@/hooks/usePipelineData"
 import {
   IconMailPlus,
   IconMailOpened,
@@ -157,7 +158,8 @@ type Email = {
    * Outlook thread belonging to a different connected account.
    */
   accountId?: string | null
-  influencerId?: number
+  /** Matched BrandInfluencer id, if any — lets stage updates skip re-deriving the match from fromEmail. */
+  brandInfluencerId?: string
   name: string
   handle: string
   avatar: string
@@ -206,11 +208,11 @@ type StageConfig = {
 // ─── Stage Configs ────────────────────────────────────────────────────────────
 
 const stageConfigs: StageConfig[] = [
-  { id: "PROSPECT", label: "Prospects", icon: <IconUserPlus size={16} />, color: "text-gray-700", bgColor: "bg-gray-100", activeBgColor: "bg-gray-600", hoverBgColor: "hover:bg-gray-500", borderColor: "border-gray-300", arrowColor: "#f3f4f6" },
-  { id: "REACHED_OUT", label: "Reached Out", icon: <IconMessage size={16} />, color: "text-blue-700", bgColor: "bg-blue-100", activeBgColor: "bg-blue-600", hoverBgColor: "hover:bg-blue-500", borderColor: "border-blue-300", arrowColor: "#dbeafe" },
+  { id: "PROSPECT", label: "For Outreach", icon: <IconUserPlus size={16} />, color: "text-gray-700", bgColor: "bg-gray-100", activeBgColor: "bg-gray-600", hoverBgColor: "hover:bg-gray-500", borderColor: "border-gray-300", arrowColor: "#f3f4f6" },
+  { id: "REACHED_OUT", label: "Contacted", icon: <IconMessage size={16} />, color: "text-blue-700", bgColor: "bg-blue-100", activeBgColor: "bg-blue-600", hoverBgColor: "hover:bg-blue-500", borderColor: "border-blue-300", arrowColor: "#dbeafe" },
   { id: "IN_CONVERSATION", label: "In Conversation", icon: <IconMessageCircle size={16} />, color: "text-purple-700", bgColor: "bg-purple-100", activeBgColor: "bg-purple-600", hoverBgColor: "hover:bg-purple-500", borderColor: "border-purple-300", arrowColor: "#f3e8ff" },
-  { id: "ONBOARDED", label: "Onboarded", icon: <IconUserCheck size={16} />, color: "text-indigo-700", bgColor: "bg-indigo-100", activeBgColor: "bg-indigo-600", hoverBgColor: "hover:bg-indigo-500", borderColor: "border-indigo-300", arrowColor: "#e0e7ff" },
-  { id: "FOR_ORDER_CREATION", label: "For Order", icon: <IconShoppingCart size={16} />, color: "text-orange-700", bgColor: "bg-orange-100", activeBgColor: "bg-orange-600", hoverBgColor: "hover:bg-orange-500", borderColor: "border-orange-300", arrowColor: "#ffedd5" },
+  { id: "ONBOARDED", label: "Deal Agreed", icon: <IconUserCheck size={16} />, color: "text-indigo-700", bgColor: "bg-indigo-100", activeBgColor: "bg-indigo-600", hoverBgColor: "hover:bg-indigo-500", borderColor: "border-indigo-300", arrowColor: "#e0e7ff" },
+  { id: "FOR_ORDER_CREATION", label: "For Order Creation", icon: <IconShoppingCart size={16} />, color: "text-orange-700", bgColor: "bg-orange-100", activeBgColor: "bg-orange-600", hoverBgColor: "hover:bg-orange-500", borderColor: "border-orange-300", arrowColor: "#ffedd5" },
   { id: "IN_TRANSIT", label: "In-Transit", icon: <IconTruck size={16} />, color: "text-yellow-700", bgColor: "bg-yellow-100", activeBgColor: "bg-yellow-600", hoverBgColor: "hover:bg-yellow-500", borderColor: "border-yellow-300", arrowColor: "#fef9c3" },
   { id: "DELIVERED", label: "Delivered", icon: <IconPackage size={16} />, color: "text-teal-700", bgColor: "bg-teal-100", activeBgColor: "bg-teal-600", hoverBgColor: "hover:bg-teal-500", borderColor: "border-teal-300", arrowColor: "#ccfbf1" },
   { id: "POSTED", label: "Posted", icon: <IconPhoto size={16} />, color: "text-pink-700", bgColor: "bg-pink-100", activeBgColor: "bg-pink-600", hoverBgColor: "hover:bg-pink-500", borderColor: "border-pink-300", arrowColor: "#fce7f3" },
@@ -220,25 +222,49 @@ const stageConfigs: StageConfig[] = [
 
 // ─── Pipeline Status Resolver ─────────────────────────────────────────────────
 
+// Mirrors derivePipelineStatus/deriveClosedStatus (pipeline & closed routes) —
+// real order_status values are shipped/delivered, default is For Order Creation.
 function getPipelineStatus(bi?: {
   contact_status?: string | null
   content_posted?: boolean | null
   stage?: number | null
   order_status?: string | null
+  approval_status?: string | null
 } | null): PipelineStage | null {
   if (!bi) return null
-  const { contact_status, content_posted, stage, order_status } = bi
-  if (contact_status && ["not_interested", "no_response", "email_error"].includes(contact_status)) return "REJECTED"
+  const { contact_status, content_posted, stage, order_status, approval_status } = bi
+
+  // Same as derivePipelineStatus's "Not Interested" hard exit.
+  if (contact_status === "not_interested" || approval_status === "Declined") return "REJECTED"
+
   if (content_posted) return "POSTED"
-  if (stage === 4) return "COMPLETED"
-  if (order_status === "delivered") return "DELIVERED"
-  if (order_status === "in_transit") return "IN_TRANSIT"
-  if (order_status && ["not_sent", "sent_to_email"].includes(order_status)) return "FOR_ORDER_CREATION"
-  if (contact_status === "agreed") return "ONBOARDED"
-  if (contact_status && ["responded", "replied", "negotiating"].includes(contact_status)) return "IN_CONVERSATION"
-  if (contact_status === "contacted") return "REACHED_OUT"
-  if (stage === 1) return "PROSPECT"
-  return null
+
+  // Same gate derivePipelineStatus uses for handing off to Post Tracker.
+  const inOrderRealm = contact_status === "for_order_creation" || (stage != null && stage >= 5)
+  if (inOrderRealm) {
+    if (order_status === "delivered") return "DELIVERED"
+    if (order_status === "shipped") return "IN_TRANSIT"
+    return "FOR_ORDER_CREATION"
+  }
+
+  if (stage != null) {
+    if (stage >= 4) return "ONBOARDED"
+    if (stage === 3) return "IN_CONVERSATION"
+    if (stage === 2) return "REACHED_OUT"
+    if (stage === 1) return "PROSPECT"
+  }
+
+  switch (contact_status) {
+    case "agreed":       return "ONBOARDED"
+    case "negotiating":
+    case "paid_collab":  return "IN_CONVERSATION"
+    case "responded":
+    case "replied":
+    case "contacted":
+    case "no_response":
+    case "email_error":  return "REACHED_OUT"
+    default:             return "PROSPECT"
+  }
 }
 
 // ─── Gmail Thread → Email Mapper ──────────────────────────────────────────────
@@ -314,6 +340,7 @@ function mapGmailThreadToEmail(thread: any, index: number, accountId?: string | 
     id: thread.id || `gmail-${index}`,
     uid: conversationUid("gmail", accountId, thread.id || `gmail-${index}`),
     accountId: accountId ?? null,
+    brandInfluencerId: thread.brandInfluencer?.id,
     gmailThreadId: thread.id,
     name: senderName,
     handle: senderEmail,
@@ -345,6 +372,7 @@ function mapLightweightSentThread(thread: any, index: number, accountId?: string
     id: thread.id || `gmail-sent-${index}`,
     uid: conversationUid("gmail", accountId, thread.id || `gmail-sent-${index}`),
     accountId: accountId ?? null,
+    brandInfluencerId: thread.brandInfluencer?.id,
     gmailThreadId: thread.id,
     name: recipientName,
     handle: thread.recipientEmail || "",
@@ -403,6 +431,7 @@ function mapOutlookThreadToEmail(thread: any, index: number, accountId?: string 
     id: thread.id || `outlook-${index}`,
     uid: conversationUid("outlook", accountId, thread.id || `outlook-${index}`),
     accountId: accountId ?? null,
+    brandInfluencerId: thread.brandInfluencer?.id,
     name: senderName,
     handle: senderEmail,
     avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(senderName)}&background=0078D4&color=fff&bold=true`,
@@ -757,6 +786,9 @@ function InboxContent() {
   // Inbox is Solo/Team only per the pricing page — Basic gets no Gmail/Outlook
   // access at all, unlike Pipeline and Post Tracker which Basic does include.
   const { isSubscribed, status: subscriptionStatus, planDisplayName, refetch: refetchSubscription } = useSubscriptionGate(brandId, ["solo", "team"])
+
+  // Same cache Pipeline/Post Tracker use, so stage counts always agree.
+  const { data: pipelineRows } = usePipelineData(brandId || undefined)
 
   // Threads already fetched for this brand render immediately; the mount checks
   // below still run and update these silently in the background.
@@ -1739,20 +1771,32 @@ function InboxContent() {
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
   }, [emails, selectedStage, debouncedSearchQuery, readFilter])
 
-  // Pipeline-stage tabs count distinct contacts, not threads — "In
-  // Conversation: 1" means one influencer at that stage, even if there are
-  // several separate email threads with them (repeated outreach, multiple
-  // "Welcome back" style follow-ups, etc.). `handle` is the contact's email
-  // address in every mapper (Gmail, Outlook, and the lightweight
-  // sent-awaiting-reply entries), so it's a reliable per-contact key. "All
-  // Messages" deliberately stays a raw thread count — that view is about
-  // message volume, not the pipeline.
+  // Counts come from `pipelineRows` (same data as Pipeline/Post Tracker), not
+  // mailbox threads. "All" stays a raw thread count, not an influencer count.
   const getStageCount = (stage: PipelineStage | "ALL") => {
     if (stage === "ALL") return emails.length
-    const handles = new Set(
-      emails.filter((e) => e.status === stage).map((e) => e.handle)
-    )
-    return handles.size
+
+    // Not exclusive with the Post Tracker stages below — matches Pipeline's
+    // own Deal Agreed column, which folds in rows already sent to Post
+    // Tracker (see matchesColumnStatus in kanban-board.tsx).
+    if (stage === "ONBOARDED") {
+      return pipelineRows.filter((r) => {
+        const rejected = r.contactStatus === "not_interested" || r.approvalStatus === "Declined"
+        if (rejected) return false
+        return (r.stage != null && r.stage >= 4) || r.contactStatus === "for_order_creation"
+      }).length
+    }
+
+    return pipelineRows.filter(
+      (r) =>
+        getPipelineStatus({
+          contact_status: r.contactStatus,
+          content_posted: r.contentPosted,
+          stage: r.stage,
+          order_status: r.orderStatus,
+          approval_status: r.approvalStatus,
+        }) === stage
+    ).length
   }
 
   // Keyed on `uid`, not `id` — see updateEmailStage below for why.
@@ -1962,7 +2006,8 @@ function InboxContent() {
       const res = await fetch("/api/inbox/stage", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ senderEmail: email.fromEmail, stage: newStage, brandId }),
+        // brandInfluencerId skips re-deriving the match from fromEmail; senderEmail is the fallback.
+        body: JSON.stringify({ senderEmail: email.fromEmail, brandInfluencerId: email.brandInfluencerId, stage: newStage, brandId }),
       })
       if (!res.ok) {
         const data = await res.json()

@@ -213,8 +213,10 @@ export async function GET(req: NextRequest) {
 
     const senderEmails = [...new Set([
       ...shapedThreads.map((t) => t.senderEmail),
+      // Also try who we originally emailed — covers replies from a different address.
+      ...shapedThreads.map((t) => t.originalRecipientEmail),
       ...shapedSentOnly.map((t) => t.recipientEmail),
-    ].filter(Boolean))]
+    ].filter((e): e is string => Boolean(e)))]
 
     type BrandInfluencerRow = {
       id: string
@@ -244,11 +246,14 @@ export async function GET(req: NextRequest) {
       brandInfluencers.map((bi) => [bi.influencer.email?.toLowerCase(), bi])
     )
 
-    // 5. Attach brandInfluencer to each thread (null for unknown senders)
-    const threads = shapedThreads.map(({ senderEmail, hasReply, ...thread }) => ({
+    // 5. Attach brandInfluencer (null if unmatched) — sender first, then original recipient.
+    const threads = shapedThreads.map(({ senderEmail, originalRecipientEmail, hasReply, ...thread }) => ({
       ...thread,
       senderEmail,
-      brandInfluencer: biByEmail.get(senderEmail) ?? null,
+      brandInfluencer:
+        biByEmail.get(senderEmail) ??
+        (originalRecipientEmail ? biByEmail.get(originalRecipientEmail) : undefined) ??
+        null,
       hasReply,
     }))
 

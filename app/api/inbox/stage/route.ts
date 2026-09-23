@@ -21,7 +21,7 @@ function stageToDbFields(stage: string): Record<string, any> | null {
 }
 
 const stageLabel: Record<string, string> = {
-  REACHED_OUT:        "Reached Out",
+  REACHED_OUT:        "Contacted",
   IN_CONVERSATION:    "In Conversation",
   FOR_ORDER_CREATION: "For Order Creation",
   IN_TRANSIT:         "In Transit",
@@ -43,9 +43,9 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "No user in session" }, { status: 403 })
   }
 
-  const { senderEmail, stage, brandId } = await req.json()
+  const { senderEmail, stage, brandId, brandInfluencerId } = await req.json()
 
-  if (!senderEmail || !stage) {
+  if ((!senderEmail && !brandInfluencerId) || !stage) {
     return NextResponse.json({ error: "Missing senderEmail or stage" }, { status: 400 })
   }
 
@@ -68,33 +68,49 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "No brand found for user" }, { status: 404 })
   }
 
-  const normalizedEmail = senderEmail.toLowerCase().trim()
+  // Prefer a resolved brandInfluencerId; fall back to email lookup for older clients.
+  let existingBi: { id: string; influencerName: string }
 
-  // MySQL's default collation (utf8mb4_general_ci/unicode_ci) is case-insensitive
-  // for String columns, so a single findFirst covers case-insensitive matching
-  // without ever pulling the entire influencer table into memory.
-  const influencer = await prisma.influencer.findFirst({
-    where:  { email: normalizedEmail },
-    select: { id: true, full_name: true, handle: true },
-  })
+  if (brandInfluencerId) {
+    const bi = await prisma.brandInfluencer.findFirst({
+      where:  { id: brandInfluencerId, brand_id },
+      select: { id: true, influencer: { select: { full_name: true, handle: true } } },
+    })
+    if (!bi) {
+      return NextResponse.json({ error: "Influencer not found in this brand" }, { status: 404 })
+    }
+    existingBi = { id: bi.id, influencerName: bi.influencer.full_name ?? bi.influencer.handle ?? "This influencer" }
+  } else {
+    const normalizedEmail = senderEmail.toLowerCase().trim()
 
-  if (!influencer) {
-    return NextResponse.json({ error: "Influencer not registered" }, { status: 404 })
-  }
+    // MySQL's default collation (utf8mb4_general_ci/unicode_ci) is case-insensitive
+    // for String columns, so a single findFirst covers case-insensitive matching
+    // without ever pulling the entire influencer table into memory.
+    const influencer = await prisma.influencer.findFirst({
+      where:  { email: normalizedEmail },
+      select: { id: true, full_name: true, handle: true },
+    })
 
-  const existingBi = await prisma.brandInfluencer.findFirst({
-    where: {
-      brand_id,
-      influencer_id: influencer.id,
-    },
-    select: { id: true },
-  })
+    if (!influencer) {
+      return NextResponse.json({ error: "Influencer not registered" }, { status: 404 })
+    }
 
-  if (!existingBi) {
-    return NextResponse.json(
-      { error: "Influencer not found in this brand" },
-      { status: 404 },
-    )
+    const bi = await prisma.brandInfluencer.findFirst({
+      where: {
+        brand_id,
+        influencer_id: influencer.id,
+      },
+      select: { id: true },
+    })
+
+    if (!bi) {
+      return NextResponse.json(
+        { error: "Influencer not found in this brand" },
+        { status: 404 },
+      )
+    }
+
+    existingBi = { id: bi.id, influencerName: influencer.full_name ?? influencer.handle ?? senderEmail }
   }
 
   const updated = await prisma.brandInfluencer.update({
@@ -109,8 +125,7 @@ export async function PATCH(req: NextRequest) {
     },
   })
 
-  const influencerName =
-    influencer.full_name ?? influencer.handle ?? senderEmail
+  const influencerName = existingBi.influencerName
 
   const appUrl   = process.env.NEXTAUTH_URL ?? ""
   const inboxUrl = `${appUrl}/dashboard/inbox?brandId=${brand_id}`

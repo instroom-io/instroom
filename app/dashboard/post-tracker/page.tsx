@@ -41,6 +41,7 @@ import AutoPostDetectionCard from "./AutoPostDetection"
 import { readDroppedPostUrl, type DetectedPost } from "./DetectedPostsList"
 import { fetchCached } from "@/lib/data-cache"
 import { useSubscriptionGate } from "@/hooks/useSubscriptionGate"
+import { EmailModal } from "@/components/shared/email-modal"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const NICHES    = ["Beauty","Fitness","Lifestyle","Food","Tech","Fashion","Travel"]
@@ -692,6 +693,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
   focusPostUrl?: boolean
 }) {
   const [profileTab, setProfileTab] = useState(initialTab)
+  const [showEmailModal, setShowEmailModal] = useState(false)
 
   const [savingPost, setSavingPost] = useState(false)
   const postUrlRef = useRef<HTMLInputElement>(null)
@@ -999,6 +1001,17 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
     <>
       <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.3)", zIndex: 400, cursor: "pointer" }} />
 
+      {showEmailModal && (
+        <EmailModal
+          partnerName={inf.influencer}
+          handle={inf.handle}
+          platform={inf.platform}
+          brandId={brandId}
+          defaultTo={inf.email || ""}
+          onClose={() => setShowEmailModal(false)}
+        />
+      )}
+
       <div className="pp">
         {/* Pinned to the panel's top-right corner, independent of the header's
             own content — it used to sit inside the Stage/Collaboration Type
@@ -1105,7 +1118,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
               <PlatformIcon platform={inf.platform} size={14} className="shrink-0" />
               <span className="truncate">{getPlatformLabel(inf.platform) || "—"}</span>
             </button>
-            <button className="atag">Send Email</button>
+            <button className="atag" onClick={() => setShowEmailModal(true)}>Send Email</button>
             <button className="atag">Send DM</button>
             <button className="atag">Follow up</button>
           </div>
@@ -1448,7 +1461,8 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
           .csel { font-size:11px; padding:5px 10px; border-radius:8px; border:1px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; font-family:inherit; font-weight:600; transition:all .15s; width:115px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
           .close-btn { position:absolute; top:16px; right:20px; z-index:1; width:30px; height:30px; border-radius:50%; border:1.5px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; line-height:1; transition:background .15s,border-color .15s,color .15s; }
           .close-btn:hover { background:#fee2e2; color:#dc2626; border-color:#fca5a5; }
-          .atag { font-size:12px; font-weight:500; padding:6px 14px; border-radius:20px; cursor:pointer; border:1px solid #e5e7eb; background:#f9fafb; color:#555; }
+          .atag { font-size:12px; font-weight:500; padding:6px 14px; border-radius:20px; cursor:pointer; border:1px solid #e5e7eb; background:#f9fafb; color:#555; transition:background .15s,border-color .15s,color .15s; }
+          .atag:not(.plat):hover { background:#eafaf1; border-color:#1fae5b; color:#1fae5b; }
           .atag.plat { background:#1fae5b; color:#fff; border-color:#1fae5b; }
           .pit-bar { display:flex; gap:0; padding:0 20px; border-bottom:1px solid #f0f0f0; overflow-x:auto; }
           .pit { font-size:12px; font-weight:600; padding:11px 14px; cursor:pointer; color:#9ca3af; border-bottom:2px solid transparent; white-space:nowrap; transition:color .15s; flex-shrink:0; }
