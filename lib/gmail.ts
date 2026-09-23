@@ -250,6 +250,8 @@ export type ShapedGmailThread = {
     attachments: GmailAttachmentMeta[]
   }[]
   senderEmail: string
+  /** Who we originally emailed, if we sent first. */
+  originalRecipientEmail?: string
   hasReply: boolean
 }
 
@@ -292,6 +294,13 @@ export function shapeGmailThread(thread: any): ShapedGmailThread {
   const emailMatch = fromHeader.match(/<([^>]+)>/)
   const senderEmail = (emailMatch ? emailMatch[1] : fromHeader).toLowerCase().trim()
 
+  // First SENT message's "To" — a fallback for when the reply comes from a
+  // different address (e.g. an agency rep) than the one we emailed.
+  const firstSentMsg = messages.find((m: any) => (m.labelIds || []).includes("SENT"))
+  const originalToHeader: string = firstSentMsg?.to || ""
+  const originalEmailMatch = originalToHeader.match(/<([^>]+)>/)
+  const originalRecipientEmail = (originalEmailMatch ? originalEmailMatch[1] : originalToHeader).toLowerCase().trim() || undefined
+
   return {
     id: thread.id,
     subject: firstMsg.subject || "(No subject)",
@@ -300,6 +309,7 @@ export function shapeGmailThread(thread: any): ShapedGmailThread {
     starred: isStarred,
     messages,
     senderEmail,
+    originalRecipientEmail,
     hasReply: Boolean(contactMsg),
   }
 }

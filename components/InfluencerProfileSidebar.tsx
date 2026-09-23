@@ -760,7 +760,8 @@ export default function InfluencerProfileSidebar({
 
           .close-btn { position:absolute; top:16px; right:20px; width:30px; height:30px; border-radius:50%; border:1.5px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; flex-shrink:0; line-height:1; transition:background .15s,border-color .15s,color .15s; }
           .close-btn:hover { background:#fee2e2; color:#dc2626; border-color:#fca5a5; }
-          .atag { font-size:12px; font-weight:500; padding:6px 14px; border-radius:20px; cursor:pointer; border:1px solid #e5e7eb; background:#f9fafb; color:#555; }
+          .atag { font-size:12px; font-weight:500; padding:6px 14px; border-radius:20px; cursor:pointer; border:1px solid #e5e7eb; background:#f9fafb; color:#555; transition:background .15s,border-color .15s,color .15s; }
+          .atag:not(.plat):hover { background:#eafaf1; border-color:#1fae5b; color:#1fae5b; }
           .atag.plat { background:#1fae5b; color:#fff; border-color:#1fae5b; }
           .pit-bar { display:flex; gap:0; padding:0 20px; border-bottom:1px solid #f0f0f0; overflow-x:auto; }
           .pit { font-size:12px; font-weight:600; padding:11px 14px; cursor:pointer; color:#9ca3af; border-bottom:2px solid transparent; white-space:nowrap; transition:color .15s; flex-shrink:0; }
