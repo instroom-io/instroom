@@ -31,37 +31,11 @@ import { hasBrandCapability } from "@/lib/permissions"
 import {
   derivePipelineStage,
   isTransitionAllowed,
+  pipelineStatusToFields,
   transitionRefusalReason,
 } from "@/lib/pipeline-transitions"
+import { clearPostTrackerState } from "@/lib/post-tracker-status"
 
-// ─── Status → DB field mapping ────────────────────────────────────────────────
-function pipelineStatusToFields(pipelineStatus: string, collaborationType?: string): {
-  contact_status:  string
-  stage:           number
-  approval_status: string
-} {
-  switch (pipelineStatus) {
-    case "For Outreach":
-      return { contact_status: "pending",             stage: 1, approval_status: "Approved" }
-    case "Contacted":
-      return { contact_status: "contacted",           stage: 2, approval_status: "Approved" }
-    case "In Conversation":
-      return { contact_status: "negotiating",         stage: 3, approval_status: "Approved" }
-    case "Deal Agreed":
-      // Confirming a Collaboration Type is what marks the deal as fully agreed —
-      // once it's set, skip the separate "Move to Post Tracker" step entirely and
-      // land directly on Post Tracker's default initial status (stage 5).
-      return collaborationType
-        ? { contact_status: "for_order_creation", stage: 5, approval_status: "Approved" }
-        : { contact_status: "agreed",              stage: 4, approval_status: "Approved" }
-    case "For Order Creation":
-      return { contact_status: "for_order_creation",  stage: 5, approval_status: "Approved" }
-    case "Not Interested":
-      return { contact_status: "not_interested",      stage: 0, approval_status: "Declined" }
-    default:
-      return { contact_status: "pending",             stage: 1, approval_status: "Approved" }
-  }
-}
 
 // ─── PATCH handler ────────────────────────────────────────────────────────────
 export async function PATCH(
@@ -200,6 +174,12 @@ export async function PATCH(
       productDetailsJson = JSON.stringify(details)
     }
 
+    // Pre-order stages (1–4) take the row out of Post Tracker.
+    const postTrackerReset =
+      fields.stage >= 1 && fields.stage <= 4
+        ? clearPostTrackerState(productDetailsJson ?? before?.product_details)
+        : null
+
     // ── Write ────────────────────────────────────────────────────────────────
     // updateMany, not update({ select }).
     //
@@ -230,6 +210,7 @@ export async function PATCH(
         stage:           fields.stage,
         approval_status: fields.approval_status,
         ...(productDetailsJson !== undefined ? { product_details: productDetailsJson } : {}),
+        ...(postTrackerReset ?? {}),
         // Only write approval_notes for NI moves — don't overwrite on others.
         //
         // decline_notes is written on the SAME branch, and unconditionally

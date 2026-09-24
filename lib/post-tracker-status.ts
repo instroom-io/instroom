@@ -200,6 +200,34 @@ export function mapClosedToPipelineFields(
   }
 }
 
+/**
+ * Fields that take a row out of Post Tracker when it moves back to stages 1–4.
+ * Without this it keeps order_status/content_posted/closedStatus and shows on
+ * both boards. Dates, post URL and other product_details keys are kept.
+ */
+export function clearPostTrackerState(productDetails: string | null | undefined): {
+  order_status: null
+  content_posted: false
+  product_details?: string
+} {
+  const fields: { order_status: null; content_posted: false; product_details?: string } = {
+    order_status: null,
+    content_posted: false,
+  }
+  if (productDetails) {
+    try {
+      const details = JSON.parse(productDetails)
+      if (details && typeof details === "object" && "closedStatus" in details) {
+        delete details.closedStatus
+        fields.product_details = JSON.stringify(details)
+      }
+    } catch {
+      // Leave unparseable JSON as stored.
+    }
+  }
+  return fields
+}
+
 type ShopifyFulfillment = {
   status?: string | null
   shipment_status?: string | null

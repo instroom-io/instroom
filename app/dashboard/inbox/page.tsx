@@ -64,6 +64,7 @@ import {
   IconDeviceFloppy,
 } from "@tabler/icons-react"
 import { EmailTemplatesModal } from "@/components/shared/email-templates-modal"
+import { DeclineModal } from "@/components/shared/decline-modal"
 import { UseTemplatePicker } from "@/components/shared/use-template-picker"
 import { RichComposeEditor, type RichComposeEditorHandle, type PendingAttachment, AttachmentChipReadOnly } from "@/components/shared/rich-compose-editor"
 
@@ -175,6 +176,9 @@ type Email = {
   trackingNumber?: string
   postedLink?: string
   rejectionReason?: string
+  // Set locally on decline so the badge shows it before pipelineRows refetches.
+  declineReason?: string
+  declineNotes?: string
   replies?: { sender: string; message: string; timestamp: string; isUser?: boolean; isHtml?: boolean; attachments?: EmailAttachment[] }[]
   // Gmail-specific
   gmailThreadId?: string
@@ -237,11 +241,11 @@ function getPipelineStatus(bi?: {
   // Same as derivePipelineStatus's "Not Interested" hard exit.
   if (contact_status === "not_interested" || approval_status === "Declined") return "REJECTED"
 
-  if (content_posted) return "POSTED"
-
   // Same gate derivePipelineStatus uses for handing off to Post Tracker.
+  // content_posted only counts inside it, as on the Pipeline.
   const inOrderRealm = contact_status === "for_order_creation" || (stage != null && stage >= 5)
   if (inOrderRealm) {
+    if (content_posted) return "POSTED"
     if (order_status === "delivered") return "DELIVERED"
     if (order_status === "shipped") return "IN_TRANSIT"
     return "FOR_ORDER_CREATION"
@@ -916,6 +920,7 @@ function InboxContent() {
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("")
   const [readFilter, setReadFilter] = useState<"all" | "unread" | "read">("all")
   const [updateStageModal, setUpdateStageModal] = useState<{ open: boolean; email: Email | null }>({ open: false, email: null })
+  const [declineTarget, setDeclineTarget] = useState<Email | null>(null)
 
   // ── Connected mailboxes ───────────────────────────────────────────────────
   // Read through the shared cache like every other inbox fetch, so the shell
@@ -1976,7 +1981,11 @@ function InboxContent() {
   // Keyed on `uid`, not `id`: `id` is the provider's own thread id, and Gmail
   // and Outlook conversations share this array, so an id match could resolve to
   // a different provider's — or a different Outlook account's — conversation.
-  const updateEmailStage = async (emailUid: string, newStage: PipelineStage) => {
+  const updateEmailStage = async (
+    emailUid: string,
+    newStage: PipelineStage,
+    decline?: { reason: string; notes?: string }
+  ) => {
     setUpdateStageModal({ open: false, email: null })
 
     const email = emails.find((e) => e.uid === emailUid)
@@ -1996,10 +2005,17 @@ function InboxContent() {
       return
     }
 
+    // Rejected needs a decline reason first, as on the Pipeline.
+    if (newStage === "REJECTED" && !decline) {
+      setDeclineTarget(email)
+      return
+    }
+
     const previousStatus = emails.find((e) => e.uid === emailUid)?.status
-    setEmails((prev) => prev.map((e) => (e.uid === emailUid ? { ...e, status: newStage } : e)))
+    const declineFields = { declineReason: decline?.reason, declineNotes: decline?.notes }
+    setEmails((prev) => prev.map((e) => (e.uid === emailUid ? { ...e, status: newStage, ...declineFields } : e)))
     if (selectedEmail?.uid === emailUid) {
-      setSelectedEmail((prev) => (prev ? { ...prev, status: newStage } : null))
+      setSelectedEmail((prev) => (prev ? { ...prev, status: newStage, ...declineFields } : null))
     }
 
     try {
@@ -2007,7 +2023,13 @@ function InboxContent() {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         // brandInfluencerId skips re-deriving the match from fromEmail; senderEmail is the fallback.
-        body: JSON.stringify({ senderEmail: email.fromEmail, brandInfluencerId: email.brandInfluencerId, stage: newStage, brandId }),
+        body: JSON.stringify({
+          senderEmail: email.fromEmail,
+          brandInfluencerId: email.brandInfluencerId,
+          stage: newStage,
+          brandId,
+          ...(decline ? { niReason: decline.reason, declineNotes: decline.notes } : {}),
+        }),
       })
       if (!res.ok) {
         const data = await res.json()
@@ -2172,14 +2194,34 @@ function InboxContent() {
     }
   }
 
-  const getStatusBadge = (status: PipelineStage | null) => {
+  const getDeclineInfo = (email: Email): { reason: string; notes?: string } | null => {
+    if (email.status !== "REJECTED") return null
+    if (email.declineReason) return { reason: email.declineReason, notes: email.declineNotes }
+    const row = email.brandInfluencerId ? pipelineRows.find((r) => r.id === email.brandInfluencerId) : undefined
+    return row?.niReason ? { reason: row.niReason, notes: row.declineNotes ?? undefined } : null
+  }
+
+  // Rejected badges show the reason as a tooltip, or inline with `showReason`.
+  const getStatusBadge = (status: PipelineStage | null, email?: Email, showReason = false) => {
     if (!status) return null
     const config = stageConfigs.find((s) => s.id === status)
     if (!config) return null
-    return (
-      <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${config.bgColor} ${config.color}`}>
+    const decline = email ? getDeclineInfo(email) : null
+    const tooltip = decline ? `Reason: ${decline.reason}${decline.notes ? ` — ${decline.notes}` : ""}` : undefined
+    const badge = (
+      <span title={tooltip} className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${config.bgColor} ${config.color}`}>
         {config.icon}
         {config.label}
+      </span>
+    )
+    if (!decline || !showReason) return badge
+    return (
+      <span className="inline-flex items-center gap-1.5 min-w-0">
+        {badge}
+        <span title={tooltip} className="text-xs text-red-600/80 truncate max-w-[320px]">
+          {decline.reason}
+          {decline.notes && <span className="text-gray-400"> · {decline.notes}</span>}
+        </span>
       </span>
     )
   }
@@ -2615,7 +2657,7 @@ function InboxContent() {
                             {email.subject}
                           </p>
                           <p className="text-xs text-gray-400 truncate mt-0.5">{email.preview}</p>
-                          {getStatusBadge(email.status) && <div className="mt-1.5">{getStatusBadge(email.status)}</div>}
+                          {getStatusBadge(email.status) && <div className="mt-1.5">{getStatusBadge(email.status, email)}</div>}
                         </div>
 
                         <button onClick={(e) => toggleStar(email, e)} className="flex-shrink-0 mt-0.5 transition-opacity hover:opacity-80">
@@ -2664,7 +2706,7 @@ function InboxContent() {
                         <span className="text-xs text-gray-500 hidden sm:inline">{selectedEmail.handle}</span>
                       </div>
                       <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                        {getStatusBadge(selectedEmail.status)}
+                        {getStatusBadge(selectedEmail.status, selectedEmail, true)}
                         <span className="text-xs text-gray-400 flex items-center gap-1">
                           <IconClock size={12} />
                           <span className="hidden sm:inline">Last active</span> {formatDate(selectedEmail.timestamp)}
@@ -3101,6 +3143,21 @@ function InboxContent() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── DECLINE REASON MODAL ── */}
+      {declineTarget && (
+        <DeclineModal
+          name={declineTarget.name}
+          handle={declineTarget.handle}
+          profileImageUrl={declineTarget.avatar?.startsWith("http") ? declineTarget.avatar : null}
+          onCancel={() => setDeclineTarget(null)}
+          onConfirm={(reason, notes) => {
+            const uid = declineTarget.uid
+            setDeclineTarget(null)
+            updateEmailStage(uid, "REJECTED", { reason, notes })
+          }}
+        />
       )}
 
       {/* ── COMPOSE MODAL ── */}
