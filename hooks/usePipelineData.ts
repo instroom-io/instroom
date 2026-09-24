@@ -19,7 +19,8 @@ import {
   isLatestRowWrite,
 } from "@/lib/data-cache"
 import { invalidateInfluencerDerivedCaches, pipelineCacheKey, closedCacheKey } from "@/lib/cache-invalidation"
-import type { ClosedInfluencer } from "@/hooks/useClosedData"
+import type { ClosedInfluencer, PaidCollabData } from "@/hooks/useClosedData"
+import { applyDeliverableNames } from "@/lib/deliverables"
 
 /** Stable empty reference used before the first payload arrives. */
 const EMPTY_PIPELINE: PipelineInfluencer[] = []
@@ -91,6 +92,8 @@ interface UsePipelineDataReturn {
     /** Free-text explanation, sent only with an "Others" decline. */
     declineNotes?: string
     collaborationType?: string
+    /** Deliverable names chosen on the hand-over into Post Tracker. */
+    campaignDeliverables?: string[]
     /**
      * Skip marking the OTHER views stale after this row succeeds.
      *
@@ -239,7 +242,7 @@ const POST_TRACKER_ENTRY = "For Order Creation"
  * The background revalidation that follows replaces this with the server's own
  * mapping either way, so this only has to be right for the seconds in between.
  */
-function toClosedRow(item: PipelineInfluencer, collaborationType?: string): ClosedInfluencer {
+function toClosedRow(item: PipelineInfluencer, collaborationType?: string, deliverableNames?: string[]): ClosedInfluencer {
   return {
     id:              item.id,
     influencerId:    item.influencerId,
@@ -292,7 +295,11 @@ function toClosedRow(item: PipelineInfluencer, collaborationType?: string): Clos
     commentsCount:     0,
     engagementCount:   0,
 
-    paidCollabData:  null,
+    // Same array the PATCH route writes — see lib/deliverables.
+    paidCollabData:  deliverableNames
+      ? ({ deliverables: applyDeliverableNames([], deliverableNames) } as unknown as PaidCollabData)
+      : null,
+    completed:       false,
 
     internalRating:  item.internalRating,
     lastContact:     item.lastContact,
@@ -546,6 +553,8 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
         /** Free-text explanation, sent only with an "Others" decline. */
         declineNotes?: string
         collaborationType?: string
+        /** Deliverable names chosen on the hand-over into Post Tracker. */
+        campaignDeliverables?: string[]
         /**
          * Skip marking the OTHER views stale after this row succeeds.
          *
@@ -607,7 +616,7 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
         const closedRows = getCachedData<ClosedInfluencer[]>(closedKey)
         if (closedRows && !closedRows.some((row) => row.id === id)) {
           markCacheWrite(closedKey)
-          setCachedData(closedKey, [...closedRows, toClosedRow(previous, extra?.collaborationType)])
+          setCachedData(closedKey, [...closedRows, toClosedRow(previous, extra?.collaborationType, extra?.campaignDeliverables)])
           // NOT invalidated here — that is what made the seeded card disappear.
           //
           // invalidateCache sets updatedAt = 0, so the entry read as stale the
@@ -670,6 +679,7 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
             ...(extra?.niReason ? { niReason: extra.niReason } : {}),
             ...(extra?.declineNotes ? { declineNotes: extra.declineNotes } : {}),
             ...(extra?.collaborationType !== undefined ? { collaborationType: extra.collaborationType } : {}),
+            ...(extra?.campaignDeliverables ? { campaignDeliverables: extra.campaignDeliverables } : {}),
           }),
         })
 

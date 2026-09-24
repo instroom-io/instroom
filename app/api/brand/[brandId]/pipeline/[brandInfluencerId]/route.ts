@@ -28,6 +28,7 @@ import { sendNotification } from "@/lib/notifications"
 import type { NotifType } from "@/emails/notification"
 import { provisionGoAffProAffiliate } from "@/lib/goaffpro-provision"
 import { hasBrandCapability } from "@/lib/permissions"
+import { parseDeliverableNames, applyDeliverableNames } from "@/lib/deliverables"
 import {
   derivePipelineStage,
   isTransitionAllowed,
@@ -78,13 +79,25 @@ export async function PATCH(
     const { brandId, brandInfluencerId } = await params
 
     const body = await req.json()
-    const { pipelineStatus, niReason, declineNotes, collaborationType, notes } = body as {
+    const { pipelineStatus, niReason, declineNotes, collaborationType, notes, campaignDeliverables } = body as {
       pipelineStatus?: string
       niReason?: string
       /** Free-text explanation, sent only with an "Others" decline. */
       declineNotes?: string
       collaborationType?: string
       notes?: string
+      /** Deliverable names chosen on the hand-over — see lib/deliverables. */
+      campaignDeliverables?: unknown
+    }
+
+    // Only meaningful alongside a Collaboration Type (the hand-over into Post
+    // Tracker). Validated up front so a bad payload never reaches the write.
+    const deliverableNames =
+      campaignDeliverables !== undefined && collaborationType !== undefined
+        ? parseDeliverableNames(campaignDeliverables)
+        : undefined
+    if (deliverableNames === null) {
+      return NextResponse.json({ error: "Invalid campaignDeliverables" }, { status: 400 })
     }
 
     // Notes aren't a stage transition, so they use manageInfluencers (not the
@@ -197,6 +210,12 @@ export async function PATCH(
       let details: Record<string, unknown> = {}
       try { details = before?.product_details ? JSON.parse(before.product_details) : {} } catch { details = {} }
       details.campaignType = collaborationType
+      // Campaign deliverables live in the same blob, in the array Post Tracker
+      // and the Paid Collaboration editor already read (paidCollab.deliverables).
+      if (deliverableNames) {
+        const paidCollab = (details.paidCollab ?? {}) as Record<string, unknown>
+        details.paidCollab = { ...paidCollab, deliverables: applyDeliverableNames(paidCollab.deliverables, deliverableNames) }
+      }
       productDetailsJson = JSON.stringify(details)
     }
 

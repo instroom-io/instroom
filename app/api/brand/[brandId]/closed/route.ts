@@ -289,6 +289,7 @@ export async function GET(
         engagementCount: row.engagement_count || 0,
 
         paidCollabData:  productDetails.paidCollab || null,
+        completed:       productDetails.completed === true,
 
         internalRating:  row.internal_rating ? Number(row.internal_rating) : null,
         lastContact:     row.updated_at.toISOString(),

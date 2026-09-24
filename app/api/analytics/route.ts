@@ -178,6 +178,9 @@ export async function GET(req: Request) {
         createdAt:        r.created_at.toISOString(),
 
         pipelineStatus:   resolveAnalyticsStatus(r, productDetails),
+        // Marked completed in Post Tracker (all deliverables posted) — the same
+        // product_details flag the Completed column reads.
+        completed:        productDetails.closedStatus === "Posted" && productDetails.completed === true,
 
         // Outreach activity — the source of truth for Total Outreach.
         outreachCount:    outreachCountById.get(r.id) ?? 0,

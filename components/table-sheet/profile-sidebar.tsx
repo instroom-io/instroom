@@ -9,6 +9,7 @@ import { getProfileUrl, handleApprovalChange, formatFollowers } from "./utils"
 import { ProfilePicture } from "./ui-atoms"
 import { DeclineModal } from "@/components/shared/decline-modal"
 import { EmailModal } from "@/components/shared/email-modal"
+import type { CampaignDeliverable } from "@/lib/deliverables"
 
 // Instagram's official "message me" shortlink opens a DM composer directly.
 // No platform exposes an equivalent deep link for an arbitrary handle, so
@@ -286,7 +287,12 @@ function pcStatusSelectStyle(status: string, disabled?: boolean) {
   }
 }
 
-export function PaidCollabTab({ influencerName, rateHint }: { influencerName: string; rateHint?: number }) {
+export function PaidCollabTab({ influencerName, rateHint, initialDeliverables }: {
+  influencerName: string
+  rateHint?: number
+  /** The influencer's saved campaign deliverables (lib/deliverables), when known. */
+  initialDeliverables?: CampaignDeliverable[]
+}) {
   const [contractEnabled, setContractEnabled] = useState(false)
   const [contractStatus, setContractStatus] = useState<ContractStatus>("not_started")
   const [contractLink, setContractLink] = useState("")
@@ -295,11 +301,20 @@ export function PaidCollabTab({ influencerName, rateHint }: { influencerName: st
   const [scriptEnabled, setScriptEnabled] = useState(true)
   const [postStatus, setPostStatus] = useState<PostStatus>("pending")
 
-  const [deliverables, setDeliverables] = useState<PaidDeliverable[]>(() => [
-    { id: 1, name: "", scriptStatus: "pending", scriptLink: "", contentStatus: "pending", contentLink: "", postUrl: "", postDate: "" },
-    { id: 2, name: "", scriptStatus: "pending", scriptLink: "", contentStatus: "pending", contentLink: "", postUrl: "", postDate: "" },
-  ])
-  const nextIdRef = React.useRef(3)
+  const [deliverables, setDeliverables] = useState<PaidDeliverable[]>(() =>
+    initialDeliverables?.length
+      ? initialDeliverables.map(d => ({
+          id: d.id, name: d.name ?? "",
+          scriptStatus: (d.scriptStatus || "pending") as StepStatus, scriptLink: d.scriptLink ?? "",
+          contentStatus: (d.contentStatus || "pending") as StepStatus, contentLink: d.contentLink ?? "",
+          postUrl: d.postUrl ?? "", postDate: d.postDate ?? "",
+        }))
+      : [
+          { id: 1, name: "", scriptStatus: "pending", scriptLink: "", contentStatus: "pending", contentLink: "", postUrl: "", postDate: "" },
+          { id: 2, name: "", scriptStatus: "pending", scriptLink: "", contentStatus: "pending", contentLink: "", postUrl: "", postDate: "" },
+        ]
+  )
+  const nextIdRef = React.useRef(deliverables.reduce((m, d) => Math.max(m, Number(d.id) || 0), 0) + 1)
 
   // Payment starts in a blank / zero state. An agreed fee already stored on the
   // record is real data and is still honoured; everything else (no rate, or 0)

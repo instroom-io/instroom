@@ -31,11 +31,8 @@ export type PipelineStage = (typeof PIPELINE_STAGES)[number]
 /**
  * Stages a row cannot move OUT of through the Pipeline board.
  *
- * ONLY "For Order Creation". That stage hands the row to Post Tracker, which
- * fetches everything at `stage >= 5` and owns it from then on — moving it
- * backward from here would pull a row out from under the other board while it
- * is being worked, so it stays one-way and Post Tracker's own controls govern
- * it from that point.
+ * None. "For Order Creation" used to be one-way, but a row handed over to Post
+ * Tracker can now be moved from the board like any other stage.
  *
  * "Not Interested" is NOT terminal. A decline is a decision the brand can
  * revisit — the influencer replies later, the budget changes, the decline was
@@ -43,7 +40,8 @@ export type PipelineStage = (typeof PIPELINE_STAGES)[number]
  * grouped with For Order Creation here, which made an ordinary correction
  * impossible from the board.
  */
-export const TERMINAL_STAGES: readonly string[] = ["For Order Creation"]
+// Moving an "In Post Tracker" row to an earlier stage takes it back out of Post Tracker.
+export const TERMINAL_STAGES: readonly string[] = []
 
 export const isTerminalStage = (stage: string): boolean => TERMINAL_STAGES.includes(stage)
 
@@ -116,7 +114,7 @@ export function suggestedTransitions(currentStatus: string): string[] {
  * active stages is not a funnel that only runs one way: a conversation can
  * regress, a stage can be set by mistake, and a decline can be reconsidered.
  *
- * The one exception is "For Order Creation" — see TERMINAL_STAGES.
+ * Rows in a TERMINAL_STAGES stage (currently none) cannot move at all.
  */
 export function allowedTransitions(currentStatus: string): string[] {
   if (isTerminalStage(currentStatus)) return []
