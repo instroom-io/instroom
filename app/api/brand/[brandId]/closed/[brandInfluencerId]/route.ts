@@ -6,6 +6,7 @@ import { authOptions } from "@/lib/auth"
 import { prisma, timeStep } from "@/lib/prisma"
 import { hasBrandCapability } from "@/lib/permissions"
 import { mapClosedToPipelineFields, parseMetricInput, isClosedColumn, type ClosedColumn } from "@/lib/post-tracker-status"
+import { getDeliverables, getDeliverableProgress } from "@/lib/deliverables"
 
 // ✅ Safe JSON parse
 function safeParse(value: string | null) {
@@ -74,7 +75,13 @@ export async function PATCH(
       // deliverable (or a single placeholder one if there are none yet) —
       // see the dedicated block below, not a new column.
       scriptStatus, contentStatus,
+      // "Mark as completed" on a Posted row — stored as product_details.completed.
+      completed,
     } = body
+
+    if (completed !== undefined && typeof completed !== "boolean") {
+      return NextResponse.json({ error: "Invalid completed" }, { status: 400 })
+    }
 
     // ✅ Validate closedStatus against the canonical list (post-tracker-status.ts),
     // not a copy kept here — a column added there is accepted here immediately.
@@ -122,7 +129,12 @@ export async function PATCH(
     // evidence the client uses: a stored post_url, or a DetectedPost row. Moves
     // to Delivered and to every earlier stage are untouched — those need no post,
     // which is the point of Delivered.
-    if (closedStatus === "Posted") {
+    // A row with campaign deliverables enters Posted at "0/N deliverables" and
+    // its posts are tracked there (lib/deliverables), so it needs no link yet.
+    const hasCampaignDeliverables =
+      getDeliverables(productDetails.paidCollab).length > 0 ||
+      getDeliverables(paidCollabData).length > 0
+    if (closedStatus === "Posted" && !hasCampaignDeliverables) {
       // A Post URL submitted in THIS same request (the Post tab's Save button
       // sends the URL and the Posted move together) is evidence too — `record`
       // was read before this request's body was merged in, so checking only
@@ -203,6 +215,26 @@ export async function PATCH(
     }
     if (trackingNumber !== undefined) {
       productDetails.trackingNumber = trackingNumber
+    }
+
+    // ── Completed ─────────────────────────────────────────────────────────────
+    // Only a Posted row whose every deliverable has a post link (or, with no
+    // deliverables, that has a Post URL) can be marked completed. Leaving
+    // Posted clears it, so a row only sits in Completed while it is Posted.
+    if (completed === true) {
+      const effectiveStatus = closedStatus ?? storedStatus
+      const legacyUrl = typeof postUrl === "string" ? postUrl : record.post_url
+      const progress = getDeliverableProgress(productDetails.paidCollab, legacyUrl)
+      const ready = progress.total > 0 ? progress.complete : Boolean(legacyUrl && legacyUrl.trim())
+      if (effectiveStatus !== "Posted" || !ready) {
+        return NextResponse.json(
+          { error: "Add a post link for every deliverable before marking this influencer completed." },
+          { status: 409 }
+        )
+      }
+      productDetails.completed = true
+    } else if (completed === false || (closedStatus !== undefined && closedStatus !== "Posted")) {
+      productDetails.completed = false
     }
 
     // ✅ Script/Content Status — a bulk-set across paidCollab.deliverables[],

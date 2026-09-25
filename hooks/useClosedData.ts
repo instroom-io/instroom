@@ -22,6 +22,7 @@ import {
 } from "@/lib/data-cache"
 import { invalidateInfluencerDerivedCaches, closedCacheKey } from "@/lib/cache-invalidation"
 import { parseMetricInput } from "@/lib/post-tracker-status"
+import type { CampaignDeliverable } from "@/lib/deliverables"
 import { mutationErrorMessage } from "@/lib/user-facing-error"
 
 /** Stable empty reference used before the first payload arrives. */
@@ -91,6 +92,8 @@ export interface ClosedInfluencer {
   engagementCount: number
 
   paidCollabData: PaidCollabData | null
+  /** Marked completed from the Posted column — shown in the Completed column. */
+  completed: boolean
 
   internalRating: number | null
   lastContact: string
@@ -110,16 +113,8 @@ export interface PaidCollabData {
   milestoneProofLinks: string[]
 }
 
-export interface CollabDeliverable {
-  id: number
-  name: string
-  scriptStatus: string
-  scriptLink: string
-  scriptRevs: { num: number; date: string; notes: string }[]
-  contentStatus: string
-  contentLink: string
-  contentRevs: { num: number; date: string; notes: string }[]
-}
+// One shape for campaign deliverables everywhere — see lib/deliverables.ts.
+export type CollabDeliverable = CampaignDeliverable
 
 /**
  * Result of a stage move. An object rather than a bare boolean so the caller
@@ -159,6 +154,8 @@ export interface PostDetailsFields {
   /** Rollup applied to every deliverable — see the route's own comment. */
   scriptStatus?: string
   contentStatus?: string
+  /** Full deliverables write (per-deliverable post links); supersedes the rollup. */
+  paidCollabData?: PaidCollabData
 }
 
 interface UseClosedDataReturn {
@@ -177,6 +174,8 @@ interface UseClosedDataReturn {
     options?: { resetWorkflow?: boolean; deferDerivedInvalidation?: boolean }
   ) => Promise<UpdateColumnResult>
   updatePaidCollab: (id: string, paidCollabData: PaidCollabData) => Promise<boolean>
+  /** "Mark as completed" on a Posted row — moves it to the Completed column. */
+  markCompleted: (id: string, completed: boolean) => Promise<UpdateColumnResult>
   updateCampaignType: (id: string, campaignType: string) => Promise<boolean>
   updatePostUrl: (id: string, postUrl: string) => Promise<boolean>
   updateOrderDetails: (id: string, fields: OrderDetailsFields) => Promise<boolean>
@@ -482,7 +481,10 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
       setDataCached((prev) => {
         previous = prev.find((item) => item.id === id)
         return prev.map((item) =>
-          item.id === id ? applyColumnChange(item, newColumn) : item
+          item.id === id
+            // Leaving Posted clears "completed", mirroring the PATCH route.
+            ? { ...applyColumnChange(item, newColumn), completed: newColumn === "Posted" ? item.completed : false }
+            : item
         )
       })
 
@@ -533,6 +535,52 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         if (!options?.deferDerivedInvalidation) {
           invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId!)])
         }
+        return { ok: true }
+      } catch {
+        rollback()
+        return { ok: false, error: "Network error" }
+      } finally {
+        endWrite(writeOk)
+      }
+    },
+    [brandId, cacheKey, setDataCached, beginWrite, endWrite]
+  )
+
+  // ── Mark Completed (optimistic) ───────────────────────────────────────────
+  // Same write pattern as updatePaidCollab below.
+  const markCompleted = useCallback(
+    async (id: string, completed: boolean): Promise<UpdateColumnResult> => {
+      if (!brandId) return { ok: false, error: "No brand selected" }
+
+      const writeSeq = cacheKey ? beginRowWrite(cacheKey, id) : 0
+      beginWrite()
+
+      let previous: ClosedInfluencer | undefined
+      setDataCached((prev) => {
+        previous = prev.find((item) => item.id === id)
+        return prev.map((item) => (item.id !== id ? item : { ...item, completed }))
+      })
+
+      let writeOk = true
+      const rollback = () => {
+        writeOk = false
+        if (cacheKey && !isLatestRowWrite(cacheKey, id, writeSeq)) return
+        if (!previous) return
+        setDataCached((prev) => prev.map((item) => (item.id === id ? previous! : item)))
+      }
+
+      try {
+        const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
+          method:  "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ completed }),
+        })
+        if (!res.ok) {
+          rollback()
+          const body = await res.json().catch(() => ({}))
+          return { ok: false, error: mutationErrorMessage(res, body, "Failed to mark as completed") }
+        }
+        invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId!)])
         return { ok: true }
       } catch {
         rollback()
@@ -857,7 +905,9 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
             }),
           }
           const withDeliverables =
-            fields.scriptStatus !== undefined || fields.contentStatus !== undefined
+            fields.paidCollabData !== undefined
+              ? { paidCollabData: fields.paidCollabData, ...inferContentStatuses({ paidCollabData: fields.paidCollabData }) }
+              : fields.scriptStatus !== undefined || fields.contentStatus !== undefined
               ? (() => {
                   const existing = withFields.paidCollabData?.deliverables ?? []
                   const nextDeliverables: CollabDeliverable[] = existing.length
@@ -948,6 +998,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
     hasGivenUp,
     updateColumn,
     updatePaidCollab,
+    markCompleted,
     updateCampaignType,
     updatePostUrl,
     updateOrderDetails,

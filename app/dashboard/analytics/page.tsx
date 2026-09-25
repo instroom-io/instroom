@@ -55,6 +55,8 @@ interface AnalyticsInfluencer {
   contentSaved: boolean | null
   adCode: boolean | null
   deliveredDaysAgo: number | null
+  /** Marked completed in Post Tracker. Optional for older cached payloads. */
+  completed?: boolean
 }
 
 // ============================================================
@@ -841,6 +843,9 @@ function AnalyticsPageContent() {
     // literal entries in RESPONDED_OR_BEYOND above, so every row counted here
     // is already counted there.
     const notInterested = dataToUse.filter(i => i.pipelineStatus === "Rejected").length
+    // Closed collaborations marked completed in Post Tracker — a subset of
+    // `closed`, since only a Posted row can be completed.
+    const completed = dataToUse.filter(i => i.completed === true).length
     const responseRate = totalOutreach > 0 ? (responded / totalOutreach) * 100 : 0
     const closingRate = responded > 0 ? (closed / responded) * 100 : 0
 
@@ -967,7 +972,7 @@ function AnalyticsPageContent() {
     }))
 
     return {
-      totalOutreach, responded, closed, notInterested, responseRate, closingRate,
+      totalOutreach, responded, closed, completed, notInterested, responseRate, closingRate,
       reasonsBreakdown, hardTotal, softTotal, otherTotal, noOrderYet, inTransit, deliveryProblem,
       noPost, posted, closedCollaborations, receivedProduct, postRate, platformStats,
       platformEMV, totalViews, totalLikes, totalComments, engagementRate, totalEMV,
@@ -1510,7 +1515,9 @@ function AnalyticsPageContent() {
                     "of reached out" as if it sat at the same funnel depth as
                     Responded itself. The COUNT was already correct; only the
                     denominator this step displayed against was wrong. */}
-                <FunnelStep index={4} name="Not interested" value={metrics.notInterested} total={metrics.responded} color="#E24B4A" isLast />
+                <FunnelStep index={4} name="Completed" value={metrics.completed} total={metrics.closed} color="#0F6B3E"
+                  dropOff={metrics.closed > 0 ? `▼ ${Math.round((1 - metrics.completed / metrics.closed) * 100)}% not yet completed` : undefined} />
+                <FunnelStep index={5} name="Not interested" value={metrics.notInterested} total={metrics.responded} color="#E24B4A" isLast />
               </SectionCard>
 
               {/* Reasons not interested */}

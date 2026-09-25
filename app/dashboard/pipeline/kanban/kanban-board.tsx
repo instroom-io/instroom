@@ -60,6 +60,7 @@ import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { BoardSkeleton } from "@/components/shared/skeletons"
 import { DeclineModal } from "@/components/shared/decline-modal"
 import { StageActionButton } from "@/components/shared/stage-action-button"
+import { DELIVERABLE_COLLAB_TYPES, MAX_DELIVERABLES } from "@/lib/deliverables"
 import {
   allowedTransitions,
   isTerminalStage,
@@ -544,7 +545,8 @@ function SearchableMultiSelect({ label, options, selected, onChange, allLabel }:
 // Now fires when moving TO "Deal Agreed" — user picks collab type first, THEN it moves
 interface CollabTypeModalProps {
   influencer: PipelineInfluencer
-  onConfirm: (collabType: CollabType) => void
+  /** `deliverables` is set for Gifting / Paid types — one name per expected post. */
+  onConfirm: (collabType: CollabType, deliverables?: string[]) => void
   onCancel: () => void
   /** Set when the modal drives a bulk move — one collab type applies to all. */
   bulkCount?: number
@@ -552,9 +554,14 @@ interface CollabTypeModalProps {
 
 function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabTypeModalProps) {
   const [selectedType, setSelectedType] = useState<CollabType | null>(null)
+  // Campaign deliverables for Post Tracker — one entry per expected post.
+  const [deliverableNames, setDeliverableNames] = useState<string[]>([""])
   const initials = influencer.influencer.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()
 
   const selectedCollab = COLLAB_TYPES.find((c) => c.id === selectedType)
+  const needsDeliverables = selectedType !== null && DELIVERABLE_COLLAB_TYPES.has(selectedType)
+  const setDeliverableCount = (n: number) =>
+    setDeliverableNames((prev) => Array.from({ length: n }, (_, i) => prev[i] ?? ""))
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4" onClick={onCancel}>
@@ -641,6 +648,44 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
           </div>
         </div>
 
+        {/* Campaign deliverables — saved to the influencer's record and used by
+            Post Tracker as the number of posts it expects. */}
+        {needsDeliverables && (
+          <div className="px-4 sm:px-6 pt-2 pb-4">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Campaign Deliverables</p>
+              <label className="flex items-center gap-2 text-[11px] text-gray-500">
+                How many?
+                <select
+                  value={deliverableNames.length}
+                  onChange={(e) => setDeliverableCount(parseInt(e.target.value, 10))}
+                  className="text-xs px-2 py-1 rounded-lg border border-gray-200 bg-white text-gray-700 focus:outline-none focus:border-green-500"
+                >
+                  {Array.from({ length: MAX_DELIVERABLES }, (_, i) => i + 1).map((v) => (
+                    <option key={v} value={v}>{v}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="flex flex-col gap-2">
+              {deliverableNames.map((name, i) => (
+                <div key={i} className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 rounded-lg">
+                  <span className="text-[11px] font-semibold text-gray-400 min-w-[16px]">{i + 1}</span>
+                  <input
+                    value={name}
+                    placeholder="e.g. 1x IG Reel, TikTok video… (optional)"
+                    onChange={(e) => setDeliverableNames((prev) => prev.map((n, idx) => (idx === i ? e.target.value : n)))}
+                    className="flex-1 text-xs text-gray-700 bg-transparent focus:outline-none"
+                  />
+                </div>
+              ))}
+            </div>
+            <p className="text-[11px] text-gray-400 mt-2">
+              Each deliverable is one expected post. Post Tracker marks the influencer Completed once every deliverable has a post link.
+            </p>
+          </div>
+        )}
+
         {/* Footer */}
         <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 px-4 sm:px-6 py-3 sm:py-4 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl">
           <p className="text-[11px] text-gray-400">
@@ -654,7 +699,7 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
               Cancel
             </button>
             <button
-              onClick={() => selectedType && onConfirm(selectedType)}
+              onClick={() => selectedType && onConfirm(selectedType, needsDeliverables ? deliverableNames : undefined)}
               disabled={!selectedType}
               className="px-4 sm:px-6 py-2 text-sm font-medium text-white bg-green-500 rounded-lg hover:bg-green-600 transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 whitespace-nowrap"
             >
@@ -803,6 +848,28 @@ function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApprov
           stage this card would actually land in rather than a fixed string. */}
       {nextStages.length > 0 && !terminal && (
         <div className="flex gap-1.5 mt-2.5 pt-2 border-t border-gray-100 flex-nowrap">
+          {/* The hand-over to Post Tracker, on the one stage it starts from.
+              Dropping a card on the Deal Agreed column used to trigger this
+              cascade implicitly, which left the row at the terminal
+              "For Order Creation" stage while the board still drew it under
+              Deal Agreed — it looked moved, but could never be moved again.
+              Deal Agreed is now an ordinary reversible stage and the cascade
+              is this explicit button, so the step is deliberate and the card
+              stays draggable until it is taken. Routed through the same
+              onStatusChange → collab modal path the For Order Creation column
+              uses, so the modal, its copy and the resulting write are all
+              unchanged. */}
+          {influencer.pipelineStatus === "Deal Agreed" && (
+            <StageActionButton
+              destination="For Order Creation"
+              label="Move influencer to Post Tracker"
+              tone="forward"
+              disabled={!canApproveInfluencers}
+              disabledReason="Only Owners and Managers can approve influencers"
+              icon={<IconPackage size={11} className="flex-shrink-0" />}
+              onClick={(e) => { e.stopPropagation(); if (!canApproveInfluencers) return; onStatusChange(influencer.id, "For Order Creation") }}
+            />
+          )}
           {nextStages.map((stage) => (
             <StageActionButton
               key={stage}
@@ -1067,9 +1134,9 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   // Confirming a Collaboration Type is the single action that both marks the
   // deal agreed and moves the influencer into Post Tracker with its default
   // initial status — no separate "Move to Post Tracker" click needed anymore.
-  const handleCollabTypeConfirm = async (collabType: CollabType) => {
+  const handleCollabTypeConfirm = async (collabType: CollabType, deliverables?: string[]) => {
     if (!pendingCollabId || !collabModalInfluencer) return
-    const success = await updateStatus(pendingCollabId, "Deal Agreed", { collaborationType: collabType })
+    const success = await updateStatus(pendingCollabId, "Deal Agreed", { collaborationType: collabType, campaignDeliverables: deliverables })
     const collabName = COLLAB_TYPES.find((c) => c.id === collabType)?.title ?? collabType
     toast(
       success
@@ -1165,6 +1232,23 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
 
     const newStatus = getStatusFromColumnKey(destKey)
     if (dragged.pipelineStatus === newStatus) return
+    // An "In Post Tracker" card is drawn under Deal Agreed, so dropping it back
+    // on that column is a drop onto its own column — nothing to move.
+    if (dragged.pipelineStatus === "For Order Creation" && newStatus === "Deal Agreed") return
+
+    // Hand-over to Post Tracker — checked BEFORE the transition rule, which
+    // would refuse it: "For Order Creation" is deliberately not a selectable
+    // destination, because it must be reached by confirming a collaboration
+    // type rather than picked directly. Same branch, same reason, same order
+    // as handleStatusUpdate.
+    // A move to Deal Agreed opens the collaboration-type modal and, once
+    // confirmed, hands the row straight over to Post Tracker's For Order
+    // Creation with the chosen type and deliverables.
+    if (newStatus === "For Order Creation" || newStatus === "Deal Agreed") {
+      setPendingCollabId(draggedId)
+      setCollabModalInfluencer(dragged)
+      return
+    }
 
     // One check, the same rule the buttons and dropdowns use.
     //
@@ -1175,15 +1259,6 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     // names the source, so the message says what is really wrong.
     if (!isTransitionAllowed(dragged.pipelineStatus, newStatus)) {
       toast(transitionRefusalReason(dragged.pipelineStatus, newStatus), 3500, "error")
-      return
-    }
-
-    // Drag to Deal Agreed (or directly to the hidden For Order Creation column)
-    // → open the collab type modal first. Confirming it both agrees the deal
-    // and cascades straight into Post Tracker — there's no manual move step.
-    if (newStatus === "Deal Agreed" || newStatus === "For Order Creation") {
-      setPendingCollabId(draggedId)
-      setCollabModalInfluencer(dragged)
       return
     }
 
@@ -1216,6 +1291,25 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
       toast("Only Owners and Managers can approve influencers", 2500, "error")
       return
     }
+    // ── Hand-over to Post Tracker ─────────────────────────────────────────
+    // Checked BEFORE the transition rule below, because it is not a plain
+    // stage move and that rule would refuse it: "For Order Creation" is
+    // deliberately not a selectable destination (see SELECTABLE_STAGES), as
+    // it must be reached by confirming a collaboration type rather than
+    // picked directly. The modal supplies that type, and the PATCH it then
+    // sends is the one the server accepts for this cascade.
+    // Deal Agreed opens the same modal (see handleDragEnd). A row already in
+    // Post Tracker is drawn under Deal Agreed, so there is nothing to do.
+    if (newStatus === "For Order Creation" || newStatus === "Deal Agreed") {
+      const handover = data.find((i) => i.id === id)
+      if (handover?.pipelineStatus === "For Order Creation") return
+      if (handover) {
+        setPendingCollabId(id)
+        setCollabModalInfluencer(handover)
+      }
+      return
+    }
+
     // ── Transition check ──────────────────────────────────────────────────
     // Every movement control funnels through here — card quick-move buttons,
     // the list-view status dropdown and the Details panel's stage dropdown —
@@ -1231,15 +1325,6 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     if (newStatus === "Not Interested") {
       const influencer = data.find((i) => i.id === id)
       if (influencer) { setPendingNiId(id); setNiModalInfluencer(influencer) }
-      return
-    }
-    // Moving to Deal Agreed → show collab type modal first
-    if (newStatus === "Deal Agreed") {
-      const influencer = data.find((i) => i.id === id)
-      if (influencer) {
-        setPendingCollabId(id)
-        setCollabModalInfluencer(influencer)
-      }
       return
     }
     const influencer = data.find((i) => i.id === id)
@@ -1277,18 +1362,34 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   // Two at a time leaves a connection free for whatever the user does next.
   const runBulkUpdate = async (
     newStatus: string,
-    extra?: { niReason?: string; declineNotes?: string; collaborationType?: string }
+    extra?: { niReason?: string; declineNotes?: string; collaborationType?: string; campaignDeliverables?: string[] }
   ) => {
     const selected = data.filter((d) => selectedIds.has(d.id))
+
+    // The hand-over into Post Tracker, which is sent as "Deal Agreed" plus a
+    // collaboration type (the pair the PATCH route cascades to stage 5).
+    //
+    // It needs its own target rule. The plain rule below excludes a row whose
+    // stage already EQUALS the destination, which is right for an ordinary
+    // move but wrong here: a row sitting at Deal Agreed is precisely the one
+    // this action is for, and it would have been filtered out of its own
+    // hand-over. Rows already in Post Tracker are still excluded — that stage
+    // is terminal and there is nothing left to hand over.
+    const isHandover = newStatus === "Deal Agreed" && extra?.collaborationType !== undefined
+
     // Same rule the single-row paths apply, asked the same way: a row is a
     // target only if this exact move is permitted from where it currently is.
     // (`isTransitionAllowed` returns true for a no-op, so the second clause
     // still excludes rows already in the target stage.)
-    const targets = selected.filter(
-      (d) => isTransitionAllowed(d.pipelineStatus, newStatus) && d.pipelineStatus !== newStatus
+    const targets = selected.filter((d) =>
+      isHandover
+        ? d.pipelineStatus !== "For Order Creation"
+        : isTransitionAllowed(d.pipelineStatus, newStatus) && d.pipelineStatus !== newStatus
     )
     const skipped = selected.length - targets.length
-    const stageTitle = getStatusTitle(newStatus)
+    // Named for where the rows actually land, so the toast does not report a
+    // hand-over as a move to "Deal Agreed".
+    const stageTitle = isHandover ? "Post Tracker" : getStatusTitle(newStatus)
 
     if (targets.length === 0) {
       toast(`Nothing to move — the selected influencers are already in ${stageTitle} or can't be moved`, 3500, "error")
@@ -1351,8 +1452,10 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     if (selectedIds.size === 0) return
     // These two stages need extra input before they can be written; reuse the
     // existing modals, collecting one answer that applies to the whole batch.
-    if (newStatus === "Not Interested") { setBulkNiOpen(true); return }
-    if (newStatus === "Deal Agreed")    { setBulkCollabOpen(true); return }
+    if (newStatus === "Not Interested")     { setBulkNiOpen(true); return }
+    // Deal Agreed and the explicit hand-over both collect a collaboration type
+    // (and deliverables) and move the selection into Post Tracker.
+    if (newStatus === "For Order Creation" || newStatus === "Deal Agreed") { setBulkCollabOpen(true); return }
     void runBulkUpdate(newStatus)
   }
 
@@ -1362,9 +1465,12 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     await runBulkUpdate("Not Interested", { niReason: reason, declineNotes })
   }
 
-  const handleBulkCollabConfirm = async (collabType: CollabType) => {
+  const handleBulkCollabConfirm = async (collabType: CollabType, deliverables?: string[]) => {
     setBulkCollabOpen(false)
-    await runBulkUpdate("Deal Agreed", { collaborationType: collabType })
+    // Still sent as "Deal Agreed" + a collaboration type: that is the pair the
+    // PATCH route turns into the cascade to stage 5 (see
+    // pipelineStatusToFields). Only the menu entry that reaches this changed.
+    await runBulkUpdate("Deal Agreed", { collaborationType: collabType, campaignDeliverables: deliverables })
   }
 
   const openSidebar = useCallback((inf: PipelineInfluencer) => {
@@ -1885,6 +1991,18 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                     {col.title}
                   </button>
                 ))}
+                {/* The hand-over, listed explicitly. "For Order Creation" is a
+                    hidden column so it is not in visibleColumns, and bulk
+                    "Deal Agreed" used to stand in for it — which is what sent
+                    whole selections to a terminal stage unintentionally. */}
+                <button
+                  role="menuitem"
+                  onClick={() => handleBulkStageSelect("For Order Creation")}
+                  className="flex items-center gap-2 w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 focus:bg-gray-50 focus:outline-none transition border-t border-gray-100 mt-1 pt-2"
+                >
+                  <span className="w-2 h-2 rounded-full bg-[#1FAE5B]" />
+                  Move to Post Tracker
+                </button>
               </div>
             )}
           </div>

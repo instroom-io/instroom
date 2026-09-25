@@ -20,10 +20,14 @@ import { useDraggable } from "@dnd-kit/core"
 import {
   IconSearch, IconX, IconChevronDown, IconChevronUp,
   IconLayoutKanban, IconList, IconFilter, IconLocation,
-  IconLayoutList, IconLink, IconArrowRight, IconAlertTriangle,
+  IconLayoutList, IconLink, IconArrowRight, IconAlertTriangle, IconCircleCheck,
 } from "@tabler/icons-react"
-import { useClosedData, type ClosedInfluencer, type ClosedColumn, type OrderDetailsFields, type PostDetailsFields, type UpdateColumnResult } from "@/hooks/useClosedData"
+import { useClosedData, type ClosedInfluencer, type ClosedColumn, type OrderDetailsFields, type PostDetailsFields, type UpdateColumnResult, type PaidCollabData } from "@/hooks/useClosedData"
 import { parseMetricInput, formatEngagementPercent } from "@/lib/post-tracker-status"
+import {
+  getDeliverables, getDeliverableProgress, deliverablePostUrl, blankDeliverable, MAX_DELIVERABLES,
+  type CampaignDeliverable,
+} from "@/lib/deliverables"
 import { invalidateInfluencerDerivedCaches, closedCacheKey } from "@/lib/cache-invalidation"
 import { DataSyncStatus } from "@/components/data-sync-status"
 import { ProfilePicture, PlatformIcon } from "@/components/table-sheet/ui-atoms"
@@ -164,6 +168,11 @@ const hasDetectedPost = (inf: Pick<ClosedInfluencer, "detectedPostCount">) =>
   (inf.detectedPostCount ?? 0) > 0
 const hasPostEvidence = (inf: Pick<ClosedInfluencer, "postUrl" | "detectedPostCount">) =>
   hasPostUrl(inf) || hasDetectedPost(inf)
+// A row with campaign deliverables enters Posted at "0/N deliverables" — its
+// posts are tracked there — so it needs no evidence up front. Same rule as the
+// closed PATCH route.
+const canEnterPosted = (inf: Pick<ClosedInfluencer, "postUrl" | "detectedPostCount" | "paidCollabData">) =>
+  hasPostEvidence(inf) || getDeliverables(inf.paidCollabData).length > 0
 
 /**
  * Stages where the post FIELDS make sense.
@@ -458,10 +467,12 @@ const OFFSCREEN_SKIP: CSSProperties = {
   containIntrinsicSize: "auto 180px",
 }
 
-function PostTrackerCardBase({ inf, onOpen, onMove, canApproveInfluencers }: {
+function PostTrackerCardBase({ inf, onOpen, onMove, onComplete, canApproveInfluencers }: {
   inf: ClosedInfluencer
   onOpen: (inf: ClosedInfluencer) => void
   onMove: (id: string, col: ClosedColumn) => void
+  /** "Mark as completed" — moves a Posted row into the Completed column. */
+  onComplete: (id: string) => void
   canApproveInfluencers: boolean
 }) {
   const nextStage  = NEXT_STAGE[inf.closedStatus]
@@ -478,6 +489,14 @@ function PostTrackerCardBase({ inf, onOpen, onMove, canApproveInfluencers }: {
   // stage, unlike "No post" which only makes sense once the product landed.
   // Not offered from Issues itself (already there) or the terminal stages.
   const showIssues = !isTerminal && !isIssue
+  // Posted column tracks campaign deliverables: "x/N deliverables" until every
+  // one has a post link, then "Completed". Rows without deliverables keep the
+  // original "Content live" pill.
+  const progress = getDeliverableProgress(inf.paidCollabData, inf.postUrl)
+  // Every deliverable linked (or, without deliverables, a Post URL) — same rule
+  // the PATCH route enforces for "completed".
+  const canComplete = progress.total > 0 ? progress.complete : hasPostUrl(inf)
+  const showComplete = inf.closedStatus === "Posted" && !inf.completed
 
   return (
     <div style={OFFSCREEN_SKIP} className={`bg-white border rounded-lg p-3 hover:shadow-md transition-shadow ${
@@ -534,7 +553,17 @@ function PostTrackerCardBase({ inf, onOpen, onMove, canApproveInfluencers }: {
               ⚠️ Awaiting content
             </span>
           )}
-          {inf.closedStatus === "Posted" && inf.postUrl && (
+          {inf.closedStatus === "Posted" && inf.completed && (
+            <span className="text-[10px] text-green-600 bg-green-50 rounded-full px-2.5 py-1 inline-flex items-center gap-1 font-medium">
+              <IconCircleCheck size={10}/> Completed
+            </span>
+          )}
+          {showComplete && progress.total > 0 && (
+            <span className="text-[10px] text-amber-600 bg-amber-50 rounded-full px-2.5 py-1 inline-flex items-center gap-1 font-medium">
+              <IconLink size={10}/> {progress.posted}/{progress.total} deliverables
+            </span>
+          )}
+          {showComplete && progress.total === 0 && inf.postUrl && (
             <span className="text-[10px] text-green-600 bg-green-50 rounded-full px-2.5 py-1 inline-flex items-center gap-1 font-medium">
               <IconLink size={10}/> Content live
             </span>
@@ -560,6 +589,23 @@ function PostTrackerCardBase({ inf, onOpen, onMove, canApproveInfluencers }: {
           (advance, Issues, No post) and at a 240px column width three
           truncated labels are unreadable. They wrap to a second line instead,
           each staying wide enough to read. */}
+      {/* Posted → Completed is an explicit step, offered once every
+          deliverable has its post link. */}
+      {showComplete && (
+        <div className="flex flex-wrap gap-1.5 mt-2.5 pt-2 border-t border-gray-100">
+          <StageActionButton
+            destination="Completed"
+            label="Mark as completed"
+            tone="forward"
+            disabled={!canApproveInfluencers || !canComplete}
+            disabledReason={!canApproveInfluencers
+              ? "Only Owners and Managers can update post status"
+              : "Add a post link for every deliverable first"}
+            icon={<IconCircleCheck size={11} className="flex-shrink-0"/>}
+            onClick={e => { e.stopPropagation(); if (!canApproveInfluencers || !canComplete) return; onComplete(inf.id) }}
+          />
+        </div>
+      )}
       {!isTerminal && (nextStage || showNoPost || showIssues) && (
         <div className="flex flex-wrap gap-1.5 mt-2.5 pt-2 border-t border-gray-100">
           {nextStage && (
@@ -607,7 +653,8 @@ const PostTrackerCard = memo(PostTrackerCardBase, (prev, next) =>
   prev.inf === next.inf &&
   prev.canApproveInfluencers === next.canApproveInfluencers &&
   prev.onOpen === next.onOpen &&
-  prev.onMove === next.onMove
+  prev.onMove === next.onMove &&
+  prev.onComplete === next.onComplete
 )
 
 function DroppableColumn({ id, children, isExit }: { id: string; children: React.ReactNode; isExit?: boolean }) {
@@ -764,6 +811,28 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
   })
   postUrlValueRef.current = postData.postUrl
 
+  // Campaign deliverables — the same paidCollab.deliverables array the Pipeline
+  // hand-over writes (lib/deliverables). One post link per deliverable is
+  // edited here and saved by the Post tab's Update; the row-level Post URL
+  // (which predates deliverables) seeds the first one.
+  const [deliverableDrafts, setDeliverableDrafts] = useState<CampaignDeliverable[]>(() =>
+    getDeliverables(inf.paidCollabData).map((d, i) => ({ ...d, postUrl: deliverablePostUrl(d, i, inf.postUrl) }))
+  )
+  const deliverableDraftsRef = useRef(deliverableDrafts)
+  deliverableDraftsRef.current = deliverableDrafts
+  const hasDeliverables = deliverableDrafts.length > 0
+  const postedDeliverables = deliverableDrafts.filter(d => (d.postUrl ?? "").trim()).length
+  const setDeliverableCount = (n: number) => setDeliverableDrafts(ds => {
+    const maxId = ds.reduce((m, d) => Math.max(m, Number(d.id) || 0), 0)
+    // A first deliverable added to a row that already has a Post URL inherits
+    // it, so defining deliverables never discards the post already recorded.
+    return Array.from({ length: n }, (_, i) =>
+      ds[i] ?? { ...blankDeliverable(maxId + i + 1), postUrl: i === 0 ? (inf.postUrl ?? "") : "" }
+    )
+  })
+  const updateDeliverableLink = (index: number, url: string) =>
+    setDeliverableDrafts(ds => ds.map((d, i) => (i === index ? { ...d, postUrl: url } : d)))
+
   // ── Shopify push flow (self-contained — doesn't depend on the manual
   // Order tab fields above) ──────────────────────────────────────────────────
   const isGifting = campaignType === "gifting"
@@ -888,25 +957,49 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
   }
   const handleSavePost = async () => {
     setSavingPost(true)
-    const trimmedUrl = postData.postUrl.trim()
+    // With deliverables, the row-level Post URL mirrors the first deliverable
+    // link, so the existing Posted evidence check and post detection keep
+    // reading the same column they always have.
+    const trimmedUrl = hasDeliverables
+      ? (deliverableDrafts.map(d => (d.postUrl ?? "").trim()).find(Boolean) ?? "")
+      : postData.postUrl.trim()
+    // Sent whenever the row has (or had) deliverables, so a count change is saved.
+    const sendDeliverables = hasDeliverables || getDeliverables(inf.paidCollabData).length > 0
+    // The Script/Content dropdowns are a rollup over every deliverable; only a
+    // value the user actually changed is applied, so per-deliverable review
+    // states set in the Paid collab editor are not flattened by an untouched field.
+    const scriptChanged = Boolean(postData.scriptStatus) && postData.scriptStatus !== (inf.scriptStatus || "")
+    const contentChanged = Boolean(postData.contentStatus) && postData.contentStatus !== (inf.contentStatus || "")
     // Save moves this influencer straight to Posted once there's evidence of a
     // published post — the same requirement handleMove's manual Stage move
     // enforces (hasPostEvidence), and still re-checked by the server's own
     // "Posted needs proof of a post" guard either way. Already-Posted rows are
     // left alone: the server's "Posted is terminal" guard would 409 a redundant
     // closedStatus:"Posted" anyway, so it's simply not sent.
-    const markPosted = inf.closedStatus !== "Posted" && (Boolean(trimmedUrl) || hasPostEvidence(inf))
+    const markPosted = inf.closedStatus !== "Posted" &&
+      (Boolean(trimmedUrl) || (hasDeliverables ? hasDetectedPost(inf) : hasPostEvidence(inf)))
     const res = await onPostDetailsChange(
       inf.id,
       {
-        postUrl: postData.postUrl,
+        postUrl: hasDeliverables ? trimmedUrl : postData.postUrl,
         postedAt: postData.postedAt,
         likes: postData.likes,
         comments: postData.comments,
         engagement: postData.engagement,
         internalRating: postData.internalRating,
-        scriptStatus: postData.scriptStatus,
-        contentStatus: postData.contentStatus,
+        ...(sendDeliverables
+          ? {
+              paidCollabData: {
+                ...(inf.paidCollabData ?? {}),
+                deliverables: deliverableDrafts.map(d => ({
+                  ...d,
+                  postUrl: (d.postUrl ?? "").trim(),
+                  ...(scriptChanged ? { scriptStatus: postData.scriptStatus } : {}),
+                  ...(contentChanged ? { contentStatus: postData.contentStatus } : {}),
+                })),
+              } as PaidCollabData,
+            }
+          : { scriptStatus: postData.scriptStatus, contentStatus: postData.contentStatus }),
       },
       { markPosted }
     )
@@ -964,7 +1057,18 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
    * already in the form rather than being zeroed, and nothing is invented.
    */
   const handleDetectedPost = useCallback((post: DetectedPost) => {
-    if (postUrlValueRef.current.trim()) return
+    // With deliverables, a detected post fills the first deliverable that has
+    // no link yet — never one already holding this same post — and only the
+    // first deliverable's post fills the metrics, as the single field did.
+    const ds = deliverableDraftsRef.current
+    if (ds.length > 0) {
+      if (ds.some(d => (d.postUrl ?? "").trim() === post.postUrl)) return
+      const idx = ds.findIndex(d => !(d.postUrl ?? "").trim())
+      if (idx === -1) return
+      setDeliverableDrafts(prev => prev.map((d, i) => (i === idx ? { ...d, postUrl: post.postUrl } : d)))
+      setPostUrlOrigin("detected")
+      if (idx > 0) return
+    } else if (postUrlValueRef.current.trim()) return
     setPostData(d => ({
       ...d,
       postUrl: post.postUrl,
@@ -1336,9 +1440,70 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
 
               {canTrackPost(inf) && (
                 <>
+              {/* Campaign deliverables — one expected post each, defined on the
+                  Pipeline hand-over. Each gets its own post link; Post Tracker
+                  shows "x/N deliverables" until all are linked, then Completed. */}
+              <div className="pfg">
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                  <div className="pfl">
+                    Deliverables{hasDeliverables ? ` · ${postedDeliverables}/${deliverableDrafts.length} posted` : ""}
+                  </div>
+                  <select
+                    className="pfi"
+                    style={{ width: "auto", padding: "4px 8px" }}
+                    value={deliverableDrafts.length}
+                    onChange={e => setDeliverableCount(parseInt(e.target.value, 10))}
+                  >
+                    {Array.from({ length: MAX_DELIVERABLES + 1 }, (_, i) => i).map(v => (
+                      <option key={v} value={v}>{v === 0 ? "None" : v}</option>
+                    ))}
+                  </select>
+                </div>
+                {deliverableDrafts.map((d, i) => {
+                  const link = (d.postUrl ?? "").trim()
+                  const isWebLink = /^https?:\/\//i.test(link)
+                  return (
+                    <div
+                      key={d.id}
+                      onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = "copy" }}
+                      onDrop={e => {
+                        e.preventDefault()
+                        const url = readDroppedPostUrl(e.dataTransfer)
+                        if (!url) { showToast("That drop contained no post link"); return }
+                        updateDeliverableLink(i, url)
+                        setPostUrlOrigin("dropped")
+                      }}
+                    >
+                      <div style={{ fontSize: 11, color: "#555", margin: "4px 0" }}>{i + 1}. {d.name || `Deliverable ${i + 1}`}</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <input
+                          ref={i === 0 ? postUrlRef : undefined}
+                          className="pfi"
+                          value={d.postUrl ?? ""}
+                          onChange={e => { updateDeliverableLink(i, e.target.value); setPostUrlOrigin("stored") }}
+                          placeholder="Paste the post link, or drag a detected post here"
+                        />
+                        {isWebLink && (
+                          <a href={link} target="_blank" rel="noopener noreferrer" title="Open post" className="text-[#0F6B3E] hover:text-[#1FAE5B]">
+                            <IconLink size={14} />
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+                {hasDeliverables && postUrlOrigin !== "stored" && (
+                  <div className="text-[10px] text-gray-400 mt-1">
+                    {postUrlOrigin === "detected" ? "Filled from Automatic Post Detection" : "Dropped from a detected post"} — Update to keep it.
+                  </div>
+                )}
+              </div>
+
               {/* Post URL — typed, auto-filled from detection, or dropped from
                   the detected posts list above. All three end up as the same
-                  form value and are saved by the same Save button. */}
+                  form value and are saved by the same Save button. Replaced by
+                  the per-deliverable links above when deliverables are set. */}
+              {!hasDeliverables && (
               <div
                 className="pfg"
                 onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; setUrlDropActive(true) }}
@@ -1371,6 +1536,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                   </div>
                 ) : null}
               </div>
+              )}
               <div className="pfr">
                 <div className="pfg"><div className="pfl">Posted At</div><input type="date" className="pfi" value={postData.postedAt} onChange={e => setPostData(d => ({ ...d, postedAt: e.target.value }))} /></div>
                 <div className="pfg"><div className="pfl">Internal Rating</div>
@@ -1433,7 +1599,11 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
 
           {/* ════ PAID COLLAB DETAILS TAB ════ */}
           {profileTab === 4 && (
-            <PaidCollabTab influencerName={inf.influencer} rateHint={inf.agreedRate ?? undefined} />
+            <PaidCollabTab
+              influencerName={inf.influencer}
+              rateHint={inf.agreedRate ?? undefined}
+              initialDeliverables={getDeliverables(inf.paidCollabData).map((d, i) => ({ ...d, postUrl: deliverablePostUrl(d, i, inf.postUrl) }))}
+            />
           )}
 
           {/* ════ HISTORY TAB ════ */}
@@ -1526,7 +1696,7 @@ function PostTrackerContent() {
   // feature for free-tier users. A cached answer resolves on mount instead.
   const { isSubscribed, status: subscriptionStatus } = useSubscriptionGate(brandId)
 
-  const { data, isLoading, error, hasGivenUp, updateColumn, updateCampaignType, updatePostDetails, updateOrderDetails, isSaving, saveFailed, saveMessage, refetch } = useClosedData(brandId)
+  const { data, isLoading, error, hasGivenUp, updateColumn, markCompleted, updateCampaignType, updatePostDetails, updateOrderDetails, isSaving, saveFailed, saveMessage, refetch } = useClosedData(brandId)
 
   // Same approach and constant as the Pipeline board (kanban/kanban-board.tsx)
   // — see there for why it's measured rather than a flat vh, and why this
@@ -1592,7 +1762,7 @@ function PostTrackerContent() {
     const inf = data.find(d=>d.id===id)
     // A manual move to Posted needs evidence of a published post — either a
     // Post URL or a post already found by Automatic Post Detection.
-    if (col === "Posted" && inf && !hasPostEvidence(inf)) {
+    if (col === "Posted" && inf && !canEnterPosted(inf)) {
       setPostUrlBlocked([inf])
       return false
     }
@@ -1608,6 +1778,21 @@ function PostTrackerContent() {
     }
     return res.ok
   }, [data, updateColumn, canApprove])
+
+  const handleComplete = useCallback(async (id: string) => {
+    if (!canApprove) {
+      showToast("Only Owners and Managers can update post status", "error")
+      return
+    }
+    const inf = data.find(d=>d.id===id)
+    const res = await markCompleted(id, true)
+    if (res.ok) {
+      showToast(`${inf?.influencer} marked as completed`)
+      setSelectedInf(p => p?.id===id ? {...p, completed: true} : p)
+    } else {
+      showToast(res.error || "Failed to mark as completed", "error")
+    }
+  }, [data, markCompleted, canApprove])
 
   const filteredData = useMemo(() => {
     let result = data.filter(inf =>
@@ -1685,7 +1870,7 @@ function PostTrackerContent() {
     // Posted. If any selected row has neither a Post URL nor a detected post,
     // block the whole batch and name them, rather than silently moving a subset.
     if (col === "Posted") {
-      const missing = candidates.filter(d => !hasPostEvidence(d))
+      const missing = candidates.filter(d => !canEnterPosted(d))
       if (missing.length > 0) {
         setPostUrlBlocked(missing)
         return
@@ -1770,6 +1955,10 @@ function PostTrackerContent() {
   const activeInf          = activeId ? data.find(d=>d.id===activeId) : null
   const selectedColumnInfo = selectedColumnStatus ? COLUMNS.find(col=>col.key===selectedColumnStatus) : null
   const getItemsByColumn   = (columnKey: ClosedColumn) => filteredData.filter(item=>item.closedStatus===columnKey)
+  // "Completed" is a board view over Posted, not a stage of its own: a Posted
+  // row whose every deliverable has a post link moves there automatically.
+  // Marked completed from the Posted column ("Mark as completed").
+  const isCompleted        = (inf: ClosedInfluencer) => inf.completed === true
 
   const handleDragStart = (event: DragStartEvent) => setActiveId(event.active.id as string)
   const handleDragEnd   = async (event: DragEndEvent) => {
@@ -1804,6 +1993,7 @@ function PostTrackerContent() {
           }),
           ...(fields.scriptStatus !== undefined && { scriptStatus: fields.scriptStatus }),
           ...(fields.contentStatus !== undefined && { contentStatus: fields.contentStatus }),
+          ...(fields.paidCollabData !== undefined && { paidCollabData: fields.paidCollabData }),
           ...(options?.markPosted && { closedStatus: "Posted" as ClosedColumn }),
         }
         return next
@@ -2084,7 +2274,9 @@ function PostTrackerContent() {
               {/* The two hand-placed columns are excluded here and rendered after the
                   Exit separator below, in order: No post, then Issues. */}
               {COLUMNS.filter(c=>c.key!=="No post"&&c.key!=="Issues").map((col, colIndex) => {
-                const items = getItemsByColumn(col.key)
+                const items = col.key==="Posted"
+                  ? getItemsByColumn(col.key).filter(inf=>!isCompleted(inf))
+                  : getItemsByColumn(col.key)
                 return (
                   <div key={col.key} className="w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0" style={{ scrollSnapAlign: "start", height: columnHeight ?? undefined }}>
                     <DroppableColumn id={col.key}>
@@ -2110,7 +2302,7 @@ function PostTrackerContent() {
                           <div className="border-2 border-dashed border-gray-200 rounded-lg p-4 text-center text-xs text-gray-400">Drop here</div>
                         ):items.map(inf=>(
                           <DraggableCard key={inf.id} id={inf.id} onClick={()=>setSelectedInf(inf)} disabled={!canApprove}>
-                            <PostTrackerCard inf={inf} onOpen={setSelectedInf} onMove={handleMove} canApproveInfluencers={canApprove}/>
+                            <PostTrackerCard inf={inf} onOpen={setSelectedInf} onMove={handleMove} onComplete={handleComplete} canApproveInfluencers={canApprove}/>
                           </DraggableCard>
                         ))}
                       </div>
@@ -2118,6 +2310,32 @@ function PostTrackerContent() {
                   </div>
                 )
               })}
+
+              {/* Completed — Posted rows marked completed. Not a drop target: a
+                  card lands here through "Mark as completed" on the Posted
+                  card, which requires every deliverable to have a post link. */}
+              {(()=>{
+                const items = getItemsByColumn("Posted").filter(isCompleted)
+                return (
+                  <div className="w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0" style={{ scrollSnapAlign: "start", height: columnHeight ?? undefined }}>
+                    <div className="flex flex-col gap-3 h-full rounded-lg">
+                      <div className="bg-[#1FAE5B] text-white rounded-lg px-3 py-2 text-sm font-semibold flex items-center justify-between">
+                        <span className="flex-1 truncate mr-2">Completed</span>
+                        <span className="bg-white/20 text-white rounded-full px-2 py-0.5 text-xs flex-shrink-0">{items.length}</span>
+                      </div>
+                      <div className="flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto mt-2 pr-1">
+                        {items.length===0?(
+                          <div className="border-2 border-dashed border-gray-200 rounded-lg p-4 text-center text-xs text-gray-400">All deliverables posted</div>
+                        ):items.map(inf=>(
+                          <DraggableCard key={inf.id} id={inf.id} onClick={()=>setSelectedInf(inf)} disabled={!canApprove}>
+                            <PostTrackerCard inf={inf} onOpen={setSelectedInf} onMove={handleMove} onComplete={handleComplete} canApproveInfluencers={canApprove}/>
+                          </DraggableCard>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })()}
 
               {/* Exit separator */}
               <div className="flex flex-col items-center justify-center px-2 flex-shrink-0">
@@ -2151,7 +2369,7 @@ function PostTrackerContent() {
                           <div className="border-2 border-dashed border-red-200 rounded-lg p-4 text-center text-xs text-gray-400">Drop here</div>
                         ):items.map(inf=>(
                           <DraggableCard key={inf.id} id={inf.id} onClick={()=>setSelectedInf(inf)} disabled={!canApprove}>
-                            <PostTrackerCard inf={inf} onOpen={setSelectedInf} onMove={handleMove} canApproveInfluencers={canApprove}/>
+                            <PostTrackerCard inf={inf} onOpen={setSelectedInf} onMove={handleMove} onComplete={handleComplete} canApproveInfluencers={canApprove}/>
                           </DraggableCard>
                         ))}
                       </div>
@@ -2188,7 +2406,7 @@ function PostTrackerContent() {
                           <div className="border-2 border-dashed border-purple-200 rounded-lg p-4 text-center text-xs text-gray-400">Drop here</div>
                         ):items.map(inf=>(
                           <DraggableCard key={inf.id} id={inf.id} onClick={()=>setSelectedInf(inf)} disabled={!canApprove}>
-                            <PostTrackerCard inf={inf} onOpen={setSelectedInf} onMove={handleMove} canApproveInfluencers={canApprove}/>
+                            <PostTrackerCard inf={inf} onOpen={setSelectedInf} onMove={handleMove} onComplete={handleComplete} canApproveInfluencers={canApprove}/>
                           </DraggableCard>
                         ))}
                       </div>
