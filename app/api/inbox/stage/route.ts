@@ -33,6 +33,7 @@ const POST_TRACKER_TARGET: Record<string, ClosedColumn> = {
   IN_TRANSIT:         "In-Transit",
   DELIVERED:          "Delivered",
   POSTED:             "Posted",
+  ISSUES:             "Issues",
   COMPLETED:          "Posted",
 }
 
@@ -43,6 +44,7 @@ const stageLabel: Record<string, string> = {
   IN_TRANSIT:         "In Transit",
   DELIVERED:          "Delivered",
   POSTED:             "Posted",
+  ISSUES:             "Issues",
   COMPLETED:          "Completed",
   REJECTED:           "Rejected",
 }
