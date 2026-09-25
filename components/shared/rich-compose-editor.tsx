@@ -78,23 +78,22 @@ function ToolbarButton({
 
 function AttachmentChip({ pending, onRemove }: { pending: PendingAttachment; onRemove: (id: string) => void }) {
   return (
-    <div className="relative flex-shrink-0 overflow-hidden rounded-lg border border-gray-200 bg-white">
+    <div title={pending.file.name} className="flex h-8 max-w-[220px] flex-shrink-0 items-center gap-1.5 rounded-lg border border-gray-200 bg-white pl-1.5 pr-1">
       {pending.previewUrl ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={pending.previewUrl} alt={pending.file.name} className="h-16 w-16 object-cover" />
+        <img src={pending.previewUrl} alt="" className="h-5 w-5 flex-shrink-0 rounded object-cover" />
       ) : (
-        <div className="flex h-16 w-[104px] flex-col justify-center gap-0.5 px-2">
-          <IconFile size={15} className="text-gray-400" aria-hidden />
-          <span className="truncate text-[10.5px] font-medium text-gray-600">{pending.file.name}</span>
-        </div>
+        <IconFile size={14} className="flex-shrink-0 text-gray-400" aria-hidden />
       )}
+      <span className="min-w-0 truncate text-xs font-medium text-gray-600">{pending.file.name}</span>
+      <span className="flex-shrink-0 text-[10.5px] text-gray-400">{formatAttachmentSize(pending.file.size)}</span>
       <button
         type="button"
         onClick={() => onRemove(pending.id)}
         aria-label={`Remove ${pending.file.name}`}
-        className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-gray-900/70 text-white transition-colors hover:bg-gray-900"
+        className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
       >
-        <IconX size={11} />
+        <IconX size={12} />
       </button>
     </div>
   )
@@ -240,7 +239,8 @@ export const RichComposeEditor = forwardRef<RichComposeEditorHandle, {
   /** Compose wants a large body; the reply box wants something closer to its
    *  old single-line-growing textarea footprint. */
   minHeightPx?: number
-  maxHeightPx?: number
+  /** px or any CSS length. */
+  maxHeightPx?: number | string
   /** Which way the emoji picker opens. Compose sits near the top of its own
    *  modal, so "bottom" (downward, into the body) fits; the reply box sits
    *  near the bottom of the screen, so it wants "top" instead — otherwise
@@ -254,11 +254,16 @@ export const RichComposeEditor = forwardRef<RichComposeEditorHandle, {
    *  a no-op, so the button opens SignatureSetupPopover instead. Defaults to
    *  true so callers that don't pass it keep the normal toggle behavior. */
   signatureAvailable?: boolean
+  /** Rendered at the right end of the toolbar. */
+  toolbarEnd?: React.ReactNode
+  /** Limits attachments + text to about two lines. */
+  collapsed?: boolean
 }>(function RichComposeEditor(
   {
     html, onHtmlChange, files, onAddFiles, onRemoveFile, disabled = false, maxTotalBytes,
     placeholder = "Write your message…", onKeyDown, minHeightPx = 140, maxHeightPx = 320,
     emojiPickerSide = "bottom", signatureEnabled, onToggleSignature, signatureAvailable = true,
+    toolbarEnd, collapsed = false,
   },
   ref
 ) {
@@ -380,7 +385,8 @@ export const RichComposeEditor = forwardRef<RichComposeEditorHandle, {
 
   return (
     <div
-      className={`overflow-visible rounded-2xl border bg-white transition-colors ${
+      // min-h-0 lets a height-capped parent shrink the box.
+      className={`flex min-h-0 flex-col overflow-visible rounded-2xl border bg-white transition-colors ${
         dragging ? "border-[#1FAE5B] bg-[#1FAE5B]/5" : "border-gray-200"
       }`}
       onDragOver={(e) => { e.preventDefault(); if (!disabled) setDragging(true) }}
@@ -392,7 +398,7 @@ export const RichComposeEditor = forwardRef<RichComposeEditorHandle, {
       }}
     >
       {/* Toolbar */}
-      <div className="flex items-center gap-0.5 border-b border-gray-100 px-2 py-1.5">
+      <div className="flex flex-shrink-0 flex-wrap items-center gap-0.5 border-b border-gray-100 px-2 py-1.5">
         <ToolbarButton icon={IconBold} label="Bold" disabled={disabled} active={activeFormats.bold} onClick={() => runCommand("bold")} />
         <ToolbarButton icon={IconItalic} label="Italic" disabled={disabled} active={activeFormats.italic} onClick={() => runCommand("italic")} />
         <div className="relative">
@@ -445,6 +451,7 @@ export const RichComposeEditor = forwardRef<RichComposeEditorHandle, {
         {disabled && (
           <span className="ml-auto pr-1 text-[11px] text-gray-400">Attachments and formatting aren't available here</span>
         )}
+        {toolbarEnd && <div className="ml-auto flex items-center gap-1">{toolbarEnd}</div>}
       </div>
 
       <input
@@ -463,8 +470,10 @@ export const RichComposeEditor = forwardRef<RichComposeEditorHandle, {
         onChange={(e) => { tryAddFiles(Array.from(e.target.files ?? [])); e.target.value = "" }}
       />
 
+      {/* Scrolls below the toolbar, so toolbar popovers aren't clipped. */}
+      <div className={`min-h-0 flex-1 overflow-y-auto ${collapsed ? "max-h-24" : ""}`}>
       {files.length > 0 && (
-        <div className="flex gap-2 overflow-x-auto border-b border-gray-100 p-2">
+        <div className="flex flex-wrap gap-1.5 border-b border-gray-100 p-2">
           {files.map((f) => (
             <AttachmentChip key={f.id} pending={f} onRemove={onRemoveFile} />
           ))}
@@ -495,6 +504,7 @@ export const RichComposeEditor = forwardRef<RichComposeEditorHandle, {
           style={{ minHeight: minHeightPx, maxHeight: maxHeightPx }}
           className="overflow-y-auto px-3 py-3 text-sm text-gray-800 outline-none"
         />
+      </div>
       </div>
     </div>
   )

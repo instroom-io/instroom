@@ -18,10 +18,13 @@ export function UseTemplatePicker({
   brandId,
   recipientEmail,
   onApply,
+  side = "bottom",
 }: {
   brandId: string | null | undefined
   recipientEmail: string
   onApply: (subject: string, body: string) => void
+  /** "top" opens the menu upward. */
+  side?: "top" | "bottom"
 }) {
   const [open, setOpen] = useState(false)
   const [templates, setTemplates] = useState<EmailTemplate[]>([])
@@ -77,7 +80,7 @@ export function UseTemplatePicker({
         <IconTemplate size={14} /> Use template <IconChevronDown size={12} />
       </button>
       {open && (
-        <div className="absolute right-0 z-20 mt-1 w-64 max-h-64 overflow-y-auto bg-white border border-gray-100 rounded-lg shadow-lg py-1">
+        <div className={`absolute right-0 z-20 ${side === "top" ? "bottom-full mb-1" : "mt-1"} w-64 max-h-64 overflow-y-auto bg-white border border-gray-100 rounded-lg shadow-lg py-1`}>
           {loading ? (
             <p className="px-3 py-2 text-xs text-gray-400">Loading…</p>
           ) : templates.length === 0 ? (

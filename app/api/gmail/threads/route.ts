@@ -339,6 +339,7 @@ export async function GET(req: NextRequest) {
     if (cacheKey) threadsCache.set(cacheKey, { expiresAt: Date.now() + THREADS_CACHE_TTL_MS, body })
     return NextResponse.json(body)
   } catch (err: any) {
+    console.error("[gmail/threads] failed:", err)
     if (isDatabaseCapacityError(err)) return databaseCapacityResponse()
     return NextResponse.json({ error: err.message || "Failed to fetch threads" }, { status: 500 })
   }

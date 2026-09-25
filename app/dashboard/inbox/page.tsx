@@ -60,6 +60,7 @@ import {
   IconBrandWindows,
   IconRefresh,
   IconAlertCircle,
+  IconAlertTriangle,
   IconTemplate,
   IconDeviceFloppy,
 } from "@tabler/icons-react"
@@ -88,6 +89,7 @@ type PipelineStage =
   | "IN_TRANSIT"
   | "DELIVERED"
   | "POSTED"
+  | "ISSUES"
   | "COMPLETED"
   | "REJECTED"
 
@@ -220,6 +222,7 @@ const stageConfigs: StageConfig[] = [
   { id: "IN_TRANSIT", label: "In-Transit", icon: <IconTruck size={16} />, color: "text-yellow-700", bgColor: "bg-yellow-100", activeBgColor: "bg-yellow-600", hoverBgColor: "hover:bg-yellow-500", borderColor: "border-yellow-300", arrowColor: "#fef9c3" },
   { id: "DELIVERED", label: "Delivered", icon: <IconPackage size={16} />, color: "text-teal-700", bgColor: "bg-teal-100", activeBgColor: "bg-teal-600", hoverBgColor: "hover:bg-teal-500", borderColor: "border-teal-300", arrowColor: "#ccfbf1" },
   { id: "POSTED", label: "Posted", icon: <IconPhoto size={16} />, color: "text-pink-700", bgColor: "bg-pink-100", activeBgColor: "bg-pink-600", hoverBgColor: "hover:bg-pink-500", borderColor: "border-pink-300", arrowColor: "#fce7f3" },
+  { id: "ISSUES", label: "Issues", icon: <IconAlertTriangle size={16} />, color: "text-amber-700", bgColor: "bg-amber-100", activeBgColor: "bg-amber-600", hoverBgColor: "hover:bg-amber-500", borderColor: "border-amber-300", arrowColor: "#fef3c7" },
   { id: "COMPLETED", label: "Completed", icon: <IconCircleCheck size={16} />, color: "text-green-700", bgColor: "bg-green-100", activeBgColor: "bg-green-600", hoverBgColor: "hover:bg-green-500", borderColor: "border-green-300", arrowColor: "#dcfce7" },
   { id: "REJECTED", label: "Rejected", icon: <IconReject size={16} />, color: "text-red-700", bgColor: "bg-red-100", activeBgColor: "bg-red-600", hoverBgColor: "hover:bg-red-500", borderColor: "border-red-300", arrowColor: "#fee2e2" },
 ]
@@ -245,6 +248,8 @@ function getPipelineStatus(bi?: {
   // content_posted only counts inside it, as on the Pipeline.
   const inOrderRealm = contact_status === "for_order_creation" || (stage != null && stage >= 5)
   if (inOrderRealm) {
+    // Post Tracker's Issues column is stage 9 (it keeps order_status).
+    if (stage === 9) return "ISSUES"
     if (content_posted) return "POSTED"
     if (order_status === "delivered") return "DELIVERED"
     if (order_status === "shipped") return "IN_TRANSIT"
@@ -875,6 +880,8 @@ function InboxContent() {
   const [sendError, setSendError] = useState<string | undefined>()
   const [replyAttachments, setReplyAttachments] = useState<PendingAttachment[]>([])
   const replyEditorRef = useRef<RichComposeEditorHandle>(null)
+  const replyBoxRef = useRef<HTMLDivElement>(null)
+  const [replyFocused, setReplyFocused] = useState(false)
 
   // Received/sent attachments (as opposed to composeAttachments/replyAttachments,
   // which are files pending upload) — fetched lazily, only when clicked.
@@ -1886,6 +1893,10 @@ function InboxContent() {
         uid: email.uid,
         accountId: email.accountId,
         status: email.status,
+        // The thread route has no influencer match; keep the resolved one.
+        brandInfluencerId: email.brandInfluencerId,
+        declineReason: email.declineReason,
+        declineNotes: email.declineNotes,
         isLightweight: false,
       }
       setEmails((prev) => prev.map((e) => (e.uid === email.uid ? merged : e)))
@@ -1981,6 +1992,11 @@ function InboxContent() {
   // Keyed on `uid`, not `id`: `id` is the provider's own thread id, and Gmail
   // and Outlook conversations share this array, so an id match could resolve to
   // a different provider's — or a different Outlook account's — conversation.
+  const isSelfThread = (email: Email) =>
+    !!gmailConnectedEmail && email.fromEmail?.toLowerCase() === gmailConnectedEmail.toLowerCase()
+
+  const canUpdateStage = (email: Email) => !!email.brandInfluencerId && !isSelfThread(email)
+
   const updateEmailStage = async (
     emailUid: string,
     newStage: PipelineStage,
@@ -1995,10 +2011,21 @@ function InboxContent() {
     // self-sent verification/test email) — there's no influencer to update,
     // and hitting the API would just surface a confusing "not registered"
     // error for something that was never meant to be one.
-    if (gmailConnectedEmail && email.fromEmail.toLowerCase() === gmailConnectedEmail.toLowerCase()) {
+    if (isSelfThread(email)) {
       setStageNotification({
         show: true,
         message: "This conversation is with your own connected mailbox — there's no influencer to update.",
+        type: "error",
+      })
+      setTimeout(() => setStageNotification({ show: false, message: "", type: "error" }), 5000)
+      return
+    }
+
+    // Covers drag-to-stage.
+    if (!canUpdateStage(email)) {
+      setStageNotification({
+        show: true,
+        message: `${email.fromEmail} isn't a saved influencer in this brand, so it has no stage to update.`,
         type: "error",
       })
       setTimeout(() => setStageNotification({ show: false, message: "", type: "error" }), 5000)
@@ -2693,8 +2720,8 @@ function InboxContent() {
             <div className="flex flex-col h-full">
               {/* Chat Header */}
               <div className="flex-shrink-0 bg-white border-b border-gray-200">
-                <div className="flex items-center justify-between px-4 md:px-6 py-3">
-                  <div className="flex items-center gap-3">
+                <div className="flex items-center justify-between gap-3 px-4 md:px-6 py-3">
+                  <div className="flex items-center gap-3 min-w-0">
                     <button onClick={() => setSelectedEmail(null)} className="lg:hidden p-2 rounded-full hover:bg-gray-100 transition">
                       <IconArrowLeft size={20} />
                     </button>
@@ -2714,29 +2741,19 @@ function InboxContent() {
                       </div>
                     </div>
                   </div>
-                </div>
 
-                <div className="px-4 md:px-6 py-2 bg-gray-50 border-t border-gray-100 flex flex-wrap items-center gap-2">
-                  {(() => {
-                    const isSelfThread = !!gmailConnectedEmail && selectedEmail.fromEmail?.toLowerCase() === gmailConnectedEmail.toLowerCase()
-                    return (
-                      <button
-                        onClick={() => !isSelfThread && setUpdateStageModal({ open: true, email: selectedEmail })}
-                        disabled={isSelfThread}
-                        className={`flex items-center gap-1 md:gap-2 px-2 md:px-3 py-1.5 text-xs border rounded-lg transition-colors ${
-                          isSelfThread
-                            ? "opacity-50 cursor-not-allowed bg-gray-50 border-gray-200 text-gray-400"
-                            : "bg-white border-gray-200 hover:bg-gray-50"
-                        }`}
-                        title={isSelfThread ? "This conversation is with your own connected mailbox — nothing to update" : undefined}
-                      >
-                        <IconUserCheck size={14} />
-                        <span className="hidden sm:inline">Update Stage</span>
-                      </button>
-                    )
-                  })()}
+                <div className="flex-shrink-0 flex items-center gap-2">
+                  {canUpdateStage(selectedEmail) && (
+                    <button
+                      onClick={() => setUpdateStageModal({ open: true, email: selectedEmail })}
+                      className="flex items-center gap-1 md:gap-2 px-2 md:px-3 py-1.5 text-xs border rounded-lg transition-colors bg-white border-gray-200 hover:bg-gray-50"
+                    >
+                      <IconUserCheck size={14} />
+                      <span className="hidden sm:inline">Update Stage</span>
+                    </button>
+                  )}
 
-                  <div className="relative ml-auto">
+                  <div className="relative">
                     <button
                       onClick={() => setShowActions((v) => !v)}
                       className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 transition-colors"
@@ -2765,6 +2782,7 @@ function InboxContent() {
                       </>
                     )}
                   </div>
+                </div>
                 </div>
               </div>
 
@@ -2970,18 +2988,22 @@ function InboxContent() {
                 </div>
               </div>
 
-              {/* Reply Input */}
-              <div className="flex-shrink-0 border-t border-gray-200 bg-white p-3 md:p-4 shadow-lg">
-                <div className="flex justify-end mb-1.5">
-                  <UseTemplatePicker
-                    brandId={brandId}
-                    recipientEmail={selectedEmail.fromEmail || selectedEmail.handle}
-                    onApply={(_subject, body) => replyEditorRef.current?.setHtml(plainTextToComposeHtml(body))}
-                  />
-                </div>
-                <div className="flex gap-3 items-start">
-                  <div className="w-8 h-8 rounded-full bg-[#1FAE5B] flex items-center justify-center text-white text-xs font-medium shadow-sm flex-shrink-0 mt-1">ME</div>
-                  <div className="flex-1 min-w-0">
+              {/* Reply Input — max 40% of the panel, collapsed when not focused */}
+              <div
+                ref={replyBoxRef}
+                tabIndex={-1}
+                onFocus={() => setReplyFocused(true)}
+                onBlur={() => {
+                  // Deferred so focus moving within the box or to the OS file picker doesn't collapse it.
+                  setTimeout(() => {
+                    if (document.hasFocus() && !replyBoxRef.current?.contains(document.activeElement)) setReplyFocused(false)
+                  }, 0)
+                }}
+                className="flex-shrink-0 max-h-[40%] flex flex-col border-t border-gray-200 bg-white p-3 md:p-4 shadow-lg outline-none"
+              >
+                <div className="flex gap-3 min-h-0">
+                  <div className="self-start w-8 h-8 rounded-full bg-[#1FAE5B] flex items-center justify-center text-white text-xs font-medium shadow-sm flex-shrink-0 mt-1">ME</div>
+                  <div className="flex-1 min-w-0 min-h-0 flex flex-col">
                     <RichComposeEditor
                       ref={replyEditorRef}
                       html={reply}
@@ -2993,29 +3015,41 @@ function InboxContent() {
                       placeholder={`Reply to ${selectedEmail.name.split(" ")[0]}…`}
                       onKeyDown={handleKeyDown}
                       minHeightPx={44}
-                      maxHeightPx={320}
+                      // The editor body scrolls instead.
+                      maxHeightPx="none"
+                      collapsed={!replyFocused}
                       emojiPickerSide="top"
                       signatureEnabled={replyIncludeSignature}
                       onToggleSignature={() => setReplySignatureOverride(!replyIncludeSignature)}
                       signatureAvailable={signatureConfigured}
-                    />
-                    <div className="flex items-center justify-between mt-2">
-                      {sendError
-                        ? <span className="text-xs text-red-500 flex items-center gap-1"><IconAlertCircle size={12} />{sendError}</span>
-                        : <span className="text-xs text-gray-400 hidden sm:inline">Press Enter to send • Shift+Enter for new line</span>
+                      toolbarEnd={
+                        <UseTemplatePicker
+                          side="top"
+                          brandId={brandId}
+                          recipientEmail={selectedEmail.fromEmail || selectedEmail.handle}
+                          onApply={(_subject, body) => replyEditorRef.current?.setHtml(plainTextToComposeHtml(body))}
+                        />
                       }
-                      <button
-                        onClick={sendReply}
-                        disabled={(htmlToPlainText(reply).length === 0 && replyAttachments.length === 0) || isSending}
-                        className="flex-shrink-0 flex items-center justify-center w-8 h-8 rounded-full bg-[#1FAE5B] text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[#0F6B3E] transition-all duration-200"
-                      >
-                        {isSending
-                          ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                          : <IconSend size={16} />
-                        }
-                      </button>
-                    </div>
+                    />
                   </div>
+                </div>
+                <div className="flex-shrink-0 flex items-center justify-between gap-2 mt-2 pl-11">
+                  {sendError
+                    ? <span className="text-xs text-red-500 flex items-center gap-1"><IconAlertCircle size={12} />{sendError}</span>
+                    : <span className="min-w-0 truncate text-[11px] sm:text-xs text-gray-400">Press Enter to send • Shift+Enter for new line</span>
+                  }
+                  <button
+                    onClick={sendReply}
+                    disabled={(htmlToPlainText(reply).length === 0 && replyAttachments.length === 0) || isSending}
+                    title="Send (Enter) • Shift+Enter for new line"
+                    aria-label="Send reply"
+                    className="ml-auto flex-shrink-0 flex items-center justify-center w-8 h-8 rounded-full bg-[#1FAE5B] text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[#0F6B3E] transition-all duration-200"
+                  >
+                    {isSending
+                      ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      : <IconSend size={16} />
+                    }
+                  </button>
                 </div>
               </div>
             </div>
