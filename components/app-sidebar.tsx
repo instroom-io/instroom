@@ -3,8 +3,10 @@
 import * as React from "react"
 import { Suspense } from "react"
 import { useSearchParams } from "next/navigation"
+import { useSession } from "next-auth/react"
 
 import type { Sidebar } from "@/components/ui/sidebar"
+import { signOutEverywhere } from "@/lib/sign-out"
 import { DASHBOARD_NAV } from "@/components/sidebar/nav-config"
 import { PortalSidebar } from "@/components/sidebar/portal-sidebar"
 
@@ -21,6 +23,7 @@ function AppSidebarInner({
   // forever, and every sidebar link would keep losing brandId thereafter.
   const searchParams = useSearchParams()
   const brandId = searchParams.get("brandId")
+  const { data: session } = useSession()
 
   // Preserved from the previous NavMain implementation: brandId is threaded
   // onto every destination so it survives navigation.
@@ -40,6 +43,13 @@ function AppSidebarInner({
       onBrandClick={() => setView?.("dashboard")}
       brandAlt="Instroom Logo"
       transformHref={transformHref}
+      user={{
+        name: session?.user?.name || "User",
+        email: session?.user?.email || undefined,
+        image: session?.user?.image,
+        settingsHref: transformHref("/dashboard/settings"),
+        onSignOut: () => signOutEverywhere(),
+      }}
       {...props}
     />
   )

@@ -1,7 +1,6 @@
 "use client"
 
 import { useEffect, useState, useRef, useCallback } from "react"
-import { signOutEverywhere } from "@/lib/sign-out"
 import { createPortal } from "react-dom"
 import { useRouter, usePathname } from "next/navigation"
 import { useSession } from "next-auth/react"
@@ -10,8 +9,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Plus, Zap, AlertCircle, Check, ChevronDown, LogOut, Users } from "lucide-react"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { Plus, Zap, AlertCircle, Check, ChevronDown, Users } from "lucide-react"
 import { WorkspaceUnavailableModal } from "@/components/workspace-unavailable-modal"
 import { fetchCached } from "@/lib/data-cache"
 
@@ -282,8 +281,6 @@ export function BrandSelector() {
   const getInitials = (name: string) => name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2)
   const ownedBrands = brands.filter((b) => b.isOwner)
   const sharedBrands = brands.filter((b) => !b.isOwner)
-  const userName = session?.user?.name || "User"
-  const userAvatar = session?.user?.image || "/avatars/default.jpg"
 
   // Dropdown via portal — right-aligned to trigger, escapes any overflow clipping
   const dropdown = (
@@ -497,39 +494,6 @@ export function BrandSelector() {
           </div>
         </>
       )}
-
-      {/* Account + Logout.
-          Everything above this line is about WORKSPACES; everything below is
-          about the person signed in. A tinted footer (rather than one more
-          hairline in a menu that already has several) is what makes that
-          split read at a glance. */}
-      <div className="h-px bg-gray-200" />
-      <div className="bg-gray-50/70 p-1.5">
-        <button
-          onClick={() => { router.push("/dashboard/settings"); setDropdownOpen(false) }}
-          className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white transition-colors"
-        >
-          <Avatar className="h-7 w-7 rounded-full flex-shrink-0">
-            <AvatarImage src={userAvatar} alt={userName} />
-            <AvatarFallback className="text-[11px] font-bold bg-gray-200 text-gray-700">
-              {getInitials(userName)}
-            </AvatarFallback>
-          </Avatar>
-          <div className="flex-1 text-left min-w-0 leading-tight">
-            <p className="text-[13px] font-medium text-gray-900 truncate">{userName}</p>
-            <p className="text-[11px] font-medium text-[#0F6B3E]">Account settings</p>
-          </div>
-        </button>
-        <button
-          onClick={() => signOutEverywhere()}
-          className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-red-50 transition-colors"
-        >
-          <span className="flex h-7 w-7 items-center justify-center flex-shrink-0">
-            <LogOut className="h-3.5 w-3.5 text-red-500" />
-          </span>
-          <span className="text-[13px] font-medium text-red-500">Log out</span>
-        </button>
-      </div>
     </div>
   )
 
