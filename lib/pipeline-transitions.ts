@@ -150,6 +150,35 @@ export function transitionRefusalReason(from: string, to: string): string {
   return `Cannot move from ${from} to ${to}.`
 }
 
+/** DB fields for a move to a Pipeline stage. Shared by the pipeline and inbox routes. */
+export function pipelineStatusToFields(pipelineStatus: string, collaborationType?: string): {
+  contact_status:  string
+  stage:           number
+  approval_status: string
+} {
+  switch (pipelineStatus) {
+    case "For Outreach":
+      return { contact_status: "pending",             stage: 1, approval_status: "Approved" }
+    case "Contacted":
+      return { contact_status: "contacted",           stage: 2, approval_status: "Approved" }
+    case "In Conversation":
+      return { contact_status: "negotiating",         stage: 3, approval_status: "Approved" }
+    case "Deal Agreed":
+      // Confirming a Collaboration Type is what marks the deal as fully agreed —
+      // once it's set, skip the separate "Move to Post Tracker" step entirely and
+      // land directly on Post Tracker's default initial status (stage 5).
+      return collaborationType
+        ? { contact_status: "for_order_creation", stage: 5, approval_status: "Approved" }
+        : { contact_status: "agreed",              stage: 4, approval_status: "Approved" }
+    case "For Order Creation":
+      return { contact_status: "for_order_creation",  stage: 5, approval_status: "Approved" }
+    case "Not Interested":
+      return { contact_status: "not_interested",      stage: 0, approval_status: "Declined" }
+    default:
+      return { contact_status: "pending",             stage: 1, approval_status: "Approved" }
+  }
+}
+
 /**
  * The stage a stored row is currently in.
  *
