@@ -66,6 +66,8 @@ import {
 } from "@tabler/icons-react"
 import { EmailTemplatesModal } from "@/components/shared/email-templates-modal"
 import { DeclineModal } from "@/components/shared/decline-modal"
+import { PlatformIcon } from "@/components/table-sheet/ui-atoms"
+import { getProfileUrl, getPlatformLabel } from "@/components/table-sheet/utils"
 import { UseTemplatePicker } from "@/components/shared/use-template-picker"
 import { RichComposeEditor, type RichComposeEditorHandle, type PendingAttachment, AttachmentChipReadOnly } from "@/components/shared/rich-compose-editor"
 
@@ -2221,7 +2223,15 @@ function InboxContent() {
     }
   }
 
-  const getDeclineInfo = (email: Email): { reason: string; notes?: string } | null => {
+  const getInfluencerRow = (email: Email) =>
+    email.brandInfluencerId ? pipelineRows.find((r) => r.id === email.brandInfluencerId) : undefined
+
+  const getInfluencerCountry = (email: Email): string => {
+    const parts = (getInfluencerRow(email)?.location ?? "").split(",").map((p) => p.trim()).filter(Boolean)
+    return parts[parts.length - 1] ?? ""
+  }
+
+  const getDeclineInfo =(email: Email): { reason: string; notes?: string } | null => {
     if (email.status !== "REJECTED") return null
     if (email.declineReason) return { reason: email.declineReason, notes: email.declineNotes }
     const row = email.brandInfluencerId ? pipelineRows.find((r) => r.id === email.brandInfluencerId) : undefined
@@ -2731,6 +2741,25 @@ function InboxContent() {
                         <h2 className="font-semibold text-gray-900 text-sm md:text-base">{selectedEmail.name}</h2>
                         <span className="text-xs text-gray-400 hidden sm:inline">•</span>
                         <span className="text-xs text-gray-500 hidden sm:inline">{selectedEmail.handle}</span>
+                        {(() => {
+                          const row = getInfluencerRow(selectedEmail)
+                          if (!row?.handle) return null
+                          const handle = `@${row.handle.replace(/^@/, "")}`
+                          const url = getProfileUrl(row.platform?.toLowerCase() ?? "", row.handle)
+                          const label = `${handle} on ${getPlatformLabel(row.platform)}`
+                          const chip = (
+                            <>
+                              <PlatformIcon platform={row.platform} size={12} className="shrink-0" />
+                              <span className="hidden sm:inline truncate max-w-[160px]">{handle}</span>
+                            </>
+                          )
+                          const cls = "inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border border-gray-200 text-xs text-gray-600"
+                          return url ? (
+                            <a href={url} target="_blank" rel="noopener noreferrer" title={label} className={`${cls} hover:bg-gray-50 transition`}>{chip}</a>
+                          ) : (
+                            <span title={label} className={cls}>{chip}</span>
+                          )
+                        })()}
                       </div>
                       <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                         {getStatusBadge(selectedEmail.status, selectedEmail, true)}
@@ -2820,7 +2849,10 @@ function InboxContent() {
               {/* Messages */}
               <div className="flex-1 overflow-y-auto p-4 md:p-6 bg-gray-50">
                 <div className="max-w-3xl">
-                  <p className="text-xs text-gray-400 mb-3 font-medium">{selectedEmail.subject}</p>
+                  <p className="text-xs text-gray-400 mb-3 font-medium">
+                    Subject Line : {selectedEmail.subject}
+                    {getInfluencerCountry(selectedEmail) && ` – ${getInfluencerCountry(selectedEmail)}`}
+                  </p>
                   {selectedEmail.isLightweight && loadingThreadId === selectedEmail.id ? (
                     <div className="flex items-center gap-2 text-sm text-gray-400 py-6">
                       <span className="relative inline-block w-3.5 h-3.5 flex-shrink-0">

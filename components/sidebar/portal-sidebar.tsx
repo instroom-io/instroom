@@ -26,6 +26,7 @@ export type PortalUser = {
   name: string
   email?: string
   image?: string | null
+  settingsHref?: string
   onSignOut: () => void
 }
 
@@ -155,6 +156,8 @@ export function PortalSidebar({
             name={user.name}
             email={user.email}
             image={user.image}
+            settingsHref={user.settingsHref}
+            onNavigate={handleNavigate}
             onSignOut={user.onSignOut}
           />
         </SidebarFooter>
