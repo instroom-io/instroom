@@ -16,6 +16,7 @@ import {
   beginKeyWrite,
   endKeyWrite,
   beginRowWrite,
+  rowFetch,
   isLatestRowWrite,
 } from "@/lib/data-cache"
 import { invalidateInfluencerDerivedCaches, pipelineCacheKey, closedCacheKey } from "@/lib/cache-invalidation"
@@ -294,6 +295,7 @@ function toClosedRow(item: PipelineInfluencer, collaborationType?: string, deliv
     likesCount:        0,
     commentsCount:     0,
     engagementCount:   0,
+    viewsCount:        0,
 
     // Same array the PATCH route writes — see lib/deliverables.
     paidCollabData:  deliverableNames
@@ -671,7 +673,7 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
       }
 
       try {
-        const res = await fetch(`/api/brand/${brandId}/pipeline/${id}`, {
+        const res = await rowFetch(id, `/api/brand/${brandId}/pipeline/${id}`, {
           method:  "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

@@ -67,7 +67,7 @@ export async function PATCH(
       // Order tab fields above. postedAt/likes/comments/engagement/
       // internalRating were previously typed into the drawer's local state but
       // never sent to this route at all — only postUrl was.
-      postedAt, likes, comments, engagement, internalRating,
+      postedAt, likes, comments, engagement, views, internalRating,
       // scriptStatus/contentStatus are NOT their own columns — they are the
       // aggregate `inferContentStatuses` in useClosedData.ts computes from
       // paidCollabData.deliverables[].{scriptStatus,contentStatus}. Setting
@@ -129,23 +129,34 @@ export async function PATCH(
     // evidence the client uses: a stored post_url, or a DetectedPost row. Moves
     // to Delivered and to every earlier stage are untouched — those need no post,
     // which is the point of Delivered.
-    // A row with campaign deliverables enters Posted at "0/N deliverables" and
-    // its posts are tracked there (lib/deliverables), so it needs no link yet.
-    const hasCampaignDeliverables =
-      getDeliverables(productDetails.paidCollab).length > 0 ||
-      getDeliverables(paidCollabData).length > 0
-    if (closedStatus === "Posted" && !hasCampaignDeliverables) {
+    // A row with campaign deliverables still needs at least ONE post: a link on
+    // any deliverable counts as evidence (the deliverables sent in this request
+    // when present, otherwise the stored ones). It then sits in Posted at
+    // "1/N deliverables" until the rest are linked.
+    const deliverablesForCheck = getDeliverables(
+      paidCollabData !== undefined ? paidCollabData : productDetails.paidCollab
+    )
+    const hasDeliverableLink = deliverablesForCheck.some((d) => Boolean((d.postUrl ?? "").trim()))
+    if (closedStatus === "Posted") {
       // A Post URL submitted in THIS same request (the Post tab's Save button
       // sends the URL and the Posted move together) is evidence too — `record`
       // was read before this request's body was merged in, so checking only
       // `record.post_url` would 409 a save that is itself supplying the very
       // URL the guard is asking for.
       const hasUrl = Boolean(record.post_url && record.post_url.trim()) ||
-        Boolean(typeof postUrl === "string" && postUrl.trim())
+        Boolean(typeof postUrl === "string" && postUrl.trim()) ||
+        hasDeliverableLink
+      const trackingSince = record.shipped_at ?? record.delivered_at ?? null
       const detected = hasUrl
         ? 0
         : await prisma.detectedPost.count({
-            where: { brand_influencer_id: brandInfluencerId, brand_id: brandId },
+            where: {
+              brand_influencer_id: brandInfluencerId,
+              brand_id: brandId,
+              // Only posts published since tracking started (the In-Transit
+              // date) count — same cutoff as lib/post-tracker/monitor.ts.
+              ...(trackingSince ? { published_at: { gte: trackingSince } } : {}),
+            },
           })
       if (!hasUrl && detected === 0) {
         return NextResponse.json(
@@ -339,6 +350,9 @@ export async function PATCH(
     }
     if (engagement !== undefined) {
       updateData.engagement_count = parseMetricInput(engagement)
+    }
+    if (views !== undefined) {
+      updateData.views_count = parseMetricInput(views)
     }
     if (internalRating !== undefined) {
       updateData.internal_rating = internalRating === "" || internalRating === null ? null : Number(internalRating)

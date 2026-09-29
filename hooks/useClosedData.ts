@@ -18,6 +18,7 @@ import {
   beginKeyWrite,
   endKeyWrite,
   beginRowWrite,
+  rowFetch,
   isLatestRowWrite,
 } from "@/lib/data-cache"
 import { invalidateInfluencerDerivedCaches, closedCacheKey } from "@/lib/cache-invalidation"
@@ -90,6 +91,8 @@ export interface ClosedInfluencer {
   likesCount: number
   commentsCount: number
   engagementCount: number
+  /** Post views — fetched from the post link or detection, or typed by hand. */
+  viewsCount: number
 
   paidCollabData: PaidCollabData | null
   /** Marked completed from the Posted column — shown in the Completed column. */
@@ -144,12 +147,22 @@ export interface OrderDetailsFields {
   notes?: string
 }
 
+export interface PostMetricsResult {
+  ok: boolean
+  likes: number | null
+  comments: number | null
+  views: number | null
+  /** Set when nothing was fetched: add-on off, no link, provider error… */
+  error?: string
+}
+
 export interface PostDetailsFields {
   postUrl?: string
   postedAt?: string
   likes?: string
   comments?: string
   engagement?: string
+  views?: string
   internalRating?: string
   /** Rollup applied to every deliverable — see the route's own comment. */
   scriptStatus?: string
@@ -171,7 +184,7 @@ interface UseClosedDataReturn {
   updateColumn: (
     id: string,
     newColumn: ClosedColumn,
-    options?: { resetWorkflow?: boolean; deferDerivedInvalidation?: boolean }
+    options?: { resetWorkflow?: boolean; deferDerivedInvalidation?: boolean; notes?: string }
   ) => Promise<UpdateColumnResult>
   updatePaidCollab: (id: string, paidCollabData: PaidCollabData) => Promise<boolean>
   /** "Mark as completed" on a Posted row — moves it to the Completed column. */
@@ -192,6 +205,12 @@ interface UseClosedDataReturn {
     fields: PostDetailsFields,
     options?: { markPosted?: boolean }
   ) => Promise<UpdateColumnResult>
+  /**
+   * Fetch Likes, Comments and Views from the row's post link(s) and store them
+   * (POST /api/post-tracker/metrics). Called after a link is saved; the board's
+   * cached row is updated in place, so no refresh is needed.
+   */
+  refreshPostMetrics: (id: string) => Promise<PostMetricsResult>
   /** True while at least one write is in flight — drives the saving indicator. */
   isSaving: boolean
   /** True when the write that just finished failed, so the pill skips "Saved". */
@@ -206,20 +225,22 @@ function inferContentStatuses(inf: { paidCollabData?: PaidCollabData | null }) {
   const paid = inf.paidCollabData
   if (!paid?.deliverables?.length) return { scriptStatus: null, contentStatus: null }
 
-  const scripts  = paid.deliverables.map((d) => d.scriptStatus)
-  const contents = paid.deliverables.map((d) => d.contentStatus)
+  // "n_a" (N/A — this collab has no script / content review step) is neutral:
+  // all N/A rolls up to N/A, otherwise it is ignored so it neither blocks
+  // "approved" nor counts as pending.
+  const rollup = (values: string[]) => {
+    if (values.every((s) => s === "n_a")) return "n_a"
+    const relevant = values.filter((s) => s !== "n_a")
+    return relevant.every((s) => s === "approved")
+      ? "approved"
+      : relevant.some((s) => ["pending", "revision_requested"].includes(s))
+      ? "pending"
+      : null
+  }
 
   return {
-    scriptStatus: scripts.every((s) => s === "approved")
-      ? "approved"
-      : scripts.some((s) => ["pending", "revision_requested"].includes(s))
-      ? "pending"
-      : null,
-    contentStatus: contents.every((s) => s === "approved")
-      ? "approved"
-      : contents.some((s) => ["pending", "revision_requested"].includes(s))
-      ? "pending"
-      : null,
+    scriptStatus:  rollup(paid.deliverables.map((d) => d.scriptStatus)),
+    contentStatus: rollup(paid.deliverables.map((d) => d.contentStatus)),
   }
 }
 
@@ -464,6 +485,11 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
          * the run instead.
          */
         deferDerivedInvalidation?: boolean
+        /**
+         * Replaces BrandInfluencer.notes in the same PATCH — the move to Issues
+         * requires a note, which lands in the influencer's profile notes.
+         */
+        notes?: string
       }
     ): Promise<UpdateColumnResult> => {
       if (!brandId) return { ok: false, error: "No brand selected" }
@@ -483,7 +509,11 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         return prev.map((item) =>
           item.id === id
             // Leaving Posted clears "completed", mirroring the PATCH route.
-            ? { ...applyColumnChange(item, newColumn), completed: newColumn === "Posted" ? item.completed : false }
+            ? {
+                ...applyColumnChange(item, newColumn),
+                completed: newColumn === "Posted" ? item.completed : false,
+                ...(options?.notes !== undefined && { notes: options.notes }),
+              }
             : item
         )
       })
@@ -504,12 +534,13 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
 
 
       try {
-        const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
+        const res = await rowFetch(id, `/api/brand/${brandId}/closed/${id}`, {
           method:  "PATCH",
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify({
             closedStatus: newColumn,
             ...(options?.resetWorkflow ? { resetWorkflow: true } : {}),
+            ...(options?.notes !== undefined ? { notes: options.notes } : {}),
           }),
         })
 
@@ -570,7 +601,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
       }
 
       try {
-        const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
+        const res = await rowFetch(id, `/api/brand/${brandId}/closed/${id}`, {
           method:  "PATCH",
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify({ completed }),
@@ -635,7 +666,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
       // before it could resolve afterwards and put the old value back — and the
       // saving indicator never showed for it either.
       try {
-        const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
+        const res = await rowFetch(id, `/api/brand/${brandId}/closed/${id}`, {
           method:  "PATCH",
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify({ paidCollabData }),
@@ -697,7 +728,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
       // before it could resolve afterwards and put the old value back — and the
       // saving indicator never showed for it either.
       try {
-        const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
+        const res = await rowFetch(id, `/api/brand/${brandId}/closed/${id}`, {
           method:  "PATCH",
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify({ campaignType }),
@@ -761,7 +792,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
       // before it could resolve afterwards and put the old value back — and the
       // saving indicator never showed for it either.
       try {
-        const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
+        const res = await rowFetch(id, `/api/brand/${brandId}/closed/${id}`, {
           method:  "PATCH",
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify({ postUrl: trimmed }),
@@ -839,7 +870,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
       // before it could resolve afterwards and put the old value back — and the
       // saving indicator never showed for it either.
       try {
-        const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
+        const res = await rowFetch(id, `/api/brand/${brandId}/closed/${id}`, {
           method:  "PATCH",
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify(fields),
@@ -900,6 +931,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
             ...(fields.likes !== undefined && { likesCount: parseMetricInput(fields.likes) }),
             ...(fields.comments !== undefined && { commentsCount: parseMetricInput(fields.comments) }),
             ...(fields.engagement !== undefined && { engagementCount: parseMetricInput(fields.engagement) }),
+            ...(fields.views !== undefined && { viewsCount: parseMetricInput(fields.views) }),
             ...(fields.internalRating !== undefined && {
               internalRating: fields.internalRating === "" ? null : Number(fields.internalRating),
             }),
@@ -955,7 +987,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
       }
 
       try {
-        const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
+        const res = await rowFetch(id, `/api/brand/${brandId}/closed/${id}`, {
           method:  "PATCH",
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify({
@@ -991,6 +1023,48 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
     [brandId, cacheKey, setDataCached, beginWrite, endWrite]
   )
 
+  const refreshPostMetrics = useCallback(
+    async (id: string): Promise<PostMetricsResult> => {
+      const none = { likes: null, comments: null, views: null }
+      if (!brandId) return { ok: false, ...none, error: "No brand selected" }
+      try {
+        const res = await fetch("/api/post-tracker/metrics", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ brandId, biId: id }),
+        })
+        const body = await res.json().catch(() => ({}))
+        if (!res.ok || !body.ok) {
+          return { ok: false, ...none, error: body.error || body.reason || "Could not fetch post metrics" }
+        }
+        const result: PostMetricsResult = {
+          ok: true,
+          likes: body.likes ?? null,
+          comments: body.comments ?? null,
+          views: body.views ?? null,
+        }
+        setDataCached((prev) =>
+          prev.map((item) =>
+            item.id === id
+              ? {
+                  ...item,
+                  ...(result.likes != null && { likesCount: result.likes }),
+                  ...(result.comments != null && { commentsCount: result.comments }),
+                  ...(result.views != null && { viewsCount: result.views }),
+                }
+              : item
+          )
+        )
+        // Analytics reads these metrics — mark it (and the other views) stale.
+        invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId)])
+        return result
+      } catch {
+        return { ok: false, ...none, error: "Network error" }
+      }
+    },
+    [brandId, setDataCached]
+  )
+
   return {
     data,
     isLoading: Boolean(brandId) && isLoading,
@@ -1003,6 +1077,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
     updatePostUrl,
     updateOrderDetails,
     updatePostDetails,
+    refreshPostMetrics,
     isSaving: pendingWrites > 0,
     saveFailed,
     saveMessage,

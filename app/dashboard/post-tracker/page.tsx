@@ -22,8 +22,8 @@ import {
   IconLayoutKanban, IconList, IconFilter, IconLocation,
   IconLayoutList, IconLink, IconArrowRight, IconAlertTriangle, IconCircleCheck,
 } from "@tabler/icons-react"
-import { useClosedData, type ClosedInfluencer, type ClosedColumn, type OrderDetailsFields, type PostDetailsFields, type UpdateColumnResult, type PaidCollabData } from "@/hooks/useClosedData"
-import { parseMetricInput, formatEngagementPercent } from "@/lib/post-tracker-status"
+import { useClosedData, type ClosedInfluencer, type ClosedColumn, type OrderDetailsFields, type PostDetailsFields, type UpdateColumnResult, type PaidCollabData, type PostMetricsResult } from "@/hooks/useClosedData"
+import { parseMetricInput } from "@/lib/post-tracker-status"
 import {
   getDeliverables, getDeliverableProgress, deliverablePostUrl, blankDeliverable, MAX_DELIVERABLES,
   type CampaignDeliverable,
@@ -41,6 +41,7 @@ import { PaidCollabTab } from "@/components/table-sheet/profile-sidebar"
 import { BoardSkeleton } from "@/components/shared/skeletons"
 import { StageDropdown, type StageOption } from "@/components/shared/stage-dropdown"
 import { StageActionButton } from "@/components/shared/stage-action-button"
+import { InfoTooltip } from "@/components/shared/anchored-tooltip"
 import AutoPostDetectionCard from "./AutoPostDetection"
 import { readDroppedPostUrl, type DetectedPost } from "./DetectedPostsList"
 import { fetchCached } from "@/lib/data-cache"
@@ -167,11 +168,12 @@ const hasDetectedPost = (inf: Pick<ClosedInfluencer, "detectedPostCount">) =>
   (inf.detectedPostCount ?? 0) > 0
 const hasPostEvidence = (inf: Pick<ClosedInfluencer, "postUrl" | "detectedPostCount">) =>
   hasPostUrl(inf) || hasDetectedPost(inf)
-// A row with campaign deliverables enters Posted at "0/N deliverables" — its
-// posts are tracked there — so it needs no evidence up front. Same rule as the
-// closed PATCH route.
+// Posted always needs at least one post. For a row with campaign deliverables,
+// a link on any deliverable counts too — it then sits in Posted at
+// "1/N deliverables" until the rest are linked. Same rule as the closed PATCH
+// route.
 const canEnterPosted = (inf: Pick<ClosedInfluencer, "postUrl" | "detectedPostCount" | "paidCollabData">) =>
-  hasPostEvidence(inf) || getDeliverables(inf.paidCollabData).length > 0
+  hasPostEvidence(inf) || getDeliverables(inf.paidCollabData).some(d => Boolean((d.postUrl ?? "").trim()))
 
 /**
  * Stages where the post FIELDS make sense.
@@ -210,13 +212,14 @@ const canTrackPost = (
 /**
  * Stages where Automatic Post Detection runs.
  *
- * Narrower than the fields, and deliberately identical to the server's gate in
- * lib/post-tracker/monitor.ts, which keeps only stage >= 7 (Delivered = 7,
- * Posted = 8). "No post" is stage 0 — a decision that no post exists — so the
- * pass skips it, and offering "Check now" there would be a button that appears
- * to work and polls nothing.
+ * Deliberately identical to the server's gate in lib/post-tracker/monitor.ts,
+ * which keeps stage >= 6 (In-Transit = 6, Delivered = 7, Posted = 8,
+ * Issues = 9). Tracking starts when the order ships, and only posts published
+ * after the In-Transit date are picked up. "No post" is stage 0 — a decision
+ * that no post exists — so the pass skips it, and offering "Check now" there
+ * would be a button that appears to work and polls nothing.
  */
-const POST_DETECTION_STAGES: ClosedColumn[] = ["Delivered", "Posted"]
+const POST_DETECTION_STAGES: ClosedColumn[] = ["In-Transit", "Delivered", "Posted", "Issues"]
 
 /** Should Automatic Post Detection be offered for this influencer? */
 const canDetectPost = (status: ClosedColumn) => POST_DETECTION_STAGES.includes(status)
@@ -360,6 +363,120 @@ function PostUrlRequiredDialog({ onGoToPostDetails, onCancel }: {
   )
 }
 
+// ─── Issue Note Modal ─────────────────────────────────────────────────────────
+// Fires before any move INTO Issues — same layout as the Pipeline's Deal Agreed
+// (collaboration type) modal. The note is required, and is appended to the
+// influencer's profile notes (BrandInfluencer.notes) in the same PATCH as the
+// move, so the Notes field shows it straight away without a refresh.
+function IssueNoteModal({ targets, onConfirm, onCancel }: {
+  targets: ClosedInfluencer[]
+  onConfirm: (note: string) => void
+  onCancel: () => void
+}) {
+  const [note, setNote] = useState("")
+  const trimmed = note.trim()
+  const single = targets.length === 1 ? targets[0] : null
+
+  return (
+    <div className="fixed inset-0 z-[500] flex items-center justify-center bg-black/50 p-3 sm:p-4" onClick={onCancel}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="issue-note-title"
+        className="bg-white rounded-2xl shadow-2xl w-[560px] max-w-[calc(100vw-2rem)] max-h-[90vh] overflow-y-auto"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between px-4 sm:px-6 pt-5 sm:pt-6 pb-4 border-b border-gray-100">
+          <div>
+            <h2 id="issue-note-title" className="text-base font-semibold text-gray-900">Move to Issues</h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {single
+                ? "Describe the issue with this post before moving it to Issues."
+                : `Describe the issue to apply to all ${targets.length} selected influencers before moving them to Issues.`}
+            </p>
+          </div>
+          <button onClick={onCancel} aria-label="Close" className="text-gray-400 hover:text-gray-600 transition ml-4 mt-0.5">
+            <IconX size={18} />
+          </button>
+        </div>
+
+        {/* Influencer Info */}
+        <div className="px-4 sm:px-6 pt-4 sm:pt-5 pb-2">
+          <div className="flex flex-wrap items-center gap-3 bg-gray-50 rounded-xl px-3 sm:px-4 py-3 border border-gray-100">
+            {single ? (
+              <>
+                <ProfilePicture src={single.profileImageUrl ?? undefined} name={single.influencer} handle={single.handle} size={40} />
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">{single.influencer}</p>
+                  <p className="text-xs text-gray-500">@{single.handle}</p>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="w-10 h-10 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 font-semibold text-sm">{targets.length}</div>
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">{targets.length} influencers selected</p>
+                  <p className="text-xs text-gray-500">The note below is added to each of their profiles</p>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Note */}
+        <div className="px-4 sm:px-6 pt-4 sm:pt-5 pb-4">
+          <label htmlFor="issue-note" className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+            Issue notes <span className="text-red-500">*</span>
+          </label>
+          <textarea
+            id="issue-note"
+            autoFocus
+            required
+            rows={4}
+            value={note}
+            onChange={e => setNote(e.target.value)}
+            placeholder="e.g. Wrong product shown, missing brand tag, post taken down…"
+            className="w-full text-sm text-gray-700 px-3 py-2 bg-white border border-gray-200 rounded-lg resize-y focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20"
+          />
+          <p className="text-[11px] text-gray-400 mt-2">
+            Required. Saved to the influencer&apos;s profile notes.
+          </p>
+        </div>
+
+        {/* Footer */}
+        <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 px-4 sm:px-6 py-3 sm:py-4 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl">
+          <p className="text-[11px] text-gray-400">
+            This flags the post and moves it to Issues
+          </p>
+          <div className="flex items-center justify-end gap-2">
+            <button
+              onClick={onCancel}
+              className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 rounded-lg border border-gray-200 hover:bg-gray-50 transition bg-white"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => trimmed && onConfirm(trimmed)}
+              disabled={!trimmed}
+              className="px-4 sm:px-6 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 whitespace-nowrap"
+            >
+              <IconAlertTriangle size={14} />
+              Move to Issues
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** Appends a dated issue entry to the existing profile notes. */
+function appendIssueNote(existing: string | undefined, note: string) {
+  const entry = `[Issue · ${new Date().toLocaleDateString()}] ${note}`
+  return existing?.trim() ? `${existing.trimEnd()}\n\n${entry}` : entry
+}
+
 // Chip multi-select for the filter panel. Deliberately local rather than
 // imported from the Pipeline board — the two pages stay independent.
 function TagSelect({ label, options, selected, onChange, colorClass = "bg-[#1FAE5B]/10 text-[#0F6B3E] border-[#1FAE5B]/30" }: {
@@ -428,27 +545,20 @@ function ColumnInfoTooltip({ colKey, variant }: { colKey: ClosedColumn; variant:
                     : isIssues ? "text-purple-700" : "text-red-700"
 
   return (
-    <div className="relative group/info flex-shrink-0">
-      <span
-        className={`text-[10px] font-medium border ${borderColor} ${textColor} rounded-full w-4 h-4 flex items-center justify-center opacity-70 cursor-default select-none hover:opacity-100 transition-opacity`}
-      >
-        i
-      </span>
-      <div className="absolute top-full right-0 mt-1.5 w-64 bg-white border border-gray-200 rounded-xl p-3 text-xs text-gray-700 leading-relaxed z-[60] hidden group-hover/info:block shadow-lg pointer-events-none">
-        <p className="font-semibold text-gray-900 mb-1 text-[11px]">{col.title}</p>
-        <p className="text-gray-600">{col.description}</p>
-        {col.move && (
-          <p className="mt-1.5 text-gray-400 border-t border-gray-100 pt-1.5">
-            <span className="font-medium text-gray-500">Next → </span>{col.move}
-          </p>
-        )}
-        {col.terminal && (
-          <p className="mt-1.5 text-[10px] font-medium text-red-500 border-t border-gray-100 pt-1.5 uppercase tracking-wide">
-            Terminal — cannot be moved
-          </p>
-        )}
-      </div>
-    </div>
+    <InfoTooltip iconClassName={`${borderColor} ${textColor}`}>
+      <p className="font-semibold text-gray-900 mb-1 text-[11px]">{col.title}</p>
+      <p className="text-gray-600">{col.description}</p>
+      {col.move && (
+        <p className="mt-1.5 text-gray-400 border-t border-gray-100 pt-1.5">
+          <span className="font-medium text-gray-500">Next → </span>{col.move}
+        </p>
+      )}
+      {col.terminal && (
+        <p className="mt-1.5 text-[10px] font-medium text-red-500 border-t border-gray-100 pt-1.5 uppercase tracking-wide">
+          Terminal — cannot be moved
+        </p>
+      )}
+    </InfoTooltip>
   )
 }
 
@@ -714,7 +824,7 @@ const STAGE_TO_ORDER_STATUS: Partial<Record<ClosedColumn, string>> = {
  */
 const BULK_CONCURRENCY = 2
 
-function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onCollabTypeChange, onPostDetailsChange, onOrderDetailsChange, canApproveInfluencers, subscriptionStatus, initialTab = 0, focusPostUrl = false }: {
+function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onCollabTypeChange, onPostDetailsChange, onRefreshMetrics, onOrderDetailsChange, canApproveInfluencers, subscriptionStatus, initialTab = 0, focusPostUrl = false }: {
   inf: ClosedInfluencer; brandId?: string; onClose: () => void
   /**
    * Report a save through the PAGE's notification dock.
@@ -730,6 +840,8 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
   onColumnChange: (id: string, col: ClosedColumn) => Promise<boolean>
   onCollabTypeChange: (id: string, type: string) => Promise<boolean>
   onPostDetailsChange: (id: string, fields: PostDetailsFields, options?: { markPosted?: boolean }) => Promise<UpdateColumnResult>
+  /** Fetches Likes/Comments/Views from the saved post link(s). */
+  onRefreshMetrics: (id: string) => Promise<PostMetricsResult>
   onOrderDetailsChange: (id: string, fields: OrderDetailsFields) => Promise<boolean>
   canApproveInfluencers: boolean
   subscriptionStatus?: string
@@ -799,11 +911,19 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
 
   // Notes reuses updateOrderDetails' PATCH path for its optimistic-update/rollback handling.
   const [notesValue, setNotesValue] = useState(inf.notes || "")
+  // Notes can change from outside the drawer — a move to Issues appends the
+  // required issue note — so pick that up without a refresh or remount.
+  const [syncedNotes, setSyncedNotes] = useState(inf.notes || "")
+  if ((inf.notes || "") !== syncedNotes) {
+    setSyncedNotes(inf.notes || "")
+    setNotesValue(inf.notes || "")
+  }
   const [savingNotes, setSavingNotes] = useState(false)
+  const [fetchingMetrics, setFetchingMetrics] = useState(false)
   const [postData, setPostData] = useState({
     postUrl: inf.postUrl || "", postedAt: inf.postedAt ? inf.postedAt.slice(0,10) : "",
     likes: inf.likesCount ? String(inf.likesCount) : "", comments: inf.commentsCount ? String(inf.commentsCount) : "",
-    engagement: inf.engagementCount ? String(inf.engagementCount) : "",
+    views: inf.viewsCount ? String(inf.viewsCount) : "",
     scriptStatus: inf.scriptStatus || "", contentStatus: inf.contentStatus || "",
     internalRating: inf.internalRating ? String(inf.internalRating) : "",
   })
@@ -974,6 +1094,11 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
     // "Posted needs proof of a post" guard either way. Already-Posted rows are
     // left alone: the server's "Posted is terminal" guard would 409 a redundant
     // closedStatus:"Posted" anyway, so it's simply not sent.
+    // Links stored before this save — a link not in here is new.
+    const previousLinks = new Set(
+      [inf.postUrl ?? "", ...getDeliverables(inf.paidCollabData).map(d => d.postUrl ?? "")]
+        .map(l => l.trim()).filter(Boolean)
+    )
     const markPosted = inf.closedStatus !== "Posted" &&
       (Boolean(trimmedUrl) || (hasDeliverables ? hasDetectedPost(inf) : hasPostEvidence(inf)))
     const res = await onPostDetailsChange(
@@ -983,7 +1108,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
         postedAt: postData.postedAt,
         likes: postData.likes,
         comments: postData.comments,
-        engagement: postData.engagement,
+        views: postData.views,
         internalRating: postData.internalRating,
         ...(sendDeliverables
           ? {
@@ -1005,6 +1130,26 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
     if (res.ok) {
       setPostUrlOrigin("stored")
       showToast(markPosted ? "Post details saved — moved to Posted" : "Post details saved")
+      // A new post link was saved: pull its Likes, Comments and Views
+      // automatically. Only on a NEW link, so re-saving hand-typed metrics
+      // against an existing link does not overwrite them.
+      const savedLinks = hasDeliverables
+        ? deliverableDrafts.map(d => (d.postUrl ?? "").trim())
+        : [postData.postUrl.trim()]
+      if (savedLinks.some(l => l && !previousLinks.has(l))) {
+        setFetchingMetrics(true)
+        const m = await onRefreshMetrics(inf.id)
+        setFetchingMetrics(false)
+        if (m.ok) {
+          setPostData(d => ({
+            ...d,
+            ...(m.likes    != null && { likes:    String(m.likes) }),
+            ...(m.comments != null && { comments: String(m.comments) }),
+            ...(m.views    != null && { views:    String(m.views) }),
+          }))
+          showToast("Likes, comments and views updated from the post")
+        }
+      }
     } else if (res.terminal) {
       showToast("This influencer has already Posted.", "error")
     } else {
@@ -1046,7 +1191,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
    * Take a detected post into the Post form.
    *
    * One set of fields for both routes: a detected post fills the SAME Post URL,
-   * Posted At, Likes, Comments and Engagement inputs a user types into, and the
+   * Posted At, Likes, Comments and Views inputs a user types into, and the
    * same Save button persists them. There is no separate manual-vs-automatic
    * form.
    *
@@ -1074,12 +1219,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
       ...(post.publishedAt ? { postedAt: post.publishedAt.slice(0, 10) } : {}),
       ...(post.likeCount    != null ? { likes:    String(post.likeCount) } : {}),
       ...(post.commentCount != null ? { comments: String(post.commentCount) } : {}),
-      // Engagement is interactions — likes + comments, not views. Written only
-      // when both halves are present, since a sum missing one would read as a
-      // real figure while understating it.
-      ...(post.likeCount != null && post.commentCount != null
-        ? { engagement: String(post.likeCount + post.commentCount) }
-        : {}),
+      ...(post.viewCount    != null ? { views:    String(post.viewCount) } : {}),
     }))
     setPostUrlOrigin("detected")
   }, [])
@@ -1243,7 +1383,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                 <div className="avg-row">
                   <div className="avg-card"><div className="avg-val">{Number.isFinite(inf.likesCount) ? inf.likesCount.toLocaleString() : "—"}</div><div className="avg-lbl">Likes</div></div>
                   <div className="avg-card"><div className="avg-val">{Number.isFinite(inf.commentsCount) ? inf.commentsCount.toLocaleString() : "—"}</div><div className="avg-lbl">Comments</div></div>
-                  <div className="avg-card"><div className="avg-val">{formatEngagementPercent(inf.engagementCount)}</div><div className="avg-lbl">Engagement</div></div>
+                  <div className="avg-card"><div className="avg-val">{Number.isFinite(inf.viewsCount) ? inf.viewsCount.toLocaleString() : "—"}</div><div className="avg-lbl">Views</div></div>
                 </div>
               </div>
               <div className="fgrd">
@@ -1536,16 +1676,16 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                 <div className="pfg"><div className="pfl">Likes</div><input className="pfi" value={postData.likes} onChange={e => setPostData(d => ({ ...d, likes: e.target.value }))} /></div>
                 <div className="pfg"><div className="pfl">Comments</div><input className="pfi" value={postData.comments} onChange={e => setPostData(d => ({ ...d, comments: e.target.value }))} /></div>
               </div>
-              <div className="pfg"><div className="pfl">Engagement</div><input className="pfi" value={postData.engagement} onChange={e => setPostData(d => ({ ...d, engagement: e.target.value }))} /></div>
+              <div className="pfg"><div className="pfl">Views{fetchingMetrics ? " · fetching…" : ""}</div><input className="pfi" value={postData.views} onChange={e => setPostData(d => ({ ...d, views: e.target.value }))} /></div>
               <div className="pfr">
                 <div className="pfg"><div className="pfl">Script Status</div>
                   <select className="pfi" value={postData.scriptStatus} onChange={e => setPostData(d => ({ ...d, scriptStatus: e.target.value }))}>
-                    <option value="">Select...</option><option value="pending">Pending</option><option value="revision_requested">Revision Requested</option><option value="approved">Approved</option>
+                    <option value="">Select...</option><option value="n_a">N/A</option><option value="pending">Pending</option><option value="revision_requested">Revision Requested</option><option value="approved">Approved</option>
                   </select>
                 </div>
                 <div className="pfg"><div className="pfl">Content Status</div>
                   <select className="pfi" value={postData.contentStatus} onChange={e => setPostData(d => ({ ...d, contentStatus: e.target.value }))}>
-                    <option value="">Select...</option><option value="pending">Pending</option><option value="revision_requested">Revision Requested</option><option value="approved">Approved</option>
+                    <option value="">Select...</option><option value="n_a">N/A</option><option value="pending">Pending</option><option value="revision_requested">Revision Requested</option><option value="approved">Approved</option>
                   </select>
                 </div>
               </div>
@@ -1572,7 +1712,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                 <div className="skc"><div className="skv-blue">{inf.engagementRate || "—"}</div><div className="skl">Eng. rate</div></div>
                 <div className="skc"><div className="skv-dark">{Number.isFinite(inf.likesCount) ? inf.likesCount.toLocaleString() : "—"}</div><div className="skl">Likes</div></div>
                 <div className="skc"><div className="skv-dark">{Number.isFinite(inf.commentsCount) ? inf.commentsCount.toLocaleString() : "—"}</div><div className="skl">Comments</div></div>
-                <div className="skc"><div className="skv-dark">{Number.isFinite(inf.engagementCount) ? inf.engagementCount.toLocaleString() : "—"}</div><div className="skl">Total engagement</div></div>
+                <div className="skc"><div className="skv-dark">{Number.isFinite(inf.viewsCount) ? inf.viewsCount.toLocaleString() : "—"}</div><div className="skl">Views</div></div>
                 <div className="skc"><div className="skv-green">{fmtMoney(inf.agreedRate)}</div><div className="skl">Rate</div></div>
               </div>
               <div className="stit">Timeline</div>
@@ -1682,7 +1822,7 @@ function PostTrackerContent() {
   // feature for free-tier users. A cached answer resolves on mount instead.
   const { isSubscribed, status: subscriptionStatus } = useSubscriptionGate(brandId)
 
-  const { data, isLoading, error, hasGivenUp, updateColumn, markCompleted, updateCampaignType, updatePostDetails, updateOrderDetails, isSaving, saveFailed, saveMessage, refetch } = useClosedData(brandId)
+  const { data, isLoading, error, hasGivenUp, updateColumn, markCompleted, updateCampaignType, updatePostDetails, updateOrderDetails, refreshPostMetrics, isSaving, saveFailed, saveMessage, refetch } = useClosedData(brandId)
 
   // Same approach and constant as the Pipeline board (kanban/kanban-board.tsx)
   // — see there for why it's measured rather than a flat vh, and why this
@@ -1731,7 +1871,9 @@ function PostTrackerContent() {
   const [postUrlBlocked, setPostUrlBlocked] = useState<ClosedInfluencer[]>([])
   // Move refused because the row is already Posted (terminal). Holds the
   // intended target so the reset can be confirmed and then re-applied.
-  const [resetBlocked, setResetBlocked] = useState<{ inf: ClosedInfluencer; target: ClosedColumn } | null>(null)
+  const [resetBlocked, setResetBlocked] = useState<{ inf: ClosedInfluencer; target: ClosedColumn; issueNote?: string } | null>(null)
+  // Move(s) into Issues waiting on the required note (single row or bulk).
+  const [issuePending, setIssuePending] = useState<{ targets: ClosedInfluencer[]; resetWorkflow?: boolean; bulk?: boolean } | null>(null)
   // Set when the drawer is opened from the warning's "Go to Post Details"
   const [drawerFocusPostUrl, setDrawerFocusPostUrl] = useState(false)
 
@@ -1740,25 +1882,43 @@ function PostTrackerContent() {
   }
   const sensors   = useSensors(useSensor(PointerSensor,{activationConstraint:{distance:5}}))
 
-  const handleMove = useCallback(async (id: string, col: ClosedColumn, opts?: { resetWorkflow?: boolean }) => {
+  // The drawer reads the row from the board's own data, not from the copy taken
+  // when it opened. `selectedInf` was patched separately after each move's
+  // request resolved — so with quick back-and-forth moves the responses landed
+  // out of order and the drawer's Stage showed a different (or no) current stage
+  // than the card. The board data is the one source every view now shares.
+  const liveSelectedInf = useMemo(
+    () => (selectedInf ? data.find(d => d.id === selectedInf.id) ?? selectedInf : null),
+    [selectedInf, data]
+  )
+
+  const handleMove = useCallback(async (id: string, col: ClosedColumn, opts?: { resetWorkflow?: boolean; issueNote?: string }) => {
     if (!canApprove) {
       showToast("Only Owners and Managers can update post status", "error")
       return false
     }
     const inf = data.find(d=>d.id===id)
+    // Every move INTO Issues goes through the required-note modal first; the
+    // modal calls back into this handler with the note set.
+    if (col === "Issues" && inf && inf.closedStatus !== "Issues" && opts?.issueNote === undefined) {
+      setIssuePending({ targets: [inf], resetWorkflow: opts?.resetWorkflow })
+      return false
+    }
+    const notes = opts?.issueNote !== undefined && inf ? appendIssueNote(inf.notes, opts.issueNote) : undefined
     // A manual move to Posted needs evidence of a published post — either a
     // Post URL or a post already found by Automatic Post Detection.
     if (col === "Posted" && inf && !canEnterPosted(inf)) {
       setPostUrlBlocked([inf])
       return false
     }
-    const res = await updateColumn(id, col, opts)
+    const res = await updateColumn(id, col, { resetWorkflow: opts?.resetWorkflow, notes })
     if (res.ok) {
       showToast(`${inf?.influencer} moved to ${col}`)
-      setSelectedInf(p => p?.id===id ? {...p, closedStatus: col} : p)
+      setSelectedInf(p => p?.id===id ? {...p, closedStatus: col, ...(notes !== undefined && { notes })} : p)
     } else if (res.terminal && inf) {
       // Posted is final. Offer the explicit reset rather than failing silently.
-      setResetBlocked({ inf, target: col })
+      // The issue note is carried so the reset does not ask for it again.
+      setResetBlocked({ inf, target: col, issueNote: opts?.issueNote })
     } else {
       showToast(res.error || "Failed to move", "error")
     }
@@ -1849,8 +2009,14 @@ function PostTrackerContent() {
   // stage logic. Concurrency is capped rather than serial: `updateColumn`
   // restores only its own row on failure, so overlapping calls cannot undo each
   // other's successful writes (see BULK_CONCURRENCY).
-  const runBulkStageMove = async (col: ClosedColumn) => {
+  const runBulkStageMove = async (col: ClosedColumn, issueNote?: string) => {
     const candidates = selectedInfluencers.filter(d => d.closedStatus !== col)
+
+    // Bulk moves into Issues need the same required note as a single move.
+    if (col === "Issues" && issueNote === undefined && candidates.length > 0) {
+      setIssuePending({ targets: candidates, bulk: true })
+      return
+    }
 
     // Same rule as the single-row paths: no post evidence, no manual move to
     // Posted. If any selected row has neither a Post URL nor a detected post,
@@ -1885,10 +2051,11 @@ function PostTrackerContent() {
       while (cursor < targets.length) {
         const target = targets[cursor++]
         // Derived views are marked stale once after the run, not per row.
-        const res = await updateColumn(target.id, col, { deferDerivedInvalidation: true })
+        const notes = issueNote !== undefined ? appendIssueNote(target.notes, issueNote) : undefined
+        const res = await updateColumn(target.id, col, { deferDerivedInvalidation: true, notes })
         if (res.ok) {
           moved += 1
-          setSelectedInf(p => (p?.id === target.id ? { ...p, closedStatus: col } : p))
+          setSelectedInf(p => (p?.id === target.id ? { ...p, closedStatus: col, ...(notes !== undefined && { notes }) } : p))
         } else {
           // Already Posted — counted separately so the toast can say why, rather
           // than reporting a generic failure the user can't act on.
@@ -1973,7 +2140,7 @@ function PostTrackerContent() {
           ...(fields.postedAt !== undefined && { postedAt: fields.postedAt || null }),
           ...(fields.likes !== undefined && { likesCount: parseMetricInput(fields.likes) }),
           ...(fields.comments !== undefined && { commentsCount: parseMetricInput(fields.comments) }),
-          ...(fields.engagement !== undefined && { engagementCount: parseMetricInput(fields.engagement) }),
+          ...(fields.views !== undefined && { viewsCount: parseMetricInput(fields.views) }),
           ...(fields.internalRating !== undefined && {
             internalRating: fields.internalRating === "" ? null : Number(fields.internalRating),
           }),
@@ -1987,6 +2154,19 @@ function PostTrackerContent() {
     }
     return res
   }, [updatePostDetails])
+
+  const handleRefreshMetrics = useCallback(async (id: string) => {
+    const m = await refreshPostMetrics(id)
+    if (m.ok) {
+      setSelectedInf(p => p?.id !== id ? p : {
+        ...p,
+        ...(m.likes    != null && { likesCount:    m.likes }),
+        ...(m.comments != null && { commentsCount: m.comments }),
+        ...(m.views    != null && { viewsCount:    m.views }),
+      })
+    }
+    return m
+  }, [refreshPostMetrics])
 
   const handleOrderDetailsChange = useCallback(async (id: string, fields: OrderDetailsFields): Promise<boolean> => {
     const ok = await updateOrderDetails(id, fields)
@@ -2112,15 +2292,28 @@ function PostTrackerContent() {
         />
       )}
 
+      {issuePending&&(
+        <IssueNoteModal
+          targets={issuePending.targets}
+          onConfirm={note=>{
+            const pending = issuePending
+            setIssuePending(null)
+            if (pending.bulk) void runBulkStageMove("Issues", note)
+            else void handleMove(pending.targets[0].id, "Issues", { resetWorkflow: pending.resetWorkflow, issueNote: note })
+          }}
+          onCancel={()=>setIssuePending(null)}
+        />
+      )}
+
       {resetBlocked&&(
         <ResetWorkflowDialog
           influencerName={resetBlocked.inf.influencer}
           target={resetBlocked.target}
           onConfirm={async()=>{
-            const { inf, target } = resetBlocked
+            const { inf, target, issueNote } = resetBlocked
             setResetBlocked(null)
             // Same handler, now with the explicit administrator override.
-            await handleMove(inf.id, target, { resetWorkflow: true })
+            await handleMove(inf.id, target, { resetWorkflow: true, issueNote })
           }}
           onCancel={()=>setResetBlocked(null)}
         />
@@ -2131,11 +2324,11 @@ function PostTrackerContent() {
           // Remount when the target or the "jump to Post URL" intent changes,
           // so initialTab/focus apply even if the drawer is already open.
           key={`${selectedInf.id}${drawerFocusPostUrl ? ":post" : ""}`}
-          inf={selectedInf} brandId={brandId}
+          inf={liveSelectedInf ?? selectedInf} brandId={brandId}
           onClose={()=>{ setSelectedInf(null); setDrawerFocusPostUrl(false) }}
           onNotify={showToast}
           onColumnChange={handleMove} onCollabTypeChange={handleCollabTypeChange}
-          onPostDetailsChange={handlePostDetailsChange} onOrderDetailsChange={handleOrderDetailsChange}
+          onPostDetailsChange={handlePostDetailsChange} onRefreshMetrics={handleRefreshMetrics} onOrderDetailsChange={handleOrderDetailsChange}
           canApproveInfluencers={canApprove}
           subscriptionStatus={subscriptionStatus}
           initialTab={drawerFocusPostUrl ? 2 : 0} focusPostUrl={drawerFocusPostUrl}/>

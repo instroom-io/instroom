@@ -55,14 +55,13 @@ export const MIN_POLL_INTERVAL_MS = 5 * 60 * 1000
 const RESULTS_PER_QUERY = 10
 
 /**
- * Monitoring window: how far back a post may be published and still be imported.
+ * Fallback monitoring window, used only for a row with no shipped_at or
+ * delivered_at to anchor on (legacy data).
  *
- * There is no per-setting window column, so this is the intended default in one
- * place — same pattern as MIN_POLL_INTERVAL_MS above.
- *
- * Why it exists: a provider feed can reach years back, and without a window a
- * pass that had already deduped the genuinely recent posts would keep importing
- * old ones as if they were new. A post outside the window is never imported.
+ * The normal cutoff is the moment the row entered In-Transit (`shipped_at`):
+ * only posts published AFTER the order shipped can be about this collaboration,
+ * so anything older in the influencer's feed is never imported. See
+ * `trackingSince` in runMonitoringPass.
  */
 const MAX_POST_AGE_MS = 30 * 24 * 60 * 60 * 1000
 
@@ -240,6 +239,7 @@ async function applyDetectionToInfluencer(
       // whatever the record already holds rather than being zeroed.
       ...(post.likeCount    != null ? { likes_count:    post.likeCount } : {}),
       ...(post.commentCount != null ? { comments_count: post.commentCount } : {}),
+      ...(post.viewCount    != null ? { views_count:    post.viewCount } : {}),
       // engagement_count is interactions, so likes + comments — NOT views.
       // Written only when the provider returned both, since a sum with a
       // missing half would understate it and read as a real figure.
@@ -266,6 +266,12 @@ async function pollInfluencer(
     hashtags: string | null
     mentions: string | null
     platforms: string | null
+    /**
+     * When tracking started for this row — its In-Transit date (shipped_at),
+     * else delivered_at. Posts published before this are never imported.
+     * Null only for legacy rows with neither date.
+     */
+    tracking_since: Date | null
   },
   /**
    * What the BRAND configured, which is the source of truth now that detection
@@ -290,7 +296,7 @@ async function pollInfluencer(
    *
    * Upsert by brand_influencer_id (which is @unique), not update by id: the
    * target list is derived from BrandInfluencer now, so an influencer that has
-   * just reached Delivered has no bookkeeping row yet and one update() would
+   * just reached In-Transit has no bookkeeping row yet and one update() would
    * throw P2025 before its first poll ever ran.
    */
   const recordPass = (last_error: string | null) =>
@@ -384,8 +390,9 @@ async function pollInfluencer(
 
       // The window is passed INTO the provider request layer so pagination can
       // stop as soon as the feed drops out of it, rather than fetching pages of
-      // old posts and discarding them here.
-      const notBefore = new Date(Date.now() - MAX_POST_AGE_MS)
+      // old posts and discarding them here. It starts when the order went
+      // In-Transit, so only posts made after shipping are ever picked up.
+      const notBefore = setting.tracking_since ?? new Date(Date.now() - MAX_POST_AGE_MS)
 
       const res = await fetchAccountPosts(q.platform, q.handle, RESULTS_PER_QUERY, { notBefore })
 
@@ -428,7 +435,7 @@ async function pollInfluencer(
         if (!post.publishedAt || post.publishedAt < notBefore) {
           outOfWindow++
           console.log(
-            `${LOG} SKIP (outside ${MAX_POST_AGE_MS / 86400000}d window) ${post.platform} ${post.postUrl} ` +
+            `${LOG} SKIP (published before tracking start ${notBefore.toISOString()}) ${post.platform} ${post.postUrl} ` +
               `published=${post.publishedAt?.toISOString() ?? "unknown"}`
           )
           continue
@@ -493,7 +500,7 @@ async function pollInfluencer(
       }
 
       if (outOfWindow > 0) {
-        console.log(`${LOG} ${label} — ${outOfWindow} matching post(s) skipped as older than the monitoring window`)
+        console.log(`${LOG} ${label} — ${outOfWindow} matching post(s) skipped as published before tracking started`)
       }
 
       if (wrongAuthor > 0) {
@@ -596,14 +603,15 @@ export async function runMonitoringPass(options?: { brandId?: string; force?: bo
   // ── Who gets polled ─────────────────────────────────────────────────────
   // Detection is a PAID BRAND-LEVEL feature, not a per-influencer opt-in. So
   // the target list is derived, not configured: every influencer a brand has at
-  // Delivered or beyond, for every brand whose add-on is active. Nobody has to
+  // In-Transit or beyond, for every brand whose add-on is active. Nobody has to
   // switch anything on per influencer, and nothing is missed because a toggle
   // was forgotten.
   //
-  // Stage 7 = Delivered, 8 = Posted (lib/post-tracker-status.ts). Below that —
-  // For Order Creation (5), In-Transit (6) — the product has not arrived, so
-  // there is no post to find and polling would spend the brand's API allowance
-  // proving it.
+  // Stage 6 = In-Transit, 7 = Delivered, 8 = Posted, 9 = Issues
+  // (lib/post-tracker-status.ts). Tracking starts the moment the order ships,
+  // and only posts published from then on count (tracking_since below), so the
+  // influencer's older posts are never picked up. For Order Creation (5) has
+  // not shipped yet, so there is nothing to track.
   //
   // PostDetectionSetting is still read, but only for what it is now: per-handle
   // BOOKKEEPING. `last_synced_at` paces the poll interval and `last_error`
@@ -612,14 +620,14 @@ export async function runMonitoringPass(options?: { brandId?: string; force?: bo
   // working with no data migration.
   const candidateRows = await prisma.brandInfluencer.findMany({
     where: {
-      stage: { gte: 7 },
+      stage: { gte: 6 },
       ...(options?.brandId ? { brand_id: options.brandId } : {}),
     },
-    select: { id: true, brand_id: true },
+    select: { id: true, brand_id: true, shipped_at: true, delivered_at: true },
   })
 
   if (candidateRows.length === 0) {
-    console.log(`${LOG} no influencers at Delivered or beyond — nothing to poll`)
+    console.log(`${LOG} no influencers at In-Transit or beyond — nothing to poll`)
   }
 
   // Bookkeeping rows for those influencers, in one query.
@@ -658,6 +666,7 @@ export async function runMonitoringPass(options?: { brandId?: string; force?: bo
         hashtags: book?.hashtags ?? null,
         mentions: book?.mentions ?? null,
         platforms: book?.platforms ?? null,
+        tracking_since: row.shipped_at ?? row.delivered_at ?? null,
         last_synced_at: book?.last_synced_at ?? null,
       }
     })
@@ -667,7 +676,7 @@ export async function runMonitoringPass(options?: { brandId?: string; force?: bo
   console.log(
     `${LOG} ${settings.length} influencer(s) due for polling` +
       (settings.length === 0 && candidateRows.length > 0
-        ? ` — all ${candidateRows.length} at Delivered+ were polled within the last ` +
+        ? ` — all ${candidateRows.length} at In-Transit+ were polled within the last ` +
           `${MIN_POLL_INTERVAL_MS / 60000} minutes (pass force=true to override).`
         : "")
   )
@@ -686,7 +695,7 @@ export async function runMonitoringPass(options?: { brandId?: string; force?: bo
 
     // getAddonStatus, not isAddonActive: the same row carries the gate AND the
     // brand's hashtags/mentions, so one read answers both. The add-on being
-    // active is what enables detection for every Delivered influencer of this
+    // active is what enables detection for every In-Transit+ influencer of this
     // brand — there is no per-influencer switch.
     const addon = await getAddonStatus(brandId)
     if (!addon.active) {
