@@ -37,6 +37,8 @@ import { StaleDataNotice } from "@/components/stale-data-notice"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { SubscriptionGate } from "@/components/ui/subscription-gate"
 import { HistoryTab, LastEditedBy } from "@/components/InfluencerProfileSidebar"
+import { AttributionTab } from "@/components/shared/attribution-tab"
+import { InfluencerStatsTab } from "@/components/shared/influencer-stats-tab"
 import { PaidCollabTab } from "@/components/table-sheet/profile-sidebar"
 import { BoardSkeleton } from "@/components/shared/skeletons"
 import { StageDropdown, type StageOption } from "@/components/shared/stage-dropdown"
@@ -527,10 +529,6 @@ function CampaignBadge({ type }: { type: string | null }) {
 function fmtMoney(v: number | null | undefined) {
   return v ? "$" + Math.round(v).toLocaleString() : "—"
 }
-function fmtDate(iso: string | null | undefined) {
-  return iso ? new Date(iso).toLocaleDateString() : "—"
-}
-
 // ─── Column Info Tooltip — identical pattern to pipeline ──────────────────────
 function ColumnInfoTooltip({ colKey, variant }: { colKey: ClosedColumn; variant: "dark" | "light" }) {
   const col = COLUMNS.find(c => c.key === colKey)
@@ -797,7 +795,9 @@ function DraggableCard({ id, children, onClick, disabled }: { id: string; childr
 // appears in the drawer's dropdown too. It was a separate literal, which is
 // exactly how a new column would have been silently missing here.
 const STAGE_OPTIONS: ClosedColumn[] = COLUMNS.map((c) => c.key)
-const PROFILE_TABS = ["Basic", "Order", "Post", "Stats", "Paid collab details", "History"]
+const PROFILE_TABS = ["Basic", "Order", "Post", "Stats", "Paid collab details", "History", "Attribution"]
+// Display order; Attribution (6) sits after Order without renumbering the others.
+const PROFILE_TAB_ORDER = [0, 1, 6, 2, 3, 4, 5]
 
 // The Order tab's "Order Status" field is the same underlying stage as the
 // Stage dropdown above it, just scoped to the order-fulfillment steps and
@@ -1370,10 +1370,10 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
 
         {/* ── Tabs ── */}
         <div className="pit-bar">
-          {PROFILE_TABS.map((tab, idx) => (
+          {PROFILE_TAB_ORDER.map((idx) => (
             idx === 4 && !showPaidCollabTab ? null :
             <div key={idx} className={`pit ${profileTab === idx ? "active" : ""}`} onClick={() => setProfileTab(idx)}>
-              {tab}
+              {PROFILE_TABS[idx]}
             </div>
           ))}
         </div>
@@ -1718,23 +1718,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
 
           {/* ════ STATS TAB ════ */}
           {profileTab === 3 && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-              <div className="stit">Engagement &amp; Performance</div>
-              <div className="skg">
-                <div className="skc"><div className="skv-dark">{inf.followers}</div><div className="skl">Followers</div></div>
-                <div className="skc"><div className="skv-blue">{inf.engagementRate || "—"}</div><div className="skl">Eng. rate</div></div>
-                <div className="skc"><div className="skv-dark">{Number.isFinite(inf.likesCount) ? inf.likesCount.toLocaleString() : "—"}</div><div className="skl">Likes</div></div>
-                <div className="skc"><div className="skv-dark">{Number.isFinite(inf.commentsCount) ? inf.commentsCount.toLocaleString() : "—"}</div><div className="skl">Comments</div></div>
-                <div className="skc"><div className="skv-dark">{Number.isFinite(inf.viewsCount) ? inf.viewsCount.toLocaleString() : "—"}</div><div className="skl">Views</div></div>
-                <div className="skc"><div className="skv-green">{fmtMoney(inf.agreedRate)}</div><div className="skl">Rate</div></div>
-              </div>
-              <div className="stit">Timeline</div>
-              <div className="skg">
-                <div className="skc"><div className="skv-dark">{fmtDate(inf.shippedAt)}</div><div className="skl">Shipped</div></div>
-                <div className="skc"><div className="skv-dark">{fmtDate(inf.deliveredAt)}</div><div className="skl">Delivered</div></div>
-                <div className="skc"><div className="skv-dark">{fmtDate(inf.postedAt)}</div><div className="skl">Posted</div></div>
-              </div>
-            </div>
+            <InfluencerStatsTab brandId={brandId} brandInfluencerId={inf.id} />
           )}
 
           {/* ════ PAID COLLAB DETAILS TAB ════ */}
@@ -1749,6 +1733,11 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
           {/* ════ HISTORY TAB ════ */}
           {profileTab === 5 && (
             <HistoryTab brandId={brandId} biId={inf.id} />
+          )}
+
+          {/* ════ ATTRIBUTION TAB ════ */}
+          {profileTab === 6 && (
+            <AttributionTab brandId={brandId} brandInfluencerId={inf.id} firstName={(inf.influencer || inf.handle || "").split(" ")[0]} />
           )}
 
         </div>
@@ -1774,7 +1763,9 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
           .atag { font-size:12px; font-weight:500; padding:6px 14px; border-radius:20px; cursor:pointer; border:1px solid #e5e7eb; background:#f9fafb; color:#555; transition:background .15s,border-color .15s,color .15s; }
           .atag:not(.plat):hover { background:#eafaf1; border-color:#1fae5b; color:#1fae5b; }
           .atag.plat { background:#1fae5b; color:#fff; border-color:#1fae5b; }
-          .pit-bar { display:flex; gap:0; padding:0 20px; border-bottom:1px solid #f0f0f0; overflow-x:auto; }
+          .pit-bar { display:flex; gap:0; padding:0 20px; border-bottom:1px solid #f0f0f0; overflow-x:auto; scrollbar-width:thin; scrollbar-color:#d1d5db transparent; }
+          .pit-bar::-webkit-scrollbar { height:4px; }
+          .pit-bar::-webkit-scrollbar-thumb { background:#d1d5db; border-radius:4px; }
           .pit { font-size:12px; font-weight:600; padding:11px 14px; cursor:pointer; color:#9ca3af; border-bottom:2px solid transparent; white-space:nowrap; transition:color .15s; flex-shrink:0; }
           .pit.active { color:#1fae5b; border-bottom-color:#1fae5b; }
           .ppb { flex:1; overflow-y:auto; padding:18px 20px; }

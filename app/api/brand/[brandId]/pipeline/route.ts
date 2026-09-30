@@ -103,7 +103,6 @@ export async function GET(
     //
     // The OR on approval_status / contact_status is intentional:
     //   - "Approved"         → active pipeline cards
-    //   - "Declined"         → Not Interested column (must persist on refresh)
     //   - "not_interested"   → legacy rows before approval_status was set
     //   - "for_order_creation" → moved to Post Tracker but still shown here
     //   - stage >= 5         → same as for_order_creation, stage-based
@@ -136,7 +135,7 @@ export async function GET(
         // ── Pipeline visibility filter ─────────────────────────────────────
         OR: [
           { approval_status: "Approved"  },
-          { approval_status: "Declined"  },
+          // List declines (Declined without not_interested) stay off the board.
           { contact_status:  "not_interested"    },
           { contact_status:  "for_order_creation" },
           { stage:           { gte: 5 }  },
@@ -165,6 +164,7 @@ export async function GET(
         post_url:        true,
         likes_count:     true,
         comments_count:  true,
+        views_count:     true,
         engagement_count: true,
         posted_at:       true,
         shipped_at:      true,
@@ -259,8 +259,13 @@ export async function GET(
         )
 
         let collabType: string | undefined
+        let completed = false
         if (bi.product_details) {
-          try { collabType = JSON.parse(bi.product_details)?.campaignType || undefined } catch { /* malformed — ignore */ }
+          try {
+            const details = JSON.parse(bi.product_details)
+            collabType = details?.campaignType || undefined
+            completed = details?.completed === true
+          } catch { /* malformed — ignore */ }
         }
 
         return {
@@ -294,6 +299,7 @@ export async function GET(
           stage:           bi.stage,
           orderStatus:     bi.order_status,
           contentPosted:   bi.content_posted,
+          completed,
           approvalStatus:  bi.approval_status,
           approvalNotes:   bi.approval_notes,   // doubles as NI reason
           declineNotes:    bi.decline_notes,    // free text, "Others" declines only
@@ -305,6 +311,7 @@ export async function GET(
           postUrl:         bi.post_url,
           likesCount:      bi.likes_count,
           commentsCount:   bi.comments_count,
+          viewsCount:      bi.views_count,
           engagementCount: bi.engagement_count,
           postedAt:        bi.posted_at      ? bi.posted_at.toISOString()      : null,
           shippedAt:       bi.shipped_at     ? bi.shipped_at.toISOString()     : null,

@@ -36,6 +36,7 @@ import { prisma } from "@/lib/prisma"
 import { checkBrandAccess } from "@/lib/brand-access"
 import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 import { declineBucket, type DeclineBucket } from "@/lib/decline-reasons"
+import { isListDeclined, productCostFromDetails } from "@/lib/pipeline-transitions"
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions)
@@ -84,7 +85,7 @@ export async function GET(req: Request) {
       influencer: { is: { ...influencerFilter, is_draft: false } },
     }
 
-    const records = await prisma.brandInfluencer.findMany({
+    const fetchedRecords = await prisma.brandInfluencer.findMany({
       where: whereClause,
       select: {
         id: true,
@@ -111,7 +112,7 @@ export async function GET(req: Request) {
         },
         // Affiliate performance — the only source of clicks and sales.
         attribution: {
-          select: { clicks: true, sales_count: true, gmv: true },
+          select: { clicks: true, sales_count: true, gmv: true, spark_ads: true },
         },
         // Campaign spend, entered per partner.
         partner: {
@@ -119,6 +120,8 @@ export async function GET(req: Request) {
         },
       },
     })
+
+    const records = fetchedRecords.filter(r => !isListDeclined(r.approval_status, r.contact_status))
 
     // Per-post metrics live in DetectedPost, one row per detected post. Summing
     // them per influencer in a single grouped query keeps this O(1) queries
@@ -239,15 +242,16 @@ export async function GET(req: Request) {
         salesQty: Number(r.attribution?.sales_count ?? 0),
         salesAmt: r.attribution?.gmv ? Number(r.attribution.gmv) : 0,
 
-        prodCost:      r.partner?.product_cost    ? Number(r.partner.product_cost)    : 0,
+        prodCost:      r.partner
+          ? Number(r.partner.product_cost ?? 0)
+          : productCostFromDetails(r.product_details),
         feesPaid:      r.partner?.fees_paid       ? Number(r.partner.fees_paid)       : 0,
         commissionPaid: r.partner?.commission_paid ? Number(r.partner.commission_paid) : 0,
 
-        // DATA-GAPS: no column exists for these three anywhere in the schema.
-        // null (not false) so the UI reports "not tracked" instead of zero.
+        // No column for these two; null means "not tracked".
         usageRights:  null,
         contentSaved: null,
-        adCode:       null,
+        adCode:       Boolean(r.attribution?.spark_ads?.trim()),
 
         deliveredDaysAgo: resolveDeliveredDaysAgo(r.delivered_at),
       }
@@ -263,7 +267,7 @@ export async function GET(req: Request) {
         dateField: "created_at",
         recordCount: rows.length,
         /** Metrics with no backing column in the schema. */
-        untracked: ["usageRights", "contentSaved", "adCode"],
+        untracked: ["usageRights", "contentSaved"],
       },
     })
   } catch (err: unknown) {

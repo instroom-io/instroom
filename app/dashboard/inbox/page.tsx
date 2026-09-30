@@ -21,6 +21,7 @@ import { fetchCached, getCachedData, invalidateCache, useCachedFetch, useRestore
 import { useSubscriptionGate } from "@/hooks/useSubscriptionGate"
 import { invalidateInfluencerDerivedCaches } from "@/lib/cache-invalidation"
 import { usePipelineData } from "@/hooks/usePipelineData"
+import { isListDeclined } from "@/lib/pipeline-transitions"
 import {
   IconMailPlus,
   IconMailOpened,
@@ -239,9 +240,12 @@ function getPipelineStatus(bi?: {
   stage?: number | null
   order_status?: string | null
   approval_status?: string | null
+  completed?: boolean | null
 } | null): PipelineStage | null {
   if (!bi) return null
-  const { contact_status, content_posted, stage, order_status, approval_status } = bi
+  const { contact_status, content_posted, stage, order_status, approval_status, completed } = bi
+
+  if (isListDeclined(approval_status, contact_status)) return null
 
   // Same as derivePipelineStatus's "Not Interested" hard exit.
   if (contact_status === "not_interested" || approval_status === "Declined") return "REJECTED"
@@ -252,7 +256,7 @@ function getPipelineStatus(bi?: {
   if (inOrderRealm) {
     // Post Tracker's Issues column is stage 9 (it keeps order_status).
     if (stage === 9) return "ISSUES"
-    if (content_posted) return "POSTED"
+    if (content_posted) return completed ? "COMPLETED" : "POSTED"
     if (order_status === "delivered") return "DELIVERED"
     if (order_status === "shipped") return "IN_TRANSIT"
     return "FOR_ORDER_CREATION"
@@ -1809,6 +1813,7 @@ function InboxContent() {
           stage: r.stage,
           order_status: r.orderStatus,
           approval_status: r.approvalStatus,
+          completed: r.completed,
         }) === stage
     ).length
   }
@@ -1997,7 +2002,8 @@ function InboxContent() {
   const isSelfThread = (email: Email) =>
     !!gmailConnectedEmail && email.fromEmail?.toLowerCase() === gmailConnectedEmail.toLowerCase()
 
-  const canUpdateStage = (email: Email) => !!email.brandInfluencerId && !isSelfThread(email)
+  // No stage = declined on the Influencers List.
+  const canUpdateStage = (email: Email) => !!email.brandInfluencerId && email.status !== null && !isSelfThread(email)
 
   const updateEmailStage = async (
     emailUid: string,
@@ -2027,7 +2033,9 @@ function InboxContent() {
     if (!canUpdateStage(email)) {
       setStageNotification({
         show: true,
-        message: `${email.fromEmail} isn't a saved influencer in this brand, so it has no stage to update.`,
+        message: email.brandInfluencerId
+          ? `${email.fromEmail} was declined on the Influencers List. Change their status there to move them into the Pipeline.`
+          : `${email.fromEmail} isn't a saved influencer in this brand, so it has no stage to update.`,
         type: "error",
       })
       setTimeout(() => setStageNotification({ show: false, message: "", type: "error" }), 5000)

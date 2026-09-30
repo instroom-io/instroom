@@ -928,8 +928,9 @@ function AnalyticsPageContent() {
     const totalRevenue = dataToUse.reduce((sum, i) => sum + (i.salesAmt || 0), 0)
     const conversionRate = totalClicks > 0 ? (totalSalesQty / totalClicks) * 100 : 0
     const aov = totalSalesQty > 0 ? totalRevenue / totalSalesQty : 0
-    const avgSalePerInfluencer = posted > 0 ? totalRevenue / posted : 0
-    const influencersWithSales = dataToUse.filter(i => (i.salesQty || 0) > 0).length
+    const postedRevenue = dataToUse.reduce((sum, i) => sum + (i.pipelineStatus === "Posted" ? (i.salesAmt || 0) : 0), 0)
+    const avgSalePerInfluencer = posted > 0 ? postedRevenue / posted : 0
+    const influencersWithSales = dataToUse.filter(i => i.pipelineStatus === "Posted" && (i.salesQty || 0) > 0).length
     const totalProductCost = dataToUse.reduce((sum, i) => sum + (i.prodCost || 0), 0)
 
     // Spend/ROI metrics — every component is a stored per-partner figure
@@ -944,15 +945,12 @@ function AnalyticsPageContent() {
     const roi = totalSpend > 0 ? ((totalRevenue - totalSpend) / totalSpend * 100).toFixed(1) + '%' : '—'
     const profit = totalRevenue - totalSpend
 
-    // UGC flags have no backing column yet, so the API sends null. Counting
-    // nulls as false would render a confident "0 of N" for something that was
-    // never recorded — ugcTracked lets the UI say "not tracked" instead.
-    const ugcTracked = dataToUse.some(
-      i => i.usageRights !== null || i.contentSaved !== null || i.adCode !== null
-    )
+    // null = not tracked (no column yet).
+    const ugcTracked = dataToUse.some(i => i.usageRights !== null || i.contentSaved !== null)
+    const adCodesTracked = dataToUse.some(i => i.adCode !== null)
     const usageRights = dataToUse.filter(i => i.usageRights === true).length
     const contentSaved = dataToUse.filter(i => i.contentSaved === true).length
-    const adCodesGiven = dataToUse.filter(i => i.adCode === true).length
+    const adCodesGiven = dataToUse.filter(i => i.pipelineStatus === "Posted" && i.adCode === true).length
 
     // Aging data for No Post
     const noPostItems = dataToUse.filter(i => i.pipelineStatus === 'Content Pending' && i.deliveredDaysAgo)
@@ -978,7 +976,7 @@ function AnalyticsPageContent() {
       platformEMV, totalViews, totalLikes, totalComments, engagementRate, totalEMV,
       totalClicks, totalSalesQty, totalRevenue, conversionRate, aov, avgSalePerInfluencer,
       influencersWithSales, totalProductCost, totalFeesPaid, totalCommPaid, totalSpend,
-      ugcTracked,
+      ugcTracked, adCodesTracked,
       roas, roi, profit, usageRights, contentSaved, adCodesGiven, agingData
     }
   }
@@ -1165,11 +1163,11 @@ function AnalyticsPageContent() {
     section('CONVERSION')
     header('Metric', 'Value', 'Basis')
     row('Web clicks', metrics.totalClicks, 'affiliate attribution')
-    row('Total sales (units)', metrics.totalSalesQty, '')
+    row('Total sales (orders)', metrics.totalSalesQty, 'approved orders')
     row('Total revenue ($)', metrics.totalRevenue, 'influencer-driven sales')
-    row('Conversion rate', `${metrics.conversionRate.toFixed(1)}%`, 'units ÷ clicks')
-    row('Avg order value ($)', Math.round(metrics.aov), 'revenue ÷ units sold')
-    row('Avg sale per influencer ($)', Math.round(metrics.avgSalePerInfluencer), 'revenue ÷ all who posted')
+    row('Conversion rate', `${metrics.conversionRate.toFixed(1)}%`, 'orders ÷ clicks')
+    row('Avg order value ($)', Math.round(metrics.aov), 'revenue ÷ orders')
+    row('Avg sale per influencer ($)', Math.round(metrics.avgSalePerInfluencer), 'revenue of those who posted ÷ all who posted')
     row('Influencers with sales', metrics.influencersWithSales, pctOf(metrics.influencersWithSales, metrics.posted) + ' of those who posted')
 
     section('CAMPAIGN SPEND & RETURN')
@@ -1192,8 +1190,8 @@ function AnalyticsPageContent() {
       metrics.ugcTracked ? pctOf(metrics.usageRights, metrics.posted) + ' of those who posted' : 'no source field in schema')
     row('Content saved', metrics.ugcTracked ? metrics.contentSaved : untracked,
       metrics.ugcTracked ? pctOf(metrics.contentSaved, metrics.usageRights) + ' of usage rights granted' : 'no source field in schema')
-    row('Ad codes given', metrics.ugcTracked ? metrics.adCodesGiven : untracked,
-      metrics.ugcTracked ? pctOf(metrics.adCodesGiven, metrics.posted) + ' of those who posted' : 'no source field in schema')
+    row('Ad codes given', metrics.adCodesTracked ? metrics.adCodesGiven : untracked,
+      metrics.adCodesTracked ? pctOf(metrics.adCodesGiven, metrics.posted) + ' of those who posted' : 'no source field in schema')
 
     // ── Per-influencer detail (the original export, unchanged in meaning) ───
     section('INFLUENCER DETAIL')
@@ -1740,7 +1738,7 @@ function AnalyticsPageContent() {
           <div className="space-y-5">
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
               <StatTile value={metrics.totalClicks.toLocaleString()} label="Web clicks" />
-              <StatTile value={metrics.totalSalesQty} label="Total sales (units)" />
+              <StatTile value={metrics.totalSalesQty} label="Total sales (orders)" />
               <StatTile value={formatMoney(metrics.totalRevenue)} label="Total revenue" />
               <StatTile value={`${metrics.conversionRate.toFixed(1)}%`} label="Conversion rate" />
             </div>
@@ -1753,7 +1751,11 @@ function AnalyticsPageContent() {
               <div className="grid grid-cols-2 gap-x-6 gap-y-4 lg:grid-cols-3">
                 <MetricCard nested label="Total revenue" value={formatMoney(metrics.totalRevenue)} subLabel="from influencer-driven sales" isGreen />
                 <MetricCard nested label="Total spend" value={formatMoney(metrics.totalSpend)} subLabel="COGS + fees + commission" />
-                <MetricCard nested label="Net profit / loss" value={`${metrics.profit >= 0 ? '+' : ''}${formatMoney(metrics.profit)}`} subLabel={metrics.profit >= 0 ? 'profitable campaign' : 'loss-making campaign'} isGreen={metrics.profit >= 0} />
+                {metrics.totalRevenue === 0 && metrics.totalSpend === 0 ? (
+                  <MetricCard nested label="Net profit / loss" value="—" subLabel="no revenue or spend yet" />
+                ) : (
+                  <MetricCard nested label="Net profit / loss" value={`${metrics.profit >= 0 ? '+' : ''}${formatMoney(metrics.profit)}`} subLabel={metrics.profit >= 0 ? 'profitable campaign' : 'loss-making campaign'} isGreen={metrics.profit >= 0} />
+                )}
                 <MetricCard nested label="ROAS" value={metrics.roas !== '—' ? `${metrics.roas}x` : '—'} subLabel="revenue ÷ total spend" isGreen={typeof metrics.roas === 'string' ? parseFloat(metrics.roas) >= 1 : false} />
                 <MetricCard nested label="ROI" value={metrics.roi} subLabel="net profit ÷ total spend" isGreen={metrics.profit >= 0} />
                 <MetricCard nested label="Break-even" value={formatMoney(metrics.totalSpend)} subLabel="min revenue needed" />
@@ -1769,17 +1771,17 @@ function AnalyticsPageContent() {
                   <span className={`shrink-0 text-sm font-semibold text-gray-900 ${NUM}`}>{formatMoney(metrics.totalFeesPaid)}</span>
                 </div>
                 <div className="flex min-w-0 items-center justify-between gap-3 rounded-lg bg-gray-50 px-2.5 py-2">
-                  <span className="min-w-0 truncate text-sm text-gray-600">🔗 Commission paid (10%)</span>
+                  <span className="min-w-0 truncate text-sm text-gray-600">🔗 Commission paid</span>
                   <span className={`shrink-0 text-sm font-semibold text-gray-900 ${NUM}`}>{formatMoney(metrics.totalCommPaid)}</span>
                 </div>
               </div>
             </SectionCard>
 
-            <div className="grid items-start gap-4 md:grid-cols-2">
+            <div className="grid items-stretch gap-4 md:grid-cols-2">
               <SectionCard title="Additional conversion metrics">
-                <div className="divide-y divide-gray-100 [&>*]:py-3 [&>*:first-child]:pt-0 [&>*:last-child]:pb-0">
-                  <MetricCard nested label="Avg order value (AOV)" value={formatMoney(Math.round(metrics.aov))} subLabel="revenue ÷ units sold" isGreen />
-                  <MetricCard nested label="Avg sale per influencer" value={formatMoney(Math.round(metrics.avgSalePerInfluencer))} subLabel="revenue ÷ all who posted" isGreen />
+                <div className="grid grid-cols-1 gap-x-6 gap-y-4 min-[380px]:grid-cols-2">
+                  <MetricCard nested label="Avg order value (AOV)" value={formatMoney(Math.round(metrics.aov))} subLabel="revenue ÷ orders" isGreen />
+                  <MetricCard nested label="Avg sale per influencer" value={formatMoney(Math.round(metrics.avgSalePerInfluencer))} subLabel="their revenue ÷ all who posted" isGreen />
                   <MetricCard nested label="Influencers with sales" value={`${metrics.influencersWithSales} (${formatPercent(metrics.influencersWithSales, metrics.posted)})`} subLabel="of those who posted" isGreen />
                   <MetricCard nested label="Product cost (total)" value={formatMoney(metrics.totalProductCost)} subLabel="cost of products sent" />
                 </div>
@@ -1832,7 +1834,11 @@ function AnalyticsPageContent() {
                 <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
                   <StatTile value="—" label="Usage rights granted" sub="not tracked yet" />
                   <StatTile value="—" label="Content saved" sub="not tracked yet" />
-                  <StatTile value="—" label="Ad codes given" sub="not tracked yet" />
+                  {metrics.adCodesTracked ? (
+                    <StatTile value={metrics.adCodesGiven} label="Ad codes given" sub={`${formatPercent(metrics.adCodesGiven, metrics.posted)} of those who posted`} />
+                  ) : (
+                    <StatTile value="—" label="Ad codes given" sub="not tracked yet" />
+                  )}
                 </div>
               )}
             </div>

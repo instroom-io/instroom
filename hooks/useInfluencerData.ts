@@ -99,6 +99,7 @@ export async function fetchInfluencerPayload(brandId: string): Promise<Influence
           clicks: item.clicks ?? 0,
           sales_count: item.sales_count ?? 0,
           gmv: item.gmv ? Number(item.gmv) : 0,
+          product_cost: item.product_cost ?? 0,
 
           // BrandInfluencer relationship fields
           contact_status: item.contact_status ?? "not_contacted",

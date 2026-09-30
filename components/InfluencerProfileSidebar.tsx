@@ -2,9 +2,15 @@
 
 import { useState, useEffect } from "react"
 import { EmailModal } from "@/components/shared/email-modal"
-import { ProfilePicture } from "@/components/table-sheet/ui-atoms"
-import { getProfileUrl } from "@/components/table-sheet/utils"
+import { ProfilePicture, PlatformIcon } from "@/components/table-sheet/ui-atoms"
+import { getProfileUrl, getPlatformLabel } from "@/components/table-sheet/utils"
 import { DeclineModal } from "@/components/shared/decline-modal"
+import { AttributionTab } from "@/components/shared/attribution-tab"
+import { InfluencerStatsTab } from "@/components/shared/influencer-stats-tab"
+import { useClosedData } from "@/hooks/useClosedData"
+import {
+  PAID_COLLAB_TYPES, ReadOnlyOrderTab, ReadOnlyPostTab, ReadOnlyPaidCollabTab,
+} from "@/components/pipeline/post-tracker-readonly-tabs"
 import { allowedTransitions } from "@/lib/pipeline-transitions"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -51,6 +57,14 @@ export interface Partner {
   affiliate_link?: string | null
   brandInfluencerId?: string
   brandId?: string
+  agreedRate?: number | null
+  internalRating?: number | null
+  likesCount?: number
+  commentsCount?: number
+  viewsCount?: number
+  orderStatus?: string | null
+  campaignName?: string | null
+  contactStatus?: string
   email?: string | null
   /**
    * The influencer's stored avatar — the permanent Cloudinary URL the
@@ -267,22 +281,9 @@ const LABEL_TO_KANBAN_ID: Record<string, string> = Object.fromEntries(
   Object.entries(KANBAN_ID_TO_LABEL).map(([id, label]) => [label, id])
 )
 
-// Colour coding per collab type so the pill is visually distinct
-const COLLAB_COLORS: Record<string, { bg: string; color: string; border: string }> = {
-  "Gifting":            { bg: "#f0fdf4", color: "#15803d", border: "#bbf7d0" },
-  "Paid":               { bg: "#eff6ff", color: "#1d4ed8", border: "#bfdbfe" },
-  "Affiliate":          { bg: "#fef9c3", color: "#854d0e", border: "#fde68a" },
-  "UGC":                { bg: "#faf5ff", color: "#7e22ce", border: "#e9d5ff" },
-  "TikTok Shop":        { bg: "#fff1f2", color: "#be123c", border: "#fecdd3" },
-  "Paid + Affiliate":   { bg: "#ecfeff", color: "#0e7490", border: "#a5f3fc" },
-  "UGC + Paid":         { bg: "#fff7ed", color: "#c2410c", border: "#fed7aa" },
-  "TikTok Shop + Paid": { bg: "#fdf4ff", color: "#a21caf", border: "#f0abfc" },
-}
-
 // ─── NI Modal ────────────────────────────────────────────────────────────────
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function formatMoney(v: number) { return "$" + Math.round(v).toLocaleString() }
-function formatROAS(rev: number, spend: number) { return spend > 0 ? (rev / spend).toFixed(1) + "x" : "—" }
 function autoTier(rev: number) { return rev >= 10001 ? "Gold" : rev >= 2001 ? "Silver" : "Bronze" }
 
 function fmt(n: number | null | undefined): string {
@@ -299,7 +300,6 @@ function fmt(n: number | null | undefined): string {
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function InfluencerProfileSidebar({
   partner,
-  campaigns,
   allPartners,
   onClose,
   onPipelineStatusChange,
@@ -340,43 +340,6 @@ export default function InfluencerProfileSidebar({
     setPrevStatus(persisted)
   }, [partner.commSt])
 
-  const [orderData, setOrderData] = useState({
-    discountCode: partner.coupon || partner.ref_code || "CODE" + partner.firstName.toUpperCase(),
-    affiliateLink: partner.affiliate_link || "https://instroom.io/ref/" + partner.firstName.toLowerCase(),
-    sparkAds: partner.spark_ads || "",
-  })
-  const [attributionSaveState, setAttributionSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle")
-  const [attributionSaveMessage, setAttributionSaveMessage] = useState<string | null>(null)
-
-  const handleAttributionSave = async () => {
-    if (!partner.brandId || !partner.brandInfluencerId) return
-    setAttributionSaveState("saving")
-    setAttributionSaveMessage(null)
-    try {
-      const res = await fetch(`/api/brand/${partner.brandId}/attribution/${partner.brandInfluencerId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          coupon: orderData.discountCode || null,
-          affiliateLink: orderData.affiliateLink || null,
-          sparkAds: orderData.sparkAds || null,
-        }),
-      })
-      if (!res.ok) throw new Error("Failed to update")
-      const json = await res.json()
-      setAttributionSaveState("saved")
-      if (json.goAffPro?.synced === false && json.goAffPro?.reason) {
-        setAttributionSaveMessage(`Updated — GoAffPro sync skipped: ${json.goAffPro.reason}`)
-      } else if (json.goAffPro?.synced) {
-        setAttributionSaveMessage("Updated and synced to GoAffPro")
-      }
-    } catch {
-      setAttributionSaveState("error")
-      setAttributionSaveMessage("Failed to update")
-    } finally {
-      setTimeout(() => setAttributionSaveState("idle"), 3000)
-    }
-  }
 
   // Notes uses the same pipeline route the Stage/Collaboration Type dropdowns use.
   const [notesValue, setNotesValue] = useState(partner.notes ?? "")
@@ -412,20 +375,25 @@ export default function InfluencerProfileSidebar({
     if (du <= 30) bdayPill = `in ${du}d`
   }
 
-  const bestMonth = partner.monthly.reduce((a, x) => (x.rev > a.rev ? x : a), partner.monthly[0])
-  const campCount = campaigns.filter(c => c.partners.some(cp => cp.pid === partner.id)).length
-
-  const avgLikes    = fmt(partner.avg_likes)
-  const avgComments = fmt(partner.avg_comments)
-  const avgViews    = fmt(partner.avg_views ?? partner.avgV)
   const followers   = fmt(partner.follower_count ?? partner.fol)
   const engRate     = partner.engagement_rate != null ? `${partner.engagement_rate}%`
                     : partner.eng != null ? `${partner.eng}%` : "—"
 
-  // Order and Post tabs removed — never worked; the real version is in Post Tracker.
-  const TABS = ["Basic", "Attribution", "Stats", "History"]
+  // Same tabs as Post Tracker's drawer. Order, Post and Paid collab are view-only
+  // here (edited in Post Tracker) and disabled until the influencer is there.
+  const TABS = ["Basic", "Order", "Attribution", "Post", "Stats", "Paid collab details", "History"]
+  const inPostTracker = partner.commSt === "For Order Creation"
+  const { data: closedRows } = useClosedData(inPostTracker ? partner.brandId : undefined)
+  const closedRow = inPostTracker ? closedRows.find((r) => r.id === partner.brandInfluencerId) : undefined
+  const tabDisabledReason = (idx: number): string | null => {
+    if (idx !== 1 && idx !== 3 && idx !== 5) return null
+    if (!inPostTracker) return "Available once this influencer is in Post Tracker"
+    if (idx === 5 && !PAID_COLLAB_TYPES.has(LABEL_TO_KANBAN_ID[collabType] ?? collabType)) return "Only for paid collaborations"
+    return null
+  }
+  // Falls back to Basic if the open tab becomes unavailable (e.g. another influencer).
+  const activeTab = tabDisabledReason(profileTab) ? 0 : profileTab
 
-  const collabColors = COLLAB_COLORS[collabType] ?? { bg: "#f9fafb", color: "#374151", border: "#e5e7eb" }
 
   // ── Collab type change handler ────────────────────────────────────────────
   const handleCollabTypeChange = (newType: string) => {
@@ -494,11 +462,11 @@ export default function InfluencerProfileSidebar({
 
       {/* ── Sidebar panel ── */}
       <div className="pp">
-        {/* ── Header ── */}
+        {/* Header copied from Post Tracker's drawer so the two match. */}
+        <button onClick={onClose} title="Close" className="close-btn">✕</button>
         <div className="pph">
-          <button onClick={onClose} title="Close" className="close-btn">✕</button>
-          <div className="ppt">Influencer Profile</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+          <div className="ppt" style={{ paddingRight: 40 }}>Influencer Profile</div>
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, marginBottom: 12, paddingRight: 40 }}>
             <div className="pav">
               {partner.profileImageUrl ? (
                 // Shared avatar component, so a broken or expired image falls
@@ -513,9 +481,9 @@ export default function InfluencerProfileSidebar({
                 partner.firstName ? partner.firstName[0] : partner.handle[1]?.toUpperCase()
               )}
             </div>
-            <div style={{ flex: 1 }}>
+            <div style={{ flexGrow: 1, flexShrink: 0, flexBasis: "auto" }}>
               <div className="pnm">{partner.firstName} {partner.lastName}</div>
-              <div className="phd">{partner.handle}</div>
+              <div className="phd">@{partner.handle.replace(/^@/, "")}</div>
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "flex-start" }}>
               {/* STAGE dropdown */}
@@ -562,11 +530,6 @@ export default function InfluencerProfileSidebar({
                   className="csel"
                   value={collabType}
                   onChange={(e) => handleCollabTypeChange(e.target.value)}
-                  style={{
-                    borderColor: collabColors.border,
-                    background:  collabColors.bg,
-                    color:       collabColors.color,
-                  }}
                 >
                   {COLLAB_TYPES.map((ct) => (
                     <option key={ct.value} value={ct.value}>{ct.value}</option>
@@ -584,7 +547,10 @@ export default function InfluencerProfileSidebar({
           )}
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-            <button className="atag plat">{partner.plat}</button>
+            <button className="atag plat" style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0, lineHeight: 1 }}>
+              <PlatformIcon platform={partner.plat} size={14} className="shrink-0" />
+              <span className="truncate">{getPlatformLabel(partner.plat) || "—"}</span>
+            </button>
             <button className="atag" onClick={() => setShowEmailModal(true)}>Send Email</button>
             <button
               className="atag"
@@ -602,39 +568,49 @@ export default function InfluencerProfileSidebar({
 
         {/* ── Tabs ── */}
         <div className="pit-bar">
-          {TABS.map((tab, idx) => (
-            <div key={idx} className={`pit ${profileTab === idx ? "active" : ""}`} onClick={() => setProfileTab(idx)}>
-              {tab}
-            </div>
-          ))}
+          {TABS.map((tab, idx) => {
+            const reason = tabDisabledReason(idx)
+            return (
+              <div key={idx} title={reason ?? undefined}
+                className={`pit ${activeTab === idx ? "active" : ""} ${reason ? "pit-disabled" : ""}`}
+                onClick={() => { if (!reason) setProfileTab(idx) }}>
+                {tab}
+              </div>
+            )
+          })}
         </div>
 
         {/* ── Body ── */}
         <div className="ppb">
 
-          {/* ════ BASIC TAB ════ */}
-          {profileTab === 0 && (
+          {/* ════ BASIC TAB ════ — Post Tracker's layout plus the Pipeline extras */}
+          {activeTab === 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <LastEditedBy brandId={partner.brandId} biId={partner.brandInfluencerId} />
               <div className="sr4">
                 <div className="sbox"><div className="slb">Followers</div><div className="svl">{followers}</div></div>
                 <div className="sbox"><div className="slb">Eng Rate</div><div className="svl" style={{ color: "#2c8ec4" }}>{engRate}</div></div>
-                <div className="sbox"><div className="slb">Avg Views</div><div className="svl">{avgViews}</div></div>
-                <div className="sbox"><div className="slb">GMV</div><div className="svl" style={{ color: "#1fae5b" }}>{formatMoney(partner.gmv)}</div></div>
+                <div className="sbox"><div className="slb">Rate</div><div className="svl" style={{ color: "#1fae5b" }}>{partner.agreedRate ? formatMoney(partner.agreedRate) : "—"}</div></div>
+                <div className="sbox"><div className="slb">Rating</div><div className="svl">{partner.internalRating ? `${partner.internalRating}/5` : "—"}</div></div>
               </div>
               <div>
                 <div className="section-label">Avg Metrics</div>
                 <div className="avg-row">
-                  <div className="avg-card"><div className="avg-val">{avgLikes}</div><div className="avg-lbl">Avg Likes</div></div>
-                  <div className="avg-card"><div className="avg-val">{avgComments}</div><div className="avg-lbl">Avg Comments</div></div>
-                  <div className="avg-card"><div className="avg-val">{avgViews}</div><div className="avg-lbl">Avg Views</div></div>
+                  <div className="avg-card"><div className="avg-val">{(partner.likesCount ?? 0).toLocaleString()}</div><div className="avg-lbl">Likes</div></div>
+                  <div className="avg-card"><div className="avg-val">{(partner.commentsCount ?? 0).toLocaleString()}</div><div className="avg-lbl">Comments</div></div>
+                  <div className="avg-card"><div className="avg-val">{(partner.viewsCount ?? 0).toLocaleString()}</div><div className="avg-lbl">Views</div></div>
                 </div>
               </div>
               <div className="fgrd">
                 <div className="frow"><div className="flbl">Location</div><div className="fval">{partner.loc || "—"}</div></div>
                 <div className="frow"><div className="flbl">Niche</div><div className="fval">{partner.niche || "—"}</div></div>
+                <div className="frow"><div className="flbl">Platform</div><div className="fval">{partner.plat || "—"}</div></div>
+                <div className="frow"><div className="flbl">Email</div><div className="fval">{partner.email || "—"}</div></div>
+                <div className="frow"><div className="flbl">Order Status</div><div className="fval">{partner.orderStatus || "—"}</div></div>
+                <div className="frow"><div className="flbl">Stage</div><div className="fval">{closedRow?.closedStatus ?? partner.commSt}</div></div>
+                <div className="frow"><div className="flbl">Campaign</div><div className="fval">{partner.campaignName || "—"}</div></div>
+                <div className="frow"><div className="flbl">Contact Status</div><div className="fval">{partner.contactStatus || "—"}</div></div>
                 <div className="frow"><div className="flbl">Gender</div><div className="fval">{partner.gend || "—"}</div></div>
-                <div className="frow"><div className="flbl">Platform</div><div className="fval">{partner.plat}</div></div>
                 <div className="frow">
                   <div className="flbl">Birthday</div>
                   <div className="fval">{partner.birthday || "—"}{bdayPill && <span className="bp">{bdayPill}</span>}</div>
@@ -666,79 +642,31 @@ export default function InfluencerProfileSidebar({
             </div>
           )}
 
+          {/* ════ ORDER / POST / PAID COLLAB — read-only, from Post Tracker's data ════ */}
+          {(activeTab === 1 || activeTab === 3 || activeTab === 5) && !closedRow && (
+            <div style={{ fontSize: 12, color: "#9ca3af" }}>Loading…</div>
+          )}
+          {activeTab === 1 && closedRow && <ReadOnlyOrderTab inf={closedRow} brandId={partner.brandId} />}
+          {activeTab === 3 && closedRow && <ReadOnlyPostTab inf={closedRow} brandId={partner.brandId} />}
+          {activeTab === 5 && closedRow && <ReadOnlyPaidCollabTab inf={closedRow} brandId={partner.brandId} />}
+
           {/* ════ ATTRIBUTION TAB ════ */}
-          {profileTab === 1 && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <div className="pfr">
-                <div className="pfg"><div className="pfl">Discount Code</div><input className="pfi" value={orderData.discountCode} onChange={e => setOrderData(d => ({ ...d, discountCode: e.target.value }))} /></div>
-                <div className="pfg"><div className="pfl">Ad Code/Spark Ads Code</div><input className="pfi" value={orderData.sparkAds} onChange={e => setOrderData(d => ({ ...d, sparkAds: e.target.value }))} placeholder="Ad Code/Spark Ads Code" /></div>
-              </div>
-              <div className="pfg"><div className="pfl">Affiliate Link</div><input className="pfi" value={orderData.affiliateLink} onChange={e => setOrderData(d => ({ ...d, affiliateLink: e.target.value }))} /></div>
-              <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10 }}>
-                {attributionSaveMessage && (
-                  <div style={{ fontSize: 12, color: attributionSaveState === "error" ? "#B42318" : "#667085" }}>
-                    {attributionSaveMessage}
-                  </div>
-                )}
-                <button
-                  className="btn-primary"
-                  onClick={handleAttributionSave}
-                  disabled={attributionSaveState === "saving"}
-                  style={{ opacity: attributionSaveState === "saving" ? 0.6 : 1 }}
-                >
-                  {attributionSaveState === "saving" ? "Updating…" : attributionSaveState === "saved" ? "Updated" : "Update"}
-                </button>
-              </div>
-            </div>
+          {activeTab === 2 && (
+            <AttributionTab
+              brandId={partner.brandId}
+              brandInfluencerId={partner.brandInfluencerId}
+              firstName={partner.firstName}
+              initial={{ coupon: partner.coupon, refCode: partner.ref_code, affiliateLink: partner.affiliate_link, sparkAds: partner.spark_ads }}
+            />
           )}
 
           {/* ════ STATS TAB ════ */}
-          {profileTab === 2 && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-              <div className="stit">Performance — all campaigns combined</div>
-              <div className="skg">
-                <div className="skc"><div className="skv-dark">{(partner.clicks || partner.hClicks || 0).toLocaleString()}</div><div className="skl">Total clicks</div></div>
-                <div className="skc"><div className="skv-blue">{partner.cvr || partner.hCVR || 0}%</div><div className="skl">CVR</div></div>
-                <div className="skc"><div className="skv-dark">{(partner.sales || partner.hSales || 0).toLocaleString()}</div><div className="skl">Total sales</div></div>
-                <div className="skc"><div className="skv-green">{formatMoney(partner.rev || partner.hRev || 0)}</div><div className="skl">Total revenue</div></div>
-                <div className="skc"><div className="skv-green">{formatMoney(partner.totalSpend || 0)}</div><div className="skl">Total spend</div></div>
-                <div className="skc"><div className={(partner.roas_val || 0) >= 1 ? "skv-green" : "skv-red"}>{formatROAS(partner.rev || partner.gmv || 0, partner.totalSpend)}</div><div className="skl">ROAS</div></div>
-              </div>
-              <div className="breakdown-box">
-                <strong>Spend breakdown:</strong>{" "}
-                {formatMoney(partner.prodCost)} product COGS + {formatMoney(partner.feesPaid)} fees + {formatMoney(partner.commPaid)} commission
-              </div>
-              <div className="stit">Engagement</div>
-              <div className="skg">
-                <div className="skc"><div className="skv-dark">{followers}</div><div className="skl">Followers</div></div>
-                <div className="skc"><div className="skv-blue">{engRate}</div><div className="skl">Eng. rate</div></div>
-                <div className="skc"><div className="skv-dark">{avgViews}</div><div className="skl">Avg views/post</div></div>
-                <div className="skc"><div className="skv-dark">{partner.ppm || 0}</div><div className="skl">Posts/month</div></div>
-                <div className="skc"><div className="skv-green">{formatMoney(partner.gmv || partner.rev || 0)}</div><div className="skl">GMV</div></div>
-                <div className="skc"><div className="skv-dark">{campCount}</div><div className="skl">Campaigns</div></div>
-              </div>
-              <div className="stit">Avg Metrics</div>
-              <div className="skg">
-                <div className="skc"><div className="skv-dark">{avgLikes}</div><div className="skl">Avg Likes</div></div>
-                <div className="skc"><div className="skv-dark">{avgComments}</div><div className="skl">Avg Comments</div></div>
-                <div className="skc"><div className="skv-dark">{avgViews}</div><div className="skl">Avg Views</div></div>
-              </div>
-              <div className="stit">Monthly breakdown</div>
-              <div className="mg">
-                {partner.monthly.map(m => (
-                  <div key={m.month} className={`mc2 ${m.month === bestMonth.month ? "best" : ""}`}>
-                    <div className="mn">{m.month}</div>
-                    <div className={`mv ${m.month === bestMonth.month ? "mv-best" : ""}`}>{formatMoney(m.rev)}</div>
-                    <div className="ms-txt">{m.posts} posts</div>
-                    <div className="ms-txt">{m.sales} sales</div>
-                  </div>
-                ))}
-              </div>
-            </div>
+          {activeTab === 4 && (
+            <InfluencerStatsTab brandId={partner.brandId} brandInfluencerId={partner.brandInfluencerId} />
           )}
 
           {/* ════ HISTORY TAB ════ */}
-          {profileTab === 3 && (
+          {activeTab === 6 && (
             <HistoryTab brandId={partner.brandId} biId={partner.brandInfluencerId} />
           )}
 
@@ -746,26 +674,29 @@ export default function InfluencerProfileSidebar({
 
         <style jsx>{`
           .pp { position:fixed; top:0; right:0; width:520px; max-width:100vw; height:100%; background:#fff; box-shadow:-8px 0 40px rgba(0,0,0,0.14); z-index:500; display:flex; flex-direction:column; font-family:"Inter",system-ui,sans-serif; }
-          .pph { position:relative; padding:16px 20px; border-bottom:1px solid #f0f0f0; }
+          .pph { padding:16px 20px; border-bottom:1px solid #f0f0f0; }
           .ppt { font-size:11px; font-weight:600; color:#9ca3af; letter-spacing:.1em; text-transform:uppercase; margin-bottom:12px; }
           .pav { width:44px; height:44px; border-radius:50%; background:#1fae5b; display:flex; align-items:center; justify-content:center; font-size:18px; font-weight:700; color:#fff; flex-shrink:0; box-shadow:0 0 0 3px #dcfce7; }
-          .pnm { font-size:15px; font-weight:700; color:#111827; }
-          .phd { font-size:12px; color:#6b7280; margin-top:2px; }
+          .pnm { font-size:15px; font-weight:700; color:#111827; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+          .phd { font-size:12px; color:#6b7280; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
           /* Pipeline select */
-          .ssel { font-size:11px; padding:5px 10px; border-radius:8px; border:.5px solid #f4b740; background:#fffbeb; color:#854f0b; cursor:pointer; font-family:inherit; font-weight:500; transition:all .15s; }
+          .ssel { font-size:11px; padding:5px 10px; border-radius:8px; border:.5px solid #f4b740; background:#fffbeb; color:#854f0b; cursor:pointer; font-family:inherit; font-weight:500; transition:all .15s; width:115px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
           /* Collab type select — adapts colour via inline style */
-          .csel { font-size:11px; padding:5px 10px; border-radius:8px; border-width:1px; border-style:solid; cursor:pointer; font-family:inherit; font-weight:600; transition:all .15s; min-width:130px; }
+          .csel { font-size:11px; padding:5px 10px; border-radius:8px; border:1px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; font-family:inherit; font-weight:600; transition:all .15s; width:115px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
-          .close-btn { position:absolute; top:16px; right:20px; width:30px; height:30px; border-radius:50%; border:1.5px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; flex-shrink:0; line-height:1; transition:background .15s,border-color .15s,color .15s; }
+          .close-btn { position:absolute; top:16px; right:20px; z-index:1; width:30px; height:30px; border-radius:50%; border:1.5px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; line-height:1; transition:background .15s,border-color .15s,color .15s; }
           .close-btn:hover { background:#fee2e2; color:#dc2626; border-color:#fca5a5; }
           .atag { font-size:12px; font-weight:500; padding:6px 14px; border-radius:20px; cursor:pointer; border:1px solid #e5e7eb; background:#f9fafb; color:#555; transition:background .15s,border-color .15s,color .15s; }
           .atag:not(.plat):hover { background:#eafaf1; border-color:#1fae5b; color:#1fae5b; }
           .atag.plat { background:#1fae5b; color:#fff; border-color:#1fae5b; }
-          .pit-bar { display:flex; gap:0; padding:0 20px; border-bottom:1px solid #f0f0f0; overflow-x:auto; }
+          .pit-bar { display:flex; gap:0; padding:0 20px; border-bottom:1px solid #f0f0f0; overflow-x:auto; scrollbar-width:thin; scrollbar-color:#d1d5db transparent; }
+          .pit-bar::-webkit-scrollbar { height:4px; }
+          .pit-bar::-webkit-scrollbar-thumb { background:#d1d5db; border-radius:4px; }
           .pit { font-size:12px; font-weight:600; padding:11px 14px; cursor:pointer; color:#9ca3af; border-bottom:2px solid transparent; white-space:nowrap; transition:color .15s; flex-shrink:0; }
           .pit.active { color:#1fae5b; border-bottom-color:#1fae5b; }
+          .pit-disabled { color:#d1d5db; cursor:not-allowed; }
           .ppb { flex:1; overflow-y:auto; padding:18px 20px; }
           .sr4 { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; background:linear-gradient(135deg,#f0fdf4 0%,#f9fafb 100%); border-radius:12px; padding:14px; margin-bottom:4px; border:1px solid #dcfce7; }
           .sbox { text-align:center; }
