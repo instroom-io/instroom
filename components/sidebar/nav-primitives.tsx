@@ -151,33 +151,37 @@ export function SidebarUserCard({
     <>
       {image && failedSrc !== image ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={image} alt="" onError={() => setFailedSrc(image)} className="h-8 w-8 shrink-0 rounded-full object-cover" />
+        <img src={image} alt="" className="h-8 w-8 shrink-0 rounded-full object-cover @max-[190px]:hidden" />
       ) : (
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--sb-accent)]/20 text-[11px] font-semibold text-[var(--sb-accent)]">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--sb-accent)]/20 text-[11px] font-semibold text-[var(--sb-accent)] @max-[190px]:hidden">
           {initials}
         </span>
       )}
 
-      {/* min-w-0 + truncate: a long email must not widen the rail */}
+      {/* min-w-0 + wrapping (not truncate): the full name stays readable in
+          the narrow rail by growing the card's height instead of its width.
+          Below 190px of card width (the rail dragged toward its 200px minimum)
+          the avatar hides and the name drops to 12px, so a typical first +
+          last name still fits on one line instead of breaking mid-word. */}
       <div className="min-w-0 flex-1">
-        <p className="truncate text-[13px] font-medium leading-tight text-white">{name}</p>
+        <p className="text-[13px] font-medium leading-snug text-white [overflow-wrap:break-word] @max-[190px]:text-[12px]">{name}</p>
         {settingsHref ? (
-          <p className="mt-0.5 truncate text-[11px] leading-tight text-[var(--sb-accent)]">Account settings</p>
+          <p className="mt-0.5 text-[11px] leading-tight text-[var(--sb-accent)]">Account settings</p>
         ) : (
-          email && <p className="mt-0.5 truncate text-[11px] leading-tight text-white/55">{email}</p>
+          email && <p className="mt-0.5 text-[11px] leading-tight text-white/55 [overflow-wrap:anywhere]">{email}</p>
         )}
       </div>
     </>
   )
 
   return (
-    <div className="flex h-16 items-center gap-2.5 rounded-[var(--sb-item-radius)] border border-white/10 bg-white/[0.05] px-2.5">
+    <div className="@container flex min-h-14 items-center gap-1.5 rounded-[var(--sb-item-radius)] border border-white/10 bg-white/[0.05] p-1.5">
       {settingsHref ? (
         <Link
           href={settingsHref}
           onClick={onNavigate}
           title={email}
-          className="-ml-1 flex min-w-0 flex-1 items-center gap-2.5 rounded-md py-1.5 pl-1 outline-none transition-colors duration-[var(--sb-transition)] hover:bg-white/[0.07] focus-visible:ring-2 focus-visible:ring-white/70"
+          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-md p-1.5 outline-none transition-colors duration-[var(--sb-transition)] hover:bg-white/[0.07] focus-visible:ring-2 focus-visible:ring-white/70"
         >
           {identity}
         </Link>
@@ -226,4 +230,5 @@ export const SIDEBAR_HEADER_CLASS =
 export const SIDEBAR_CONTENT_CLASS =
   "min-h-0 flex-1 gap-0 overflow-y-auto overflow-x-hidden bg-[var(--sb-bg)] px-3"
 
-export const SIDEBAR_FOOTER_CLASS = "shrink-0 bg-[var(--sb-bg)] p-2 pt-1"
+// px-3 matches SIDEBAR_CONTENT_CLASS so the user card lines up with the nav items.
+export const SIDEBAR_FOOTER_CLASS = "shrink-0 bg-[var(--sb-bg)] px-3 pb-3 pt-1"
