@@ -19,6 +19,7 @@ import {
 import { Link2, ShoppingCart, FolderOpen } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { SettingsSkeleton } from "@/components/shared/skeletons"
+import { fetchCached, invalidateCache, getCachedData } from "@/lib/data-cache"
 
 function LoadingScreen() {
   return (
@@ -50,6 +51,7 @@ type IntegrationId =
 type IntegrationState = {
   connected: boolean
   connectedAs?: string
+  unmatchedOrders?: number
 }
 
 type IntegrationsMap = Record<IntegrationId, IntegrationState>
@@ -70,8 +72,16 @@ function IntegrationsContent() {
 
   const brandId = searchParams.get("brandId")
 
-  const [loading, setLoading] = useState(true)
-  const [integrations, setIntegrations] = useState<IntegrationsMap>(DEFAULT_STATE)
+  // Seeded from the shared cache (the same entry the Post Tracker reads), so a
+  // revisit renders the connected integrations immediately.
+  const cachedIntegrations = brandId
+    ? getCachedData<{ integrations?: IntegrationsMap }>(`/api/settings/integrations?brandId=${brandId}`)
+    : undefined
+
+  const [loading, setLoading] = useState(cachedIntegrations === undefined)
+  const [integrations, setIntegrations] = useState<IntegrationsMap>(
+    cachedIntegrations?.integrations ?? DEFAULT_STATE
+  )
   const [pendingId, setPendingId] = useState<IntegrationId | null>(null)
   const [goaffproSyncing, setGoaffproSyncing] = useState(false)
 
@@ -83,6 +93,30 @@ function IntegrationsContent() {
     typeof window !== "undefined" && brandId
       ? `${window.location.origin}/api/webhooks/goaffpro/orders/${brandId}`
       : ""
+
+  const [shopifySyncing, setShopifySyncing] = useState(false)
+  const [shopifyModalOpen, setShopifyModalOpen] = useState(false)
+  const [shopifyShopDomain, setShopifyShopDomain] = useState("")
+
+  // Shopify connects via a full-page OAuth redirect, not a fetch — it lands
+  // back here with ?shopify=connected or ?shopify_error=... once done.
+  useEffect(() => {
+    const shopifyResult = searchParams.get("shopify")
+    const shopifyError = searchParams.get("shopify_error")
+    if (!shopifyResult && !shopifyError) return
+
+    if (shopifyResult === "connected") {
+      show("Shopify connected", "success")
+    } else if (shopifyError) {
+      show(shopifyError, "error")
+    }
+
+    const cleanUrl = new URL(window.location.href)
+    cleanUrl.searchParams.delete("shopify")
+    cleanUrl.searchParams.delete("shopify_error")
+    router.replace(cleanUrl.pathname + cleanUrl.search)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     if (!brandId) {
@@ -96,8 +130,13 @@ function IntegrationsContent() {
     }
     if (status !== "authenticated") return
 
-    fetch(`/api/settings/integrations?brandId=${encodeURIComponent(brandId)}`)
-      .then((r) => r.json())
+    // Shared cache entry — the same key the Post Tracker reads, so switching
+    // between them does not repeat the request.
+    fetchCached<any>(`/api/settings/integrations?brandId=${brandId}`, async () => {
+      const r = await fetch(`/api/settings/integrations?brandId=${encodeURIComponent(brandId)}`)
+      if (!r.ok) throw new Error(`Request failed (${r.status})`)
+      return r.json()
+    })
       .then((data) => {
         if (data.integrations) setIntegrations(data.integrations)
       })
@@ -112,6 +151,11 @@ function IntegrationsContent() {
       setGoaffproModalOpen(true)
       return
     }
+    if (id === "shopify") {
+      setShopifyShopDomain("")
+      setShopifyModalOpen(true)
+      return
+    }
 
     setPendingId(id)
     try {
@@ -122,6 +166,7 @@ function IntegrationsContent() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || `Failed to connect ${label}`)
+      invalidateCache(`/api/settings/integrations?brandId=${brandId}`)
 
       setIntegrations((prev) => ({
         ...prev,
@@ -155,6 +200,7 @@ function IntegrationsContent() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "Failed to connect GoAffPro")
+      invalidateCache(`/api/settings/integrations?brandId=${brandId}`)
 
       setIntegrations((prev) => ({
         ...prev,
@@ -169,6 +215,22 @@ function IntegrationsContent() {
     }
   }
 
+  // Shopify connects via OAuth — this navigates the browser away to Shopify's
+  // consent screen (not a fetch call), so there's no local success/error
+  // handling here; the callback route redirects back with ?shopify=connected
+  // or ?shopify_error=..., handled by the effect above.
+  function handleShopifyConnectSubmit() {
+    if (!shopifyShopDomain.trim()) {
+      show("Shop domain is required", "error")
+      return
+    }
+
+    const url = `/api/settings/integrations/shopify/install?brandId=${encodeURIComponent(
+      brandId ?? ""
+    )}&shopDomain=${encodeURIComponent(shopifyShopDomain.trim())}`
+    window.location.href = url
+  }
+
   async function handleDisconnect(id: IntegrationId, label: string) {
     setPendingId(id)
     try {
@@ -181,6 +243,8 @@ function IntegrationsContent() {
       if (!res.ok) throw new Error(data.error || `Failed to disconnect ${label}`)
 
       setIntegrations((prev) => ({ ...prev, [id]: { connected: false } }))
+      // Other pages (Post Tracker) read the same cached entry.
+      invalidateCache(`/api/settings/integrations?brandId=${brandId}`)
       show(`${label} disconnected`, "success")
     } catch (err: any) {
       show(err.message || "Something went wrong", "error")
@@ -221,6 +285,34 @@ function IntegrationsContent() {
       show(err.message || "Failed to sync GoAffPro clicks", "error")
     } finally {
       setGoaffproSyncing(false)
+    }
+  }
+
+  // "Sync now" — the on-demand backstop for the Shopify pull-sync. Webhooks
+  // are the primary path; this exists because Vercel's Hobby plan (this
+  // project's current tier) rejects any cron schedule finer than daily, so
+  // there's no scheduled job doing this automatically (see the header of
+  // app/api/cron/shopify-sync/route.ts for the full explanation).
+  async function handleShopifyManage() {
+    setShopifySyncing(true)
+    try {
+      const res = await fetch("/api/settings/integrations/shopify/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ brandId }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "Failed to sync Shopify orders")
+
+      setIntegrations((prev) => ({
+        ...prev,
+        shopify: { ...prev.shopify, unmatchedOrders: data.unmatched },
+      }))
+      show(`Shopify synced: ${data.ordersSynced} orders (${data.matched} matched, ${data.unmatched} unmatched)`, "success")
+    } catch (err: any) {
+      show(err.message || "Failed to sync Shopify orders", "error")
+    } finally {
+      setShopifySyncing(false)
     }
   }
 
@@ -287,14 +379,20 @@ function IntegrationsContent() {
             logo={<span className="text-[18px]">🛍</span>}
             logoBg="#f0faf5"
             name="Shopify"
-            desc="Sync orders and revenue per affiliate link or discount code"
+            desc="Create orders and auto-advance Post Tracker from Shopify fulfillment"
             connected={integrations.shopify.connected}
-            loading={pendingId === "shopify" || loading}
-            comingSoon
+            loading={pendingId === "shopify" || loading || shopifySyncing}
             onConnect={() => handleConnect("shopify", "Shopify")}
             onDisconnect={() => handleDisconnect("shopify", "Shopify")}
-            onManage={() => handleManage("Shopify")}
+            onManage={handleShopifyManage}
+            manageLabel={shopifySyncing ? "Syncing…" : "Sync now"}
           />
+          {integrations.shopify.connected && (integrations.shopify.unmatchedOrders ?? 0) > 0 && (
+            <div className="px-1 text-[11px] text-[#888]">
+              {integrations.shopify.unmatchedOrders} unmatched Shopify order
+              {integrations.shopify.unmatchedOrders === 1 ? "" : "s"} — placed outside Post Tracker with no matching discount code.
+            </div>
+          )}
           <IntegrationRow
             logo={<span className="text-[18px]">🟡</span>}
             logoBg="#fff8e1"
@@ -389,6 +487,50 @@ function IntegrationsContent() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={shopifyModalOpen} onOpenChange={setShopifyModalOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Connect Shopify</DialogTitle>
+            <DialogDescription>
+              Enter your store&rsquo;s domain, then you&rsquo;ll be sent to Shopify to review and
+              approve access — nothing to set up in your Shopify admin first.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-col gap-4 py-2">
+            <div className="flex flex-col gap-1.5">
+              <Label className="text-[11px] font-semibold tracking-wide text-[#555]">
+                Shop Domain
+              </Label>
+              <Input
+                placeholder="yourstore.myshopify.com"
+                value={shopifyShopDomain}
+                onChange={(e) => setShopifyShopDomain(e.target.value)}
+              />
+            </div>
+
+            <div className="rounded-lg bg-[#fff8e1] px-3 py-2 text-[11px] text-[#854F0B]">
+              Auto-advancing a card to In-Transit / Delivered depends on Shopify recognizing your
+              carrier&rsquo;s tracking info. Fulfilling without a tracked carrier may need a manual
+              nudge the rest of the way — this automates the common path, it doesn&rsquo;t replace
+              the board.
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShopifyModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-[#1FAE5B] text-white hover:bg-[#0F6B3E]"
+              onClick={handleShopifyConnectSubmit}
+            >
+              Continue to Shopify
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -440,6 +582,7 @@ function IntegrationRow({
   connectedLabel = "Connected",
   disconnectedLabel = "Not connected",
   connectLabel = "Connect",
+  manageLabel = "Manage",
   loading,
   comingSoon = false,
   onConnect,
@@ -455,6 +598,7 @@ function IntegrationRow({
   connectedLabel?: string
   disconnectedLabel?: string
   connectLabel?: string
+  manageLabel?: string
   loading?: boolean
   comingSoon?: boolean
   onConnect: () => void
@@ -513,7 +657,7 @@ function IntegrationRow({
               onClick={onManage}
               disabled={loading}
             >
-              Manage
+              {manageLabel}
             </Button>
             <Button
               size="sm"

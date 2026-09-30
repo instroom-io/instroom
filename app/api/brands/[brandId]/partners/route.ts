@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
+import { checkBrandAccess } from "@/lib/brand-access"
 
 // Re-flattens the Attribution relation back onto the response object so
 // consumers (BrandPartnersPage.tsx etc.) keep reading these as top-level
@@ -112,6 +113,9 @@ export async function GET(
 
     // Next.js 15+: params is a Promise — must be awaited
     const { brandId } = await context.params
+    if (!(await checkBrandAccess(brandId, session.user.id))) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
 
     const { searchParams } = new URL(req.url)
     const search        = searchParams.get("search") || ""
@@ -165,6 +169,9 @@ export async function POST(
     }
 
     const { brandId } = await context.params
+    if (!(await checkBrandAccess(brandId, session.user.id))) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
     const body = await req.json()
 
     if (!body.influencer_id) {

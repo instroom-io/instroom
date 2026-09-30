@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo, useRef, Suspense } from "react"
+import { useState, useEffect, useMemo, useRef, useCallback, Suspense } from "react"
 import { useSearchParams } from "next/navigation"
 import { useSession } from "next-auth/react"
 import {
@@ -17,10 +17,16 @@ import {
 } from "@dnd-kit/core"
 import { SubscriptionGate } from "@/components/ui/subscription-gate"
 import { ListSkeleton } from "@/components/shared/skeletons"
+import { fetchCached, getCachedData, invalidateCache, useCachedFetch, useRestoredCache } from "@/lib/data-cache"
+import { useSubscriptionGate } from "@/hooks/useSubscriptionGate"
+import { invalidateInfluencerDerivedCaches } from "@/lib/cache-invalidation"
+import { usePipelineData } from "@/hooks/usePipelineData"
 import {
   IconMailPlus,
+  IconMailOpened,
   IconSearch,
   IconX,
+  IconPlus,
   IconSend,
   IconMessageCircle,
   IconInbox,
@@ -45,7 +51,6 @@ import {
   IconArchive,
   IconTrash,
   IconBell,
-  IconUser,
   IconClock,
   IconLock,
   IconCheck,
@@ -55,7 +60,16 @@ import {
   IconBrandWindows,
   IconRefresh,
   IconAlertCircle,
+  IconAlertTriangle,
+  IconTemplate,
+  IconDeviceFloppy,
 } from "@tabler/icons-react"
+import { EmailTemplatesModal } from "@/components/shared/email-templates-modal"
+import { DeclineModal } from "@/components/shared/decline-modal"
+import { PlatformIcon } from "@/components/table-sheet/ui-atoms"
+import { getProfileUrl, getPlatformLabel } from "@/components/table-sheet/utils"
+import { UseTemplatePicker } from "@/components/shared/use-template-picker"
+import { RichComposeEditor, type RichComposeEditorHandle, type PendingAttachment, AttachmentChipReadOnly } from "@/components/shared/rich-compose-editor"
 
 function OutlookIcon({ size = 28 }: { size?: number }) {
   return (
@@ -77,14 +91,80 @@ type PipelineStage =
   | "IN_TRANSIT"
   | "DELIVERED"
   | "POSTED"
+  | "ISSUES"
   | "COMPLETED"
   | "REJECTED"
 
 type GmailSyncState = "checking" | "not_connected" | "connecting" | "syncing" | "connected" | "error"
 
+// ── OAuth hand-off between tabs ──────────────────────────────────────────────
+// Both provider flows run entirely in a second tab: /api/{gmail,outlook}/connect
+// 302s to accounts.google.com / login.microsoftonline.com there, the matching
+// callback lands there too, and it finishes on
+// /dashboard/inbox?{gmail,outlook}Connected=1. That tab therefore knows the
+// outcome and the original tab does not. A same-origin BroadcastChannel carries
+// the result back, so the original tab can leave its waiting state on its own
+// rather than the user pressing Back or reloading. Same-origin only — no data
+// crosses to Google's or Microsoft's tab, which are different origins and
+// cannot listen.
+const OAUTH_CHANNEL = "instroom-oauth"
+
+type MailProvider = "gmail" | "outlook"
+type OAuthResult = { provider: MailProvider; ok: boolean; error?: string }
+
+/** Provider names as they already read in the inbox UI. */
+const PROVIDER_LABEL: Record<MailProvider, string> = { gmail: "Gmail", outlook: "Outlook" }
+
+/** One connected mailbox, as /api/mail/accounts reports it. Never carries tokens. */
+type MailAccount = { id: string; provider: MailProvider; email: string | null; isSelected: boolean }
+
+/** Shared-cache key for the connected-mailbox list. */
+const MAIL_ACCOUNTS_KEY = "/api/mail/accounts"
+
+/** Normalized attachment metadata, independent of provider — messageId +
+ *  attachmentId + provider is everything openAttachment() needs to hit the
+ *  right bytes-endpoint. Metadata only; bytes are fetched lazily on click. */
+type EmailAttachment = {
+  id: string
+  messageId: string
+  filename: string
+  mimeType: string
+  size: number
+  provider: "gmail" | "outlook"
+}
+
 type Email = {
   id: number | string
-  influencerId?: number
+
+  /**
+   * Identity of this conversation WITHIN the inbox list.
+   *
+   * `id` is the provider's own thread id (a Gmail thread id, an Outlook
+   * conversationId) and is what the send/thread routes need, so it stays as it
+   * is. But Gmail and Outlook conversations share one `emails` array, and their
+   * id spaces are unrelated and opaque — nothing guarantees a Gmail thread id
+   * cannot equal an Outlook conversationId. Every place the UI looked a
+   * conversation up by `id` (the stage update, the drag handler, the drag
+   * overlay, the React list key) would then resolve to whichever provider's
+   * thread came first in the array, so a drag on an Outlook conversation could
+   * restage a Gmail one.
+   *
+   * `uid` namespaces that identity by provider AND by connected account, so it
+   * is unique across every mailbox on screen. It is used for UI identity only
+   * and is never sent to a provider.
+   */
+  uid: string
+
+  /**
+   * Which connected mailbox this conversation came from — the Account row id.
+   *
+   * Needed so a conversation keeps its account identity after it is mapped:
+   * without it, an Outlook thread in `emails` was indistinguishable from an
+   * Outlook thread belonging to a different connected account.
+   */
+  accountId?: string | null
+  /** Matched BrandInfluencer id, if any — lets stage updates skip re-deriving the match from fromEmail. */
+  brandInfluencerId?: string
   name: string
   handle: string
   avatar: string
@@ -100,7 +180,10 @@ type Email = {
   trackingNumber?: string
   postedLink?: string
   rejectionReason?: string
-  replies?: { sender: string; message: string; timestamp: string; isUser?: boolean }[]
+  // Set locally on decline so the badge shows it before pipelineRows refetches.
+  declineReason?: string
+  declineNotes?: string
+  replies?: { sender: string; message: string; timestamp: string; isUser?: boolean; isHtml?: boolean; attachments?: EmailAttachment[] }[]
   // Gmail-specific
   gmailThreadId?: string
   from?: string
@@ -108,6 +191,14 @@ type Email = {
   // Source tracking for multi-provider support
   source?: "gmail" | "outlook"
   outlookMessageId?: string
+  // A "sent, awaiting reply" entry shown from headers/snippet only — no full
+  // message body loaded yet. Opening it triggers a lazy fetch (see
+  // loadFullGmailThread) that replaces the entry with real content.
+  isLightweight?: boolean
+  // The optimistic row shown right after sendCompose, before the next real
+  // refresh replaces it — its id/gmailThreadId are locally generated, not a
+  // real Gmail thread id, so nothing should call the Gmail API with them.
+  isLocalPending?: boolean
 }
 
 type StageConfig = {
@@ -125,44 +216,87 @@ type StageConfig = {
 // ─── Stage Configs ────────────────────────────────────────────────────────────
 
 const stageConfigs: StageConfig[] = [
-  { id: "PROSPECT", label: "Prospects", icon: <IconUserPlus size={16} />, color: "text-gray-700", bgColor: "bg-gray-100", activeBgColor: "bg-gray-600", hoverBgColor: "hover:bg-gray-500", borderColor: "border-gray-300", arrowColor: "#f3f4f6" },
-  { id: "REACHED_OUT", label: "Reached Out", icon: <IconMessage size={16} />, color: "text-blue-700", bgColor: "bg-blue-100", activeBgColor: "bg-blue-600", hoverBgColor: "hover:bg-blue-500", borderColor: "border-blue-300", arrowColor: "#dbeafe" },
+  { id: "PROSPECT", label: "For Outreach", icon: <IconUserPlus size={16} />, color: "text-gray-700", bgColor: "bg-gray-100", activeBgColor: "bg-gray-600", hoverBgColor: "hover:bg-gray-500", borderColor: "border-gray-300", arrowColor: "#f3f4f6" },
+  { id: "REACHED_OUT", label: "Contacted", icon: <IconMessage size={16} />, color: "text-blue-700", bgColor: "bg-blue-100", activeBgColor: "bg-blue-600", hoverBgColor: "hover:bg-blue-500", borderColor: "border-blue-300", arrowColor: "#dbeafe" },
   { id: "IN_CONVERSATION", label: "In Conversation", icon: <IconMessageCircle size={16} />, color: "text-purple-700", bgColor: "bg-purple-100", activeBgColor: "bg-purple-600", hoverBgColor: "hover:bg-purple-500", borderColor: "border-purple-300", arrowColor: "#f3e8ff" },
-  { id: "ONBOARDED", label: "Onboarded", icon: <IconUserCheck size={16} />, color: "text-indigo-700", bgColor: "bg-indigo-100", activeBgColor: "bg-indigo-600", hoverBgColor: "hover:bg-indigo-500", borderColor: "border-indigo-300", arrowColor: "#e0e7ff" },
-  { id: "FOR_ORDER_CREATION", label: "For Order", icon: <IconShoppingCart size={16} />, color: "text-orange-700", bgColor: "bg-orange-100", activeBgColor: "bg-orange-600", hoverBgColor: "hover:bg-orange-500", borderColor: "border-orange-300", arrowColor: "#ffedd5" },
+  { id: "ONBOARDED", label: "Deal Agreed", icon: <IconUserCheck size={16} />, color: "text-indigo-700", bgColor: "bg-indigo-100", activeBgColor: "bg-indigo-600", hoverBgColor: "hover:bg-indigo-500", borderColor: "border-indigo-300", arrowColor: "#e0e7ff" },
+  { id: "FOR_ORDER_CREATION", label: "For Order Creation", icon: <IconShoppingCart size={16} />, color: "text-orange-700", bgColor: "bg-orange-100", activeBgColor: "bg-orange-600", hoverBgColor: "hover:bg-orange-500", borderColor: "border-orange-300", arrowColor: "#ffedd5" },
   { id: "IN_TRANSIT", label: "In-Transit", icon: <IconTruck size={16} />, color: "text-yellow-700", bgColor: "bg-yellow-100", activeBgColor: "bg-yellow-600", hoverBgColor: "hover:bg-yellow-500", borderColor: "border-yellow-300", arrowColor: "#fef9c3" },
   { id: "DELIVERED", label: "Delivered", icon: <IconPackage size={16} />, color: "text-teal-700", bgColor: "bg-teal-100", activeBgColor: "bg-teal-600", hoverBgColor: "hover:bg-teal-500", borderColor: "border-teal-300", arrowColor: "#ccfbf1" },
   { id: "POSTED", label: "Posted", icon: <IconPhoto size={16} />, color: "text-pink-700", bgColor: "bg-pink-100", activeBgColor: "bg-pink-600", hoverBgColor: "hover:bg-pink-500", borderColor: "border-pink-300", arrowColor: "#fce7f3" },
+  { id: "ISSUES", label: "Issues", icon: <IconAlertTriangle size={16} />, color: "text-amber-700", bgColor: "bg-amber-100", activeBgColor: "bg-amber-600", hoverBgColor: "hover:bg-amber-500", borderColor: "border-amber-300", arrowColor: "#fef3c7" },
   { id: "COMPLETED", label: "Completed", icon: <IconCircleCheck size={16} />, color: "text-green-700", bgColor: "bg-green-100", activeBgColor: "bg-green-600", hoverBgColor: "hover:bg-green-500", borderColor: "border-green-300", arrowColor: "#dcfce7" },
   { id: "REJECTED", label: "Rejected", icon: <IconReject size={16} />, color: "text-red-700", bgColor: "bg-red-100", activeBgColor: "bg-red-600", hoverBgColor: "hover:bg-red-500", borderColor: "border-red-300", arrowColor: "#fee2e2" },
 ]
 
 // ─── Pipeline Status Resolver ─────────────────────────────────────────────────
 
+// Mirrors derivePipelineStatus/deriveClosedStatus (pipeline & closed routes) —
+// real order_status values are shipped/delivered, default is For Order Creation.
 function getPipelineStatus(bi?: {
   contact_status?: string | null
   content_posted?: boolean | null
   stage?: number | null
   order_status?: string | null
+  approval_status?: string | null
 } | null): PipelineStage | null {
   if (!bi) return null
-  const { contact_status, content_posted, stage, order_status } = bi
-  if (contact_status && ["not_interested", "no_response", "email_error"].includes(contact_status)) return "REJECTED"
-  if (content_posted) return "POSTED"
-  if (stage === 4) return "COMPLETED"
-  if (order_status === "delivered") return "DELIVERED"
-  if (order_status === "in_transit") return "IN_TRANSIT"
-  if (order_status && ["not_sent", "sent_to_email"].includes(order_status)) return "FOR_ORDER_CREATION"
-  if (contact_status === "agreed") return "ONBOARDED"
-  if (contact_status && ["responded", "replied", "negotiating"].includes(contact_status)) return "IN_CONVERSATION"
-  if (contact_status === "contacted") return "REACHED_OUT"
-  if (stage === 1) return "PROSPECT"
-  return null
+  const { contact_status, content_posted, stage, order_status, approval_status } = bi
+
+  // Same as derivePipelineStatus's "Not Interested" hard exit.
+  if (contact_status === "not_interested" || approval_status === "Declined") return "REJECTED"
+
+  // Same gate derivePipelineStatus uses for handing off to Post Tracker.
+  // content_posted only counts inside it, as on the Pipeline.
+  const inOrderRealm = contact_status === "for_order_creation" || (stage != null && stage >= 5)
+  if (inOrderRealm) {
+    // Post Tracker's Issues column is stage 9 (it keeps order_status).
+    if (stage === 9) return "ISSUES"
+    if (content_posted) return "POSTED"
+    if (order_status === "delivered") return "DELIVERED"
+    if (order_status === "shipped") return "IN_TRANSIT"
+    return "FOR_ORDER_CREATION"
+  }
+
+  if (stage != null) {
+    if (stage >= 4) return "ONBOARDED"
+    if (stage === 3) return "IN_CONVERSATION"
+    if (stage === 2) return "REACHED_OUT"
+    if (stage === 1) return "PROSPECT"
+  }
+
+  switch (contact_status) {
+    case "agreed":       return "ONBOARDED"
+    case "negotiating":
+    case "paid_collab":  return "IN_CONVERSATION"
+    case "responded":
+    case "replied":
+    case "contacted":
+    case "no_response":
+    case "email_error":  return "REACHED_OUT"
+    default:             return "PROSPECT"
+  }
 }
 
 // ─── Gmail Thread → Email Mapper ──────────────────────────────────────────────
 
-function mapGmailThreadToEmail(thread: any, index: number): Email {
+/**
+ * Build the namespaced UI identity for one conversation.
+ *
+ * Encoded as a JSON array rather than joined with a separator character: any
+ * separator can in principle appear inside a provider's thread id, which would
+ * let two different (provider, account, thread) triples collapse to the same
+ * uid. JSON escaping makes the encoding injective, so that cannot happen.
+ */
+function conversationUid(
+  source: "gmail" | "outlook",
+  accountId: string | null | undefined,
+  threadId: string | number
+): string {
+  return JSON.stringify([source, accountId ?? "selected", String(threadId)])
+}
+
+function mapGmailThreadToEmail(thread: any, index: number, accountId?: string | null): Email {
   const messages = thread.messages || []
   const firstMsg = messages[0] || {}
   const lastMsg = messages[messages.length - 1] || {}
@@ -185,19 +319,39 @@ function mapGmailThreadToEmail(thread: any, index: number): Email {
     const replyFrom = msg.from || msg.sender || ""
     const replyName = replyFrom.match(/^([^<]+)</)?.[1]?.trim() || replyFrom.split("@")[0] || "Unknown"
     const isUser = (msg.labelIds || []).includes("SENT")
+    // Only trust the isHtml flag when it's paired with an actual body —
+    // msg.body falls back to the plain-text msg.snippet/msg.text when the
+    // real body couldn't be extracted, and that fallback is never HTML.
+    const hasRealBody = Boolean(msg.body)
     return {
       sender: isUser ? "You" : replyName,
       message: msg.body || msg.snippet || msg.text || "",
       timestamp: msg.date || new Date().toISOString(),
       isUser,
+      isHtml: hasRealBody && Boolean(msg.isHtml),
+      attachments: (msg.attachments || []).map((a: any) => ({
+        id: a.attachmentId,
+        messageId: msg.id,
+        filename: a.filename,
+        mimeType: a.mimeType,
+        size: a.size,
+        provider: "gmail" as const,
+      })),
     }
   })
 
   const status = getPipelineStatus(thread.brandInfluencer)
-  const timestamp = firstMsg.date || new Date().toISOString()
+  // The conversation's date should reflect its most recent activity, not
+  // when it started — use the last message, not the first (messages[0] is
+  // the oldest, per the comment above). Matches how Outlook's timestamp is
+  // already derived below.
+  const timestamp = lastMsg.date || firstMsg.date || new Date().toISOString()
 
   return {
     id: thread.id || `gmail-${index}`,
+    uid: conversationUid("gmail", accountId, thread.id || `gmail-${index}`),
+    accountId: accountId ?? null,
+    brandInfluencerId: thread.brandInfluencer?.id,
     gmailThreadId: thread.id,
     name: senderName,
     handle: senderEmail,
@@ -209,7 +363,7 @@ function mapGmailThreadToEmail(thread: any, index: number): Email {
     timestamp,
     status,
     read: !thread.unread,
-    starred: false,
+    starred: Boolean(thread.starred),
     from: senderName,
     fromEmail: senderEmail,
     replies,
@@ -217,7 +371,40 @@ function mapGmailThreadToEmail(thread: any, index: number): Email {
   }
 }
 
-function mapOutlookThreadToEmail(thread: any, index: number): Email {
+// A cold-outreach thread with no reply yet — shown from headers/snippet only
+// (see app/api/gmail/threads/route.ts's sentAwaitingReply). Deliberately
+// separate from mapGmailThreadToEmail, which assumes a full messages[] array.
+function mapLightweightSentThread(thread: any, index: number, accountId?: string | null): Email {
+  const status = getPipelineStatus(thread.brandInfluencer)
+  const timestamp = thread.date || new Date().toISOString()
+  const recipientName = thread.recipientName || thread.recipientEmail?.split("@")[0] || "Unknown"
+
+  return {
+    id: thread.id || `gmail-sent-${index}`,
+    uid: conversationUid("gmail", accountId, thread.id || `gmail-sent-${index}`),
+    accountId: accountId ?? null,
+    brandInfluencerId: thread.brandInfluencer?.id,
+    gmailThreadId: thread.id,
+    name: recipientName,
+    handle: thread.recipientEmail || "",
+    avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(recipientName)}&background=1FAE5B&color=fff&bold=true`,
+    subject: thread.subject || "(No subject)",
+    preview: thread.snippet || "",
+    message: "",
+    date: formatRelativeDate(timestamp),
+    timestamp,
+    status,
+    read: true,
+    starred: false,
+    from: recipientName,
+    fromEmail: thread.recipientEmail || "",
+    replies: undefined,
+    source: "gmail" as const,
+    isLightweight: true,
+  }
+}
+
+function mapOutlookThreadToEmail(thread: any, index: number, accountId?: string | null): Email {
   const messages = thread.messages || []
   const firstMsg = messages[0] || {}
 
@@ -237,6 +424,14 @@ function mapOutlookThreadToEmail(thread: any, index: number): Email {
       message: msg.body || msg.snippet || "",
       timestamp: msg.date || new Date().toISOString(),
       isUser: false,
+      attachments: (msg.attachments || []).map((a: any) => ({
+        id: a.id,
+        messageId: msg.id,
+        filename: a.filename,
+        mimeType: a.mimeType,
+        size: a.size,
+        provider: "outlook" as const,
+      })),
     }
   })
 
@@ -245,6 +440,9 @@ function mapOutlookThreadToEmail(thread: any, index: number): Email {
 
   return {
     id: thread.id || `outlook-${index}`,
+    uid: conversationUid("outlook", accountId, thread.id || `outlook-${index}`),
+    accountId: accountId ?? null,
+    brandInfluencerId: thread.brandInfluencer?.id,
     name: senderName,
     handle: senderEmail,
     avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(senderName)}&background=0078D4&color=fff&bold=true`,
@@ -255,7 +453,7 @@ function mapOutlookThreadToEmail(thread: any, index: number): Email {
     timestamp,
     status,
     read: !thread.unread,
-    starred: false,
+    starred: Boolean(thread.starred),
     from: senderName,
     fromEmail: senderEmail,
     replies,
@@ -277,21 +475,156 @@ function formatRelativeDate(timestamp: string): string {
   }
 }
 
+// Renders untrusted HTML email content inside a sandboxed iframe rather than
+// dangerouslySetInnerHTML — inbound mail can come from anyone, and raw HTML
+// from a third party is a script/XSS vector otherwise. `allow-same-origin`
+// (without `allow-scripts`) lets this component measure the rendered
+// content's real size to auto-size the iframe; scripts still can't execute.
+//
+// Callers must pass `key={html}` (both call sites below do) — otherwise
+// React can reuse this instance with different content when switching
+// threads and back, inheriting a stale narrow `size` instead of starting
+// wide again.
+function HtmlMessageFrame({ html }: { html: string }) {
+  // Starts wide, not narrow: `overflow-wrap: anywhere` below force-wraps
+  // text to whatever width it's currently given, so measuring from a narrow
+  // start only measures "how tall once wrapped small" and never recovers
+  // the real width. Starting wide lets content lay out naturally; it shrinks
+  // down on measurement if it needs less.
+  const [size, setSize] = useState({ width: 520, height: 80 })
+  const doc = `<!doctype html><html><head><meta charset="utf-8">` +
+    `<style>html,body{overflow:hidden;}body{margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;font-size:14px;overflow-wrap:anywhere;display:inline-block;max-width:520px;}</style>` +
+    `</head><body>${html}</body></html>`
+
+  return (
+    <iframe
+      srcDoc={doc}
+      sandbox="allow-same-origin"
+      scrolling="no"
+      style={{ width: size.width, maxWidth: "100%", border: 0, height: size.height, display: "block" }}
+      onLoad={(e) => {
+        const body = e.currentTarget.contentWindow?.document?.body
+        if (body) {
+          // +12px buffer: scrollWidth can undercount trailing margins/icons by
+          // a few px, clipping content right at the edge.
+          setSize({
+            width: Math.min(Math.max(body.scrollWidth + 12, 160), 520),
+            height: body.scrollHeight + 8,
+          })
+        }
+      }}
+    />
+  )
+}
+
+// Splits HTML into new content and quoted history using the real markup
+// Gmail/most clients wrap quotes in, rather than guessing from text like
+// splitQuotedText does. Removing the actual node (vs. assuming a position)
+// also means a trailing signature after the quote just stays in `main`.
+function splitHtmlQuote(html: string): { main: string; quoted: string | null } {
+  if (typeof document === "undefined") return { main: html, quoted: null }
+  const container = document.createElement("div")
+  container.innerHTML = html
+  const quoteNode = container.querySelector(".gmail_quote, blockquote")
+  if (!quoteNode) return { main: html, quoted: null }
+  quoteNode.remove()
+  return { main: container.innerHTML.trim() || html, quoted: (quoteNode as HTMLElement).outerHTML }
+}
+
+/** Moves remote `<img>` src to `data-blocked-src` until the viewer opts in —
+ *  a classic tracking-pixel vector, same as Gmail/Outlook's own image gate. */
+// cdn.jsdelivr.net: our own signature template's social icons — static,
+// non-personalized, not a tracking vector.
+const TRUSTED_IMAGE_HOSTS = new Set(["cdn.jsdelivr.net"])
+
+function blockRemoteImages(html: string): { html: string; hadBlocked: boolean } {
+  if (typeof document === "undefined") return { html, hadBlocked: false }
+  const container = document.createElement("div")
+  container.innerHTML = html
+  let hadBlocked = false
+  container.querySelectorAll("img[src]").forEach((img) => {
+    const src = img.getAttribute("src") || ""
+    if (!/^https?:\/\//i.test(src)) return
+    try {
+      if (TRUSTED_IMAGE_HOSTS.has(new URL(src).hostname)) return
+    } catch {
+      // Unparseable src — fall through and block it rather than guess.
+    }
+    img.setAttribute("data-blocked-src", src)
+    img.removeAttribute("src")
+    hadBlocked = true
+  })
+  return { html: container.innerHTML, hadBlocked }
+}
+
+// "Always show images from this sender" list, kept in localStorage per user.
+function trustedImageSendersKey(userId: string): string {
+  return `instroom:trusted-image-senders:${userId}`
+}
+
+function loadTrustedImageSenders(userId: string | undefined): Set<string> {
+  if (typeof window === "undefined" || !userId) return new Set()
+  try {
+    const raw = window.localStorage.getItem(trustedImageSendersKey(userId))
+    return new Set(raw ? JSON.parse(raw) : [])
+  } catch {
+    return new Set()
+  }
+}
+
 // Splits a plain-text email body into the new reply text and the quoted
 // history beneath it (e.g. "On ... wrote:" followed by "> " lines), so the
 // quoted part can be collapsed behind a toggle instead of always shown.
 function splitQuotedText(body: string): { main: string; quoted: string | null } {
+  let main: string
+  let quoted: string | null
+
   const onWroteMatch = body.match(/\n?On [\s\S]*?wrote:\s*\n?/)
   if (onWroteMatch && onWroteMatch.index !== undefined) {
     const idx = onWroteMatch.index
-    return { main: body.slice(0, idx).trim(), quoted: body.slice(idx).trim() }
+    main = body.slice(0, idx).trim()
+    quoted = body.slice(idx).trim()
+  } else {
+    // No "On ... wrote:" line — real quoted history is a run of several ">"
+    // lines, so require two in a row rather than treating one stray ">"
+    // (e.g. inside a signature) as the start of a quote.
+    const lines = body.split("\n")
+    let quoteStartLine = -1
+    let run = 0
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].startsWith(">")) {
+        run++
+        if (run === 2) { quoteStartLine = i - 1; break }
+      } else {
+        run = 0
+      }
+    }
+    if (quoteStartLine === -1) return { main: body, quoted: null }
+    const idx = lines.slice(0, quoteStartLine).join("\n").length
+    main = body.slice(0, idx).trim()
+    quoted = body.slice(idx).trim()
   }
-  const quoteLineMatch = body.match(/^>.*$/m)
-  if (quoteLineMatch && quoteLineMatch.index !== undefined) {
-    const idx = quoteLineMatch.index
-    return { main: body.slice(0, idx).trim(), quoted: body.slice(idx).trim() }
+
+  // Some accounts' signature lands after the quoted history in the raw text
+  // rather than before it — pull any trailing non-">" lines back into `main`
+  // (matching real Gmail, which keeps that block outside its own collapse).
+  const quotedLines = quoted.split("\n")
+  let trailingStart = quotedLines.length
+  for (let i = quotedLines.length - 1; i >= 0; i--) {
+    if (quotedLines[i].trim() === "" || !quotedLines[i].startsWith(">")) {
+      trailingStart = i
+    } else {
+      break
+    }
   }
-  return { main: body, quoted: null }
+  if (trailingStart < quotedLines.length) {
+    const trailing = quotedLines.slice(trailingStart).join("\n").trim()
+    const remaining = quotedLines.slice(0, trailingStart).join("\n").trim()
+    if (trailing) main = main ? `${main}\n\n${trailing}` : trailing
+    quoted = remaining || null
+  }
+
+  return { main, quoted }
 }
 
 // Separates the "On ... wrote:" attribution line (which may itself be wrapped
@@ -310,6 +643,96 @@ function parseQuotedBlock(quoted: string): { attribution: string | null; text: s
 }
 
 // ─── Drag-and-drop: stage tab drop target / message row drag source ──────────
+
+/**
+ * The connected-mailbox menu behind an account chip.
+ *
+ * Lists every account already connected for that provider, switches between
+ * them, offers a Remove action, and links out to the existing OAuth flow for
+ * adding another. Purely presentational — every action is handled by the page.
+ */
+function AccountMenu({
+  provider,
+  accounts,
+  busy,
+  error,
+  onSelect,
+  onRemove,
+  onConnectAnother,
+  onClose,
+}: {
+  provider: MailProvider
+  accounts: MailAccount[]
+  busy: boolean
+  error?: string
+  onSelect: (account: MailAccount) => void
+  onRemove: (account: MailAccount) => void
+  onConnectAnother: () => void
+  onClose: () => void
+}) {
+  return (
+    <>
+      {/* Click-away, matching the pattern the compose and stage modals use. */}
+      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <div className="absolute right-0 top-full mt-1.5 z-50 w-64 bg-white border border-gray-200 rounded-xl shadow-xl py-1.5">
+        <div className="px-3 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+          {PROVIDER_LABEL[provider]} accounts
+        </div>
+
+        {accounts.length === 0 ? (
+          <div className="px-3 py-2 text-xs text-gray-400">No accounts listed yet.</div>
+        ) : (
+          accounts.map(account => (
+            <div
+              key={account.id}
+              className={`group flex items-center gap-2 px-3 py-2 text-xs transition ${
+                account.isSelected ? "bg-gray-50" : "hover:bg-gray-50"
+              }`}
+            >
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => onSelect(account)}
+                className="flex-1 flex items-center gap-2 text-left min-w-0 disabled:opacity-50"
+              >
+                <span className="w-3.5 flex-shrink-0">
+                  {account.isSelected && <IconCheck size={13} className="text-[#1FAE5B]" />}
+                </span>
+                <span className={`truncate ${account.isSelected ? "text-gray-900 font-medium" : "text-gray-600"}`}>
+                  {account.email || "Connected account"}
+                </span>
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => onRemove(account)}
+                title="Remove account"
+                aria-label={`Remove ${account.email || "account"}`}
+                className="p-1 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 transition disabled:opacity-50"
+              >
+                <IconTrash size={13} />
+              </button>
+            </div>
+          ))
+        )}
+
+        {error && <div className="px-3 py-1.5 text-[11px] text-red-500">{error}</div>}
+
+        <div className="border-t border-gray-100 mt-1 pt-1">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => { onClose(); onConnectAnother() }}
+            className="flex items-center gap-2 w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 transition disabled:opacity-50"
+          >
+            <IconPlus size={13} className="text-gray-400" />
+            Connect another {PROVIDER_LABEL[provider]} account
+          </button>
+        </div>
+      </div>
+    </>
+  )
+}
 
 function DroppableStageTab({ id, isExit, children }: { id: string; isExit?: boolean; children: React.ReactNode }) {
   const { setNodeRef, isOver } = useDroppable({ id })
@@ -341,53 +764,253 @@ function DraggableEmailRow({ id, children }: { id: string; children: React.React
 
 function InboxContent() {
   const { data: session } = useSession()
+  const userId = session?.user?.id as string | undefined
   const searchParams = useSearchParams()
   const brandId = searchParams.get("brandId")
 
-  // ── Subscription gate ──────────────────────────────────────────────────────
-  const [isSubscribed, setIsSubscribed] = useState<boolean | null>(null)
-  const [subscriptionStatus, setSubscriptionStatus] = useState<{ status: string; isExpired: boolean } | null>(null)
-
+  const [trustedImageSenders, setTrustedImageSenders] = useState<Set<string>>(() => loadTrustedImageSenders(userId))
+  // Reloads once userId resolves — lazy init above can miss it on first render.
   useEffect(() => {
-    if (!session?.user?.id) return
-    fetch(brandId ? `/api/subscription/status?brandId=${brandId}` : "/api/subscription/status")
-      .then(res => res.json())
-      .then(data => {
-        setSubscriptionStatus(data)
-        setIsSubscribed((data.status === "active" || data.status === "trialing") && !data.isExpired)
-      })
-      .catch(() => {
-        setSubscriptionStatus({ status: "inactive", isExpired: false })
-        setIsSubscribed(false)
-      })
-  }, [session?.user?.id, brandId])
+    if (userId) setTrustedImageSenders(loadTrustedImageSenders(userId))
+  }, [userId])
 
-  const [emails, setEmails] = useState<Email[]>([])
+  const isImageSenderTrusted = (email?: string) => Boolean(email && trustedImageSenders.has(email.toLowerCase()))
+
+  const trustImageSender = (email?: string) => {
+    if (!email || !userId) return
+    const key = email.toLowerCase()
+    setTrustedImageSenders((prev) => {
+      if (prev.has(key)) return prev
+      const next = new Set(prev).add(key)
+      try {
+        window.localStorage.setItem(trustedImageSendersKey(userId), JSON.stringify([...next]))
+      } catch {
+        // Storage unavailable — trust just won't persist.
+      }
+      return next
+    })
+  }
+
+  // ── Subscription gate ──────────────────────────────────────────────────────
+  // Served from the shared cache, so a return visit resolves on mount instead
+  // of gating the inbox behind a skeleton again.
+  // Inbox is Solo/Team only per the pricing page — Basic gets no Gmail/Outlook
+  // access at all, unlike Pipeline and Post Tracker which Basic does include.
+  const { isSubscribed, status: subscriptionStatus, planDisplayName, refetch: refetchSubscription } = useSubscriptionGate(brandId, ["solo", "team"])
+
+  // Same cache Pipeline/Post Tracker use, so stage counts always agree.
+  const { data: pipelineRows } = usePipelineData(brandId || undefined)
+
+  // Threads already fetched for this brand render immediately; the mount checks
+  // below still run and update these silently in the background.
+  // Relative path, built without `window`: this runs during the initial render,
+  // which Next.js also performs on the server, where `window.location` does not
+  // exist. It doubles as the shared-cache key and as the fetch URL — `fetch`
+  // resolves a relative path against the current document in the browser.
+  /**
+   * The selected Outlook account's id, read straight out of the shared cache.
+   *
+   * Read this way rather than from `accountsData` because threadsKey() is used
+   * inside state initialisers that run before that binding exists. Same cache
+   * entry, same value — just available earlier.
+   */
+  /**
+   * The selected Gmail account's id — used ONLY to stamp conversation identity
+   * onto mapped threads, never in Gmail's cache key or fetch URL, which stay
+   * exactly as they were.
+   */
+  const selectedGmailAccountId = (): string | null =>
+    getCachedData<{ accounts: MailAccount[] }>(MAIL_ACCOUNTS_KEY)
+      ?.accounts?.find(a => a.provider === "gmail" && a.isSelected)?.id ?? null
+
+  const selectedOutlookAccountId = (): string | null =>
+    getCachedData<{ accounts: MailAccount[] }>(MAIL_ACCOUNTS_KEY)
+      ?.accounts?.find(a => a.provider === "outlook" && a.isSelected)?.id ?? null
+
+  /**
+   * Cache key and fetch URL for one provider's threads.
+   *
+   * The Outlook key now carries the account id. Without it, two connected
+   * Outlook mailboxes shared a single cache entry keyed only by brand, so
+   * returning to the inbox — or any read that landed before a switch's refetch
+   * — painted the previous account's conversations under the newly selected
+   * account's name. Keyed per account, each mailbox has its own entry and the
+   * two can never be confused for one another.
+   *
+   * Gmail's key is unchanged, byte for byte.
+   */
+  const threadsKey = (provider: "gmail" | "outlook", accountId?: string | null) => {
+    const parts: string[] = []
+    if (brandId) parts.push(`brandId=${encodeURIComponent(brandId)}`)
+    if (provider === "outlook") {
+      const acc = accountId !== undefined ? accountId : selectedOutlookAccountId()
+      if (acc) parts.push(`accountId=${encodeURIComponent(acc)}`)
+    }
+    return `/api/${provider}/threads${parts.length ? `?${parts.join("&")}` : ""}`
+  }
+
+  const cachedEmails = () => {
+    const read = (provider: "gmail" | "outlook") => getCachedData<any>(threadsKey(provider))
+    const gmail = read("gmail")
+    const outlook = read("outlook")
+    const gmailAccountId = selectedGmailAccountId()
+    const outlookAccountId = selectedOutlookAccountId()
+    return [
+      ...((gmail?.threads ?? []) as any[]).map((t, i) => mapGmailThreadToEmail(t, i, gmailAccountId)),
+      ...((gmail?.sentAwaitingReply ?? []) as any[]).map((t, i) => mapLightweightSentThread(t, i, gmailAccountId)),
+      // Stamped with the account the Outlook cache entry belongs to, so two
+      // connected Outlook mailboxes never produce colliding conversation uids.
+      ...((outlook?.threads ?? []) as any[]).map((t, i) => mapOutlookThreadToEmail(t, i, outlook?.accountId ?? outlookAccountId)),
+    ]
+  }
+
+  const [emails, setEmails] = useState<Email[]>(cachedEmails)
+  // The connected Gmail account's own address — lets the UI tell a thread with
+  // an external contact apart from a thread with the user's own mailbox (e.g.
+  // a self-sent verification/test email), instead of treating the latter as
+  // an unregistered influencer.
+  const [gmailConnectedEmail, setGmailConnectedEmail] = useState<string | null>(
+    () => getCachedData<any>(threadsKey("gmail"))?.connectedEmail ?? null
+  )
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null)
+  const [loadingThreadId, setLoadingThreadId] = useState<string | number | null>(null)
   const [selectedStage, setSelectedStage] = useState<PipelineStage | "ALL">("ALL")
   const [openCompose, setOpenCompose] = useState(false)
+  const [openTemplates, setOpenTemplates] = useState(false)
   const [reply, setReply] = useState("")
   const [isSending, setIsSending] = useState(false)
   const [sendError, setSendError] = useState<string | undefined>()
+  const [replyAttachments, setReplyAttachments] = useState<PendingAttachment[]>([])
+  const replyEditorRef = useRef<RichComposeEditorHandle>(null)
+  const replyBoxRef = useRef<HTMLDivElement>(null)
+  const [replyFocused, setReplyFocused] = useState(false)
+
+  // Received/sent attachments (as opposed to composeAttachments/replyAttachments,
+  // which are files pending upload) — fetched lazily, only when clicked.
+  const [downloadingAttachmentId, setDownloadingAttachmentId] = useState<string | null>(null)
+
+  const openAttachment = async (att: EmailAttachment) => {
+    setDownloadingAttachmentId(att.id)
+    try {
+      const url =
+        att.provider === "gmail"
+          ? `/api/gmail/attachment/${att.messageId}/${att.id}?filename=${encodeURIComponent(att.filename)}&mimeType=${encodeURIComponent(att.mimeType)}`
+          : `/api/outlook/attachment/${att.messageId}/${att.id}`
+
+      const res = await fetch(url)
+      if (!res.ok) throw new Error("Failed to load attachment")
+      const blob = await res.blob()
+      const objectUrl = URL.createObjectURL(blob)
+
+      const isViewableInline = att.mimeType.startsWith("image/") || att.mimeType === "application/pdf"
+      if (isViewableInline) {
+        // Not revoked immediately — the new tab needs the blob URL to stay
+        // valid while it's open.
+        window.open(objectUrl, "_blank")
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000)
+      } else {
+        const a = document.createElement("a")
+        a.href = objectUrl
+        a.download = att.filename
+        a.style.display = "none"
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
+      }
+    } catch {
+      // Silent — this is a secondary action off an already-loaded thread;
+      // nothing in this view is left in a broken state if it fails.
+    } finally {
+      setDownloadingAttachmentId(null)
+    }
+  }
   const [searchQuery, setSearchQuery] = useState("")
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("")
+  const [readFilter, setReadFilter] = useState<"all" | "unread" | "read">("all")
   const [updateStageModal, setUpdateStageModal] = useState<{ open: boolean; email: Email | null }>({ open: false, email: null })
+  const [declineTarget, setDeclineTarget] = useState<Email | null>(null)
+
+  // ── Connected mailboxes ───────────────────────────────────────────────────
+  // Read through the shared cache like every other inbox fetch, so the shell
+  // and the chips render from whatever is already known and this list fills in
+  // progressively instead of gating anything.
+  const accountsFetcher = useCallback(async () => {
+    const res = await fetch(MAIL_ACCOUNTS_KEY)
+    const json = await res.json()
+    if (!res.ok) throw new Error(json?.error || "Failed to load connected accounts")
+    return json as { accounts: MailAccount[] }
+  }, [])
+
+  const { data: accountsData, refetch: refetchAccounts, mutate: mutateAccounts } =
+    useCachedFetch<{ accounts: MailAccount[] }>(MAIL_ACCOUNTS_KEY, accountsFetcher)
+  const mailAccounts = accountsData?.accounts ?? []
+  const accountsFor = (provider: MailProvider) => mailAccounts.filter(a => a.provider === provider)
+  const selectedAccount = (provider: MailProvider) =>
+    mailAccounts.find(a => a.provider === provider && a.isSelected) ?? null
+
+  /** Which provider's account menu is open, if any. */
+  const [openAccountMenu, setOpenAccountMenu] = useState<MailProvider | null>(null)
+  /** The account a Remove confirmation is currently about. */
+  const [removeAccount, setRemoveAccount] = useState<MailAccount | null>(null)
+  const [accountBusy, setAccountBusy] = useState(false)
+  const [accountError, setAccountError] = useState<string | undefined>()
   const [stageNotification, setStageNotification] = useState<{ show: boolean; message: string; type: "error" | "success" }>({ show: false, message: "", type: "error" })
   const [showPipelineBar, setShowPipelineBar] = useState(false)
   const [activeDragId, setActiveDragId] = useState<string | null>(null)
   const [showActions, setShowActions] = useState(false)
+  const [deleteConversationTarget, setDeleteConversationTarget] = useState<Email | null>(null)
+  const [deletingConversation, setDeletingConversation] = useState(false)
+  const [deleteConversationError, setDeleteConversationError] = useState<string | undefined>()
   const [isMobile, setIsMobile] = useState(false)
 
-  const [gmailSyncState, setGmailSyncState] = useState<GmailSyncState>("checking")
-  const [gmailError, setGmailError] = useState<string | undefined>()
-  const [gmailConnected, setGmailConnected] = useState(false)
+  // "checking" only when this mailbox has nothing cached — a cached mailbox was
+  // connected last time, so it renders as connected while the check re-runs.
+  const hasCachedThreads = (provider: "gmail" | "outlook") =>
+    getCachedData<any>(threadsKey(provider)) !== undefined
 
-  const [outlookSyncState, setOutlookSyncState] = useState<GmailSyncState>("checking")
+  const [gmailSyncState, setGmailSyncState] = useState<GmailSyncState>(
+    () => (hasCachedThreads("gmail") ? "connected" : "checking")
+  )
+  const [gmailError, setGmailError] = useState<string | undefined>()
+  const [gmailConnected, setGmailConnected] = useState(() => hasCachedThreads("gmail"))
+
+  const [outlookSyncState, setOutlookSyncState] = useState<GmailSyncState>(
+    () => (hasCachedThreads("outlook") ? "connected" : "checking")
+  )
   const [outlookError, setOutlookError] = useState<string | undefined>()
-  const [outlookConnected, setOutlookConnected] = useState(false)
+  const [outlookConnected, setOutlookConnected] = useState(() => hasCachedThreads("outlook"))
 
   const [composeSource, setComposeSource] = useState<"gmail" | "outlook">("gmail")
   const [expandedQuotes, setExpandedQuotes] = useState<Set<string>>(new Set())
+
+  // Signature include/exclude — defaults to the Settings → Email Signature
+  // toggle, overridable per compose/reply via the toolbar button. `null`
+  // means "use the default"; an explicit true/false is a per-send override.
+  const [signatureDefaultEnabled, setSignatureDefaultEnabled] = useState(true)
+  // Whether the user has actually filled in any signature field — mirrors
+  // renderSignatureHtml's own "hasContent" check (lib/signature.ts). With
+  // nothing saved, the toggle would just be a no-op either way, so the
+  // toolbar button points to Settings instead of toggling.
+  const [signatureConfigured, setSignatureConfigured] = useState(true)
+  useEffect(() => {
+    fetch("/api/settings/signature")
+      .then((res) => res.json())
+      .then((data) => {
+        setSignatureDefaultEnabled(data?.is_enabled ?? true)
+        setSignatureConfigured(
+          Boolean(
+            data?.full_name || data?.title || data?.company || data?.phone || data?.email || data?.website ||
+            Object.values(data?.social_links ?? {}).some(Boolean)
+          )
+        )
+      })
+      .catch(() => {})
+  }, [])
+  const [composeSignatureOverride, setComposeSignatureOverride] = useState<boolean | null>(null)
+  const [replySignatureOverride, setReplySignatureOverride] = useState<boolean | null>(null)
+  const composeIncludeSignature = composeSignatureOverride ?? signatureDefaultEnabled
+  const replyIncludeSignature = replySignatureOverride ?? signatureDefaultEnabled
 
   // Compose modal state
   const [composeTo, setComposeTo] = useState("")
@@ -397,8 +1020,88 @@ function InboxContent() {
   const [isComposeSending, setIsComposeSending] = useState(false)
   const [composeSent, setComposeSent] = useState(false)
 
+  // Save-current-draft-as-template popover (compose modal only — replies have no subject field)
+  const [savingComposeAsTemplate, setSavingComposeAsTemplate] = useState(false)
+  const [composeTemplateName, setComposeTemplateName] = useState("")
+  const [isSavingComposeTemplate, setIsSavingComposeTemplate] = useState(false)
+  const [saveComposeTemplateError, setSaveComposeTemplateError] = useState<string | undefined>()
+
+  // Rich compose: attachments + formatting, sent via both Gmail and Outlook
+  // (see sendCompose below — each provider's send route accepts the same
+  // multipart request and builds whatever format its own API needs).
+  const [composeAttachments, setComposeAttachments] = useState<PendingAttachment[]>([])
+  const composeEditorRef = useRef<RichComposeEditorHandle>(null)
+  const MAX_TOTAL_ATTACHMENT_BYTES = 4 * 1024 * 1024
+
+  const handleAddComposeFiles = (newFiles: File[]) => {
+    const built: PendingAttachment[] = newFiles.map((file) => ({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      file,
+      previewUrl: file.type.startsWith("image/") ? URL.createObjectURL(file) : null,
+    }))
+    setComposeAttachments((prev) => [...prev, ...built])
+  }
+
+  const handleRemoveComposeFile = (id: string) => {
+    setComposeAttachments((prev) => {
+      const removed = prev.find((f) => f.id === id)
+      if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl)
+      return prev.filter((f) => f.id !== id)
+    })
+  }
+
+  const clearComposeAttachments = () => {
+    setComposeAttachments((prev) => {
+      prev.forEach((f) => { if (f.previewUrl) URL.revokeObjectURL(f.previewUrl) })
+      return []
+    })
+  }
+
+  const handleAddReplyFiles = (newFiles: File[]) => {
+    const built: PendingAttachment[] = newFiles.map((file) => ({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      file,
+      previewUrl: file.type.startsWith("image/") ? URL.createObjectURL(file) : null,
+    }))
+    setReplyAttachments((prev) => [...prev, ...built])
+  }
+
+  const handleRemoveReplyFile = (id: string) => {
+    setReplyAttachments((prev) => {
+      const removed = prev.find((f) => f.id === id)
+      if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl)
+      return prev.filter((f) => f.id !== id)
+    })
+  }
+
+  const clearReplyAttachments = () => {
+    setReplyAttachments((prev) => {
+      prev.forEach((f) => { if (f.previewUrl) URL.revokeObjectURL(f.previewUrl) })
+      return []
+    })
+  }
+
+  /** Strips a rich-compose HTML string down to plain text — used wherever
+   *  the HTML body needs to become plain text (Outlook send, the optimistic
+   *  sent-thread placeholder, and saving a template). */
+  const htmlToPlainText = (html: string): string => {
+    if (typeof document === "undefined") return html
+    const el = document.createElement("div")
+    el.innerHTML = html
+    return (el.textContent || "").trim()
+  }
+
+  /** Inverse of the above, for applying a plain-text template into the rich
+   *  compose box — escapes the text and turns newlines into <br>. Kept local
+   *  (not imported from lib/signature.ts) since that module is server-only. */
+  const plainTextToComposeHtml = (text: string): string =>
+    text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\n/g, "<br>")
+
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const replyTextareaRef = useRef<HTMLTextAreaElement>(null)
 
   // Monotonically increasing request ids so a slow/stale gmail or outlook
   // fetch (e.g. issued for a previous brandId) can't overwrite state with
@@ -406,17 +1109,85 @@ function InboxContent() {
   const gmailRequestIdRef = useRef(0)
   const outlookRequestIdRef = useRef(0)
 
+  // Persisted threads are handed over after mount — `cachedEmails` and
+  // `hasCachedThreads` above read the cache during render and must stay empty
+  // while React hydrates. The connection checks below still run and revalidate.
+  useRestoredCache<any>(threadsKey("gmail"), (data) => {
+    const restoredEmails = ((data?.threads ?? []) as any[]).map((t, i) => mapGmailThreadToEmail(t, i, selectedGmailAccountId()))
+    if (restoredEmails.length) {
+      setEmails((prev) => [...prev.filter((e) => e.source !== "gmail"), ...restoredEmails])
+    }
+    // A mailbox with stored threads was connected last time, so it renders as
+    // connected while the check re-runs — the same rule the initializers use.
+    setGmailConnected(true)
+    setGmailSyncState((prev) => (prev === "checking" ? "connected" : prev))
+  })
+  useRestoredCache<any>(threadsKey("outlook"), (data) => {
+    const restoredEmails = ((data?.threads ?? []) as any[]).map((t, i) => mapOutlookThreadToEmail(t, i, data?.accountId ?? selectedOutlookAccountId()))
+    if (restoredEmails.length) {
+      setEmails((prev) => [...prev.filter((e) => e.source !== "outlook"), ...restoredEmails])
+    }
+    setOutlookConnected(true)
+    setOutlookSyncState((prev) => (prev === "checking" ? "connected" : prev))
+  })
+
   useEffect(() => {
     const checkMobile = () => setIsMobile(window.innerWidth < 768)
     checkMobile()
     window.addEventListener("resize", checkMobile)
-    checkGmailConnection()
-    checkOutlookConnection()
 
     const params = new URLSearchParams(window.location.search)
+    const justConnectedGmail = params.get("gmailConnected") === "1"
+    const justConnectedOutlook = params.get("outlookConnected") === "1"
+
+    // ── Are we the OAuth tab? ──────────────────────────────────────────────
+    // Both callbacks finish by redirecting to the inbox with one of these
+    // params, so a tab that was opened by another tab AND is carrying them is
+    // the tab that just ran the flow. Its only remaining job is to tell the tab
+    // that opened it what happened and get out of the way — no inbox load, no
+    // threads fetch, nothing else. The original tab does the reload.
+    const callbackErrors: Record<MailProvider, string | null> = {
+      gmail: params.get("gmailError"),
+      outlook: params.get("outlookError"),
+    }
+    const callbackSuccess: Record<MailProvider, boolean> = {
+      gmail: justConnectedGmail,
+      outlook: justConnectedOutlook,
+    }
+    const callbackProvider = (["gmail", "outlook"] as MailProvider[]).find(
+      pr => callbackSuccess[pr] || callbackErrors[pr]
+    )
+    if (window.opener && callbackProvider) {
+      if (typeof BroadcastChannel !== "undefined") {
+        const channel = new BroadcastChannel(OAUTH_CHANNEL)
+        const result: OAuthResult = callbackSuccess[callbackProvider]
+          ? { provider: callbackProvider, ok: true }
+          : {
+              provider: callbackProvider,
+              ok: false,
+              error: decodeURIComponent(callbackErrors[callbackProvider] || ""),
+            }
+        channel.postMessage(result)
+        channel.close()
+      }
+      window.close()
+      // If the browser refuses to close a tab it did not script-open, fall
+      // through to the normal inbox below rather than leaving a blank page.
+    }
+
+    // A fresh connect/reconnect can land on a still-valid client-side cache
+    // entry from before the switch (e.g. Change Gmail to a different
+    // account) — checkGmailConnection's force:false read would then keep
+    // showing the previous account's threads. Force a real refetch instead
+    // of the normal cached check whenever we're returning from that flow.
+    if (justConnectedGmail) loadGmailThreads()
+    else checkGmailConnection()
+
+    if (justConnectedOutlook) loadOutlookThreads()
+    else checkOutlookConnection()
 
     // Handle ?gmailConnected=1 redirect from OAuth callback
-    if (params.get("gmailConnected") === "1") {
+    if (justConnectedGmail) {
       const clean = new URL(window.location.href)
       clean.searchParams.delete("gmailConnected")
       window.history.replaceState({}, "", clean.toString())
@@ -433,7 +1204,7 @@ function InboxContent() {
     }
 
     // Handle ?outlookConnected=1 redirect from Outlook OAuth callback
-    if (params.get("outlookConnected") === "1") {
+    if (justConnectedOutlook) {
       const clean = new URL(window.location.href)
       clean.searchParams.delete("outlookConnected")
       window.history.replaceState({}, "", clean.toString())
@@ -460,6 +1231,7 @@ function InboxContent() {
 
   useEffect(() => {
     setExpandedQuotes(new Set())
+    setReplySignatureOverride(null)
   }, [selectedEmail?.id])
 
   // Debounce the search input so filtering doesn't run on every keystroke.
@@ -470,64 +1242,340 @@ function InboxContent() {
 
   // ── Gmail connection check ─────────────────────────────────────────────────
 
+  /**
+   * Thread fetch that goes through the shared cache.
+   *
+   * Mount checks read whatever is cached for this mailbox + brand, so returning
+   * to the inbox shows the threads already loaded instead of dropping back to
+   * "checking" and re-requesting. `force` is used by the explicit refresh
+   * buttons, which must always hit the provider.
+   */
+  const fetchThreads = (provider: "gmail" | "outlook", force: boolean, accountId?: string | null) => {
+    const href = threadsKey(provider, accountId)
+    return fetchCached<any>(href, async () => {
+      const res = await fetch(href)
+      const json = await res.json()
+      // A non-OK response is not cached: it is thrown with its body attached so
+      // the reauth / error branches below behave exactly as before.
+      if (!res.ok) throw Object.assign(new Error(json?.error || ""), { body: json, status: res.status })
+      return json
+    }, { force })
+  }
+
   const checkGmailConnection = async () => {
     const requestId = ++gmailRequestIdRef.current
     try {
-      const url = new URL("/api/gmail/threads", window.location.origin)
-      if (brandId) url.searchParams.append("brandId", brandId)
-      const res = await fetch(url.toString())
-      const data = await res.json()
+      const gmailAccountId = selectedGmailAccountId()
+      const data = await fetchThreads("gmail", false)
       if (requestId !== gmailRequestIdRef.current) return // superseded by a newer request
-
-      if (res.ok) {
-        const mappedEmails = (data.threads || []).map((t: any, i: number) => mapGmailThreadToEmail(t, i))
-        setEmails(prev => [...prev.filter(e => e.source !== "gmail"), ...mappedEmails])
-        setGmailConnected(true)
-        setGmailSyncState("connected")
-      } else if (data?.reauth) {
-        setGmailSyncState("not_connected")
-      } else {
-        setGmailError(data?.error || "Failed to load inbox.")
-        setGmailSyncState("error")
-      }
-    } catch {
+      const mappedEmails = [
+        ...(data.threads || []).map((t: any, i: number) => mapGmailThreadToEmail(t, i, gmailAccountId)),
+        ...(data.sentAwaitingReply || []).map((t: any, i: number) => mapLightweightSentThread(t, i, gmailAccountId)),
+      ]
+      setEmails(prev => [...prev.filter(e => e.source !== "gmail"), ...mappedEmails])
+      setGmailConnected(true)
+      setGmailSyncState("connected")
+      setGmailConnectedEmail(data.connectedEmail ?? null)
+    } catch (err: any) {
       if (requestId !== gmailRequestIdRef.current) return
-      setGmailError("Network error. Please check your connection.")
+      // reauth = the provider says this account isn't linked (or its grant
+      // lapsed). A bare 401/403 means the OAuth flow was never completed, which
+      // is the same thing from the inbox's point of view: not connected, so the
+      // existing disconnected state is shown rather than an error.
+      if (err?.body?.reauth || err?.status === 401 || err?.status === 403) {
+        setGmailSyncState("not_connected")
+        return
+      }
+      setGmailError(err?.body?.error || err?.message || "Failed to check Gmail connection.")
       setGmailSyncState("error")
     }
   }
 
-  // ── Connect Gmail — separate OAuth flow, no NextAuth signIn ───────────────
-  const handleConnectGmail = () => {
-    setGmailSyncState("connecting")
-    const returnTo = window.location.pathname + window.location.search
-    window.location.href = `/api/gmail/connect?returnTo=${encodeURIComponent(returnTo)}`
+
+  // ── Connect a mailbox — one flow, both providers ──────────────────────────
+  // Gmail and Outlook differ only in their route prefix and which slice of state
+  // they own, so the tab handling, the waiting state and the cross-tab hand-off
+  // live here once. Each provider keeps its own existing connect route,
+  // callback, credentials and session handling — untouched.
+
+  const setProviderSyncState = (provider: MailProvider, state: GmailSyncState) => {
+    if (provider === "gmail") setGmailSyncState(state)
+    else setOutlookSyncState(state)
   }
+
+  const setProviderError = (provider: MailProvider, message: string) => {
+    if (provider === "gmail") setGmailError(message)
+    else setOutlookError(message)
+  }
+
+  /**
+   * Start the OAuth flow for one provider.
+   *
+   * Everything — the authorization redirect, the account picker, consent and the
+   * provider's callback — happens in the tab this opens. This tab does not
+   * navigate anywhere; it holds on the inbox showing "Waiting for sign-in…"
+   * until the other tab reports back or goes away.
+   */
+  const connectProvider = (provider: MailProvider) => {
+    const returnTo = window.location.pathname + window.location.search
+    // NOTE: no "noopener" here, deliberately. With noopener the browser returns
+    // null from window.open even on success, so the old code could not tell a
+    // blocked popup from an opened tab — it always took the fallback branch and
+    // navigated THIS tab to Google / Microsoft. The tab we open is our own
+    // origin, and the handle is what lets us notice it closing.
+    const opened = window.open(
+      `/api/${provider}/connect?returnTo=${encodeURIComponent(returnTo)}`,
+      "_blank"
+    )
+    // Popup/tab blocked. Don't navigate this tab; surface the existing error
+    // state so the user can allow the popup and retry.
+    if (!opened) {
+      setProviderError(provider, "Your browser blocked the sign-in tab. Allow pop-ups for this site and try again.")
+      setProviderSyncState(provider, "error")
+      return
+    }
+    setProviderSyncState(provider, "connecting")
+    awaitOAuthTab(provider, opened)
+  }
+
+  /**
+   * Keep this tab waiting while the OAuth tab works, and react once it reports.
+   *
+   * Three ways out, whichever comes first, and only the first one counts:
+   *   1. the OAuth tab broadcasts its outcome — success or a callback error;
+   *   2. the OAuth tab is closed (cancelled, or the message never arrived) — the
+   *      connection is re-checked, since the grant may well have gone through;
+   *   3. focus returns to this tab and that tab has gone — an immediate check
+   *      instead of waiting up to 500ms for the next poll.
+   */
+  const awaitOAuthTab = (provider: MailProvider, oauthTab: Window) => {
+    let settled = false
+    let channel: BroadcastChannel | null = null
+    let closedPoll: ReturnType<typeof setInterval> | null = null
+
+    const cleanup = () => {
+      window.removeEventListener("focus", onFocus)
+      if (closedPoll) clearInterval(closedPoll)
+      channel?.close()
+    }
+
+    const settle = (result: "connected" | "cancelled" | { error: string }) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      if (result === "connected") {
+        // The OAuth tab closes itself once it has broadcast; close it from here
+        // too, for a browser that refuses a script-close of a tab it did not
+        // itself open. We hold the handle because we opened it.
+        if (!oauthTab.closed) {
+          try { oauthTab.close() } catch { /* already gone, or refused */ }
+        }
+        // force:true — the shared cache may still hold the "not connected"
+        // answer from a moment ago, or the previous account's threads.
+        void (provider === "gmail" ? loadGmailThreads() : loadOutlookThreads())
+        // Re-run the gate. A subscription check that happened to fail during the
+        // OAuth transition is cached as "not subscribed" and leaves the locked
+        // overlay sitting over a perfectly good inbox until something asks
+        // again. This asks again — the same check, against the same route; it
+        // does not skip or weaken it, and a genuinely unsubscribed user stays
+        // locked.
+        void refetchSubscription()
+        // A newly connected mailbox has to appear in the account selector.
+        void refetchAccounts()
+      } else if (result === "cancelled") {
+        // The tab went away without a verdict. It may still have completed, so
+        // ask the server rather than assuming either way; the check helpers
+        // already fall back to "not_connected" on a 401/403.
+        void (provider === "gmail" ? checkGmailConnection() : checkOutlookConnection())
+      } else {
+        setProviderError(provider, result.error)
+        setProviderSyncState(provider, "error")
+      }
+    }
+
+    // Focus alone is not a verdict — the user may simply be tabbing back and
+    // forth while the account picker is still open. It settles only if the OAuth
+    // tab has actually gone.
+    const onFocus = () => { if (oauthTab.closed) settle("cancelled") }
+    window.addEventListener("focus", onFocus)
+
+    if (typeof BroadcastChannel !== "undefined") {
+      channel = new BroadcastChannel(OAUTH_CHANNEL)
+      channel.onmessage = (event: MessageEvent<OAuthResult>) => {
+        const data = event.data
+        if (!data || data.provider !== provider) return
+        settle(data.ok ? "connected" : { error: data.error || `${PROVIDER_LABEL[provider]} sign-in failed.` })
+      }
+    }
+
+    closedPoll = setInterval(() => {
+      if (oauthTab.closed) settle("cancelled")
+    }, 500)
+  }
+
+  // ── Switching and removing mailboxes ──────────────────────────────────────
+
+  /** Forget only this provider's cached threads. The other mailbox's cache and
+   *  the rest of the inbox are untouched. */
+  const dropProviderThreadsCache = (provider: MailProvider) => {
+    invalidateCache(threadsKey(provider))
+  }
+
+  /** Remove this provider's conversations from the visible list — used when a
+   *  mailbox goes away, not while switching (see switchAccount). */
+  const clearProviderEmails = (provider: MailProvider) => {
+    setEmails(prev => prev.filter(e => e.source !== provider))
+    // The reading pane holds its own copy of the open conversation, so filtering
+    // the list alone left that conversation on screen after its mailbox was
+    // switched away or disconnected — and a reply typed into it would have been
+    // sent from the newly selected account instead. Closed along with the list.
+    setSelectedEmail(prev => (prev?.source === provider ? null : prev))
+  }
+
+  /** Move the selected marker within one provider, so the chip label and the
+   *  menu's checkmark update on click instead of after the round trip. */
+  const markAccountSelected = (account: MailAccount) => {
+    const current = accountsData?.accounts
+    if (!current) return
+    mutateAccounts({
+      accounts: current.map(a =>
+        a.provider === account.provider ? { ...a, isSelected: a.id === account.id } : a
+      ),
+    })
+  }
+
+  /**
+   * Switch to another already-connected mailbox of the same provider.
+   *
+   * The server side of this is a touch of `last_selected_at` — the same column
+   * both providers' token resolvers already order by — so the following fetch
+   * returns that account's conversations and only that account's.
+   */
+  const switchAccount = async (account: MailAccount) => {
+    if (accountBusy || account.isSelected) { setOpenAccountMenu(null); return }
+    const previous = accountsData?.accounts
+    setAccountBusy(true)
+    setAccountError(undefined)
+    // Close and re-label immediately. The list itself is deliberately NOT
+    // cleared: emptying it first made every switch flash a blank inbox, so the
+    // outgoing account's threads stay on screen until the incoming ones land
+    // and replace them by `source`.
+    setOpenAccountMenu(null)
+    markAccountSelected(account)
+    // Clear the outgoing mailbox's conversations before the incoming ones load.
+    // This briefly shows an empty list, which is the point: leaving the previous
+    // account's threads on screen under the newly selected account's name is
+    // exactly the confusion this switcher has to avoid.
+    clearProviderEmails(account.provider)
+    try {
+      const res = await fetch(MAIL_ACCOUNTS_KEY, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accountId: account.id }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json?.error || "Failed to switch account")
+
+      // Only the switched provider is invalidated and refetched. The other
+      // provider's threads are left alone, and the two are never merged: each
+      // load replaces just its own `source`.
+      dropProviderThreadsCache(account.provider)
+      await Promise.all([
+        refetchAccounts(),
+        // The chosen account is passed explicitly rather than left to the
+        // server's "most recently selected" ordering, so this fetch reads the
+        // mailbox the user just clicked even if another request is in flight.
+        account.provider === "gmail" ? loadGmailThreads() : loadOutlookThreads(account.id),
+      ])
+    } catch (err: any) {
+      // Put the marker back where it was — the switch did not happen.
+      if (previous) mutateAccounts({ accounts: previous })
+      setAccountError(err?.message || "Failed to switch account")
+      setOpenAccountMenu(account.provider)
+    } finally {
+      setAccountBusy(false)
+    }
+  }
+
+  /**
+   * Disconnect a mailbox, then land on a sensible state.
+   *
+   * The route replies with what is still connected, so the fallback is decided
+   * from server truth rather than guessed here: another account of the same
+   * provider becomes current, otherwise that provider drops to its existing
+   * "not connected" state and the connect-email UI appears when neither
+   * provider has anything left.
+   */
+  const confirmRemoveAccount = async () => {
+    const account = removeAccount
+    if (!account || accountBusy) return
+    setAccountBusy(true)
+    setAccountError(undefined)
+    try {
+      const res = await fetch(`${MAIL_ACCOUNTS_KEY}?accountId=${encodeURIComponent(account.id)}`, {
+        method: "DELETE",
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json?.error || "Failed to remove account")
+
+      const remaining: MailAccount[] = json.remaining ?? []
+      const provider = account.provider
+
+      setRemoveAccount(null)
+      setOpenAccountMenu(null)
+      dropProviderThreadsCache(provider)
+      clearProviderEmails(provider)
+
+      if (remaining.some(a => a.provider === provider)) {
+        // Another mailbox of the same provider took over — show its threads.
+        // The list refresh and the thread fetch don't depend on each other.
+        await Promise.all([
+          refetchAccounts(),
+          provider === "gmail" ? loadGmailThreads() : loadOutlookThreads(),
+        ])
+      } else {
+        await refetchAccounts()
+        // None left for this provider: the existing disconnected state, which
+        // is also what drives the connect-email UI once both are empty.
+        setProviderSyncState(provider, "not_connected")
+        if (provider === "gmail") {
+          setGmailConnected(false)
+          setGmailConnectedEmail(null)
+        } else {
+          setOutlookConnected(false)
+        }
+      }
+    } catch (err: any) {
+      setAccountError(err?.message || "Failed to remove account")
+    } finally {
+      setAccountBusy(false)
+    }
+  }
+
+  const handleConnectGmail = () => connectProvider("gmail")
 
   const loadGmailThreads = async () => {
     const requestId = ++gmailRequestIdRef.current
     setGmailSyncState("syncing")
     try {
-      const url = new URL("/api/gmail/threads", window.location.origin)
-      if (brandId) url.searchParams.append("brandId", brandId)
-      const res = await fetch(url.toString())
-      const data = await res.json()
+      const gmailAccountId = selectedGmailAccountId()
+      const data = await fetchThreads("gmail", true)
       if (requestId !== gmailRequestIdRef.current) return // superseded by a newer request
-
-      if (res.ok) {
-        const mappedEmails = (data.threads || []).map((t: any, i: number) => mapGmailThreadToEmail(t, i))
-        setEmails(prev => [...prev.filter(e => e.source !== "gmail"), ...mappedEmails])
-        setGmailConnected(true)
-        setGmailSyncState("connected")
-      } else if (data?.reauth) {
-        setGmailSyncState("not_connected")
-      } else {
-        setGmailError(data?.error || "Failed to load Gmail threads.")
-        setGmailSyncState("error")
-      }
+      const mappedEmails = [
+        ...(data.threads || []).map((t: any, i: number) => mapGmailThreadToEmail(t, i, gmailAccountId)),
+        ...(data.sentAwaitingReply || []).map((t: any, i: number) => mapLightweightSentThread(t, i, gmailAccountId)),
+      ]
+      setEmails(prev => [...prev.filter(e => e.source !== "gmail"), ...mappedEmails])
+      setGmailConnected(true)
+      setGmailSyncState("connected")
+      setGmailConnectedEmail(data.connectedEmail ?? null)
     } catch (err: any) {
       if (requestId !== gmailRequestIdRef.current) return
-      setGmailError(err?.message || "Failed to load Gmail threads.")
+      if (err?.body?.reauth) {
+        setGmailSyncState("not_connected")
+        return
+      }
+      setGmailError(err?.body?.error || err?.message || "Failed to load Gmail threads.")
       setGmailSyncState("error")
     }
   }
@@ -537,92 +1585,142 @@ function InboxContent() {
   const checkOutlookConnection = async () => {
     const requestId = ++outlookRequestIdRef.current
     try {
-      const url = new URL("/api/outlook/threads", window.location.origin)
-      if (brandId) url.searchParams.append("brandId", brandId)
-      const res = await fetch(url.toString())
-      const data = await res.json()
+      const targetAccountId = selectedOutlookAccountId()
+      const data = await fetchThreads("outlook", false, targetAccountId)
       if (requestId !== outlookRequestIdRef.current) return // superseded by a newer request
-
-      if (res.ok) {
-        const mappedEmails = (data.threads || []).map((t: any, i: number) => mapOutlookThreadToEmail(t, i))
-        setEmails(prev => [...prev.filter(e => e.source !== "outlook"), ...mappedEmails])
-        setOutlookConnected(true)
-        setOutlookSyncState("connected")
-      } else if (data?.reauth) {
-        setOutlookSyncState("not_connected")
-      } else {
-        setOutlookError(data?.error || "Failed to load Outlook inbox.")
-        setOutlookSyncState("error")
-      }
-    } catch {
+      if (data.accountId && targetAccountId && data.accountId !== targetAccountId) return
+      const mappedEmails = (data.threads || []).map((t: any, i: number) => mapOutlookThreadToEmail(t, i, data.accountId ?? targetAccountId))
+      setEmails(prev => [...prev.filter(e => e.source !== "outlook"), ...mappedEmails])
+      setOutlookConnected(true)
+      setOutlookSyncState("connected")
+    } catch (err: any) {
       if (requestId !== outlookRequestIdRef.current) return
-      setOutlookError("Network error. Please check your connection.")
+      // reauth = the provider says this account isn't linked (or its grant
+      // lapsed). A bare 401/403 means the OAuth flow was never completed, which
+      // is the same thing from the inbox's point of view: not connected, so the
+      // existing disconnected state is shown rather than an error.
+      if (err?.body?.reauth || err?.status === 401 || err?.status === 403) {
+        setOutlookSyncState("not_connected")
+        return
+      }
+      setOutlookError(err?.body?.error || err?.message || "Failed to check Outlook connection.")
       setOutlookSyncState("error")
     }
   }
 
-  // ── Connect Outlook — Microsoft OAuth flow ────────────────────────────────
-  const handleConnectOutlook = () => {
-    setOutlookSyncState("connecting")
-    const returnTo = window.location.pathname + window.location.search
-    window.location.href = `/api/outlook/connect?returnTo=${encodeURIComponent(returnTo)}`
-  }
+  const handleConnectOutlook = () => connectProvider("outlook")
 
-  const loadOutlookThreads = async () => {
+  const loadOutlookThreads = async (accountId?: string | null) => {
     const requestId = ++outlookRequestIdRef.current
+    // Which mailbox this load is for. Captured now so a response that arrives
+    // after another switch can be recognised as stale and dropped.
+    const targetAccountId = accountId !== undefined ? accountId : selectedOutlookAccountId()
     setOutlookSyncState("syncing")
     try {
-      const url = new URL("/api/outlook/threads", window.location.origin)
-      if (brandId) url.searchParams.append("brandId", brandId)
-      const res = await fetch(url.toString())
-      const data = await res.json()
+      const data = await fetchThreads("outlook", true, targetAccountId)
       if (requestId !== outlookRequestIdRef.current) return // superseded by a newer request
-
-      if (res.ok) {
-        const mappedEmails = (data.threads || []).map((t: any, i: number) => mapOutlookThreadToEmail(t, i))
-        setEmails(prev => [...prev.filter(e => e.source !== "outlook"), ...mappedEmails])
-        setOutlookConnected(true)
-        setOutlookSyncState("connected")
-      } else if (data?.reauth) {
-        setOutlookSyncState("not_connected")
-      } else {
-        setOutlookError(data?.error || "Failed to load Outlook threads.")
-        setOutlookSyncState("error")
-      }
+      // Second guard, on server truth rather than request ordering: the route
+      // echoes the account it actually read. If that is not the mailbox now
+      // selected, these threads belong to the previous account and must not be
+      // rendered under the new one.
+      if (data.accountId && targetAccountId && data.accountId !== targetAccountId) return
+      const mappedEmails = (data.threads || []).map((t: any, i: number) => mapOutlookThreadToEmail(t, i, data.accountId ?? targetAccountId))
+      setEmails(prev => [...prev.filter(e => e.source !== "outlook"), ...mappedEmails])
+      setOutlookConnected(true)
+      setOutlookSyncState("connected")
     } catch (err: any) {
       if (requestId !== outlookRequestIdRef.current) return
-      setOutlookError(err?.message || "Failed to load Outlook threads.")
+      if (err?.body?.reauth) {
+        setOutlookSyncState("not_connected")
+        return
+      }
+      setOutlookError(err?.body?.error || err?.message || "Failed to load Outlook threads.")
       setOutlookSyncState("error")
     }
   }
 
   const sendCompose = async () => {
-    if (!composeTo.trim() || !composeBody.trim() || isComposeSending) return
+    const bodyIsEmpty = htmlToPlainText(composeBody).trim().length === 0
+    if (!composeTo.trim() || (bodyIsEmpty && composeAttachments.length === 0) || isComposeSending) return
     setComposeError(undefined)
     setIsComposeSending(true)
     try {
-      const sendApi = composeSource === "outlook" ? "/api/outlook/send" : "/api/gmail/send"
-      const res = await fetch(sendApi, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          to: composeTo.trim(),
-          subject: composeSubject.trim() || "(No subject)",
-          body: composeBody.trim(),
-        }),
-      })
+      // The Outlook send route is told which mailbox to send from, for the same
+      // reason the thread fetch is: left to infer it, a compose could go out
+      // from a different account than the one the inbox is showing. Gmail's URL
+      // is unchanged.
+      const outlookSendAccountId = selectedOutlookAccountId()
+      const sendApi =
+        composeSource === "outlook"
+          ? `/api/outlook/send${outlookSendAccountId ? `?accountId=${encodeURIComponent(outlookSendAccountId)}` : ""}`
+          : "/api/gmail/send"
+      let res: Response
+      // Both providers accept attachments now — Gmail via a multipart
+      // request that gets built into a real MIME message server-side,
+      // Outlook via the same multipart request but converted to Graph's
+      // plain JSON attachments array server-side (see the two send routes).
+      if (composeAttachments.length > 0) {
+        const form = new FormData()
+        form.append("to", composeTo.trim())
+        form.append("subject", composeSubject.trim() || "(No subject)")
+        form.append("body", composeBody)
+        form.append("isHtmlBody", "true")
+        form.append("includeSignature", String(composeIncludeSignature))
+        if (brandId) form.append("brandId", brandId)
+        composeAttachments.forEach((a) => form.append("attachments", a.file, a.file.name))
+        // No Content-Type header — fetch generates the multipart boundary itself.
+        res = await fetch(sendApi, { method: "POST", body: form })
+      } else {
+        res = await fetch(sendApi, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            to: composeTo.trim(),
+            subject: composeSubject.trim() || "(No subject)",
+            body: composeBody,
+            brandId,
+            isHtmlBody: true,
+            includeSignature: composeIncludeSignature,
+          }),
+        })
+      }
       const data = await res.json()
       if (!res.ok) {
         setComposeError(data?.error || "Failed to send email.")
       } else {
+        // Show it in the list immediately rather than waiting for the next
+        // real refresh — Gmail-only, since sentAwaitingReply (and its
+        // lightweight-thread rendering) has no Outlook equivalent. A later
+        // refresh replaces every gmail-sourced entry wholesale anyway, so
+        // this placeholder is naturally superseded by the real one, not a
+        // lasting duplicate.
+        if (composeSource !== "outlook") {
+          const placeholder = mapLightweightSentThread(
+            {
+              id: `local-sent-${Date.now()}`,
+              recipientEmail: composeTo.trim(),
+              subject: composeSubject.trim() || "(No subject)",
+              snippet: htmlToPlainText(composeBody).slice(0, 140),
+              date: new Date().toISOString(),
+            },
+            0,
+            selectedGmailAccountId()
+          )
+          setEmails((prev) => [{ ...placeholder, isLocalPending: true }, ...prev])
+        }
         setComposeSent(true)
         setTimeout(() => {
           setOpenCompose(false)
           setComposeTo("")
           setComposeSubject("")
           setComposeBody("")
+          clearComposeAttachments()
           setComposeSent(false)
           setComposeError(undefined)
+          setSavingComposeAsTemplate(false)
+          setComposeTemplateName("")
+          setSaveComposeTemplateError(undefined)
+          setComposeSignatureOverride(null)
         }, 1500)
       }
     } catch {
@@ -632,55 +1730,340 @@ function InboxContent() {
     }
   }
 
+  const saveComposeAsTemplate = async () => {
+    const plainBody = htmlToPlainText(composeBody)
+    if (!brandId || !composeTemplateName.trim() || !composeSubject.trim() || !plainBody) {
+      setSaveComposeTemplateError("Name, subject, and message are all required")
+      return
+    }
+    setIsSavingComposeTemplate(true)
+    setSaveComposeTemplateError(undefined)
+    try {
+      // Templates are shared with the still-plain-text reply box and
+      // EmailModal, so the saved body must stay plain text — never the rich
+      // editor's raw HTML.
+      const res = await fetch(`/api/brand/${brandId}/templates`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: composeTemplateName.trim(),
+          subject: composeSubject.trim(),
+          body: plainBody,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error || "Failed to save template")
+      setSavingComposeAsTemplate(false)
+      setComposeTemplateName("")
+    } catch (err) {
+      setSaveComposeTemplateError(err instanceof Error ? err.message : "Failed to save template")
+    } finally {
+      setIsSavingComposeTemplate(false)
+    }
+  }
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   const filteredEmails = useMemo(() => {
     const query = debouncedSearchQuery.toLowerCase()
-    return emails.filter((email) => {
-      const matchesStage = selectedStage === "ALL" || email.status === selectedStage
-      const matchesSearch =
-        query === "" ||
-        email.name.toLowerCase().includes(query) ||
-        email.handle.toLowerCase().includes(query) ||
-        email.subject.toLowerCase().includes(query)
-      return matchesStage && matchesSearch
-    })
-  }, [emails, selectedStage, debouncedSearchQuery])
+    return emails
+      .filter((email) => {
+        const matchesStage = selectedStage === "ALL" || email.status === selectedStage
+        const matchesSearch =
+          query === "" ||
+          email.name.toLowerCase().includes(query) ||
+          email.handle.toLowerCase().includes(query) ||
+          email.subject.toLowerCase().includes(query)
+        const matchesRead =
+          readFilter === "all" || (readFilter === "unread" ? !email.read : email.read)
+        return matchesStage && matchesSearch && matchesRead
+      })
+      // `emails` is built by concatenating Gmail and Outlook batches as each
+      // provider finishes loading (see setEmails call sites below) — never
+      // merged by date. Sort here, once, at the single point everything
+      // actually renders from, rather than at every fetch call site.
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+  }, [emails, selectedStage, debouncedSearchQuery, readFilter])
 
+  // Counts come from `pipelineRows` (same data as Pipeline/Post Tracker), not
+  // mailbox threads. "All" stays a raw thread count, not an influencer count.
   const getStageCount = (stage: PipelineStage | "ALL") => {
     if (stage === "ALL") return emails.length
-    return emails.filter((e) => e.status === stage).length
+
+    // Not exclusive with the Post Tracker stages below — matches Pipeline's
+    // own Deal Agreed column, which folds in rows already sent to Post
+    // Tracker (see matchesColumnStatus in kanban-board.tsx).
+    if (stage === "ONBOARDED") {
+      return pipelineRows.filter((r) => {
+        const rejected = r.contactStatus === "not_interested" || r.approvalStatus === "Declined"
+        if (rejected) return false
+        return (r.stage != null && r.stage >= 4) || r.contactStatus === "for_order_creation"
+      }).length
+    }
+
+    return pipelineRows.filter(
+      (r) =>
+        getPipelineStatus({
+          contact_status: r.contactStatus,
+          content_posted: r.contentPosted,
+          stage: r.stage,
+          order_status: r.orderStatus,
+          approval_status: r.approvalStatus,
+        }) === stage
+    ).length
   }
 
-  const toggleStar = (id: number | string, e: React.MouseEvent) => {
+  // Keyed on `uid`, not `id` — see updateEmailStage below for why.
+  const toggleStar = (email: Email, e: React.MouseEvent) => {
     e.stopPropagation()
-    setEmails((prev) => prev.map((email) => (email.id === id ? { ...email, starred: !email.starred } : email)))
+    const nextStarred = !email.starred
+    setEmails((prev) => prev.map((e2) => (e2.uid === email.uid ? { ...e2, starred: nextStarred } : e2)))
+    setSelectedEmail((prev) => (prev?.uid === email.uid ? { ...prev, starred: nextStarred } : prev))
+    if (email.isLocalPending) return
+
+    if (email.source === "gmail" && email.gmailThreadId) {
+      fetch("/api/gmail/star", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ threadId: email.gmailThreadId, starred: nextStarred }),
+      })
+        .then(async (res) => {
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}))
+            console.error("[gmail star] failed:", res.status, body?.error)
+          }
+        })
+        .catch((err) => console.error("[gmail star] network error:", err))
+    } else if (email.source === "outlook") {
+      const accountId = selectedOutlookAccountId()
+      fetch(`/api/outlook/star${accountId ? `?accountId=${encodeURIComponent(accountId)}` : ""}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversationId: email.id, starred: nextStarred }),
+      })
+        .then(async (res) => {
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}))
+            console.error("[outlook star] failed:", res.status, body?.error)
+          }
+        })
+        .catch((err) => console.error("[outlook star] network error:", err))
+    }
   }
 
   const markAsRead = (id: number | string) => {
     setEmails((prev) => prev.map((email) => (email.id === id ? { ...email, read: true } : email)))
   }
 
-  const updateEmailStage = async (emailId: number | string, newStage: PipelineStage) => {
-    const previousStatus = emails.find((e) => e.id === emailId)?.status
-    setEmails((prev) => prev.map((email) => (email.id === emailId ? { ...email, status: newStage } : email)))
-    if (selectedEmail?.id === emailId) {
-      setSelectedEmail((prev) => (prev ? { ...prev, status: newStage } : null))
+  // Lightweight "sent, awaiting reply" entries only carry headers/snippet —
+  // fetch full detail on open instead of upfront for every one of them.
+  const openEmail = async (email: Email) => {
+    setSelectedEmail(email)
+    markAsRead(email.id)
+    // Also tells Gmail, not just local state — otherwise the real message
+    // stays UNREAD and reverts on next fetch. Fire-and-forget: shouldn't
+    // block opening the thread, but errors are logged, not swallowed
+    // silently (a silent failure is what hid the missing scope bug before).
+    if (email.source === "gmail" && email.gmailThreadId && !email.isLocalPending) {
+      fetch("/api/gmail/mark-read", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ threadId: email.gmailThreadId }),
+      })
+        .then(async (res) => {
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}))
+            console.error("[gmail mark-read] failed:", res.status, body?.error)
+          }
+        })
+        .catch((err) => console.error("[gmail mark-read] network error:", err))
     }
+    if (!email.isLightweight || !email.gmailThreadId || email.isLocalPending) return
+
+    setLoadingThreadId(email.id)
+    try {
+      const res = await fetch(`/api/gmail/thread/${email.gmailThreadId}`)
+      const data = await res.json()
+      if (!res.ok || !data.thread) return
+
+      const fullEmail = mapGmailThreadToEmail({ ...data.thread, brandInfluencer: null }, 0, email.accountId)
+      const merged: Email = {
+        ...fullEmail,
+        id: email.id,
+        // Identity carried over from the row being replaced, not from the newly
+        // mapped object: this is the same conversation gaining its full body.
+        uid: email.uid,
+        accountId: email.accountId,
+        status: email.status,
+        // The thread route has no influencer match; keep the resolved one.
+        brandInfluencerId: email.brandInfluencerId,
+        declineReason: email.declineReason,
+        declineNotes: email.declineNotes,
+        isLightweight: false,
+      }
+      setEmails((prev) => prev.map((e) => (e.uid === email.uid ? merged : e)))
+      setSelectedEmail((prev) => (prev?.uid === email.uid ? merged : prev))
+    } catch {
+      // Leave the lightweight entry as-is — the snippet is still shown.
+    } finally {
+      setLoadingThreadId((prev) => (prev === email.id ? null : prev))
+    }
+  }
+
+  // Mirrors openEmail's mark-read call, just re-adding UNREAD instead.
+  const markAsUnread = (email: Email) => {
+    setEmails((prev) => prev.map((e) => (e.uid === email.uid ? { ...e, read: false } : e)))
+    setSelectedEmail((prev) => (prev?.uid === email.uid ? { ...prev, read: false } : prev))
+    setShowActions(false)
+    if (email.isLocalPending) return // synthetic row, nothing real to tell either provider
+
+    if (email.source === "gmail" && email.gmailThreadId) {
+      fetch("/api/gmail/mark-read", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ threadId: email.gmailThreadId, read: false }),
+      })
+        .then(async (res) => {
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}))
+            console.error("[gmail mark-unread] failed:", res.status, body?.error)
+          }
+        })
+        .catch((err) => console.error("[gmail mark-unread] network error:", err))
+    } else if (email.source === "outlook") {
+      const accountId = selectedOutlookAccountId()
+      fetch(`/api/outlook/mark-unread${accountId ? `?accountId=${encodeURIComponent(accountId)}` : ""}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversationId: email.id }),
+      })
+        .then(async (res) => {
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}))
+            console.error("[outlook mark-unread] failed:", res.status, body?.error)
+          }
+        })
+        .catch((err) => console.error("[outlook mark-unread] network error:", err))
+    }
+  }
+
+  const confirmDeleteConversation = async () => {
+    const email = deleteConversationTarget
+    if (!email) return
+
+    // No real thread server-side for this placeholder — just drop it locally.
+    if (email.isLocalPending) {
+      setEmails((prev) => prev.filter((e) => e.uid !== email.uid))
+      setSelectedEmail((prev) => (prev?.uid === email.uid ? null : prev))
+      setDeleteConversationTarget(null)
+      return
+    }
+
+    setDeletingConversation(true)
+    setDeleteConversationError(undefined)
+    try {
+      let res: Response
+      if (email.source === "outlook") {
+        const accountId = selectedOutlookAccountId()
+        res = await fetch(`/api/outlook/trash${accountId ? `?accountId=${encodeURIComponent(accountId)}` : ""}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ conversationId: email.id }),
+        })
+      } else {
+        res = await fetch("/api/gmail/trash", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ threadId: email.gmailThreadId }),
+        })
+      }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data?.error || "Failed to delete conversation")
+      }
+      setEmails((prev) => prev.filter((e) => e.uid !== email.uid))
+      setSelectedEmail((prev) => (prev?.uid === email.uid ? null : prev))
+      setDeleteConversationTarget(null)
+    } catch (err: any) {
+      setDeleteConversationError(err.message || "Failed to delete conversation")
+    } finally {
+      setDeletingConversation(false)
+    }
+  }
+
+  // Keyed on `uid`, not `id`: `id` is the provider's own thread id, and Gmail
+  // and Outlook conversations share this array, so an id match could resolve to
+  // a different provider's — or a different Outlook account's — conversation.
+  const isSelfThread = (email: Email) =>
+    !!gmailConnectedEmail && email.fromEmail?.toLowerCase() === gmailConnectedEmail.toLowerCase()
+
+  const canUpdateStage = (email: Email) => !!email.brandInfluencerId && !isSelfThread(email)
+
+  const updateEmailStage = async (
+    emailUid: string,
+    newStage: PipelineStage,
+    decline?: { reason: string; notes?: string }
+  ) => {
     setUpdateStageModal({ open: false, email: null })
 
-    const email = emails.find((e) => e.id === emailId)
+    const email = emails.find((e) => e.uid === emailUid)
     if (!email?.fromEmail) return
+
+    // This thread's other party is the user's own connected mailbox (e.g. a
+    // self-sent verification/test email) — there's no influencer to update,
+    // and hitting the API would just surface a confusing "not registered"
+    // error for something that was never meant to be one.
+    if (isSelfThread(email)) {
+      setStageNotification({
+        show: true,
+        message: "This conversation is with your own connected mailbox — there's no influencer to update.",
+        type: "error",
+      })
+      setTimeout(() => setStageNotification({ show: false, message: "", type: "error" }), 5000)
+      return
+    }
+
+    // Covers drag-to-stage.
+    if (!canUpdateStage(email)) {
+      setStageNotification({
+        show: true,
+        message: `${email.fromEmail} isn't a saved influencer in this brand, so it has no stage to update.`,
+        type: "error",
+      })
+      setTimeout(() => setStageNotification({ show: false, message: "", type: "error" }), 5000)
+      return
+    }
+
+    // Rejected needs a decline reason first, as on the Pipeline.
+    if (newStage === "REJECTED" && !decline) {
+      setDeclineTarget(email)
+      return
+    }
+
+    const previousStatus = emails.find((e) => e.uid === emailUid)?.status
+    const declineFields = { declineReason: decline?.reason, declineNotes: decline?.notes }
+    setEmails((prev) => prev.map((e) => (e.uid === emailUid ? { ...e, status: newStage, ...declineFields } : e)))
+    if (selectedEmail?.uid === emailUid) {
+      setSelectedEmail((prev) => (prev ? { ...prev, status: newStage, ...declineFields } : null))
+    }
+
     try {
       const res = await fetch("/api/inbox/stage", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ senderEmail: email.fromEmail, stage: newStage, brandId }),
+        // brandInfluencerId skips re-deriving the match from fromEmail; senderEmail is the fallback.
+        body: JSON.stringify({
+          senderEmail: email.fromEmail,
+          brandInfluencerId: email.brandInfluencerId,
+          stage: newStage,
+          brandId,
+          ...(decline ? { niReason: decline.reason, declineNotes: decline.notes } : {}),
+        }),
       })
       if (!res.ok) {
         const data = await res.json()
-        setEmails((prev) => prev.map((e) => (e.id === emailId ? { ...e, status: previousStatus || null } : e)))
-        if (selectedEmail?.id === emailId) {
+        setEmails((prev) => prev.map((e) => (e.uid === emailUid ? { ...e, status: previousStatus || null } : e)))
+        if (selectedEmail?.uid === emailUid) {
           setSelectedEmail((prev) => (prev ? { ...prev, status: previousStatus || null } : null))
         }
         const errorMsg = data?.error === "Influencer not registered"
@@ -691,14 +2074,20 @@ function InboxContent() {
         setStageNotification({ show: true, message: errorMsg, type: "error" })
         setTimeout(() => setStageNotification({ show: false, message: "", type: "error" }), 5000)
       } else {
+        // A stage set from the inbox is the same persisted change the Pipeline
+        // board makes, so the views derived from it are marked stale.
+        invalidateInfluencerDerivedCaches(brandId)
         setStageNotification({ show: true, message: "Stage updated successfully!", type: "success" })
         setTimeout(() => setStageNotification({ show: false, message: "", type: "success" }), 3000)
       }
     } catch {
-      setEmails((prev) => prev.map((e) => (e.id === emailId ? { ...e, status: previousStatus || null } : e)))
-      if (selectedEmail?.id === emailId) {
+      setEmails((prev) => prev.map((e) => (e.uid === emailUid ? { ...e, status: previousStatus || null } : e)))
+      if (selectedEmail?.uid === emailUid) {
         setSelectedEmail((prev) => (prev ? { ...prev, status: previousStatus || null } : null))
       }
+      // The revert alone left no trace of why the stage snapped back.
+      setStageNotification({ show: true, message: "Network error — the stage was not saved", type: "error" })
+      setTimeout(() => setStageNotification({ show: false, message: "", type: "error" }), 5000)
     }
   }
 
@@ -713,50 +2102,86 @@ function InboxContent() {
     setActiveDragId(null)
     const { active, over } = event
     if (!over) return
-    const emailId = active.id as string
+    const draggedUid = active.id as string
     const targetStage = over.id as PipelineStage
-    const email = emails.find((e) => String(e.id) === emailId)
+    const email = emails.find((e) => e.uid === draggedUid)
     if (!email || email.status === targetStage) return
-    updateEmailStage(email.id, targetStage)
+    updateEmailStage(email.uid, targetStage)
   }
 
   const sendReply = async () => {
-    if (!reply.trim() || !selectedEmail || isSending) return
+    const plainReply = htmlToPlainText(reply)
+    if ((plainReply.length === 0 && replyAttachments.length === 0) || !selectedEmail || isSending) return
 
-    const messageText = reply.trim()
+    const isOutlookThread = selectedEmail.source === "outlook"
+    const htmlBody = reply
+    const attachmentsToSend = replyAttachments
     setSendError(undefined)
     setIsSending(true)
 
+    const sentAt = new Date().toISOString()
     const newReply = {
       sender: "You",
-      message: messageText,
-      timestamp: new Date().toISOString(),
+      message: htmlBody,
+      timestamp: sentAt,
       isUser: true,
+      isHtml: true,
     }
+    // Also update preview/timestamp — otherwise the list row keeps showing
+    // whatever Gmail last returned, looking untouched even though a reply
+    // was just sent, until the next real refresh happens to catch up.
     setEmails((prev) =>
       prev.map((email) =>
-        email.id === selectedEmail.id ? { ...email, replies: [...(email.replies || []), newReply] } : email
+        email.id === selectedEmail.id
+          ? { ...email, replies: [...(email.replies || []), newReply], preview: plainReply, timestamp: sentAt }
+          : email
       )
     )
     setSelectedEmail((prev) =>
-      prev ? { ...prev, replies: [...(prev.replies || []), newReply] } : null
+      prev ? { ...prev, replies: [...(prev.replies || []), newReply], preview: plainReply, timestamp: sentAt } : null
     )
-    setReply("")
+    // Reply's editor stays mounted after sending (unlike compose, which swaps
+    // to a "Message sent!" screen), so it must be cleared via the imperative
+    // ref — setReply("") alone would update state but leave the visible
+    // contentEditable content untouched.
+    replyEditorRef.current?.setHtml("")
+    clearReplyAttachments()
 
     try {
-      const replyApi = selectedEmail.source === "outlook" ? "/api/outlook/send" : "/api/gmail/send"
-      const replyPayload: any = {
-        to: selectedEmail.fromEmail || selectedEmail.handle,
-        subject: selectedEmail.subject,
-        body: messageText,
-      }
-      if (selectedEmail.source === "gmail") replyPayload.threadId = selectedEmail.gmailThreadId
+      const replyOutlookAccountId = isOutlookThread ? selectedOutlookAccountId() : null
+      const replyApi = isOutlookThread
+        ? `/api/outlook/send${replyOutlookAccountId ? `?accountId=${encodeURIComponent(replyOutlookAccountId)}` : ""}`
+        : "/api/gmail/send"
+      let res: Response
+      // Both providers accept attachments now — see sendCompose for the same pattern.
+      if (attachmentsToSend.length > 0) {
+        const form = new FormData()
+        form.append("to", selectedEmail.fromEmail || selectedEmail.handle)
+        form.append("subject", selectedEmail.subject)
+        form.append("body", htmlBody)
+        form.append("isHtmlBody", "true")
+        form.append("includeSignature", String(replyIncludeSignature))
+        if (brandId) form.append("brandId", brandId)
+        if (!isOutlookThread && selectedEmail.gmailThreadId) form.append("threadId", selectedEmail.gmailThreadId)
+        attachmentsToSend.forEach((a) => form.append("attachments", a.file, a.file.name))
+        res = await fetch(replyApi, { method: "POST", body: form })
+      } else {
+        const replyPayload: any = {
+          to: selectedEmail.fromEmail || selectedEmail.handle,
+          subject: selectedEmail.subject,
+          body: htmlBody,
+          brandId,
+          isHtmlBody: true,
+          includeSignature: replyIncludeSignature,
+        }
+        if (!isOutlookThread) replyPayload.threadId = selectedEmail.gmailThreadId
 
-      const res = await fetch(replyApi, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(replyPayload),
-      })
+        res = await fetch(replyApi, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(replyPayload),
+        })
+      }
 
       if (!res.ok) {
         const data = await res.json()
@@ -766,7 +2191,7 @@ function InboxContent() {
       setSendError("Network error. Message may not have been delivered.")
     } finally {
       setIsSending(false)
-      setTimeout(() => replyTextareaRef.current?.focus(), 100)
+      setTimeout(() => replyEditorRef.current?.focus(), 100)
     }
   }
 
@@ -798,14 +2223,42 @@ function InboxContent() {
     }
   }
 
-  const getStatusBadge = (status: PipelineStage | null) => {
+  const getInfluencerRow = (email: Email) =>
+    email.brandInfluencerId ? pipelineRows.find((r) => r.id === email.brandInfluencerId) : undefined
+
+  const getInfluencerCountry = (email: Email): string => {
+    const parts = (getInfluencerRow(email)?.location ?? "").split(",").map((p) => p.trim()).filter(Boolean)
+    return parts[parts.length - 1] ?? ""
+  }
+
+  const getDeclineInfo =(email: Email): { reason: string; notes?: string } | null => {
+    if (email.status !== "REJECTED") return null
+    if (email.declineReason) return { reason: email.declineReason, notes: email.declineNotes }
+    const row = email.brandInfluencerId ? pipelineRows.find((r) => r.id === email.brandInfluencerId) : undefined
+    return row?.niReason ? { reason: row.niReason, notes: row.declineNotes ?? undefined } : null
+  }
+
+  // Rejected badges show the reason as a tooltip, or inline with `showReason`.
+  const getStatusBadge = (status: PipelineStage | null, email?: Email, showReason = false) => {
     if (!status) return null
     const config = stageConfigs.find((s) => s.id === status)
     if (!config) return null
-    return (
-      <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${config.bgColor} ${config.color}`}>
+    const decline = email ? getDeclineInfo(email) : null
+    const tooltip = decline ? `Reason: ${decline.reason}${decline.notes ? ` — ${decline.notes}` : ""}` : undefined
+    const badge = (
+      <span title={tooltip} className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${config.bgColor} ${config.color}`}>
         {config.icon}
         {config.label}
+      </span>
+    )
+    if (!decline || !showReason) return badge
+    return (
+      <span className="inline-flex items-center gap-1.5 min-w-0">
+        {badge}
+        <span title={tooltip} className="text-xs text-red-600/80 truncate max-w-[320px]">
+          {decline.reason}
+          {decline.notes && <span className="text-gray-400"> · {decline.notes}</span>}
+        </span>
       </span>
     )
   }
@@ -823,9 +2276,10 @@ function InboxContent() {
   return (
     <SubscriptionGate
       isSubscribed={isSubscribed}
-      status={subscriptionStatus?.status || "inactive"}
+      status={subscriptionStatus || "inactive"}
       featureName="the inbox"
       plans={["Solo", "Team"]}
+      currentPlanDisplayName={planDisplayName}
     >
     <div className="flex flex-col h-screen bg-gray-50">
     <DndContext sensors={dragSensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
@@ -916,6 +2370,7 @@ function InboxContent() {
             <div className="flex items-center gap-3">
               <button
                 onClick={() => setShowPipelineBar(true)}
+                data-tour="inbox-pipeline-toggle"
                 className="flex items-center gap-2 text-xs text-gray-600 hover:text-gray-900 transition-colors"
               >
                 <IconLayoutSidebar size={14} />
@@ -929,35 +2384,91 @@ function InboxContent() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <div
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium border transition-all ${
-                  isGmailReady
-                    ? "bg-green-50 border-green-200 text-green-700"
-                    : gmailSyncState === "not_connected"
-                    ? "bg-yellow-50 border-yellow-200 text-yellow-700 cursor-pointer hover:bg-yellow-100"
-                    : isGmailLoading
-                    ? "bg-gray-50 border-gray-200 text-gray-400"
-                    : "bg-red-50 border-red-200 text-red-500"
-                }`}
-                onClick={gmailSyncState === "not_connected" ? handleConnectGmail : undefined}
-              >
-                <IconBrandGmail size={11} />
-                <span>{isGmailReady ? "Gmail" : gmailSyncState === "not_connected" ? "Connect Gmail" : isGmailLoading ? "Gmail…" : "Gmail error"}</span>
+              <div className="relative">
+                <div
+                  className={`group flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium border transition-all ${
+                    isGmailReady
+                      ? "bg-green-50 border-green-200 text-green-700 cursor-pointer hover:bg-green-100"
+                      : gmailSyncState === "not_connected"
+                      ? "bg-yellow-50 border-yellow-200 text-yellow-700 cursor-pointer hover:bg-yellow-100"
+                      : isGmailLoading
+                      ? "bg-gray-50 border-gray-200 text-gray-400"
+                      : "bg-red-50 border-red-200 text-red-500"
+                  }`}
+                  onClick={
+                    isGmailReady
+                      ? () => setOpenAccountMenu(p => (p === "gmail" ? null : "gmail"))
+                      : gmailSyncState === "not_connected"
+                      ? handleConnectGmail
+                      : undefined
+                  }
+                >
+                  <IconBrandGmail size={11} />
+                  {isGmailReady ? (
+                    <>
+                      {/* The selected address, when we know it — the chip is the
+                          account control, so it should say which account. */}
+                      <span>{selectedAccount("gmail")?.email || "Gmail"}</span>
+                      <IconChevronDown size={10} />
+                    </>
+                  ) : (
+                    <span>{gmailSyncState === "not_connected" ? "Connect Gmail" : gmailSyncState === "connecting" ? "Waiting for sign-in…" : isGmailLoading ? "Gmail…" : "Gmail error"}</span>
+                  )}
+                </div>
+                {openAccountMenu === "gmail" && (
+                  <AccountMenu
+                    provider="gmail"
+                    accounts={accountsFor("gmail")}
+                    busy={accountBusy}
+                    error={accountError}
+                    onSelect={switchAccount}
+                    onRemove={setRemoveAccount}
+                    onConnectAnother={handleConnectGmail}
+                    onClose={() => setOpenAccountMenu(null)}
+                  />
+                )}
               </div>
-              <div
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium border transition-all ${
-                  isOutlookReady
-                    ? "bg-blue-50 border-blue-200 text-blue-700"
-                    : outlookSyncState === "not_connected"
-                    ? "bg-yellow-50 border-yellow-200 text-yellow-700 cursor-pointer hover:bg-yellow-100"
-                    : isOutlookLoading
-                    ? "bg-gray-50 border-gray-200 text-gray-400"
-                    : "bg-red-50 border-red-200 text-red-500"
-                }`}
-                onClick={outlookSyncState === "not_connected" ? handleConnectOutlook : undefined}
-              >
-                <OutlookIcon size={11} />
-                <span>{isOutlookReady ? "Outlook" : outlookSyncState === "not_connected" ? "Connect Outlook" : isOutlookLoading ? "Outlook…" : "Outlook error"}</span>
+              <div className="relative">
+                <div
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium border transition-all ${
+                    isOutlookReady
+                      ? "bg-blue-50 border-blue-200 text-blue-700 cursor-pointer hover:bg-blue-100"
+                      : outlookSyncState === "not_connected"
+                      ? "bg-yellow-50 border-yellow-200 text-yellow-700 cursor-pointer hover:bg-yellow-100"
+                      : isOutlookLoading
+                      ? "bg-gray-50 border-gray-200 text-gray-400"
+                      : "bg-red-50 border-red-200 text-red-500"
+                  }`}
+                  onClick={
+                    isOutlookReady
+                      ? () => setOpenAccountMenu(p => (p === "outlook" ? null : "outlook"))
+                      : outlookSyncState === "not_connected"
+                      ? handleConnectOutlook
+                      : undefined
+                  }
+                >
+                  <OutlookIcon size={11} />
+                  {isOutlookReady ? (
+                    <>
+                      <span>{selectedAccount("outlook")?.email || "Outlook"}</span>
+                      <IconChevronDown size={10} />
+                    </>
+                  ) : (
+                    <span>{outlookSyncState === "not_connected" ? "Connect Outlook" : outlookSyncState === "connecting" ? "Waiting for sign-in…" : isOutlookLoading ? "Outlook…" : "Outlook error"}</span>
+                  )}
+                </div>
+                {openAccountMenu === "outlook" && (
+                  <AccountMenu
+                    provider="outlook"
+                    accounts={accountsFor("outlook")}
+                    busy={accountBusy}
+                    error={accountError}
+                    onSelect={switchAccount}
+                    onRemove={setRemoveAccount}
+                    onConnectAnother={handleConnectOutlook}
+                    onClose={() => setOpenAccountMenu(null)}
+                  />
+                )}
               </div>
               <div className="flex items-center gap-2 text-xs text-gray-500">
                 <span className="hidden sm:inline">Current:</span>
@@ -985,9 +2496,9 @@ function InboxContent() {
                 <div className="absolute inset-0 rounded-full border-4 border-t-[#1FAE5B] animate-spin" />
               </div>
               <p className="text-sm text-gray-500 font-medium">
-                {gmailSyncState === "connecting" ? "Redirecting to Google…" :
-                 outlookSyncState === "connecting" ? "Redirecting to Microsoft…" :
-                 "Loading your inbox…"}
+                {gmailSyncState === "connecting" || outlookSyncState === "connecting"
+                  ? "Waiting for sign-in…"
+                  : "Loading your inbox…"}
               </p>
             </div>
           ) : needsConnect ? (
@@ -1007,7 +2518,7 @@ function InboxContent() {
                   Connect Gmail or Outlook to start managing your influencer inbox.
                 </p>
               </div>
-              <div className="flex flex-col gap-2.5 w-full">
+              <div className="flex flex-col gap-2.5 w-full" data-tour="inbox-connect-email">
                 <button
                   onClick={handleConnectGmail}
                   className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-[#1FAE5B] text-white text-sm rounded-xl hover:bg-[#0F6B3E] transition font-semibold shadow-md"
@@ -1045,7 +2556,7 @@ function InboxContent() {
                   <IconRefresh size={13} /> Gmail
                 </button>
                 <button
-                  onClick={loadOutlookThreads}
+                  onClick={() => loadOutlookThreads()}
                   className="px-3 py-2 bg-[#0078D4] text-white text-xs rounded-xl hover:bg-[#006CBE] transition font-medium flex items-center gap-1.5"
                 >
                   <IconRefresh size={13} /> Outlook
@@ -1077,7 +2588,7 @@ function InboxContent() {
                     )}
                     {isOutlookReady && (
                       <button
-                        onClick={loadOutlookThreads}
+                        onClick={() => loadOutlookThreads()}
                         title="Refresh Outlook"
                         className="flex h-11 w-11 sm:h-9 sm:w-9 items-center justify-center rounded-xl hover:bg-gray-100 active:bg-gray-200 transition-colors text-gray-500"
                       >
@@ -1085,7 +2596,14 @@ function InboxContent() {
                       </button>
                     )}
                     <button
-                      onClick={() => { setComposeSource(gmailConnected ? "gmail" : outlookConnected ? "outlook" : "gmail"); setOpenCompose(true) }}
+                      onClick={() => setOpenTemplates(true)}
+                      title="Email Templates"
+                      className="flex h-11 w-11 sm:h-9 sm:w-9 shrink-0 items-center justify-center rounded-xl bg-[#1FAE5B] text-white hover:bg-[#0F6B3E] active:bg-[#0F6B3E] transition-colors shadow-sm"
+                    >
+                      <IconTemplate size={16} />
+                    </button>
+                    <button
+                      onClick={() => { setComposeSource(gmailConnected ? "gmail" : outlookConnected ? "outlook" : "gmail"); setComposeSignatureOverride(null); setOpenCompose(true) }}
                       className="flex h-11 w-11 sm:h-9 sm:w-9 shrink-0 items-center justify-center rounded-xl bg-[#1FAE5B] text-white hover:bg-[#0F6B3E] active:bg-[#0F6B3E] transition-colors shadow-sm"
                       title="New Message"
                     >
@@ -1106,6 +2624,22 @@ function InboxContent() {
                     className="h-11 sm:h-9 w-full pl-10 pr-4 text-base sm:text-sm bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#1FAE5B]/20 focus:border-[#1FAE5B] transition-all"
                   />
                 </div>
+
+                <div className="flex items-center gap-1.5 mt-2.5">
+                  {(["all", "unread", "read"] as const).map((option) => (
+                    <button
+                      key={option}
+                      onClick={() => setReadFilter(option)}
+                      className={`px-2.5 py-1 text-xs font-medium rounded-full border transition-colors ${
+                        readFilter === option
+                          ? "bg-[#1FAE5B] text-white border-[#1FAE5B]"
+                          : "bg-white text-gray-500 border-gray-200 hover:bg-gray-50"
+                      }`}
+                    >
+                      {option === "all" ? "All" : option === "unread" ? "Unread" : "Read"}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div className="flex-1 overflow-y-auto">
@@ -1117,35 +2651,53 @@ function InboxContent() {
                   </div>
                 ) : (
                   filteredEmails.map((email) => (
-                    <DraggableEmailRow key={email.id} id={String(email.id)}>
+                    <DraggableEmailRow key={email.uid} id={email.uid}>
                       <div
-                        onClick={() => { setSelectedEmail(email); markAsRead(email.id) }}
+                        // Off-screen rows skip layout and paint; the row stays in
+                        // the DOM so drag, selection and find-in-page are unchanged.
+                        style={{ contentVisibility: "auto", containIntrinsicSize: "auto 68px" }}
+                        onClick={() => openEmail(email)}
                         className={`flex items-start gap-3 px-4 py-3.5 sm:py-3 min-h-[68px] sm:min-h-0 cursor-pointer transition-colors duration-150 active:bg-gray-100 ${
-                          selectedEmail?.id === email.id ? "bg-gray-100 shadow-[inset_3px_0_0_#1FAE5B]" : "hover:bg-gray-50"
-                        } ${!email.read ? "bg-blue-50/40" : ""}`}
+                          selectedEmail?.id === email.id
+                            ? "bg-gray-100 shadow-[inset_3px_0_0_#1FAE5B]"
+                            : !email.read
+                            ? "bg-blue-50/60 hover:bg-gray-50"
+                            : "bg-white hover:bg-gray-50"
+                        }`}
                       >
                         <div className="relative flex-shrink-0">
                           <img src={email.avatar} alt="" className="w-11 h-11 sm:w-10 sm:h-10 rounded-full object-cover" />
                           {!email.read && (
-                            <div className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-[#1FAE5B] rounded-full ring-2 ring-white" />
+                            <div className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-blue-500 rounded-full ring-2 ring-white" />
                           )}
                         </div>
 
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between gap-2">
-                            <span className={`text-sm truncate ${!email.read ? "font-semibold text-gray-900" : "text-gray-700"}`}>
-                              {email.name}
-                            </span>
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className={`text-sm truncate ${!email.read ? "font-semibold text-gray-900" : "text-gray-700"}`}>
+                                {email.name}
+                              </span>
+                              {email.isLightweight && (
+                                <span
+                                  className="flex items-center gap-0.5 flex-shrink-0 text-[10px] font-medium text-gray-400 bg-gray-100 rounded-full px-1.5 py-0.5"
+                                  title="Sent — awaiting reply"
+                                >
+                                  <IconSend size={9} />
+                                  Sent
+                                </span>
+                              )}
+                            </div>
                             <span className="text-xs text-gray-400 flex-shrink-0">{formatDate(email.timestamp)}</span>
                           </div>
                           <p className={`text-xs truncate mt-0.5 ${!email.read ? "text-gray-800 font-medium" : "text-gray-500"}`}>
                             {email.subject}
                           </p>
                           <p className="text-xs text-gray-400 truncate mt-0.5">{email.preview}</p>
-                          {getStatusBadge(email.status) && <div className="mt-1.5">{getStatusBadge(email.status)}</div>}
+                          {getStatusBadge(email.status) && <div className="mt-1.5">{getStatusBadge(email.status, email)}</div>}
                         </div>
 
-                        <button onClick={(e) => toggleStar(email.id, e)} className="flex-shrink-0 mt-0.5 transition-opacity hover:opacity-80">
+                        <button onClick={(e) => toggleStar(email, e)} className="flex-shrink-0 mt-0.5 transition-opacity hover:opacity-80">
                           {email.starred ? (
                             <IconStarFilled size={14} className="text-yellow-500" />
                           ) : (
@@ -1178,8 +2730,8 @@ function InboxContent() {
             <div className="flex flex-col h-full">
               {/* Chat Header */}
               <div className="flex-shrink-0 bg-white border-b border-gray-200">
-                <div className="flex items-center justify-between px-4 md:px-6 py-3">
-                  <div className="flex items-center gap-3">
+                <div className="flex items-center justify-between gap-3 px-4 md:px-6 py-3">
+                  <div className="flex items-center gap-3 min-w-0">
                     <button onClick={() => setSelectedEmail(null)} className="lg:hidden p-2 rounded-full hover:bg-gray-100 transition">
                       <IconArrowLeft size={20} />
                     </button>
@@ -1189,9 +2741,28 @@ function InboxContent() {
                         <h2 className="font-semibold text-gray-900 text-sm md:text-base">{selectedEmail.name}</h2>
                         <span className="text-xs text-gray-400 hidden sm:inline">•</span>
                         <span className="text-xs text-gray-500 hidden sm:inline">{selectedEmail.handle}</span>
+                        {(() => {
+                          const row = getInfluencerRow(selectedEmail)
+                          if (!row?.handle) return null
+                          const handle = `@${row.handle.replace(/^@/, "")}`
+                          const url = getProfileUrl(row.platform?.toLowerCase() ?? "", row.handle)
+                          const label = `${handle} on ${getPlatformLabel(row.platform)}`
+                          const chip = (
+                            <>
+                              <PlatformIcon platform={row.platform} size={12} className="shrink-0" />
+                              <span className="hidden sm:inline truncate max-w-[160px]">{handle}</span>
+                            </>
+                          )
+                          const cls = "inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border border-gray-200 text-xs text-gray-600"
+                          return url ? (
+                            <a href={url} target="_blank" rel="noopener noreferrer" title={label} className={`${cls} hover:bg-gray-50 transition`}>{chip}</a>
+                          ) : (
+                            <span title={label} className={cls}>{chip}</span>
+                          )
+                        })()}
                       </div>
                       <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                        {getStatusBadge(selectedEmail.status)}
+                        {getStatusBadge(selectedEmail.status, selectedEmail, true)}
                         <span className="text-xs text-gray-400 flex items-center gap-1">
                           <IconClock size={12} />
                           <span className="hidden sm:inline">Last active</span> {formatDate(selectedEmail.timestamp)}
@@ -1199,27 +2770,49 @@ function InboxContent() {
                       </div>
                     </div>
                   </div>
-                </div>
 
-                <div className="px-4 md:px-6 py-2 bg-gray-50 border-t border-gray-100 flex flex-wrap items-center gap-2">
-                  <button onClick={() => setUpdateStageModal({ open: true, email: selectedEmail })} className="flex items-center gap-1 md:gap-2 px-2 md:px-3 py-1.5 text-xs bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
-                    <IconUserCheck size={14} />
-                    <span className="hidden sm:inline">Update Stage</span>
-                  </button>
-                </div>
+                <div className="flex-shrink-0 flex items-center gap-2">
+                  {canUpdateStage(selectedEmail) && (
+                    <button
+                      onClick={() => setUpdateStageModal({ open: true, email: selectedEmail })}
+                      className="flex items-center gap-1 md:gap-2 px-2 md:px-3 py-1.5 text-xs border rounded-lg transition-colors bg-white border-gray-200 hover:bg-gray-50"
+                    >
+                      <IconUserCheck size={14} />
+                      <span className="hidden sm:inline">Update Stage</span>
+                    </button>
+                  )}
 
-                {showActions && (
-                  <>
-                    <div className="fixed inset-0 z-10" onClick={() => setShowActions(false)} />
-                    <div className="absolute right-4 md:right-6 mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20">
-                      <button className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2"><IconUser size={14} />View Profile</button>
-                      <button className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2"><IconStar size={14} />Star Conversation</button>
-                      <button className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2"><IconCheck size={14} />Mark as Read</button>
-                      <div className="border-t border-gray-100 my-1" />
-                      <button className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"><IconTrash size={14} />Delete Conversation</button>
-                    </div>
-                  </>
-                )}
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowActions((v) => !v)}
+                      className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 transition-colors"
+                      title="More actions"
+                    >
+                      <IconDotsVertical size={18} />
+                    </button>
+                    {showActions && (
+                      <>
+                        <div className="fixed inset-0 z-10" onClick={() => setShowActions(false)} />
+                        <div className="absolute right-0 top-full mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20">
+                          <button
+                            onClick={() => markAsUnread(selectedEmail)}
+                            className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
+                          >
+                            <IconMailOpened size={14} />Mark as Unread
+                          </button>
+                          <div className="border-t border-gray-100 my-1" />
+                          <button
+                            onClick={() => { setShowActions(false); setDeleteConversationError(undefined); setDeleteConversationTarget(selectedEmail) }}
+                            className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+                          >
+                            <IconTrash size={14} />Delete Conversation
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+                </div>
               </div>
 
               {/* Order Info Bar */}
@@ -1256,8 +2849,19 @@ function InboxContent() {
               {/* Messages */}
               <div className="flex-1 overflow-y-auto p-4 md:p-6 bg-gray-50">
                 <div className="max-w-3xl">
-                  <p className="text-xs text-gray-400 mb-3 font-medium">{selectedEmail.subject}</p>
-                  {(() => {
+                  <p className="text-xs text-gray-400 mb-3 font-medium">
+                    Subject Line : {selectedEmail.subject}
+                    {getInfluencerCountry(selectedEmail) && ` – ${getInfluencerCountry(selectedEmail)}`}
+                  </p>
+                  {selectedEmail.isLightweight && loadingThreadId === selectedEmail.id ? (
+                    <div className="flex items-center gap-2 text-sm text-gray-400 py-6">
+                      <span className="relative inline-block w-3.5 h-3.5 flex-shrink-0">
+                        <span className="absolute inset-0 rounded-full border-2 border-gray-200" />
+                        <span className="absolute inset-0 rounded-full border-2 border-transparent border-t-[#1FAE5B] animate-spin" />
+                      </span>
+                      Loading message…
+                    </div>
+                  ) : (() => {
                     const allMessages = selectedEmail.replies?.length
                       ? selectedEmail.replies
                       : [{ sender: selectedEmail.name, message: selectedEmail.message || selectedEmail.preview, timestamp: selectedEmail.timestamp, isUser: false }]
@@ -1283,13 +2887,76 @@ function InboxContent() {
                           </div>
                           <div className={`flex flex-col gap-1 ${group.isUser ? "items-end" : "items-start"}`}>
                             {group.items.map((msg, mIdx) => {
+                              // HTML messages use splitHtmlQuote (real markup) and
+                              // gate remote images, instead of the plain-text path below.
+                              if (msg.isHtml) {
+                                const { main, quoted } = splitHtmlQuote(msg.message)
+                                const quoteKey = `${gIdx}-${mIdx}`
+                                const isExpanded = expandedQuotes.has(quoteKey)
+                                const imagesOn = isImageSenderTrusted(selectedEmail.fromEmail)
+                                const mainBlocked = blockRemoteImages(main)
+                                const quotedBlocked = quoted ? blockRemoteImages(quoted) : null
+                                const hasRemoteImages = mainBlocked.hadBlocked || Boolean(quotedBlocked?.hadBlocked)
+                                return (
+                                  <div
+                                    key={mIdx}
+                                    className={`rounded-2xl px-4 md:px-5 py-3 shadow-sm overflow-hidden ${group.isUser ? "bg-gray-100 border border-gray-200 rounded-tr-none" : "bg-white border border-gray-100 rounded-tl-none"}`}
+                                  >
+                                    {hasRemoteImages && !imagesOn && (
+                                      <button
+                                        onClick={() => trustImageSender(selectedEmail.fromEmail)}
+                                        className="mb-2 text-xs underline underline-offset-2 text-gray-400 hover:text-gray-600"
+                                      >
+                                        Display images below
+                                      </button>
+                                    )}
+                                    <HtmlMessageFrame key={imagesOn ? main : mainBlocked.html} html={imagesOn ? main : mainBlocked.html} />
+                                    {quoted && (
+                                      <div className="mt-2">
+                                        <button
+                                          onClick={() =>
+                                            setExpandedQuotes((prev) => {
+                                              const next = new Set(prev)
+                                              if (next.has(quoteKey)) next.delete(quoteKey)
+                                              else next.add(quoteKey)
+                                              return next
+                                            })
+                                          }
+                                          className="text-xs underline underline-offset-2 text-gray-400 hover:text-gray-600"
+                                        >
+                                          {isExpanded ? "Hide quoted text" : "Show quoted text"}
+                                        </button>
+                                        {isExpanded && (
+                                          <div className="mt-2 rounded-lg px-3 py-2 bg-gray-50 border border-gray-100">
+                                            <HtmlMessageFrame key={imagesOn ? quoted : quotedBlocked!.html} html={imagesOn ? quoted : quotedBlocked!.html} />
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+                                    {msg.attachments && msg.attachments.length > 0 && (
+                                      <div className="mt-2 flex flex-wrap gap-2">
+                                        {msg.attachments.map((att) => (
+                                          <AttachmentChipReadOnly
+                                            key={att.id}
+                                            filename={att.filename}
+                                            size={att.size}
+                                            loading={downloadingAttachmentId === att.id}
+                                            onOpen={() => openAttachment(att)}
+                                          />
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                )
+                              }
+
                               const { main, quoted } = splitQuotedText(msg.message)
                               const quoteKey = `${gIdx}-${mIdx}`
                               const isExpanded = expandedQuotes.has(quoteKey)
                               return (
                                 <div
                                   key={mIdx}
-                                  className={`rounded-2xl px-4 md:px-5 py-3 shadow-sm ${group.isUser ? "bg-[#1FAE5B] text-white rounded-tr-none" : "bg-white border border-gray-100 text-gray-700 rounded-tl-none"}`}
+                                  className={`rounded-2xl px-4 md:px-5 py-3 shadow-sm ${group.isUser ? "bg-gray-100 border border-gray-200 text-gray-800 rounded-tr-none" : "bg-white border border-gray-100 text-gray-700 rounded-tl-none"}`}
                                 >
                                   <p className="text-sm whitespace-pre-wrap leading-relaxed">{main}</p>
                                   {quoted && (
@@ -1303,7 +2970,7 @@ function InboxContent() {
                                             return next
                                           })
                                         }
-                                        className={`text-xs underline underline-offset-2 ${group.isUser ? "text-white/70 hover:text-white" : "text-gray-400 hover:text-gray-600"}`}
+                                        className="text-xs underline underline-offset-2 text-gray-400 hover:text-gray-600"
                                       >
                                         {isExpanded ? "Hide quoted text" : "Show quoted text"}
                                       </button>
@@ -1311,21 +2978,34 @@ function InboxContent() {
                                         const { attribution, text } = parseQuotedBlock(quoted)
                                         return (
                                           <div
-                                            className={`mt-2 rounded-lg px-3 py-2 text-xs leading-relaxed ${group.isUser ? "bg-white/10" : "bg-gray-50 border border-gray-100"}`}
+                                            className="mt-2 rounded-lg px-3 py-2 text-xs leading-relaxed bg-gray-50 border border-gray-100"
                                           >
                                             {attribution && (
-                                              <p className={`mb-1.5 italic ${group.isUser ? "text-white/60" : "text-gray-400"}`}>
+                                              <p className="mb-1.5 italic text-gray-400">
                                                 {attribution}
                                               </p>
                                             )}
                                             <div
-                                              className={`pl-2.5 border-l-2 whitespace-pre-wrap ${group.isUser ? "border-white/30 text-white/80" : "border-gray-300 text-gray-500"}`}
+                                              className="pl-2.5 border-l-2 whitespace-pre-wrap border-gray-300 text-gray-500"
                                             >
                                               {text}
                                             </div>
                                           </div>
                                         )
                                       })()}
+                                    </div>
+                                  )}
+                                  {msg.attachments && msg.attachments.length > 0 && (
+                                    <div className="mt-2 flex flex-wrap gap-2">
+                                      {msg.attachments.map((att) => (
+                                        <AttachmentChipReadOnly
+                                          key={att.id}
+                                          filename={att.filename}
+                                          size={att.size}
+                                          loading={downloadingAttachmentId === att.id}
+                                          onOpen={() => openAttachment(att)}
+                                        />
+                                      ))}
                                     </div>
                                   )}
                                 </div>
@@ -1340,39 +3020,68 @@ function InboxContent() {
                 </div>
               </div>
 
-              {/* Reply Input */}
-              <div className="flex-shrink-0 border-t border-gray-200 bg-white p-3 md:p-4 shadow-lg">
-                <div className="flex gap-3 items-end">
-                  <div className="w-8 h-8 rounded-full bg-[#1FAE5B] flex items-center justify-center text-white text-xs font-medium shadow-sm flex-shrink-0">ME</div>
-                  <div className="flex-1 relative">
-                    <textarea
-                      ref={replyTextareaRef}
-                      value={reply}
-                      onChange={(e) => setReply(e.target.value)}
-                      onKeyDown={handleKeyDown}
+              {/* Reply Input — max 40% of the panel, collapsed when not focused */}
+              <div
+                ref={replyBoxRef}
+                tabIndex={-1}
+                onFocus={() => setReplyFocused(true)}
+                onBlur={() => {
+                  // Deferred so focus moving within the box or to the OS file picker doesn't collapse it.
+                  setTimeout(() => {
+                    if (document.hasFocus() && !replyBoxRef.current?.contains(document.activeElement)) setReplyFocused(false)
+                  }, 0)
+                }}
+                className="flex-shrink-0 max-h-[40%] flex flex-col border-t border-gray-200 bg-white p-3 md:p-4 shadow-lg outline-none"
+              >
+                <div className="flex gap-3 min-h-0">
+                  <div className="self-start w-8 h-8 rounded-full bg-[#1FAE5B] flex items-center justify-center text-white text-xs font-medium shadow-sm flex-shrink-0 mt-1">ME</div>
+                  <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+                    <RichComposeEditor
+                      ref={replyEditorRef}
+                      html={reply}
+                      onHtmlChange={setReply}
+                      files={replyAttachments}
+                      onAddFiles={handleAddReplyFiles}
+                      onRemoveFile={handleRemoveReplyFile}
+                      maxTotalBytes={MAX_TOTAL_ATTACHMENT_BYTES}
                       placeholder={`Reply to ${selectedEmail.name.split(" ")[0]}…`}
-                      rows={1}
-                      className="w-full border border-gray-200 rounded-2xl px-4 py-3 pr-12 outline-none focus:ring-2 focus:ring-[#1FAE5B]/20 focus:border-[#1FAE5B] resize-none text-sm bg-gray-50"
-                      style={{ minHeight: "44px", maxHeight: "120px" }}
-                    />
-                    <button
-                      onClick={sendReply}
-                      disabled={!reply.trim() || isSending}
-                      className="absolute right-2 bottom-2 p-1.5 rounded-full bg-[#1FAE5B] text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[#0F6B3E] transition-all duration-200"
-                    >
-                      {isSending
-                        ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                        : <IconSend size={16} />
+                      onKeyDown={handleKeyDown}
+                      minHeightPx={44}
+                      // The editor body scrolls instead.
+                      maxHeightPx="none"
+                      collapsed={!replyFocused}
+                      emojiPickerSide="top"
+                      signatureEnabled={replyIncludeSignature}
+                      onToggleSignature={() => setReplySignatureOverride(!replyIncludeSignature)}
+                      signatureAvailable={signatureConfigured}
+                      toolbarEnd={
+                        <UseTemplatePicker
+                          side="top"
+                          brandId={brandId}
+                          recipientEmail={selectedEmail.fromEmail || selectedEmail.handle}
+                          onApply={(_subject, body) => replyEditorRef.current?.setHtml(plainTextToComposeHtml(body))}
+                        />
                       }
-                    </button>
+                    />
                   </div>
                 </div>
-                <div className="flex items-center justify-between mt-2">
+                <div className="flex-shrink-0 flex items-center justify-between gap-2 mt-2 pl-11">
                   {sendError
                     ? <span className="text-xs text-red-500 flex items-center gap-1"><IconAlertCircle size={12} />{sendError}</span>
-                    : <span />
+                    : <span className="min-w-0 truncate text-[11px] sm:text-xs text-gray-400">Press Enter to send • Shift+Enter for new line</span>
                   }
-                  <span className="text-xs text-gray-400 hidden sm:inline">Press Enter to send • Shift+Enter for new line</span>
+                  <button
+                    onClick={sendReply}
+                    disabled={(htmlToPlainText(reply).length === 0 && replyAttachments.length === 0) || isSending}
+                    title="Send (Enter) • Shift+Enter for new line"
+                    aria-label="Send reply"
+                    className="ml-auto flex-shrink-0 flex items-center justify-center w-8 h-8 rounded-full bg-[#1FAE5B] text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[#0F6B3E] transition-all duration-200"
+                  >
+                    {isSending
+                      ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      : <IconSend size={16} />
+                    }
+                  </button>
                 </div>
               </div>
             </div>
@@ -1388,6 +3097,91 @@ function InboxContent() {
         </div>
       </div>
 
+      {/* ── REMOVE ACCOUNT CONFIRMATION ── */}
+      {removeAccount && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center animate-fadeIn p-4">
+          <div className="absolute inset-0 bg-black/50" onClick={() => { if (!accountBusy) setRemoveAccount(null) }} />
+          <div className="relative w-full max-w-[400px] bg-white rounded-2xl shadow-2xl p-6 animate-scaleIn">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="font-semibold text-lg text-gray-900">Remove account</h2>
+              <button
+                onClick={() => { if (!accountBusy) setRemoveAccount(null) }}
+                className="p-1 rounded-lg hover:bg-gray-100 transition"
+              >
+                <IconX size={20} />
+              </button>
+            </div>
+            <p className="text-sm text-gray-600">
+              Disconnect{" "}
+              <span className="font-medium text-gray-900">
+                {removeAccount.email || `this ${PROVIDER_LABEL[removeAccount.provider]} account`}
+              </span>{" "}
+              from Instroom? Its conversations will stop appearing in your inbox. Nothing is
+              deleted from {PROVIDER_LABEL[removeAccount.provider]}, and you can connect it again
+              at any time.
+            </p>
+            {accountError && <p className="mt-3 text-xs text-red-500">{accountError}</p>}
+            <div className="flex items-center justify-end gap-2 mt-5">
+              <button
+                onClick={() => setRemoveAccount(null)}
+                disabled={accountBusy}
+                className="h-9 px-4 rounded-lg text-sm border border-gray-200 text-gray-600 hover:bg-gray-50 transition disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmRemoveAccount}
+                disabled={accountBusy}
+                className="h-9 px-4 rounded-lg text-sm font-medium bg-red-600 text-white hover:bg-red-700 transition disabled:opacity-50"
+              >
+                {accountBusy ? "Removing…" : "Remove account"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── DELETE CONVERSATION CONFIRMATION ── */}
+      {deleteConversationTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center animate-fadeIn p-4">
+          <div className="absolute inset-0 bg-black/50" onClick={() => { if (!deletingConversation) setDeleteConversationTarget(null) }} />
+          <div className="relative w-full max-w-[400px] bg-white rounded-2xl shadow-2xl p-6 animate-scaleIn">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="font-semibold text-lg text-gray-900">Delete conversation</h2>
+              <button
+                onClick={() => { if (!deletingConversation) setDeleteConversationTarget(null) }}
+                className="p-1 rounded-lg hover:bg-gray-100 transition"
+              >
+                <IconX size={20} />
+              </button>
+            </div>
+            <p className="text-sm text-gray-600">
+              Move the conversation with{" "}
+              <span className="font-medium text-gray-900">{deleteConversationTarget.name}</span>{" "}
+              to Trash? It will stay recoverable on the{" "}
+              {PROVIDER_LABEL[deleteConversationTarget.source ?? "gmail"]} side for a while, in case you change your mind.
+            </p>
+            {deleteConversationError && <p className="mt-3 text-xs text-red-500">{deleteConversationError}</p>}
+            <div className="flex items-center justify-end gap-2 mt-5">
+              <button
+                onClick={() => setDeleteConversationTarget(null)}
+                disabled={deletingConversation}
+                className="h-9 px-4 rounded-lg text-sm border border-gray-200 text-gray-600 hover:bg-gray-50 transition disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDeleteConversation}
+                disabled={deletingConversation}
+                className="h-9 px-4 rounded-lg text-sm font-medium bg-red-600 text-white hover:bg-red-700 transition disabled:opacity-50"
+              >
+                {deletingConversation ? "Deleting…" : "Delete conversation"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── UPDATE STAGE MODAL ── */}
       {updateStageModal.open && updateStageModal.email && (
         <div className="fixed inset-0 z-50 flex items-center justify-center animate-fadeIn p-4">
@@ -1402,7 +3196,7 @@ function InboxContent() {
               {stageConfigs.map((stage) => (
                 <button
                   key={stage.id}
-                  onClick={() => updateEmailStage(updateStageModal.email!.id, stage.id)}
+                  onClick={() => updateEmailStage(updateStageModal.email!.uid, stage.id)}
                   className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all duration-200 ${
                     updateStageModal.email?.status === stage.id ? `${stage.bgColor} ${stage.color} ring-2 ring-current` : "hover:bg-gray-50 text-gray-700"
                   }`}
@@ -1415,6 +3209,21 @@ function InboxContent() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── DECLINE REASON MODAL ── */}
+      {declineTarget && (
+        <DeclineModal
+          name={declineTarget.name}
+          handle={declineTarget.handle}
+          profileImageUrl={declineTarget.avatar?.startsWith("http") ? declineTarget.avatar : null}
+          onCancel={() => setDeclineTarget(null)}
+          onConfirm={(reason, notes) => {
+            const uid = declineTarget.uid
+            setDeclineTarget(null)
+            updateEmailStage(uid, "REJECTED", { reason, notes })
+          }}
+        />
       )}
 
       {/* ── COMPOSE MODAL ── */}
@@ -1438,6 +3247,61 @@ function InboxContent() {
               </div>
             ) : (
               <>
+                <div className="flex justify-end items-center gap-2 mb-1">
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => { setSavingComposeAsTemplate((v) => !v); setSaveComposeTemplateError(undefined) }}
+                      disabled={!composeSubject.trim() || htmlToPlainText(composeBody).length === 0}
+                      title="Save this message as a template"
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                    >
+                      <IconDeviceFloppy size={14} /> Save as template
+                    </button>
+                    {savingComposeAsTemplate && (
+                      <div className="absolute right-0 z-20 mt-1 w-64 bg-white border border-gray-100 rounded-lg shadow-lg p-3">
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Template name</label>
+                        <input
+                          autoFocus
+                          type="text"
+                          value={composeTemplateName}
+                          onChange={(e) => setComposeTemplateName(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") saveComposeAsTemplate() }}
+                          placeholder="e.g. Initial Outreach 1"
+                          className="w-full px-2.5 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-400 focus:border-green-400 outline-none transition mb-2"
+                        />
+                        {saveComposeTemplateError && (
+                          <p className="text-[11px] text-red-500 mb-2">{saveComposeTemplateError}</p>
+                        )}
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => { setSavingComposeAsTemplate(false); setComposeTemplateName(""); setSaveComposeTemplateError(undefined) }}
+                            className="flex-1 px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={saveComposeAsTemplate}
+                            disabled={isSavingComposeTemplate || !composeTemplateName.trim()}
+                            className="flex-1 px-2.5 py-1.5 rounded-lg bg-green-600 text-white text-xs font-medium hover:bg-green-700 disabled:opacity-50 transition"
+                          >
+                            {isSavingComposeTemplate ? "Saving…" : "Save"}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <UseTemplatePicker
+                    brandId={brandId}
+                    recipientEmail={composeTo}
+                    onApply={(subject, body) => {
+                      setComposeSubject(subject)
+                      composeEditorRef.current?.setHtml(plainTextToComposeHtml(body))
+                    }}
+                  />
+                </div>
                 <div className="space-y-1">
                   {isGmailReady && isOutlookReady && (
                     <div className="flex items-center border-b border-gray-200 gap-2 py-2">
@@ -1483,13 +3347,20 @@ function InboxContent() {
                   </div>
                 </div>
 
-                <textarea
-                  value={composeBody}
-                  onChange={(e) => setComposeBody(e.target.value)}
-                  placeholder="Write your message…"
-                  rows={6}
-                  className="w-full mt-4 outline-none resize-none text-sm text-gray-800 placeholder:text-gray-300 p-0 border-0"
-                />
+                <div className="mt-4">
+                  <RichComposeEditor
+                    ref={composeEditorRef}
+                    html={composeBody}
+                    onHtmlChange={setComposeBody}
+                    files={composeAttachments}
+                    onAddFiles={handleAddComposeFiles}
+                    onRemoveFile={handleRemoveComposeFile}
+                    maxTotalBytes={MAX_TOTAL_ATTACHMENT_BYTES}
+                    signatureEnabled={composeIncludeSignature}
+                    onToggleSignature={() => setComposeSignatureOverride(!composeIncludeSignature)}
+                    signatureAvailable={signatureConfigured}
+                  />
+                </div>
 
                 {composeError && (
                   <div className="flex items-center gap-2 text-xs text-red-500 mt-2 bg-red-50 px-3 py-2 rounded-lg">
@@ -1500,14 +3371,14 @@ function InboxContent() {
 
                 <div className="flex justify-between items-center mt-4 pt-4 border-t border-gray-100">
                   <button
-                    onClick={() => { setOpenCompose(false); setComposeTo(""); setComposeSubject(""); setComposeBody(""); setComposeError(undefined) }}
+                    onClick={() => { setOpenCompose(false); setComposeTo(""); setComposeSubject(""); setComposeBody(""); clearComposeAttachments(); setComposeError(undefined); setSavingComposeAsTemplate(false); setComposeTemplateName(""); setSaveComposeTemplateError(undefined); setComposeSignatureOverride(null) }}
                     className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 transition"
                   >
                     Discard
                   </button>
                   <button
                     onClick={sendCompose}
-                    disabled={!composeTo.trim() || !composeBody.trim() || isComposeSending}
+                    disabled={!composeTo.trim() || (htmlToPlainText(composeBody).length === 0 && composeAttachments.length === 0) || isComposeSending}
                     className="bg-[#1FAE5B] text-white px-5 py-2 rounded-xl hover:bg-[#0F6B3E] transition-all duration-200 flex items-center gap-2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
                   >
                     {isComposeSending
@@ -1521,6 +3392,8 @@ function InboxContent() {
           </div>
         </div>
       )}
+
+      <EmailTemplatesModal isOpen={openTemplates} onClose={() => setOpenTemplates(false)} brandId={brandId} />
 
       {/* ── STAGE NOTIFICATION ── */}
       {stageNotification.show && (
@@ -1546,7 +3419,7 @@ function InboxContent() {
 
       <DragOverlay>
         {activeDragId ? (() => {
-          const draggedEmail = emails.find((e) => String(e.id) === activeDragId)
+          const draggedEmail = emails.find((e) => e.uid === activeDragId)
           if (!draggedEmail) return null
           return (
             <div className="flex items-center gap-2.5 bg-white border border-gray-200 rounded-lg px-3 py-2.5 shadow-lg w-[220px] rotate-2">

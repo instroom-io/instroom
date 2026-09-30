@@ -13,6 +13,7 @@
 import {
   LayoutDashboard, Search, Mail, Users, GitBranch, CircleCheck,
   Store, MessageCircle, BarChart3, Star, Megaphone, Clock, ShieldCheck,
+  RotateCcw,
   type LucideIcon,
 } from "lucide-react"
 
@@ -22,6 +23,8 @@ export type NavItem = {
   title?: string
   icon: LucideIcon
   exact?: boolean
+  /** data-tour id, for anchoring a first-time product tour step. */
+  tourId?: string
 }
 
 export type NavSection = {
@@ -41,14 +44,16 @@ export type NavSection = {
 export const DASHBOARD_NAV: NavSection[] = [
   {
     items: [
-      { href: "/dashboard/influencer-discovery", label: "Discovery", icon: Search },
-      { href: "/dashboard/manage-influencers", label: "Influencers List", icon: Users },
-      { href: "/dashboard/inbox", label: "Inbox", icon: Mail },
-      { href: "/dashboard/pipeline", label: "Pipeline", icon: GitBranch },
-      { href: "/dashboard/post-tracker", label: "Post Tracker", icon: CircleCheck },
-      { href: "/dashboard/brand-partners", label: "Brand Partners", icon: Store },
-      { href: "/dashboard/community", label: "Community", icon: MessageCircle },
-      { href: "/dashboard/analytics", label: "Analytics", icon: BarChart3 },
+      // Temporarily hidden — page is still "Coming soon" with nothing to do
+      // yet. Restore this line to bring Discovery back into the sidebar.
+      // { href: "/dashboard/influencer-discovery", label: "Discovery", icon: Search },
+      { href: "/dashboard/manage-influencers", label: "Influencers List", icon: Users, tourId: "nav-influencers" },
+      { href: "/dashboard/inbox", label: "Inbox", icon: Mail, tourId: "nav-inbox" },
+      { href: "/dashboard/pipeline", label: "Pipeline", icon: GitBranch, tourId: "nav-pipeline" },
+      { href: "/dashboard/post-tracker", label: "Post Tracker", icon: CircleCheck, tourId: "nav-post-tracker" },
+      { href: "/dashboard/brand-partners", label: "Brand Partners", icon: Store, tourId: "nav-brand-partners" },
+      { href: "/dashboard/community", label: "Community", icon: MessageCircle, tourId: "nav-community" },
+      { href: "/dashboard/analytics", label: "Analytics", icon: BarChart3, tourId: "nav-analytics" },
     ],
   },
 ]
@@ -69,6 +74,7 @@ export const ADMIN_NAV: NavSection[] = [
       { href: "/admin/influencers", label: "Influencers", title: "Influencer Management", icon: Star },
       { href: "/admin/campaigns", label: "Campaigns", title: "Campaign Management", icon: Megaphone },
       { href: "/admin/early-access", label: "Early Access", title: "Early Access Users", icon: Clock },
+      { href: "/admin/refund-requests", label: "Refund Requests", title: "Refund Requests", icon: RotateCcw },
     ],
   },
   {

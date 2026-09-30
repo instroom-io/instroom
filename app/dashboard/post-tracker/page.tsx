@@ -8,7 +8,7 @@
 
 "use client"
 
-import { useState, useCallback, useMemo, useRef, Suspense, useEffect } from "react"
+import { useState, useCallback, useMemo, useRef, Suspense, useEffect, memo, type CSSProperties } from "react"
 import { useSearchParams } from "next/navigation"
 import { useSession } from "next-auth/react"
 import {
@@ -20,16 +20,33 @@ import { useDraggable } from "@dnd-kit/core"
 import {
   IconSearch, IconX, IconChevronDown, IconChevronUp,
   IconLayoutKanban, IconList, IconFilter, IconLocation,
-  IconLayoutList, IconLink, IconArrowRight, IconAlertTriangle,
+  IconLayoutList, IconLink, IconArrowRight, IconAlertTriangle, IconCircleCheck,
 } from "@tabler/icons-react"
-import { useClosedData, type ClosedInfluencer, type ClosedColumn } from "@/hooks/useClosedData"
+import { useClosedData, type ClosedInfluencer, type ClosedColumn, type OrderDetailsFields, type PostDetailsFields, type UpdateColumnResult, type PaidCollabData, type PostMetricsResult } from "@/hooks/useClosedData"
+import { parseMetricInput } from "@/lib/post-tracker-status"
+import {
+  getDeliverables, getDeliverableProgress, deliverablePostUrl, blankDeliverable, MAX_DELIVERABLES,
+  type CampaignDeliverable,
+} from "@/lib/deliverables"
+import { invalidateInfluencerDerivedCaches, closedCacheKey } from "@/lib/cache-invalidation"
+import { DataSyncStatus } from "@/components/data-sync-status"
+import { ProfilePicture, PlatformIcon } from "@/components/table-sheet/ui-atoms"
+import { getPlatformLabel } from "@/components/table-sheet/utils"
+import { SaveStatusPill } from "@/components/save-status-pill"
+import { StaleDataNotice } from "@/components/stale-data-notice"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { SubscriptionGate } from "@/components/ui/subscription-gate"
-import { HistoryTab } from "@/components/InfluencerProfileSidebar"
+import { HistoryTab, LastEditedBy } from "@/components/InfluencerProfileSidebar"
 import { PaidCollabTab } from "@/components/table-sheet/profile-sidebar"
 import { BoardSkeleton } from "@/components/shared/skeletons"
 import { StageDropdown, type StageOption } from "@/components/shared/stage-dropdown"
+import { StageActionButton } from "@/components/shared/stage-action-button"
+import { InfoTooltip } from "@/components/shared/anchored-tooltip"
 import AutoPostDetectionCard from "./AutoPostDetection"
+import { readDroppedPostUrl, type DetectedPost } from "./DetectedPostsList"
+import { fetchCached } from "@/lib/data-cache"
+import { useSubscriptionGate } from "@/hooks/useSubscriptionGate"
+import { EmailModal } from "@/components/shared/email-modal"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const NICHES    = ["Beauty","Fitness","Lifestyle","Food","Tech","Fashion","Travel"]
@@ -71,6 +88,13 @@ const COLUMNS: { key: ClosedColumn; title: string; color: string; description: s
     description: "No content was published. Product was sent but the influencer did not post. Flag for follow-up or mark as a loss.",
     terminal: true,
   },
+  {
+    key:   "Issues",
+    title: "Issues",
+    color: "bg-purple-500",
+    description: "Something has gone wrong with this campaign — a failed or returned delivery, a wrong address, a damaged item, or another blocker. The influencer is still in the campaign; resolve the issue and move them back into the flow.",
+    move: "Move back to the stage the campaign should resume from once the issue is resolved.",
+  },
 ]
 
 // Badge colours for the stage dropdown — the soft 100/800 shades the Pipeline
@@ -82,6 +106,7 @@ const STAGE_BADGE_CLASS: Record<ClosedColumn, string> = {
   "Delivered":          "bg-cyan-100 text-cyan-800 border-cyan-300",
   "Posted":             "bg-emerald-100 text-emerald-900 border-emerald-400",
   "No post":            "bg-red-100 text-red-800 border-red-300",
+  "Issues":             "bg-purple-100 text-purple-800 border-purple-300",
 }
 
 // Options for the shared badge dropdown (same component the Pipeline uses)
@@ -113,6 +138,10 @@ const STAGE_RANK: Record<ClosedColumn, number> = {
   "Delivered":          2,
   "Posted":             3,
   "No post":            4,
+  // Off the linear fulfilment scale — "Issues" is a side state, not a step
+  // further along it. Ranked above the exits so canQuickMarkNoPost stays true
+  // for a row parked here (a stalled delivery can still end as a no-post).
+  "Issues":             5,
 }
 
 // "No post" is only a meaningful outcome once the product has actually landed,
@@ -121,10 +150,80 @@ const STAGE_RANK: Record<ClosedColumn, number> = {
 const canQuickMarkNoPost = (stage: ClosedColumn) => STAGE_RANK[stage] >= STAGE_RANK["Delivered"]
 
 // ─── "Posted" requires evidence of a published post ───────────────────────────
-// A manual move to Posted is only allowed when a Post URL exists. Automatic
-// post detection is unaffected: it updates the record server-side and never
-// goes through these user-initiated paths.
+// A manual move to Posted needs proof that a post exists. There are two forms
+// of proof, and either is sufficient:
+//
+//   1. A Post URL entered by hand on the Post tab.
+//   2. A post found by Automatic Post Detection — a real DetectedPost row,
+//      counted per influencer by the closed list route.
+//
+// Requiring (1) even when (2) exists was blocking a legitimately posted
+// influencer: detection had already confirmed the post, but the stage move was
+// refused because nobody had re-typed the link the system already had.
+//
+// Note this keys on detection RESULTS, not on the detection toggle. Having
+// Automatic Post Detection switched on is not itself evidence — with the
+// feature enabled but nothing found yet, the Post URL requirement still holds.
 const hasPostUrl = (inf: Pick<ClosedInfluencer, "postUrl">) => Boolean(inf.postUrl?.trim())
+const hasDetectedPost = (inf: Pick<ClosedInfluencer, "detectedPostCount">) =>
+  (inf.detectedPostCount ?? 0) > 0
+const hasPostEvidence = (inf: Pick<ClosedInfluencer, "postUrl" | "detectedPostCount">) =>
+  hasPostUrl(inf) || hasDetectedPost(inf)
+// Posted always needs at least one post. For a row with campaign deliverables,
+// a link on any deliverable counts too — it then sits in Posted at
+// "1/N deliverables" until the rest are linked. Same rule as the closed PATCH
+// route.
+const canEnterPosted = (inf: Pick<ClosedInfluencer, "postUrl" | "detectedPostCount" | "paidCollabData">) =>
+  hasPostEvidence(inf) || getDeliverables(inf.paidCollabData).some(d => Boolean((d.postUrl ?? "").trim()))
+
+/**
+ * Stages where the post FIELDS make sense.
+ *
+ * Delivered is the earliest: the product has arrived, so the influencer CAN
+ * post — not that they have. Before that (For Order Creation, In-Transit) there
+ * is nothing to describe, and an empty Post URL / Posted At / Likes form on an
+ * order that has not arrived invites recording a post that cannot exist.
+ *
+ * "No post" keeps the fields: it is the record of a decision made after
+ * delivery, and a URL can still be pasted if the influencer posts late.
+ */
+const POST_FIELD_STAGES: ClosedColumn[] = ["Delivered", "Posted", "No post"]
+
+/**
+ * Should the post fields be offered for this influencer?
+ *
+ * The stage gate above covers a row that has never held post data. It is NOT
+ * the whole rule, because a stage move can go backwards: an influencer marked
+ * Delivered by mistake (or moved back for any other reason) keeps whatever
+ * Post URL was already saved — mapClosedToPipelineFields clears
+ * content_posted/posted_at on the way back but deliberately does not delete
+ * the URL itself, since that is real data the user entered.
+ *
+ * Hiding the fields on such a row stranded that data: it stayed in the
+ * database, still counted as evidence of a post, and there was no way to see,
+ * correct or clear it until the row happened to reach Delivered again. So a
+ * row that ALREADY has post data keeps its fields at any stage — the fields
+ * are shown to fix what is there, not to invent a post that cannot exist yet,
+ * which is what the stage gate is guarding against.
+ */
+const canTrackPost = (
+  inf: Pick<ClosedInfluencer, "closedStatus" | "postUrl" | "detectedPostCount">
+) => POST_FIELD_STAGES.includes(inf.closedStatus) || hasPostEvidence(inf)
+
+/**
+ * Stages where Automatic Post Detection runs.
+ *
+ * Deliberately identical to the server's gate in lib/post-tracker/monitor.ts,
+ * which keeps stage >= 6 (In-Transit = 6, Delivered = 7, Posted = 8,
+ * Issues = 9). Tracking starts when the order ships, and only posts published
+ * after the In-Transit date are picked up. "No post" is stage 0 — a decision
+ * that no post exists — so the pass skips it, and offering "Check now" there
+ * would be a button that appears to work and polls nothing.
+ */
+const POST_DETECTION_STAGES: ClosedColumn[] = ["In-Transit", "Delivered", "Posted", "Issues"]
+
+/** Should Automatic Post Detection be offered for this influencer? */
+const canDetectPost = (status: ClosedColumn) => POST_DETECTION_STAGES.includes(status)
 
 // Forward flow
 const NEXT_STAGE: Record<ClosedColumn, ClosedColumn | null> = {
@@ -133,6 +232,10 @@ const NEXT_STAGE: Record<ClosedColumn, ClosedColumn | null> = {
   "Delivered":          "Posted",
   "Posted":             null,
   "No post":            null,
+  // No single forward step: a resolved issue resumes at whichever stage the
+  // campaign had actually reached, which only the user knows. The card shows
+  // no quick-advance button here — the dropdown and drag are the way out.
+  "Issues":             null,
 }
 
 // Canonical Collaboration Type list — same ids/labels as the Pipeline board's
@@ -215,9 +318,7 @@ function ResetWorkflowDialog({ influencerName, target, onConfirm, onCancel }: {
   )
 }
 
-function PostUrlRequiredDialog({ count, onGoToPostDetails, onCancel }: {
-  /** How many influencers were blocked — >1 when a bulk move is rejected */
-  count: number
+function PostUrlRequiredDialog({ onGoToPostDetails, onCancel }: {
   onGoToPostDetails: (() => void) | null
   onCancel: () => void
 }) {
@@ -237,10 +338,7 @@ function PostUrlRequiredDialog({ count, onGoToPostDetails, onCancel }: {
           <div className="flex-1">
             <h2 id="post-url-required-title" className="text-base font-semibold text-gray-900">Cannot Move to Posted</h2>
             <p className="text-sm text-gray-600 mt-2 leading-relaxed">
-              A Post URL is required before manually moving {count > 1 ? `these ${count} influencers` : "this influencer"} to the Posted stage.
-            </p>
-            <p className="text-sm text-gray-600 mt-2 leading-relaxed">
-              Please add the post link first, or use Automatic Post Detection and run a check to have the stage updated for you.
+              A post link or detected post is required.
             </p>
           </div>
         </div>
@@ -264,6 +362,120 @@ function PostUrlRequiredDialog({ count, onGoToPostDetails, onCancel }: {
       </div>
     </div>
   )
+}
+
+// ─── Issue Note Modal ─────────────────────────────────────────────────────────
+// Fires before any move INTO Issues — same layout as the Pipeline's Deal Agreed
+// (collaboration type) modal. The note is required, and is appended to the
+// influencer's profile notes (BrandInfluencer.notes) in the same PATCH as the
+// move, so the Notes field shows it straight away without a refresh.
+function IssueNoteModal({ targets, onConfirm, onCancel }: {
+  targets: ClosedInfluencer[]
+  onConfirm: (note: string) => void
+  onCancel: () => void
+}) {
+  const [note, setNote] = useState("")
+  const trimmed = note.trim()
+  const single = targets.length === 1 ? targets[0] : null
+
+  return (
+    <div className="fixed inset-0 z-[500] flex items-center justify-center bg-black/50 p-3 sm:p-4" onClick={onCancel}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="issue-note-title"
+        className="bg-white rounded-2xl shadow-2xl w-[560px] max-w-[calc(100vw-2rem)] max-h-[90vh] overflow-y-auto"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between px-4 sm:px-6 pt-5 sm:pt-6 pb-4 border-b border-gray-100">
+          <div>
+            <h2 id="issue-note-title" className="text-base font-semibold text-gray-900">Move to Issues</h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {single
+                ? "Describe the issue with this post before moving it to Issues."
+                : `Describe the issue to apply to all ${targets.length} selected influencers before moving them to Issues.`}
+            </p>
+          </div>
+          <button onClick={onCancel} aria-label="Close" className="text-gray-400 hover:text-gray-600 transition ml-4 mt-0.5">
+            <IconX size={18} />
+          </button>
+        </div>
+
+        {/* Influencer Info */}
+        <div className="px-4 sm:px-6 pt-4 sm:pt-5 pb-2">
+          <div className="flex flex-wrap items-center gap-3 bg-gray-50 rounded-xl px-3 sm:px-4 py-3 border border-gray-100">
+            {single ? (
+              <>
+                <ProfilePicture src={single.profileImageUrl ?? undefined} name={single.influencer} handle={single.handle} size={40} />
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">{single.influencer}</p>
+                  <p className="text-xs text-gray-500">@{single.handle}</p>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="w-10 h-10 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 font-semibold text-sm">{targets.length}</div>
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">{targets.length} influencers selected</p>
+                  <p className="text-xs text-gray-500">The note below is added to each of their profiles</p>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Note */}
+        <div className="px-4 sm:px-6 pt-4 sm:pt-5 pb-4">
+          <label htmlFor="issue-note" className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+            Issue notes <span className="text-red-500">*</span>
+          </label>
+          <textarea
+            id="issue-note"
+            autoFocus
+            required
+            rows={4}
+            value={note}
+            onChange={e => setNote(e.target.value)}
+            placeholder="e.g. Wrong product shown, missing brand tag, post taken down…"
+            className="w-full text-sm text-gray-700 px-3 py-2 bg-white border border-gray-200 rounded-lg resize-y focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20"
+          />
+          <p className="text-[11px] text-gray-400 mt-2">
+            Required. Saved to the influencer&apos;s profile notes.
+          </p>
+        </div>
+
+        {/* Footer */}
+        <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 px-4 sm:px-6 py-3 sm:py-4 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl">
+          <p className="text-[11px] text-gray-400">
+            This flags the post and moves it to Issues
+          </p>
+          <div className="flex items-center justify-end gap-2">
+            <button
+              onClick={onCancel}
+              className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 rounded-lg border border-gray-200 hover:bg-gray-50 transition bg-white"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => trimmed && onConfirm(trimmed)}
+              disabled={!trimmed}
+              className="px-4 sm:px-6 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 whitespace-nowrap"
+            >
+              <IconAlertTriangle size={14} />
+              Move to Issues
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** Appends a dated issue entry to the existing profile notes. */
+function appendIssueNote(existing: string | undefined, note: string) {
+  const entry = `[Issue · ${new Date().toLocaleDateString()}] ${note}`
+  return existing?.trim() ? `${existing.trimEnd()}\n\n${entry}` : entry
 }
 
 // Chip multi-select for the filter panel. Deliberately local rather than
@@ -324,61 +536,108 @@ function ColumnInfoTooltip({ colKey, variant }: { colKey: ClosedColumn; variant:
   const col = COLUMNS.find(c => c.key === colKey)
   if (!col) return null
 
-  const borderColor = variant === "dark" ? "border-white/60" : "border-red-400/60"
-  const textColor   = variant === "dark" ? "text-white"      : "text-red-700"
+  // The "light" variant is used on the two soft-header columns past the Exit
+  // boundary, which are not the same colour — No post is red, Issues purple —
+  // so it takes its tint from the column rather than assuming red.
+  const isIssues    = colKey === "Issues"
+  const borderColor = variant === "dark" ? "border-white/60"
+                    : isIssues ? "border-purple-400/60" : "border-red-400/60"
+  const textColor   = variant === "dark" ? "text-white"
+                    : isIssues ? "text-purple-700" : "text-red-700"
 
   return (
-    <div className="relative group/info flex-shrink-0">
-      <span
-        className={`text-[10px] font-medium border ${borderColor} ${textColor} rounded-full w-4 h-4 flex items-center justify-center opacity-70 cursor-default select-none hover:opacity-100 transition-opacity`}
-      >
-        i
-      </span>
-      <div className="absolute top-full right-0 mt-1.5 w-64 bg-white border border-gray-200 rounded-xl p-3 text-xs text-gray-700 leading-relaxed z-[60] hidden group-hover/info:block shadow-lg pointer-events-none">
-        <p className="font-semibold text-gray-900 mb-1 text-[11px]">{col.title}</p>
-        <p className="text-gray-600">{col.description}</p>
-        {col.move && (
-          <p className="mt-1.5 text-gray-400 border-t border-gray-100 pt-1.5">
-            <span className="font-medium text-gray-500">Next → </span>{col.move}
-          </p>
-        )}
-        {col.terminal && (
-          <p className="mt-1.5 text-[10px] font-medium text-red-500 border-t border-gray-100 pt-1.5 uppercase tracking-wide">
-            Terminal — cannot be moved
-          </p>
-        )}
-      </div>
-    </div>
+    <InfoTooltip iconClassName={`${borderColor} ${textColor}`}>
+      <p className="font-semibold text-gray-900 mb-1 text-[11px]">{col.title}</p>
+      <p className="text-gray-600">{col.description}</p>
+      {col.move && (
+        <p className="mt-1.5 text-gray-400 border-t border-gray-100 pt-1.5">
+          <span className="font-medium text-gray-500">Next → </span>{col.move}
+        </p>
+      )}
+      {col.terminal && (
+        <p className="mt-1.5 text-[10px] font-medium text-red-500 border-t border-gray-100 pt-1.5 uppercase tracking-wide">
+          Terminal — cannot be moved
+        </p>
+      )}
+    </InfoTooltip>
   )
 }
 
 // ─── Post Tracker Card — consistent with pipeline card ────────────────────────
-function PostTrackerCard({ inf, onOpen, onMove, canApproveInfluencers }: {
+// Off-screen list items are skipped by the browser's own layout and paint pass
+// (`content-visibility: auto`), with `contain-intrinsic-size` standing in for
+// their height so the scrollbar geometry stays honest.
+//
+// Containment rather than JS windowing, deliberately: every item stays in the
+// DOM, so dnd-kit keeps its drag sources and drop targets, find-in-page still
+// works, and no interaction, measurement or markup changes — only the work the
+// browser does for items nobody is looking at.
+const OFFSCREEN_SKIP: CSSProperties = {
+  contentVisibility: "auto",
+  containIntrinsicSize: "auto 180px",
+}
+
+function PostTrackerCardBase({ inf, onOpen, onMove, onComplete, canApproveInfluencers }: {
   inf: ClosedInfluencer
   onOpen: (inf: ClosedInfluencer) => void
   onMove: (id: string, col: ClosedColumn) => void
+  /** "Mark as completed" — moves a Posted row into the Completed column. */
+  onComplete: (id: string) => void
   canApproveInfluencers: boolean
 }) {
   const nextStage  = NEXT_STAGE[inf.closedStatus]
   const isExit     = inf.closedStatus === "No post"
+  const isIssue    = inf.closedStatus === "Issues"
+  // "Issues" is deliberately NOT terminal: the row is stalled, not finished,
+  // and the whole point is that it moves back into the flow once resolved. It
+  // simply has no single forward step (NEXT_STAGE is null), so the quick-move
+  // button is absent and the dropdown or a drag is the way out.
   const isTerminal = inf.closedStatus === "Posted" || isExit
   const showNoPost = !isTerminal && canQuickMarkNoPost(inf.closedStatus)
+  // A blocker can appear at any point in fulfilment — a wrong address before
+  // shipping, a failed delivery after — so this is offered from every active
+  // stage, unlike "No post" which only makes sense once the product landed.
+  // Not offered from Issues itself (already there) or the terminal stages.
+  const showIssues = !isTerminal && !isIssue
+  // Posted column tracks campaign deliverables: "x/N deliverables" until every
+  // one has a post link, then "Completed". Rows without deliverables keep the
+  // original "Content live" pill.
+  const progress = getDeliverableProgress(inf.paidCollabData, inf.postUrl)
+  // Every deliverable linked (or, without deliverables, a Post URL) — same rule
+  // the PATCH route enforces for "completed".
+  const canComplete = progress.total > 0 ? progress.complete : hasPostUrl(inf)
+  const showComplete = inf.closedStatus === "Posted" && !inf.completed
 
   return (
-    <div className={`bg-white border rounded-lg p-3 hover:shadow-md transition-shadow ${
-      isExit ? "border-red-100 bg-red-50/30" : "border-gray-200"
+    <div style={OFFSCREEN_SKIP} className={`bg-white border rounded-lg p-3 hover:shadow-md transition-shadow ${
+      isExit ? "border-red-100 bg-red-50/30" :
+      isIssue ? "border-purple-100 bg-purple-50/30" : "border-gray-200"
     }`}>
       {/* Clickable body — same layout as pipeline card */}
       <div className="cursor-pointer" onClick={() => onOpen(inf)}>
-        {/* Name + handle */}
-        <div className="flex flex-col text-sm mb-2">
-          <span className="font-medium text-gray-900">{inf.influencer}</span>
-          <span className="text-xs text-gray-500">@{inf.handle}</span>
+        {/* Avatar + name/handle — same block as the Pipeline card. The image is
+            the persisted Cloudinary URL already on this row; nothing extra is
+            fetched or uploaded here, and ProfilePicture owns the fallback. */}
+        <div className="flex items-center gap-2 mb-2">
+          <ProfilePicture
+            src={inf.profileImageUrl ?? undefined}
+            name={inf.influencer}
+            handle={inf.handle}
+            size={36}
+          />
+          <div className="flex flex-col text-sm min-w-0">
+            <span className="font-medium text-gray-900">{inf.influencer}</span>
+            <span className="text-xs text-gray-500">@{inf.handle}</span>
+          </div>
         </div>
 
         {/* Platform + location */}
-        <div className="flex items-center gap-2 text-xs text-gray-500 mb-1.5">
-          <span>{inf.platform || "Instagram"}</span>
+        <div className="flex items-center gap-2 text-xs text-gray-500 mb-2">
+          {/* Same treatment as the Pipeline card — see the note there. */}
+          <span className="inline-flex min-w-0 items-center gap-1.5 leading-none">
+            <PlatformIcon platform={inf.platform} size={14} className="shrink-0" />
+            <span className="truncate">{getPlatformLabel(inf.platform) || "—"}</span>
+          </span>
           <span>•</span>
           <span className="flex items-center gap-0.5">
             <IconLocation size={11} />{inf.location || "—"}
@@ -388,54 +647,109 @@ function PostTrackerCard({ inf, onOpen, onMove, canApproveInfluencers }: {
         {/* Stats */}
         <div className="flex items-center gap-3 text-xs text-gray-500">
           <span>{inf.followers} followers</span>
-          <span>{inf.engagementRate || "—"}% eng</span>
+          <span>{inf.engagementRate || "—"} eng</span>
         </div>
 
-        {/* Campaign badge */}
-        <div className="mt-2">
+        {/* Campaign badge + status pill share ONE row.
+            They were stacked blocks, each with its own mt-2, so a card that had
+            both was a row taller than one that had only the badge. Same shape
+            the Pipeline card already uses for its two badges: the row owns the
+            spacing, the pills keep their own styling, and it wraps rather than
+            overflowing on a narrow column. */}
+        <div className="mt-2 flex items-center gap-1.5 flex-wrap">
           <CampaignBadge type={inf.campaignType} />
+          {inf.closedStatus === "Delivered" && !inf.postedAt && (
+            <span className="text-[10px] text-amber-600 bg-amber-50 rounded-full px-2.5 py-1 inline-block font-medium">
+              ⚠️ Awaiting content
+            </span>
+          )}
+          {inf.closedStatus === "Posted" && inf.completed && (
+            <span className="text-[10px] text-green-600 bg-green-50 rounded-full px-2.5 py-1 inline-flex items-center gap-1 font-medium">
+              <IconCircleCheck size={10}/> Completed
+            </span>
+          )}
+          {showComplete && progress.total > 0 && (
+            <span className="text-[10px] text-amber-600 bg-amber-50 rounded-full px-2.5 py-1 inline-flex items-center gap-1 font-medium">
+              <IconLink size={10}/> {progress.posted}/{progress.total} deliverables
+            </span>
+          )}
+          {showComplete && progress.total === 0 && inf.postUrl && (
+            <span className="text-[10px] text-green-600 bg-green-50 rounded-full px-2.5 py-1 inline-flex items-center gap-1 font-medium">
+              <IconLink size={10}/> Content live
+            </span>
+          )}
+          {isExit && (
+            <span className="text-[10px] text-red-500 bg-red-50 rounded-full px-2.5 py-1 inline-block font-medium">
+              ✕ No content published
+            </span>
+          )}
+          {isIssue && (
+            <span className="text-[10px] text-purple-600 bg-purple-50 rounded-full px-2.5 py-1 inline-flex items-center gap-1 font-medium">
+              <IconAlertTriangle size={10}/> Needs attention
+            </span>
+          )}
         </div>
-
-        {/* Status pills */}
-        {inf.closedStatus === "Delivered" && !inf.postedAt && (
-          <div className="mt-2 text-[10px] text-amber-600 bg-amber-50 rounded-full px-2.5 py-1 inline-block font-medium">
-            ⚠️ Awaiting content
-          </div>
-        )}
-        {inf.closedStatus === "Posted" && inf.postUrl && (
-          <div className="mt-2 text-[10px] text-green-600 bg-green-50 rounded-full px-2.5 py-1 inline-flex items-center gap-1 font-medium">
-            <IconLink size={10}/> Content live
-          </div>
-        )}
-        {isExit && (
-          <div className="mt-2 text-[10px] text-red-500 bg-red-50 rounded-full px-2.5 py-1 inline-block font-medium">
-            ✕ No content published
-          </div>
-        )}
       </div>
 
-      {/* Stage action buttons — same pattern as pipeline cards */}
-      {!isTerminal && (nextStage || showNoPost) && (
-        <div className="flex gap-1.5 mt-3 pt-2 border-t border-gray-100 flex-nowrap">
+      {/* Stage action buttons — the shared StageActionButton, same component the
+          pipeline cards use. `nextStage` is computed per card, so the tooltip
+          names the status this post actually advances to.
+
+          flex-wrap, not nowrap: a Delivered card now carries three actions
+          (advance, Issues, No post) and at a 240px column width three
+          truncated labels are unreadable. They wrap to a second line instead,
+          each staying wide enough to read. */}
+      {/* Posted → Completed is an explicit step, offered once every
+          deliverable has its post link. */}
+      {showComplete && (
+        <div className="flex flex-wrap gap-1.5 mt-2.5 pt-2 border-t border-gray-100">
+          <StageActionButton
+            destination="Completed"
+            label="Mark as completed"
+            tone="forward"
+            disabled={!canApproveInfluencers || !canComplete}
+            disabledReason={!canApproveInfluencers
+              ? "Only Owners and Managers can update post status"
+              : "Add a post link for every deliverable first"}
+            icon={<IconCircleCheck size={11} className="flex-shrink-0"/>}
+            onClick={e => { e.stopPropagation(); if (!canApproveInfluencers || !canComplete) return; onComplete(inf.id) }}
+          />
+        </div>
+      )}
+      {!isTerminal && (nextStage || showNoPost || showIssues) && (
+        <div className="flex flex-wrap gap-1.5 mt-2.5 pt-2 border-t border-gray-100">
           {nextStage && (
-            <button
-              onClick={e => { e.stopPropagation(); if (!canApproveInfluencers) return; onMove(inf.id, nextStage) }}
+            <StageActionButton
+              destination={nextStage}
+              label={`Move post to ${nextStage}`}
+              tone="forward"
               disabled={!canApproveInfluencers}
-              title={!canApproveInfluencers ? "Only Owners and Managers can update post status" : undefined}
-              className="text-[11px] font-medium px-2 py-1 rounded-full border bg-[#EAF7EF] text-[#0F6B3E] border-[#bfe5cf] hover:bg-[#d7f0e0] transition flex items-center gap-1 min-w-0 flex-1 justify-center disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              <IconArrowRight size={11} className="flex-shrink-0"/> <span className="truncate">{nextStage}</span>
-            </button>
+              disabledReason="Only Owners and Managers can update post status"
+              icon={<IconArrowRight size={11} className="flex-shrink-0"/>}
+              onClick={e => { e.stopPropagation(); if (!canApproveInfluencers) return; onMove(inf.id, nextStage) }}
+            />
+          )}
+          {showIssues && (
+            <StageActionButton
+              destination="Issues"
+              label="Move post to Issues"
+              tone="warning"
+              disabled={!canApproveInfluencers}
+              disabledReason="Only Owners and Managers can update post status"
+              icon={<IconAlertTriangle size={11} className="flex-shrink-0"/>}
+              onClick={e => { e.stopPropagation(); if (!canApproveInfluencers) return; onMove(inf.id, "Issues") }}
+            />
           )}
           {showNoPost && (
-            <button
-              onClick={e => { e.stopPropagation(); if (!canApproveInfluencers) return; onMove(inf.id, "No post") }}
+            <StageActionButton
+              destination="No post"
+              label="Move post to No post"
+              tone="danger"
               disabled={!canApproveInfluencers}
-              title={!canApproveInfluencers ? "Only Owners and Managers can update post status" : undefined}
-              className="text-[11px] font-medium px-2 py-1 rounded-full border bg-red-50 text-red-600 border-red-200 hover:bg-red-100 transition flex items-center gap-1 min-w-0 flex-1 justify-center disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              <IconX size={11} className="flex-shrink-0"/> <span className="truncate">No post</span>
-            </button>
+              disabledReason="Only Owners and Managers can update post status"
+              icon={<IconX size={11} className="flex-shrink-0"/>}
+              onClick={e => { e.stopPropagation(); if (!canApproveInfluencers) return; onMove(inf.id, "No post") }}
+            />
           )}
         </div>
       )}
@@ -444,11 +758,20 @@ function PostTrackerCard({ inf, onOpen, onMove, canApproveInfluencers }: {
 }
 
 // ─── Droppable / Draggable ────────────────────────────────────────────────────
+/** Same reasoning as the Pipeline board's card memo. */
+const PostTrackerCard = memo(PostTrackerCardBase, (prev, next) =>
+  prev.inf === next.inf &&
+  prev.canApproveInfluencers === next.canApproveInfluencers &&
+  prev.onOpen === next.onOpen &&
+  prev.onMove === next.onMove &&
+  prev.onComplete === next.onComplete
+)
+
 function DroppableColumn({ id, children, isExit }: { id: string; children: React.ReactNode; isExit?: boolean }) {
   const { setNodeRef, isOver } = useDroppable({ id })
   return (
     <div ref={setNodeRef}
-      className={`flex flex-col gap-3 transition-all rounded-lg ${
+      className={`flex flex-col gap-3 h-full transition-all rounded-lg ${
         isOver ? (isExit ? "bg-red-50" : "bg-gray-50") : ""
       }`}>
       {children}
@@ -470,14 +793,57 @@ function DraggableCard({ id, children, onClick, disabled }: { id: string; childr
 
 // ─── Profile Drawer — structure mirrors Pipeline's InfluencerProfileSidebar ──
 // Tabs: Basic, Order, Post, Stats, History (same names/order/behavior as Pipeline).
-const STAGE_OPTIONS: ClosedColumn[] = ["For Order Creation", "In-Transit", "Delivered", "Posted", "No post"]
+// Derived from COLUMNS rather than hand-listed, so a column added to the board
+// appears in the drawer's dropdown too. It was a separate literal, which is
+// exactly how a new column would have been silently missing here.
+const STAGE_OPTIONS: ClosedColumn[] = COLUMNS.map((c) => c.key)
 const PROFILE_TABS = ["Basic", "Order", "Post", "Stats", "Paid collab details", "History"]
 
-function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChange, onPostUrlChange, canApproveInfluencers, subscriptionStatus, initialTab = 0, focusPostUrl = false }: {
+// The Order tab's "Order Status" field is the same underlying stage as the
+// Stage dropdown above it, just scoped to the order-fulfillment steps and
+// spelled the way an order-status field reads. It drives the SAME
+// onColumnChange path rather than a separate write, so the two controls can
+// never disagree about what stage this influencer is actually in.
+const ORDER_STATUS_TO_STAGE: Record<string, ClosedColumn> = {
+  pending: "For Order Creation",
+  shipped: "In-Transit",
+  delivered: "Delivered",
+}
+const STAGE_TO_ORDER_STATUS: Partial<Record<ClosedColumn, string>> = {
+  "For Order Creation": "pending",
+  "In-Transit": "shipped",
+  "Delivered": "delivered",
+  "Posted": "delivered",
+}
+
+/**
+ * How many bulk column writes may be in flight at once.
+ *
+ * Matches the Pipeline board. Two, not unbounded: the Prisma pool is capped at
+ * connection_limit=3, so a request per selected row queues against three
+ * connections and crosses the 10s pool timeout.
+ */
+const BULK_CONCURRENCY = 2
+
+function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onCollabTypeChange, onPostDetailsChange, onRefreshMetrics, onOrderDetailsChange, canApproveInfluencers, subscriptionStatus, initialTab = 0, focusPostUrl = false }: {
   inf: ClosedInfluencer; brandId?: string; onClose: () => void
+  /**
+   * Report a save through the PAGE's notification dock.
+   *
+   * This drawer used to own a `.drawer-toast` positioned `absolute` inside the
+   * panel, so every message it raised was anchored to the panel rather than to
+   * the dashboard — it sat over the panel's own content and read as part of it.
+   * Handing the message up means it lands in the one dock every other module
+   * uses, which also steps aside from this panel (`.notice-dock-top` in
+   * app/globals.css).
+   */
+  onNotify: (msg: string, type?: "success" | "error") => void
   onColumnChange: (id: string, col: ClosedColumn) => Promise<boolean>
   onCollabTypeChange: (id: string, type: string) => Promise<boolean>
-  onPostUrlChange: (id: string, postUrl: string) => Promise<boolean>
+  onPostDetailsChange: (id: string, fields: PostDetailsFields, options?: { markPosted?: boolean }) => Promise<UpdateColumnResult>
+  /** Fetches Likes/Comments/Views from the saved post link(s). */
+  onRefreshMetrics: (id: string) => Promise<PostMetricsResult>
+  onOrderDetailsChange: (id: string, fields: OrderDetailsFields) => Promise<boolean>
   canApproveInfluencers: boolean
   subscriptionStatus?: string
   /** Tab to open on — used by the "Go to Post Details" warning action */
@@ -486,10 +852,20 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
   focusPostUrl?: boolean
 }) {
   const [profileTab, setProfileTab] = useState(initialTab)
-  const [drawerToast, setDT]        = useState("")
+  const [showEmailModal, setShowEmailModal] = useState(false)
+
   const [savingPost, setSavingPost] = useState(false)
   const postUrlRef = useRef<HTMLInputElement>(null)
-  const showToast = (msg: string) => { setDT(msg); setTimeout(()=>setDT(""),2600) }
+  // How the Post URL currently in the field got there. Only drives the hint
+  // under the input; the value itself is ordinary form state either way.
+  const [postUrlOrigin, setPostUrlOrigin] = useState<"stored" | "detected" | "dropped">("stored")
+  // True while a drag is over the field, for the drop affordance.
+  const [urlDropActive, setUrlDropActive] = useState(false)
+  // Mirrors the Post URL currently in the form — see handleDetectedPost.
+  const postUrlValueRef = useRef("")
+  // Forwarded to the page's dock — see onNotify above. Same call sites, same
+  // messages, same timing; only where it renders changed.
+  const showToast = (msg: string, type?: "success" | "error") => onNotify(msg, type)
 
   // Land the user directly on the Post URL field when sent here from the
   // "Cannot Move to Posted" warning.
@@ -511,19 +887,185 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
     if (profileTab === 4 && !showPaidCollabTab) setProfileTab(0)
   }, [showPaidCollabTab, profileTab])
 
-  const [orderData, setOrderData] = useState({
-    orderStatus: inf.orderStatus || "", productDetails: inf.productDetails || "",
+  // product_details is a JSON store shared by several features (pipeline
+  // stage tracking, Shopify order metadata, and this tab's own note/tracking
+  // fields) — parse it once, up front, so nothing below has to guess.
+  // Legacy plain text predating this JSON convention is rescued into `note`
+  // rather than silently dropped (mirrors the same fallback in the PATCH
+  // route's safeParse, so client and server never disagree on this).
+  const savedProductDetails = (() => {
+    const raw = inf.productDetails || ""
+    if (!raw) return {}
+    try { return JSON.parse(raw) } catch { return { note: raw } }
+  })()
+
+  // Shared by the initial state and the Order tab's Cancel button, so
+  // "discard my edits" reverts to exactly what was last loaded, not some
+  // separately-maintained copy of the same defaults.
+  const buildOrderData = () => ({
+    productDetails: savedProductDetails.note || "",
     trackingNumber: inf.trackingNumber || "", shippedAt: inf.shippedAt ? inf.shippedAt.slice(0,10) : "",
     deliveredAt: inf.deliveredAt ? inf.deliveredAt.slice(0,10) : "", deadline: inf.deadline ? inf.deadline.slice(0,10) : "",
     deliverables: inf.deliverables || "", currency: inf.currency || "USD",
   })
+  const [orderData, setOrderData] = useState(buildOrderData)
+  const [savingOrder, setSavingOrder] = useState(false)
+
+  // Notes reuses updateOrderDetails' PATCH path for its optimistic-update/rollback handling.
+  const [notesValue, setNotesValue] = useState(inf.notes || "")
+  // Notes can change from outside the drawer — a move to Issues appends the
+  // required issue note — so pick that up without a refresh or remount.
+  const [syncedNotes, setSyncedNotes] = useState(inf.notes || "")
+  if ((inf.notes || "") !== syncedNotes) {
+    setSyncedNotes(inf.notes || "")
+    setNotesValue(inf.notes || "")
+  }
+  const [savingNotes, setSavingNotes] = useState(false)
+  const [fetchingMetrics, setFetchingMetrics] = useState(false)
   const [postData, setPostData] = useState({
     postUrl: inf.postUrl || "", postedAt: inf.postedAt ? inf.postedAt.slice(0,10) : "",
     likes: inf.likesCount ? String(inf.likesCount) : "", comments: inf.commentsCount ? String(inf.commentsCount) : "",
-    engagement: inf.engagementCount ? String(inf.engagementCount) : "",
+    views: inf.viewsCount ? String(inf.viewsCount) : "",
     scriptStatus: inf.scriptStatus || "", contentStatus: inf.contentStatus || "",
     internalRating: inf.internalRating ? String(inf.internalRating) : "",
   })
+  postUrlValueRef.current = postData.postUrl
+
+  // Campaign deliverables — the same paidCollab.deliverables array the Pipeline
+  // hand-over writes (lib/deliverables). One post link per deliverable is
+  // edited here and saved by the Post tab's Update; the row-level Post URL
+  // (which predates deliverables) seeds the first one.
+  const [deliverableDrafts, setDeliverableDrafts] = useState<CampaignDeliverable[]>(() =>
+    getDeliverables(inf.paidCollabData).map((d, i) => ({ ...d, postUrl: deliverablePostUrl(d, i, inf.postUrl) }))
+  )
+  const deliverableDraftsRef = useRef(deliverableDrafts)
+  deliverableDraftsRef.current = deliverableDrafts
+  const hasDeliverables = deliverableDrafts.length > 0
+  const postedDeliverables = deliverableDrafts.filter(d => (d.postUrl ?? "").trim()).length
+  const setDeliverableCount = (n: number) => setDeliverableDrafts(ds => {
+    const maxId = ds.reduce((m, d) => Math.max(m, Number(d.id) || 0), 0)
+    // A first deliverable added to a row that already has a Post URL inherits
+    // it, so defining deliverables never discards the post already recorded.
+    return Array.from({ length: n }, (_, i) =>
+      ds[i] ?? { ...blankDeliverable(maxId + i + 1), postUrl: i === 0 ? (inf.postUrl ?? "") : "" }
+    )
+  })
+  const updateDeliverableLink = (index: number, url: string) =>
+    setDeliverableDrafts(ds => ds.map((d, i) => (i === index ? { ...d, postUrl: url } : d)))
+
+  // ── Shopify push flow (self-contained — doesn't depend on the manual
+  // Order tab fields above) ──────────────────────────────────────────────────
+  const isGifting = campaignType === "gifting"
+  const savedShippingAddress = savedProductDetails?.shippingAddress || null
+  const [shopifyConnected, setShopifyConnected] = useState(false)
+  const [shopifyProducts, setShopifyProducts] = useState<any[]>([])
+  const [shopifyLoading, setShopifyLoading] = useState(false)
+  const [shopifyForm, setShopifyForm] = useState({
+    variantId: savedProductDetails?.variantId || "", quantity: "1",
+    firstName: savedShippingAddress?.first_name || "", lastName: savedShippingAddress?.last_name || "",
+    address1: savedShippingAddress?.address1 || "", address2: savedShippingAddress?.address2 || "",
+    city: savedShippingAddress?.city || "", province: savedShippingAddress?.province || "",
+    zip: savedShippingAddress?.zip || "", country: savedShippingAddress?.country || "", phone: savedShippingAddress?.phone || "",
+  })
+  const [shopifySubmitting, setShopifySubmitting] = useState(false)
+  const [shopifyError, setShopifyError] = useState("")
+  const [shopifyOrderResult, setShopifyOrderResult] = useState<any>(null)
+
+  useEffect(() => {
+    if (!brandId) return
+    // Shared cache: the integration state is unchanged between visits, so this
+    // no longer re-requests on every mount of the tracker.
+    fetchCached<any>(`/api/settings/integrations?brandId=${brandId}`, async () => {
+      const r = await fetch(`/api/settings/integrations?brandId=${brandId}`)
+      if (!r.ok) throw new Error(`Failed to load integrations (${r.status})`)
+      return r.json()
+    })
+      // `ready`, not `connected`: the row's boolean can be true while the stored
+      // config has no credentials, and every Shopify request then fails. Gating
+      // on `ready` is what stops the products request from being made at all in
+      // that state, instead of firing it and taking a 400/500 back. Falls back
+      // to `connected` for an older response shape without the field.
+      .then(json => {
+        const shopify = json?.integrations?.shopify
+        setShopifyConnected(!!(shopify?.ready ?? shopify?.connected))
+      })
+      .catch(() => {})
+  }, [brandId])
+
+  // An order placed in an earlier session is still real — without this, the
+  // panel always shows the blank "Create Order" form even when one already
+  // exists (e.g. the influencer is already at Delivered), since
+  // shopifyOrderResult otherwise only ever gets set right after a create.
+  useEffect(() => {
+    if (!brandId || !inf.id) return
+    fetch(`/api/brand/${brandId}/pipeline/${inf.id}/shopify-order`)
+      .then(r => r.ok ? r.json() : null)
+      .then(json => {
+        if (!json?.order) return
+        setShopifyOrderResult(json.order)
+        // Suggest the real ordered product as the note, but only into an
+        // empty field — never overwrite something someone already typed.
+        if (json.order.productSummary) {
+          setOrderData(d => d.productDetails ? d : { ...d, productDetails: json.order.productSummary })
+        }
+      })
+      .catch(() => {})
+  }, [brandId, inf.id])
+
+  useEffect(() => {
+    if (!shopifyConnected || !brandId) return
+    setShopifyLoading(true)
+    fetchCached<any>(`/api/brand/${brandId}/integrations/shopify/products`, async () => {
+      const r = await fetch(`/api/brand/${brandId}/integrations/shopify/products`)
+      if (!r.ok) throw new Error(`Failed to load products (${r.status})`)
+      return r.json()
+    })
+      .then(json => setShopifyProducts(json?.products || []))
+      .catch(() => {})
+      .finally(() => setShopifyLoading(false))
+  }, [shopifyConnected, brandId])
+
+  const shopifyVariants = shopifyProducts.flatMap((p: any) =>
+    (p.variants || []).map((v: any) => ({ ...v, productTitle: p.title as string }))
+  )
+  const selectedShopifyVariant = shopifyVariants.find((v: any) => String(v.id) === shopifyForm.variantId)
+  const shopifyQuantity = parseInt(shopifyForm.quantity, 10) || 1
+  const shopifyAddressComplete = !!(shopifyForm.address1 && shopifyForm.city && shopifyForm.zip && shopifyForm.country)
+
+  const handleCreateShopifyOrder = async () => {
+    if (!brandId || !shopifyForm.variantId || !shopifyAddressComplete) return
+    setShopifySubmitting(true)
+    setShopifyError("")
+    try {
+      const res = await fetch(`/api/brand/${brandId}/pipeline/${inf.id}/shopify-order`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          variantId: shopifyForm.variantId,
+          quantity: shopifyQuantity,
+          shippingAddress: {
+            first_name: shopifyForm.firstName || undefined,
+            last_name: shopifyForm.lastName || undefined,
+            address1: shopifyForm.address1,
+            address2: shopifyForm.address2 || undefined,
+            city: shopifyForm.city,
+            province: shopifyForm.province || undefined,
+            zip: shopifyForm.zip,
+            country: shopifyForm.country,
+            phone: shopifyForm.phone || undefined,
+          },
+        }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json?.error || "Failed to create order")
+      setShopifyOrderResult(json)
+      showToast("Shopify order created")
+    } catch (e: any) {
+      setShopifyError(e?.message || "Failed to create order")
+    } finally {
+      setShopifySubmitting(false)
+    }
+  }
 
   const handleStageChange = async (newStage: ClosedColumn) => {
     const ok = await onColumnChange(inf.id, newStage)
@@ -535,26 +1077,226 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
   }
   const handleSavePost = async () => {
     setSavingPost(true)
-    const ok = await onPostUrlChange(inf.id, postData.postUrl)
+    // With deliverables, the row-level Post URL mirrors the first deliverable
+    // link, so the existing Posted evidence check and post detection keep
+    // reading the same column they always have.
+    const trimmedUrl = hasDeliverables
+      ? (deliverableDrafts.map(d => (d.postUrl ?? "").trim()).find(Boolean) ?? "")
+      : postData.postUrl.trim()
+    // Sent whenever the row has (or had) deliverables, so a count change is saved.
+    const sendDeliverables = hasDeliverables || getDeliverables(inf.paidCollabData).length > 0
+    // The Script/Content dropdowns are a rollup over every deliverable; only a
+    // value the user actually changed is applied, so per-deliverable review
+    // states set in the Paid collab editor are not flattened by an untouched field.
+    const scriptChanged = Boolean(postData.scriptStatus) && postData.scriptStatus !== (inf.scriptStatus || "")
+    const contentChanged = Boolean(postData.contentStatus) && postData.contentStatus !== (inf.contentStatus || "")
+    // Save moves this influencer straight to Posted once there's evidence of a
+    // published post — the same requirement handleMove's manual Stage move
+    // enforces (hasPostEvidence), and still re-checked by the server's own
+    // "Posted needs proof of a post" guard either way. Already-Posted rows are
+    // left alone: the server's "Posted is terminal" guard would 409 a redundant
+    // closedStatus:"Posted" anyway, so it's simply not sent.
+    // Links stored before this save — a link not in here is new.
+    const previousLinks = new Set(
+      [inf.postUrl ?? "", ...getDeliverables(inf.paidCollabData).map(d => d.postUrl ?? "")]
+        .map(l => l.trim()).filter(Boolean)
+    )
+    const markPosted = inf.closedStatus !== "Posted" &&
+      (Boolean(trimmedUrl) || (hasDeliverables ? hasDetectedPost(inf) : hasPostEvidence(inf)))
+    const res = await onPostDetailsChange(
+      inf.id,
+      {
+        postUrl: hasDeliverables ? trimmedUrl : postData.postUrl,
+        postedAt: postData.postedAt,
+        likes: postData.likes,
+        comments: postData.comments,
+        views: postData.views,
+        internalRating: postData.internalRating,
+        ...(sendDeliverables
+          ? {
+              paidCollabData: {
+                ...(inf.paidCollabData ?? {}),
+                deliverables: deliverableDrafts.map(d => ({
+                  ...d,
+                  postUrl: (d.postUrl ?? "").trim(),
+                  ...(scriptChanged ? { scriptStatus: postData.scriptStatus } : {}),
+                  ...(contentChanged ? { contentStatus: postData.contentStatus } : {}),
+                })),
+              } as PaidCollabData,
+            }
+          : { scriptStatus: postData.scriptStatus, contentStatus: postData.contentStatus }),
+      },
+      { markPosted }
+    )
     setSavingPost(false)
-    showToast(ok ? "Post details saved" : "Failed to save post details")
+    if (res.ok) {
+      setPostUrlOrigin("stored")
+      showToast(markPosted ? "Post details saved — moved to Posted" : "Post details saved")
+      // A new post link was saved: pull its Likes, Comments and Views
+      // automatically. Only on a NEW link, so re-saving hand-typed metrics
+      // against an existing link does not overwrite them.
+      const savedLinks = hasDeliverables
+        ? deliverableDrafts.map(d => (d.postUrl ?? "").trim())
+        : [postData.postUrl.trim()]
+      if (savedLinks.some(l => l && !previousLinks.has(l))) {
+        setFetchingMetrics(true)
+        const m = await onRefreshMetrics(inf.id)
+        setFetchingMetrics(false)
+        if (m.ok) {
+          setPostData(d => ({
+            ...d,
+            ...(m.likes    != null && { likes:    String(m.likes) }),
+            ...(m.comments != null && { comments: String(m.comments) }),
+            ...(m.views    != null && { views:    String(m.views) }),
+          }))
+          showToast("Likes, comments and views updated from the post")
+        }
+      }
+    } else if (res.terminal) {
+      showToast("This influencer has already Posted.", "error")
+    } else {
+      showToast(res.error || "Failed to save post details", "error")
+    }
+  }
+  const handleSaveOrder = async () => {
+    setSavingOrder(true)
+    const ok = await onOrderDetailsChange(inf.id, {
+      note: orderData.productDetails,
+      trackingNumber: orderData.trackingNumber,
+      shippedAt: orderData.shippedAt,
+      deliveredAt: orderData.deliveredAt,
+      deadline: orderData.deadline,
+      currency: orderData.currency,
+      deliverables: orderData.deliverables,
+    })
+    setSavingOrder(false)
+    showToast(ok ? "Order details saved" : "Failed to save order details")
+  }
+  const handleSaveNotes = async () => {
+    setSavingNotes(true)
+    const ok = await onOrderDetailsChange(inf.id, { notes: notesValue })
+    setSavingNotes(false)
+    showToast(ok ? "Notes updated" : "Failed to update notes")
+  }
+
+  // ── Automatic Post Detection → Post URL ───────────────────────────────────
+  // When detection has found a post, offer that URL to the field. It fills an
+  // EMPTY field only: a URL already stored on the record, or one the user is in
+  // the middle of typing, is never overwritten. The value is put into the form,
+  // not written to the database — saving stays on the existing Save button, so
+  // the manual flow is untouched.
+  //
+  // The current value is read through a ref rather than from `postData`, so the
+  // callback identity stays stable — it is a dependency of the detection card's
+  // notify effect, and a new function every keystroke would re-run it.
+  /**
+   * Take a detected post into the Post form.
+   *
+   * One set of fields for both routes: a detected post fills the SAME Post URL,
+   * Posted At, Likes, Comments and Views inputs a user types into, and the
+   * same Save button persists them. There is no separate manual-vs-automatic
+   * form.
+   *
+   * A manual URL still wins — the early return is unchanged. Only fields the
+   * provider actually returned are written; a missing metric leaves whatever is
+   * already in the form rather than being zeroed, and nothing is invented.
+   */
+  const handleDetectedPost = useCallback((post: DetectedPost) => {
+    // With deliverables, a detected post fills the first deliverable that has
+    // no link yet — never one already holding this same post — and only the
+    // first deliverable's post fills the metrics, as the single field did.
+    const ds = deliverableDraftsRef.current
+    if (ds.length > 0) {
+      if (ds.some(d => (d.postUrl ?? "").trim() === post.postUrl)) return
+      const idx = ds.findIndex(d => !(d.postUrl ?? "").trim())
+      if (idx === -1) return
+      setDeliverableDrafts(prev => prev.map((d, i) => (i === idx ? { ...d, postUrl: post.postUrl } : d)))
+      setPostUrlOrigin("detected")
+      if (idx > 0) return
+    } else if (postUrlValueRef.current.trim()) return
+    setPostData(d => ({
+      ...d,
+      postUrl: post.postUrl,
+      // The date input wants YYYY-MM-DD, as buildPostData does for stored dates.
+      ...(post.publishedAt ? { postedAt: post.publishedAt.slice(0, 10) } : {}),
+      ...(post.likeCount    != null ? { likes:    String(post.likeCount) } : {}),
+      ...(post.commentCount != null ? { comments: String(post.commentCount) } : {}),
+      ...(post.viewCount    != null ? { views:    String(post.viewCount) } : {}),
+    }))
+    setPostUrlOrigin("detected")
+  }, [])
+
+  // Drop a detected post (or any dragged link) onto the field. Reuses the
+  // reader that owns the drag payload format, so the two stay in step.
+  const handleUrlDrop = (e: React.DragEvent<HTMLElement>) => {
+    e.preventDefault()
+    setUrlDropActive(false)
+    const url = readDroppedPostUrl(e.dataTransfer)
+    if (!url) {
+      showToast("That drop contained no post link")
+      return
+    }
+    setPostData(d => ({ ...d, postUrl: url }))
+    setPostUrlOrigin("dropped")
+    postUrlRef.current?.focus()
   }
 
   return (
     <>
       <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.3)", zIndex: 400, cursor: "pointer" }} />
 
+      {showEmailModal && (
+        <EmailModal
+          partnerName={inf.influencer}
+          handle={inf.handle}
+          platform={inf.platform}
+          brandId={brandId}
+          defaultTo={inf.email || ""}
+          onClose={() => setShowEmailModal(false)}
+        />
+      )}
+
       <div className="pp">
+        {/* Pinned to the panel's top-right corner, independent of the header's
+            own content — it used to sit inside the Stage/Collaboration Type
+            row and wrap onto its own line whenever that row ran out of width,
+            landing disconnected from the header at narrower drawer widths. */}
+        <button onClick={onClose} title="Close" className="close-btn">✕</button>
         {/* ── Header ── */}
         <div className="pph">
-          <div className="ppt">Influencer Profile</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
-            {inf.profileImageUrl ? (
-              <img src={inf.profileImageUrl} alt={inf.influencer} className="pav" style={{ objectFit: "cover" }} />
-            ) : (
-              <div className="pav">{inf.influencer.charAt(0).toUpperCase()}</div>
-            )}
-            <div style={{ flex: 1 }}>
+          {/* paddingRight reserves room for the close button, which is pinned
+              absolutely to the panel's top-right corner and no longer part of
+              this row's own flex layout — without it, the Stage/Collaboration
+              Type selects could grow into the same corner. */}
+          <div className="ppt" style={{ paddingRight: 40 }}>Influencer Profile</div>
+          {/* flexWrap here, not just on the selects group below: without it, a
+              long username refuses to shrink past its own text width (a flex
+              item's default min-width), so the Stage/Collaboration Type
+              selects were the only thing left to give — squeezed into
+              whatever sliver of the row remained and stacking on top of each
+              other there, rather than the pair simply dropping to their own
+              full-width line under the avatar/name. */}
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, marginBottom: 12, paddingRight: 40 }}>
+            {/* The persisted avatar — the permanent Cloudinary URL the Influencer
+                List stores on the Influencer record, carried here by the closed
+                route's own `profileImageUrl`. Rendered through the shared
+                ProfilePicture so a missing or broken image falls back to
+                initials the way it does on every other screen, instead of a
+                bare <img> that renders as a broken icon. */}
+            <div className="pav">
+              {inf.profileImageUrl ? (
+                <ProfilePicture src={inf.profileImageUrl} name={inf.influencer} handle={inf.handle} size={44} />
+              ) : (
+                inf.influencer.charAt(0).toUpperCase()
+              )}
+            </div>
+            {/* flexShrink:0 — the name must never be the thing that gives.
+                When the row doesn't have room for everyone, flexWrap on the
+                row above is what should move Stage/Collaboration Type to
+                their own line below; the ellipsis rules on .pnm/.phd stay
+                only as a last-resort safety net for a screen too narrow to
+                fit even the avatar and name alone. */}
+            <div style={{ flexGrow: 1, flexShrink: 0, flexBasis: "auto" }}>
               <div className="pnm">{inf.influencer}</div>
               <div className="phd">@{inf.handle}</div>
             </div>
@@ -568,15 +1310,19 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
                   disabled={!canApproveInfluencers}
                   title={!canApproveInfluencers ? "Only Owners and Managers can update post status" : undefined}
                   style={{
-                    borderColor: inf.closedStatus === "No post" ? "#fca5a5" : undefined,
-                    background:  inf.closedStatus === "No post" ? "#fef2f2" : undefined,
-                    color:       inf.closedStatus === "No post" ? "#dc2626" : undefined,
+                    borderColor: inf.closedStatus === "No post" ? "#fca5a5" : inf.closedStatus === "Issues" ? "#d8b4fe" : undefined,
+                    background:  inf.closedStatus === "No post" ? "#fef2f2" : inf.closedStatus === "Issues" ? "#faf5ff" : undefined,
+                    color:       inf.closedStatus === "No post" ? "#dc2626" : inf.closedStatus === "Issues" ? "#7e22ce" : undefined,
                     opacity:     canApproveInfluencers ? undefined : 0.5,
                     cursor:      canApproveInfluencers ? undefined : "not-allowed",
                   }}
                 >
                   {STAGE_OPTIONS.map((s) => (
-                    <option key={s} value={s} style={s === "No post" ? { color: "#dc2626", fontWeight: 600 } : undefined}>
+                    <option key={s} value={s} style={
+                      s === "No post" ? { color: "#dc2626", fontWeight: 600 }
+                      : s === "Issues" ? { color: "#7e22ce", fontWeight: 600 }
+                      : undefined
+                    }>
                       {s}
                     </option>
                   ))}
@@ -599,7 +1345,6 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
                 </select>
               </div>
 
-              <button onClick={onClose} title="Close" className="close-btn">✕</button>
             </div>
           </div>
 
@@ -611,8 +1356,13 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
           )}
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-            <button className="atag plat">{inf.platform || "Instagram"}</button>
-            <button className="atag">Send Email</button>
+            {/* The chip keeps its own pill styling; only the mark's size and
+                spacing are brought in line with the cards and the table. */}
+            <button className="atag plat" style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0, lineHeight: 1 }}>
+              <PlatformIcon platform={inf.platform} size={14} className="shrink-0" />
+              <span className="truncate">{getPlatformLabel(inf.platform) || "—"}</span>
+            </button>
+            <button className="atag" onClick={() => setShowEmailModal(true)}>Send Email</button>
             <button className="atag">Send DM</button>
             <button className="atag">Follow up</button>
           </div>
@@ -634,6 +1384,7 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
           {/* ════ BASIC TAB ════ */}
           {profileTab === 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <LastEditedBy brandId={brandId} biId={inf.id} />
               <div className="sr4">
                 <div className="sbox"><div className="slb">Followers</div><div className="svl">{inf.followers}</div></div>
                 <div className="sbox"><div className="slb">Eng Rate</div><div className="svl" style={{ color: "#2c8ec4" }}>{inf.engagementRate || "—"}</div></div>
@@ -643,9 +1394,9 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
               <div>
                 <div className="section-label">Avg Metrics</div>
                 <div className="avg-row">
-                  <div className="avg-card"><div className="avg-val">{inf.likesCount?.toLocaleString() ?? "—"}</div><div className="avg-lbl">Likes</div></div>
-                  <div className="avg-card"><div className="avg-val">{inf.commentsCount?.toLocaleString() ?? "—"}</div><div className="avg-lbl">Comments</div></div>
-                  <div className="avg-card"><div className="avg-val">{inf.engagementCount?.toLocaleString() ?? "—"}</div><div className="avg-lbl">Engagement</div></div>
+                  <div className="avg-card"><div className="avg-val">{Number.isFinite(inf.likesCount) ? inf.likesCount.toLocaleString() : "—"}</div><div className="avg-lbl">Likes</div></div>
+                  <div className="avg-card"><div className="avg-val">{Number.isFinite(inf.commentsCount) ? inf.commentsCount.toLocaleString() : "—"}</div><div className="avg-lbl">Comments</div></div>
+                  <div className="avg-card"><div className="avg-val">{Number.isFinite(inf.viewsCount) ? inf.viewsCount.toLocaleString() : "—"}</div><div className="avg-lbl">Views</div></div>
                 </div>
               </div>
               <div className="fgrd">
@@ -660,7 +1411,18 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
               </div>
               <div>
                 <div style={{ fontSize: 10, color: "#888", marginBottom: 6 }}>Notes</div>
-                <textarea className="pfi" style={{ minHeight: 80, resize: "vertical" }} placeholder="Add notes..." defaultValue={inf.notes || ""} />
+                <textarea
+                  className="pfi"
+                  style={{ minHeight: 80, resize: "vertical" }}
+                  placeholder="Add notes..."
+                  value={notesValue}
+                  onChange={(e) => setNotesValue(e.target.value)}
+                />
+                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+                  <button className="btn-primary" onClick={handleSaveNotes} disabled={savingNotes} style={{ opacity: savingNotes ? 0.6 : 1 }}>
+                    {savingNotes ? "Updating…" : "Update"}
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -670,7 +1432,14 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <div className="pfg">
                 <div className="pfl">Order Status</div>
-                <select className="pfi" value={orderData.orderStatus} onChange={e => setOrderData(d => ({ ...d, orderStatus: e.target.value }))}>
+                <select
+                  className="pfi"
+                  value={STAGE_TO_ORDER_STATUS[inf.closedStatus] || ""}
+                  onChange={e => {
+                    const stage = ORDER_STATUS_TO_STAGE[e.target.value]
+                    if (stage) handleStageChange(stage)
+                  }}
+                >
                   <option value="">Select...</option><option value="pending">Pending</option><option value="shipped">Shipped</option><option value="delivered">Delivered</option>
                 </select>
               </div>
@@ -685,6 +1454,84 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
                 <div className="pfg"><div className="pfl">Currency</div><input className="pfi" value={orderData.currency} onChange={e => setOrderData(d => ({ ...d, currency: e.target.value }))} /></div>
               </div>
               <div className="pfg"><div className="pfl">Deliverables</div><input className="pfi" value={orderData.deliverables} onChange={e => setOrderData(d => ({ ...d, deliverables: e.target.value }))} placeholder="Deliverables" /></div>
+
+              {/* ── Shopify order creation — self-contained, own submit path ── */}
+              <div style={{ borderTop: "1px solid #eee", marginTop: 4, paddingTop: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#111", marginBottom: 8 }}>🛍 Shopify</div>
+                {!shopifyConnected ? (
+                  <div style={{ fontSize: 12, color: "#667085", background: "#f9fafb", border: "1px solid #eee", borderRadius: 8, padding: "10px 12px" }}>
+                    Connect Shopify in <a href="/dashboard/settings/integrations" style={{ color: "#1fae5b", fontWeight: 600 }}>Settings → Integrations</a> to create real orders from here.
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    <div className="pfg">
+                      <div className="pfl">Product</div>
+                      <select className="pfi" value={shopifyForm.variantId} onChange={e => setShopifyForm(f => ({ ...f, variantId: e.target.value }))} disabled={shopifyLoading}>
+                        <option value="">{shopifyLoading ? "Loading products…" : "Select a product…"}</option>
+                        {shopifyVariants.map((v: any) => (
+                          <option key={v.id} value={v.id}>
+                            {v.productTitle}{v.title && v.title !== "Default Title" ? ` — ${v.title}` : ""} (${v.price})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="pfg"><div className="pfl">Quantity</div><input type="number" min={1} className="pfi" value={shopifyForm.quantity} onChange={e => setShopifyForm(f => ({ ...f, quantity: e.target.value }))} /></div>
+                    <div className="pfr">
+                      <div className="pfg"><div className="pfl">First Name</div><input className="pfi" value={shopifyForm.firstName} onChange={e => setShopifyForm(f => ({ ...f, firstName: e.target.value }))} /></div>
+                      <div className="pfg"><div className="pfl">Last Name</div><input className="pfi" value={shopifyForm.lastName} onChange={e => setShopifyForm(f => ({ ...f, lastName: e.target.value }))} /></div>
+                    </div>
+                    <div className="pfg"><div className="pfl">Address</div><input className="pfi" value={shopifyForm.address1} onChange={e => setShopifyForm(f => ({ ...f, address1: e.target.value }))} placeholder="Address line 1" /></div>
+                    <div className="pfg"><input className="pfi" value={shopifyForm.address2} onChange={e => setShopifyForm(f => ({ ...f, address2: e.target.value }))} placeholder="Address line 2 (optional)" /></div>
+                    <div className="pfr">
+                      <div className="pfg"><div className="pfl">City</div><input className="pfi" value={shopifyForm.city} onChange={e => setShopifyForm(f => ({ ...f, city: e.target.value }))} /></div>
+                      <div className="pfg"><div className="pfl">Province/State</div><input className="pfi" value={shopifyForm.province} onChange={e => setShopifyForm(f => ({ ...f, province: e.target.value }))} /></div>
+                    </div>
+                    <div className="pfr">
+                      <div className="pfg"><div className="pfl">ZIP/Postal</div><input className="pfi" value={shopifyForm.zip} onChange={e => setShopifyForm(f => ({ ...f, zip: e.target.value }))} /></div>
+                      <div className="pfg"><div className="pfl">Country</div><input className="pfi" value={shopifyForm.country} onChange={e => setShopifyForm(f => ({ ...f, country: e.target.value }))} placeholder="US" /></div>
+                    </div>
+                    <div className="pfg"><div className="pfl">Phone (optional)</div><input className="pfi" value={shopifyForm.phone} onChange={e => setShopifyForm(f => ({ ...f, phone: e.target.value }))} /></div>
+
+                    {selectedShopifyVariant && (
+                      <div style={{ background: "#f9fafb", border: "1px solid #eee", borderRadius: 8, padding: "10px 12px", fontSize: 12, display: "flex", flexDirection: "column", gap: 4 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between" }}>
+                          <span>Product price</span><span>${(parseFloat(selectedShopifyVariant.price) * shopifyQuantity).toFixed(2)}</span>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", color: "#667085" }}>
+                          <span>Discount</span>
+                          <span>{isGifting ? "Free — gifting" : "Applied automatically if a discount code is assigned"}</span>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, borderTop: "1px solid #eee", paddingTop: 4 }}>
+                          <span>Total</span><span>{isGifting ? "$0.00" : "Calculated by Shopify"}</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {shopifyError && <div style={{ fontSize: 12, color: "#dc2626" }}>{shopifyError}</div>}
+
+                    {shopifyOrderResult ? (
+                      <div style={{ background: "#f0faf5", border: "1px solid #bbf7d0", borderRadius: 8, padding: "10px 12px", fontSize: 12, display: "flex", flexDirection: "column", gap: 4 }}>
+                        <div style={{ fontWeight: 700, color: "#166534" }}>Order {shopifyOrderResult.orderNumber} created</div>
+                        <div>
+                          Total: {shopifyOrderResult.priceBreakdown?.total ? `$${shopifyOrderResult.priceBreakdown.total}` : "—"}
+                          {shopifyOrderResult.priceBreakdown?.discountCode ? ` (code: ${shopifyOrderResult.priceBreakdown.discountCode})` : ""}
+                        </div>
+                        <a href={shopifyOrderResult.adminUrl} target="_blank" rel="noreferrer" style={{ color: "#1fae5b", fontWeight: 600 }}>View in Shopify admin →</a>
+                      </div>
+                    ) : (
+                      <button
+                        className="btn-primary"
+                        disabled={!shopifyForm.variantId || !shopifyAddressComplete || shopifySubmitting}
+                        onClick={handleCreateShopifyOrder}
+                        style={{ alignSelf: "flex-end", opacity: shopifySubmitting ? 0.6 : 1 }}
+                      >
+                        {shopifySubmitting ? "Creating…" : "Create Order in Shopify"}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
               <div
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8,
@@ -692,8 +1539,9 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
                   padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
                 }}
               >
-                <button className="btn-secondary">Cancel</button>
-                <button className="btn-primary">Save</button>
+                <button className="btn-primary" onClick={handleSaveOrder} disabled={savingOrder} style={{ opacity: savingOrder ? 0.6 : 1 }}>
+                  {savingOrder ? "Updating…" : "Update"}
+                </button>
               </div>
             </div>
           )}
@@ -701,8 +1549,134 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
           {/* ════ POST TAB ════ */}
           {profileTab === 2 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {brandId && <AutoPostDetectionCard brandId={brandId} biId={inf.id} subscriptionStatus={subscriptionStatus} />}
-              <div className="pfg"><div className="pfl">Post URL</div><input ref={postUrlRef} className="pfi" value={postData.postUrl} onChange={e => setPostData(d => ({ ...d, postUrl: e.target.value }))} placeholder="Post URL" /></div>
+              {/* Gated on the stage, not just hidden: rendering the card is what
+                  mounts it and fires its GET, so an influencer who cannot have
+                  posted yet costs no request and no API allowance. */}
+              {brandId && canDetectPost(inf.closedStatus) && (
+                <AutoPostDetectionCard
+                  brandId={brandId}
+                  biId={inf.id}
+                  subscriptionStatus={subscriptionStatus}
+                  onDetectedPost={handleDetectedPost}
+                />
+              )}
+              {/* Before Delivered there is no post to describe, so the fields are
+                  not offered — an empty Post URL / Posted At / Likes form on an
+                  order that has not arrived invites entering data for a post
+                  that cannot exist. Nothing is created or defaulted either way;
+                  this only changes what is shown. A row that already HAS post
+                  data keeps its fields at any stage so that data stays
+                  correctable — see canTrackPost. */}
+              {!canTrackPost(inf) && (
+                <div className="pfg">
+                  <div className="pfl">Post details</div>
+                  <div style={{ fontSize: 12, color: "#888", lineHeight: 1.5 }}>
+                    Available once this influencer is marked <strong>Delivered</strong>.
+                    {" "}Post details and Automatic Post Detection start there, because
+                    the product has to arrive before there can be a post to find.
+                  </div>
+                </div>
+              )}
+
+              {canTrackPost(inf) && (
+                <>
+              {/* Campaign deliverables — one expected post each, defined on the
+                  Pipeline hand-over. Each gets its own post link; Post Tracker
+                  shows "x/N deliverables" until all are linked, then Completed. */}
+              <div className="pfg">
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                  <div className="pfl">
+                    Deliverables{hasDeliverables ? ` · ${postedDeliverables}/${deliverableDrafts.length} posted` : ""}
+                  </div>
+                  <select
+                    className="pfi"
+                    style={{ width: "auto", padding: "4px 8px" }}
+                    value={deliverableDrafts.length}
+                    onChange={e => setDeliverableCount(parseInt(e.target.value, 10))}
+                  >
+                    {Array.from({ length: MAX_DELIVERABLES + 1 }, (_, i) => i).map(v => (
+                      <option key={v} value={v}>{v === 0 ? "None" : v}</option>
+                    ))}
+                  </select>
+                </div>
+                {deliverableDrafts.map((d, i) => {
+                  const link = (d.postUrl ?? "").trim()
+                  const isWebLink = /^https?:\/\//i.test(link)
+                  return (
+                    <div
+                      key={d.id}
+                      onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = "copy" }}
+                      onDrop={e => {
+                        e.preventDefault()
+                        const url = readDroppedPostUrl(e.dataTransfer)
+                        if (!url) { showToast("That drop contained no post link"); return }
+                        updateDeliverableLink(i, url)
+                        setPostUrlOrigin("dropped")
+                      }}
+                    >
+                      <div style={{ fontSize: 11, color: "#555", margin: "4px 0" }}>{i + 1}. {d.name || `Deliverable ${i + 1}`}</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <input
+                          ref={i === 0 ? postUrlRef : undefined}
+                          className="pfi"
+                          value={d.postUrl ?? ""}
+                          onChange={e => { updateDeliverableLink(i, e.target.value); setPostUrlOrigin("stored") }}
+                          placeholder="Paste the post link, or drag a detected post here"
+                        />
+                        {isWebLink && (
+                          <a href={link} target="_blank" rel="noopener noreferrer" title="Open post" className="text-[#0F6B3E] hover:text-[#1FAE5B]">
+                            <IconLink size={14} />
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+                {hasDeliverables && postUrlOrigin !== "stored" && (
+                  <div className="text-[10px] text-gray-400 mt-1">
+                    {postUrlOrigin === "detected" ? "Filled from Automatic Post Detection" : "Dropped from a detected post"} — Update to keep it.
+                  </div>
+                )}
+              </div>
+
+              {/* Post URL — typed, auto-filled from detection, or dropped from
+                  the detected posts list above. All three end up as the same
+                  form value and are saved by the same Save button. Replaced by
+                  the per-deliverable links above when deliverables are set. */}
+              {!hasDeliverables && (
+              <div
+                className="pfg"
+                onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; setUrlDropActive(true) }}
+                onDragEnter={e => { e.preventDefault(); setUrlDropActive(true) }}
+                onDragLeave={e => {
+                  // Ignore the leave events fired while crossing child nodes.
+                  if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+                  setUrlDropActive(false)
+                }}
+                onDrop={handleUrlDrop}
+              >
+                <div className="pfl">Post URL</div>
+                <input
+                  ref={postUrlRef}
+                  className="pfi"
+                  style={urlDropActive ? { borderColor: "#1FAE5B", background: "#1FAE5B0D" } : undefined}
+                  value={postData.postUrl}
+                  onChange={e => { setPostData(d => ({ ...d, postUrl: e.target.value })); setPostUrlOrigin("stored") }}
+                  placeholder="Paste a link, or drag a detected post here"
+                />
+                {urlDropActive ? (
+                  <div className="text-[10px] text-[#0F6B3E] mt-1">Drop to use this post URL</div>
+                ) : postUrlOrigin === "detected" ? (
+                  <div className="text-[10px] text-gray-400 mt-1">
+                    Filled from Automatic Post Detection — Update to keep it.
+                  </div>
+                ) : postUrlOrigin === "dropped" ? (
+                  <div className="text-[10px] text-gray-400 mt-1">
+                    Dropped from a detected post — Update to keep it.
+                  </div>
+                ) : null}
+              </div>
+              )}
               <div className="pfr">
                 <div className="pfg"><div className="pfl">Posted At</div><input type="date" className="pfi" value={postData.postedAt} onChange={e => setPostData(d => ({ ...d, postedAt: e.target.value }))} /></div>
                 <div className="pfg"><div className="pfl">Internal Rating</div>
@@ -715,16 +1689,16 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
                 <div className="pfg"><div className="pfl">Likes</div><input className="pfi" value={postData.likes} onChange={e => setPostData(d => ({ ...d, likes: e.target.value }))} /></div>
                 <div className="pfg"><div className="pfl">Comments</div><input className="pfi" value={postData.comments} onChange={e => setPostData(d => ({ ...d, comments: e.target.value }))} /></div>
               </div>
-              <div className="pfg"><div className="pfl">Engagement</div><input className="pfi" value={postData.engagement} onChange={e => setPostData(d => ({ ...d, engagement: e.target.value }))} /></div>
+              <div className="pfg"><div className="pfl">Views{fetchingMetrics ? " · fetching…" : ""}</div><input className="pfi" value={postData.views} onChange={e => setPostData(d => ({ ...d, views: e.target.value }))} /></div>
               <div className="pfr">
                 <div className="pfg"><div className="pfl">Script Status</div>
                   <select className="pfi" value={postData.scriptStatus} onChange={e => setPostData(d => ({ ...d, scriptStatus: e.target.value }))}>
-                    <option value="">Select...</option><option value="pending">Pending</option><option value="revision_requested">Revision Requested</option><option value="approved">Approved</option>
+                    <option value="">Select...</option><option value="n_a">N/A</option><option value="pending">Pending</option><option value="revision_requested">Revision Requested</option><option value="approved">Approved</option>
                   </select>
                 </div>
                 <div className="pfg"><div className="pfl">Content Status</div>
                   <select className="pfi" value={postData.contentStatus} onChange={e => setPostData(d => ({ ...d, contentStatus: e.target.value }))}>
-                    <option value="">Select...</option><option value="pending">Pending</option><option value="revision_requested">Revision Requested</option><option value="approved">Approved</option>
+                    <option value="">Select...</option><option value="n_a">N/A</option><option value="pending">Pending</option><option value="revision_requested">Revision Requested</option><option value="approved">Approved</option>
                   </select>
                 </div>
               </div>
@@ -735,9 +1709,10 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
                   padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
                 }}
               >
-                <button className="btn-secondary" onClick={() => setPostData(d => ({ ...d, postUrl: inf.postUrl || "" }))}>Cancel</button>
-                <button className="btn-primary" onClick={handleSavePost} disabled={savingPost}>{savingPost ? "Saving…" : "Save"}</button>
+                <button className="btn-primary" onClick={handleSavePost} disabled={savingPost}>{savingPost ? "Updating…" : "Update"}</button>
               </div>
+                </>
+              )}
             </div>
           )}
 
@@ -748,9 +1723,9 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
               <div className="skg">
                 <div className="skc"><div className="skv-dark">{inf.followers}</div><div className="skl">Followers</div></div>
                 <div className="skc"><div className="skv-blue">{inf.engagementRate || "—"}</div><div className="skl">Eng. rate</div></div>
-                <div className="skc"><div className="skv-dark">{inf.likesCount?.toLocaleString() ?? "—"}</div><div className="skl">Likes</div></div>
-                <div className="skc"><div className="skv-dark">{inf.commentsCount?.toLocaleString() ?? "—"}</div><div className="skl">Comments</div></div>
-                <div className="skc"><div className="skv-dark">{inf.engagementCount?.toLocaleString() ?? "—"}</div><div className="skl">Total engagement</div></div>
+                <div className="skc"><div className="skv-dark">{Number.isFinite(inf.likesCount) ? inf.likesCount.toLocaleString() : "—"}</div><div className="skl">Likes</div></div>
+                <div className="skc"><div className="skv-dark">{Number.isFinite(inf.commentsCount) ? inf.commentsCount.toLocaleString() : "—"}</div><div className="skl">Comments</div></div>
+                <div className="skc"><div className="skv-dark">{Number.isFinite(inf.viewsCount) ? inf.viewsCount.toLocaleString() : "—"}</div><div className="skl">Views</div></div>
                 <div className="skc"><div className="skv-green">{fmtMoney(inf.agreedRate)}</div><div className="skl">Rate</div></div>
               </div>
               <div className="stit">Timeline</div>
@@ -764,7 +1739,11 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
 
           {/* ════ PAID COLLAB DETAILS TAB ════ */}
           {profileTab === 4 && (
-            <PaidCollabTab influencerName={inf.influencer} rateHint={inf.agreedRate ?? undefined} />
+            <PaidCollabTab
+              influencerName={inf.influencer}
+              rateHint={inf.agreedRate ?? undefined}
+              initialDeliverables={getDeliverables(inf.paidCollabData).map((d, i) => ({ ...d, postUrl: deliverablePostUrl(d, i, inf.postUrl) }))}
+            />
           )}
 
           {/* ════ HISTORY TAB ════ */}
@@ -774,20 +1753,26 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
 
         </div>
 
-        {drawerToast && <div className="drawer-toast">{drawerToast}</div>}
-
         <style jsx>{`
           .pp { position:fixed; top:0; right:0; width:520px; max-width:100vw; height:100%; background:#fff; box-shadow:-8px 0 40px rgba(0,0,0,0.14); z-index:500; display:flex; flex-direction:column; font-family:"Inter",system-ui,sans-serif; }
           .pph { padding:16px 20px; border-bottom:1px solid #f0f0f0; }
           .ppt { font-size:11px; font-weight:600; color:#9ca3af; letter-spacing:.1em; text-transform:uppercase; margin-bottom:12px; }
           .pav { width:44px; height:44px; border-radius:50%; background:#1fae5b; display:flex; align-items:center; justify-content:center; font-size:18px; font-weight:700; color:#fff; flex-shrink:0; box-shadow:0 0 0 3px #dcfce7; }
-          .pnm { font-size:15px; font-weight:700; color:#111827; }
-          .phd { font-size:12px; color:#6b7280; margin-top:2px; }
-          .ssel { font-size:11px; padding:5px 10px; border-radius:8px; border:.5px solid #f4b740; background:#fffbeb; color:#854f0b; cursor:pointer; font-family:inherit; font-weight:500; transition:all .15s; }
-          .csel { font-size:11px; padding:5px 10px; border-radius:8px; border:1px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; font-family:inherit; font-weight:600; transition:all .15s; min-width:130px; }
-          .close-btn { width:30px; height:30px; border-radius:50%; border:1.5px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; flex-shrink:0; line-height:1; margin-top:14px; transition:background .15s,border-color .15s,color .15s; }
+          .pnm { font-size:15px; font-weight:700; color:#111827; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+          .phd { font-size:12px; color:#6b7280; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+          /* Fixed width, not min-width: a native select otherwise resizes to fit
+             whichever option is currently selected — "Posted" is short but "For
+             Order Creation" / "TikTok Shop + Paid" are not, so the row's total
+             width (and therefore whether it wraps) used to change depending on
+             what was picked, not just on screen size. overflow/ellipsis lets a
+             longer label clip cleanly inside that fixed box instead of forcing
+             it wider. */
+          .ssel { font-size:11px; padding:5px 10px; border-radius:8px; border:.5px solid #f4b740; background:#fffbeb; color:#854f0b; cursor:pointer; font-family:inherit; font-weight:500; transition:all .15s; width:115px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+          .csel { font-size:11px; padding:5px 10px; border-radius:8px; border:1px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; font-family:inherit; font-weight:600; transition:all .15s; width:115px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+          .close-btn { position:absolute; top:16px; right:20px; z-index:1; width:30px; height:30px; border-radius:50%; border:1.5px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; line-height:1; transition:background .15s,border-color .15s,color .15s; }
           .close-btn:hover { background:#fee2e2; color:#dc2626; border-color:#fca5a5; }
-          .atag { font-size:12px; font-weight:500; padding:6px 14px; border-radius:20px; cursor:pointer; border:1px solid #e5e7eb; background:#f9fafb; color:#555; }
+          .atag { font-size:12px; font-weight:500; padding:6px 14px; border-radius:20px; cursor:pointer; border:1px solid #e5e7eb; background:#f9fafb; color:#555; transition:background .15s,border-color .15s,color .15s; }
+          .atag:not(.plat):hover { background:#eafaf1; border-color:#1fae5b; color:#1fae5b; }
           .atag.plat { background:#1fae5b; color:#fff; border-color:#1fae5b; }
           .pit-bar { display:flex; gap:0; padding:0 20px; border-bottom:1px solid #f0f0f0; overflow-x:auto; }
           .pit { font-size:12px; font-weight:600; padding:11px 14px; cursor:pointer; color:#9ca3af; border-bottom:2px solid transparent; white-space:nowrap; transition:color .15s; flex-shrink:0; }
@@ -824,7 +1809,6 @@ function ProfileDrawer({ inf, brandId, onClose, onColumnChange, onCollabTypeChan
           .btn-secondary { background:transparent; color:#6b7280; border:1.5px solid #e5e7eb; padding:9px 18px; border-radius:8px; cursor:pointer; font-size:13px; font-weight:600; font-family:inherit; transition:background .15s,border-color .15s; }
           .btn-secondary:hover { background:#f9fafb; border-color:#d1d5db; }
           .btn-primary:hover { background:#0f6b3e; }
-          .drawer-toast { position:absolute; bottom:20px; right:20px; background:#111827; color:#fff; font-size:13px; padding:8px 16px; border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,.2); z-index:600; }
         `}</style>
       </div>
     </>
@@ -846,41 +1830,40 @@ function PostTrackerContent() {
   const brandId = searchParams.get("brandId") ?? undefined
   const { canApproveInfluencers, loading: capabilitiesLoading } = useBrandCapabilities(brandId)
   const canApprove = !capabilitiesLoading && canApproveInfluencers
-  const [isSubscribed, setIsSubscribed] = useState<boolean | null>(null)
-  // Deliberately starts undefined (not "inactive") — AutoPostDetectionCard's
-  // usePlanAccess treats a defined prop as "already resolved, trust it";
-  // seeding a placeholder string here made it look resolved before the real
-  // /api/subscription/status check below ever ran, briefly unlocking a
-  // premium feature for free-tier users. undefined correctly signals "not
-  // loaded yet" until the fetch below sets the real value.
-  const [subscriptionStatus, setSubscriptionStatus] = useState<string | undefined>(undefined)
+  // Shared, cached gate. `status` stays undefined until the check resolves —
+  // AutoPostDetectionCard's usePlanAccess treats a defined prop as "already
+  // resolved, trust it", so a placeholder here would briefly unlock a premium
+  // feature for free-tier users. A cached answer resolves on mount instead.
+  const { isSubscribed, status: subscriptionStatus } = useSubscriptionGate(brandId)
+
+  const { data, isLoading, error, hasGivenUp, updateColumn, markCompleted, updateCampaignType, updatePostDetails, updateOrderDetails, refreshPostMetrics, isSaving, saveFailed, saveMessage, refetch } = useClosedData(brandId)
+
+  // Same approach and constant as the Pipeline board (kanban/kanban-board.tsx)
+  // — see there for why it's measured rather than a flat vh, and why this
+  // depends on `isLoading`.
+  const boardPanelRef = useRef<HTMLDivElement>(null)
+  const [columnHeight, setColumnHeight] = useState<number | null>(null)
 
   useEffect(() => {
-    const checkSubscription = async () => {
-      try {
-        const response = await fetch(brandId ? `/api/subscription/status?brandId=${brandId}` : "/api/subscription/status")
-        const data = await response.json()
-        setSubscriptionStatus(data.status || "inactive")
-        setIsSubscribed((data.status === "active" || data.status === "trialing") && !data.isExpired)
-      } catch (error) {
-        console.error("Failed to check subscription:", error)
-        setSubscriptionStatus("inactive")
-        setIsSubscribed(false)
-      }
+    function recomputeColumnHeight() {
+      const panel = boardPanelRef.current
+      if (!panel) return
+      const top = panel.getBoundingClientRect().top
+      const RESERVED_BELOW_TOP = 76
+      const available = window.innerHeight - top - RESERVED_BELOW_TOP
+      setColumnHeight(Math.max(220, Math.round(available)))
     }
-
-    if (session.status === "authenticated") {
-      checkSubscription()
-    }
-  }, [session.status, brandId])
-
-  const { data, isLoading, error, updateColumn, updateCampaignType, updatePostUrl, refetch } = useClosedData(brandId)
+    recomputeColumnHeight()
+    window.addEventListener("resize", recomputeColumnHeight)
+    return () => window.removeEventListener("resize", recomputeColumnHeight)
+  }, [isLoading])
 
   const [view,                 setView]                 = useState<"Board"|"list">("Board")
   const [search,               setSearch]               = useState("")
   const [activeId,             setActiveId]             = useState<string|null>(null)
   const [selectedInf,          setSelectedInf]          = useState<ClosedInfluencer|null>(null)
   const [toastMsg,             setToastMsg]             = useState<string|null>(null)
+  const [toastType,            setToastType]            = useState<"success"|"error">("success")
   const [showFilterPanel,      setShowFilterPanel]      = useState(false)
   // Name/handle filtering lives in the global search bar only — the panel
   // holds filters that search can't express.
@@ -902,37 +1885,74 @@ function PostTrackerContent() {
   const [postUrlBlocked, setPostUrlBlocked] = useState<ClosedInfluencer[]>([])
   // Move refused because the row is already Posted (terminal). Holds the
   // intended target so the reset can be confirmed and then re-applied.
-  const [resetBlocked, setResetBlocked] = useState<{ inf: ClosedInfluencer; target: ClosedColumn } | null>(null)
+  const [resetBlocked, setResetBlocked] = useState<{ inf: ClosedInfluencer; target: ClosedColumn; issueNote?: string } | null>(null)
+  // Move(s) into Issues waiting on the required note (single row or bulk).
+  const [issuePending, setIssuePending] = useState<{ targets: ClosedInfluencer[]; resetWorkflow?: boolean; bulk?: boolean } | null>(null)
   // Set when the drawer is opened from the warning's "Go to Post Details"
   const [drawerFocusPostUrl, setDrawerFocusPostUrl] = useState(false)
 
-  const showToast = (msg: string) => { setToastMsg(msg); setTimeout(()=>setToastMsg(null),3000) }
+  const showToast = (msg: string, type: "success"|"error" = "success") => {
+    setToastMsg(msg); setToastType(type); setTimeout(()=>setToastMsg(null),3000)
+  }
   const sensors   = useSensors(useSensor(PointerSensor,{activationConstraint:{distance:5}}))
 
-  const handleMove = useCallback(async (id: string, col: ClosedColumn, opts?: { resetWorkflow?: boolean }) => {
+  // The drawer reads the row from the board's own data, not from the copy taken
+  // when it opened. `selectedInf` was patched separately after each move's
+  // request resolved — so with quick back-and-forth moves the responses landed
+  // out of order and the drawer's Stage showed a different (or no) current stage
+  // than the card. The board data is the one source every view now shares.
+  const liveSelectedInf = useMemo(
+    () => (selectedInf ? data.find(d => d.id === selectedInf.id) ?? selectedInf : null),
+    [selectedInf, data]
+  )
+
+  const handleMove = useCallback(async (id: string, col: ClosedColumn, opts?: { resetWorkflow?: boolean; issueNote?: string }) => {
     if (!canApprove) {
-      showToast("Only Owners and Managers can update post status")
+      showToast("Only Owners and Managers can update post status", "error")
       return false
     }
     const inf = data.find(d=>d.id===id)
-    // A manual move to Posted needs evidence of a published post. Automatic
-    // detection writes the record server-side and never runs through here.
-    if (col === "Posted" && inf && !hasPostUrl(inf)) {
+    // Every move INTO Issues goes through the required-note modal first; the
+    // modal calls back into this handler with the note set.
+    if (col === "Issues" && inf && inf.closedStatus !== "Issues" && opts?.issueNote === undefined) {
+      setIssuePending({ targets: [inf], resetWorkflow: opts?.resetWorkflow })
+      return false
+    }
+    const notes = opts?.issueNote !== undefined && inf ? appendIssueNote(inf.notes, opts.issueNote) : undefined
+    // A manual move to Posted needs evidence of a published post — either a
+    // Post URL or a post already found by Automatic Post Detection.
+    if (col === "Posted" && inf && !canEnterPosted(inf)) {
       setPostUrlBlocked([inf])
       return false
     }
-    const res = await updateColumn(id, col, opts)
+    const res = await updateColumn(id, col, { resetWorkflow: opts?.resetWorkflow, notes })
     if (res.ok) {
       showToast(`${inf?.influencer} moved to ${col}`)
-      setSelectedInf(p => p?.id===id ? {...p, closedStatus: col} : p)
+      setSelectedInf(p => p?.id===id ? {...p, closedStatus: col, ...(notes !== undefined && { notes })} : p)
     } else if (res.terminal && inf) {
       // Posted is final. Offer the explicit reset rather than failing silently.
-      setResetBlocked({ inf, target: col })
+      // The issue note is carried so the reset does not ask for it again.
+      setResetBlocked({ inf, target: col, issueNote: opts?.issueNote })
     } else {
-      showToast(res.error || "Failed to move")
+      showToast(res.error || "Failed to move", "error")
     }
     return res.ok
   }, [data, updateColumn, canApprove])
+
+  const handleComplete = useCallback(async (id: string) => {
+    if (!canApprove) {
+      showToast("Only Owners and Managers can update post status", "error")
+      return
+    }
+    const inf = data.find(d=>d.id===id)
+    const res = await markCompleted(id, true)
+    if (res.ok) {
+      showToast(`${inf?.influencer} marked as completed`)
+      setSelectedInf(p => p?.id===id ? {...p, completed: true} : p)
+    } else {
+      showToast(res.error || "Failed to mark as completed", "error")
+    }
+  }, [data, markCompleted, canApprove])
 
   const filteredData = useMemo(() => {
     let result = data.filter(inf =>
@@ -1000,17 +2020,23 @@ function PostTrackerContent() {
   // ── Bulk stage move ────────────────────────────────────────────────────────
   // Reuses the same per-row `updateColumn` that the single-row dropdown, the
   // card arrows and drag-and-drop all use — no new endpoint, no duplicated
-  // stage logic. Sequential on purpose: `updateColumn` rolls back from a
-  // full-list snapshot on failure, so overlapping calls could undo each
-  // other's successful writes. Sequential keeps every success intact.
-  const runBulkStageMove = async (col: ClosedColumn) => {
+  // stage logic. Concurrency is capped rather than serial: `updateColumn`
+  // restores only its own row on failure, so overlapping calls cannot undo each
+  // other's successful writes (see BULK_CONCURRENCY).
+  const runBulkStageMove = async (col: ClosedColumn, issueNote?: string) => {
     const candidates = selectedInfluencers.filter(d => d.closedStatus !== col)
 
-    // Same rule as the single-row paths: no Post URL, no manual move to Posted.
-    // If any selected row is missing one, block the whole batch and name them,
-    // rather than silently moving a subset.
+    // Bulk moves into Issues need the same required note as a single move.
+    if (col === "Issues" && issueNote === undefined && candidates.length > 0) {
+      setIssuePending({ targets: candidates, bulk: true })
+      return
+    }
+
+    // Same rule as the single-row paths: no post evidence, no manual move to
+    // Posted. If any selected row has neither a Post URL nor a detected post,
+    // block the whole batch and name them, rather than silently moving a subset.
     if (col === "Posted") {
-      const missing = candidates.filter(d => !hasPostUrl(d))
+      const missing = candidates.filter(d => !canEnterPosted(d))
       if (missing.length > 0) {
         setPostUrlBlocked(missing)
         return
@@ -1028,17 +2054,38 @@ function PostTrackerContent() {
     const failedIds: string[] = []
     let moved = 0
     let terminalSkipped = 0
-    for (const target of targets) {
-      const res = await updateColumn(target.id, col)
-      if (res.ok) {
-        moved += 1
-        setSelectedInf(p => (p?.id === target.id ? { ...p, closedStatus: col } : p))
-      } else {
-        // Already Posted — counted separately so the toast can say why, rather
-        // than reporting a generic failure the user can't act on.
-        if (res.terminal) terminalSkipped += 1
-        failedIds.push(target.id)
+
+    // Capped concurrency, not one request per selected row: the Prisma pool is
+    // capped at connection_limit=3, so unbounded parallel writes queue against
+    // three connections and cross the 10s pool timeout. `updateColumn` restores
+    // only its own row on failure, so overlapping calls cannot undo each
+    // other's successful writes.
+    let cursor = 0
+    const worker = async () => {
+      while (cursor < targets.length) {
+        const target = targets[cursor++]
+        // Derived views are marked stale once after the run, not per row.
+        const notes = issueNote !== undefined ? appendIssueNote(target.notes, issueNote) : undefined
+        const res = await updateColumn(target.id, col, { deferDerivedInvalidation: true, notes })
+        if (res.ok) {
+          moved += 1
+          setSelectedInf(p => (p?.id === target.id ? { ...p, closedStatus: col, ...(notes !== undefined && { notes }) } : p))
+        } else {
+          // Already Posted — counted separately so the toast can say why, rather
+          // than reporting a generic failure the user can't act on.
+          if (res.terminal) terminalSkipped += 1
+          failedIds.push(target.id)
+        }
       }
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(BULK_CONCURRENCY, targets.length) }, worker)
+    )
+
+    // One invalidation for the whole run. This board's own entry is excluded —
+    // already correct from the optimistic writes.
+    if (moved > 0 && brandId) {
+      invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId)])
     }
     setBulkBusy(false)
 
@@ -1049,9 +2096,12 @@ function PostTrackerContent() {
     const terminalNote = terminalSkipped > 0
       ? ` · ${terminalSkipped} already Posted (reset the workflow to move ${terminalSkipped === 1 ? "it" : "them"})`
       : ""
-    showToast(failedIds.length === 0
-      ? `${moved} influencer${moved === 1 ? "" : "s"} moved to ${col} ✓${skippedNote}`
-      : `${moved} moved to ${col}, ${failedIds.length} failed${skippedNote}${terminalNote} — the failed ones are still selected`)
+    showToast(
+      failedIds.length === 0
+        ? `${moved} influencer${moved === 1 ? "" : "s"} moved to ${col} ✓${skippedNote}`
+        : `${moved} moved to ${col}, ${failedIds.length} failed${skippedNote}${terminalNote} — the failed ones are still selected`,
+      failedIds.length === 0 ? "success" : "error"
+    )
   }
 
   const handleBulkStageSelect = (col: ClosedColumn) => {
@@ -1072,6 +2122,10 @@ function PostTrackerContent() {
   const activeInf          = activeId ? data.find(d=>d.id===activeId) : null
   const selectedColumnInfo = selectedColumnStatus ? COLUMNS.find(col=>col.key===selectedColumnStatus) : null
   const getItemsByColumn   = (columnKey: ClosedColumn) => filteredData.filter(item=>item.closedStatus===columnKey)
+  // "Completed" is a board view over Posted, not a stage of its own: a Posted
+  // row whose every deliverable has a post link moves there automatically.
+  // Marked completed from the Posted column ("Mark as completed").
+  const isCompleted        = (inf: ClosedInfluencer) => inf.completed === true
 
   const handleDragStart = (event: DragStartEvent) => setActiveId(event.active.id as string)
   const handleDragEnd   = async (event: DragEndEvent) => {
@@ -1085,11 +2139,64 @@ function PostTrackerContent() {
     await handleMove(id, newCol)
   }
 
-  const handlePostUrlChange = useCallback(async (id: string, postUrl: string): Promise<boolean> => {
-    const ok = await updatePostUrl(id, postUrl)
-    if (ok) setSelectedInf(p => (p?.id === id ? { ...p, postUrl: postUrl.trim() || null } : p))
+  const handlePostDetailsChange = useCallback(async (
+    id: string,
+    fields: PostDetailsFields,
+    options?: { markPosted?: boolean }
+  ): Promise<UpdateColumnResult> => {
+    const res = await updatePostDetails(id, fields, options)
+    if (res.ok) {
+      setSelectedInf(p => {
+        if (p?.id !== id) return p
+        const next: ClosedInfluencer = {
+          ...p,
+          ...(fields.postUrl !== undefined && { postUrl: fields.postUrl.trim() || null }),
+          ...(fields.postedAt !== undefined && { postedAt: fields.postedAt || null }),
+          ...(fields.likes !== undefined && { likesCount: parseMetricInput(fields.likes) }),
+          ...(fields.comments !== undefined && { commentsCount: parseMetricInput(fields.comments) }),
+          ...(fields.views !== undefined && { viewsCount: parseMetricInput(fields.views) }),
+          ...(fields.internalRating !== undefined && {
+            internalRating: fields.internalRating === "" ? null : Number(fields.internalRating),
+          }),
+          ...(fields.scriptStatus !== undefined && { scriptStatus: fields.scriptStatus }),
+          ...(fields.contentStatus !== undefined && { contentStatus: fields.contentStatus }),
+          ...(fields.paidCollabData !== undefined && { paidCollabData: fields.paidCollabData }),
+          ...(options?.markPosted && { closedStatus: "Posted" as ClosedColumn }),
+        }
+        return next
+      })
+    }
+    return res
+  }, [updatePostDetails])
+
+  const handleRefreshMetrics = useCallback(async (id: string) => {
+    const m = await refreshPostMetrics(id)
+    if (m.ok) {
+      setSelectedInf(p => p?.id !== id ? p : {
+        ...p,
+        ...(m.likes    != null && { likesCount:    m.likes }),
+        ...(m.comments != null && { commentsCount: m.comments }),
+        ...(m.views    != null && { viewsCount:    m.views }),
+      })
+    }
+    return m
+  }, [refreshPostMetrics])
+
+  const handleOrderDetailsChange = useCallback(async (id: string, fields: OrderDetailsFields): Promise<boolean> => {
+    const ok = await updateOrderDetails(id, fields)
+    if (ok) {
+      setSelectedInf(p => (p?.id !== id ? p : {
+        ...p,
+        ...(fields.trackingNumber !== undefined && { trackingNumber: fields.trackingNumber || null }),
+        ...(fields.shippedAt !== undefined && { shippedAt: fields.shippedAt || null }),
+        ...(fields.deliveredAt !== undefined && { deliveredAt: fields.deliveredAt || null }),
+        ...(fields.deadline !== undefined && { deadline: fields.deadline || null }),
+        ...(fields.currency !== undefined && { currency: fields.currency || null }),
+        ...(fields.deliverables !== undefined && { deliverables: fields.deliverables || null }),
+      }))
+    }
     return ok
-  }, [updatePostUrl])
+  }, [updateOrderDetails])
 
   const handleCollabTypeChange = useCallback(async (id: string, type: string): Promise<boolean> => {
     if (!canApprove) {
@@ -1140,16 +2247,53 @@ function PostTrackerContent() {
   }
 
   if (isLoading) return <BoardSkeleton label="Fetching data..." />
-  if (error) return <div className="flex flex-col items-center justify-center h-64 gap-3"><p className="text-red-500 text-sm">{error}</p><button onClick={refetch} className="text-[13px] px-4 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 transition">Retry</button></div>
+  // Two conditions, both required, before the page is given over to a fallback:
+  //
+  //   data.length === 0  there is genuinely nothing to show. A failed
+  //                      BACKGROUND refresh on a board that already has rows
+  //                      keeps the rows and reports itself through the inline
+  //                      notice below the toolbar instead.
+  //   hasGivenUp         no automatic retry is still coming. A transient blip
+  //                      (a dropped connection, a moment of pool exhaustion)
+  //                      is retried silently and keeps the skeleton above —
+  //                      gating on `error` alone is what put a bare
+  //                      "Failed to fetch" screen in front of the user for a
+  //                      failure that resolved itself a second later.
+  if (hasGivenUp && data.length === 0) return <div className="flex flex-col items-center justify-center h-64 gap-3"><p className="text-gray-600 text-sm">{error}</p><button onClick={refetch} className="text-[13px] px-4 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 transition">Retry</button></div>
 
   return (
     <SubscriptionGate isSubscribed={isSubscribed} status={subscriptionStatus} featureName="Post Tracker">
       <div className="flex flex-col gap-4 p-6">
-      {toastMsg&&<div className="fixed top-4 right-4 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg z-50 animate-in slide-in-from-top-2">{toastMsg}</div>}
+      {/* Save state lives in the bottom-right corner, clear of the board columns
+          and the bulk action bar — the shared pill, same as every other board. */}
+      <div className="notice-dock">
+        <SaveStatusPill saving={isSaving} failed={saveFailed} message={saveMessage ?? undefined} />
+      </div>
+
+      {/* Outcome floating at the top right (`.notice-dock-top`,
+          app/globals.css) — the answer the user was waiting for, where they
+          are actually looking. h-9 is the toolbar Search field's height, so
+          the two match without forcing the message to a fixed width. Slides
+          in from the top to match the edge it now enters from; timing,
+          wording and dismissal are untouched. */}
+      <div className="notice-dock-top">
+        {toastMsg && (
+          <div className={`flex h-9 max-w-full items-center rounded-lg px-3 shadow-lg text-white text-sm font-medium whitespace-nowrap animate-in slide-in-from-top-2 ${toastType === "error" ? "bg-red-600" : "bg-[#1FAE5B]"}`}>
+            <span className="truncate">{toastMsg}</span>
+          </div>
+        )}
+      </div>
+
+      {/* A refresh failed but the board still has its last good rows — say so
+          inline instead of replacing the board (see the error gate above).
+          hasGivenUp, not error: while the bounded retry is still running there
+          is nothing for the user to do, so the board just stays as it is. */}
+      {hasGivenUp && data.length > 0 && (
+        <StaleDataNotice message={error ?? ""} onRetry={refetch} />
+      )}
 
       {postUrlBlocked.length>0&&(
         <PostUrlRequiredDialog
-          count={postUrlBlocked.length}
           // With one influencer we can take the user straight to its Post tab;
           // for a bulk rejection there's no single record to open.
           onGoToPostDetails={postUrlBlocked.length===1 ? ()=>{
@@ -1162,15 +2306,28 @@ function PostTrackerContent() {
         />
       )}
 
+      {issuePending&&(
+        <IssueNoteModal
+          targets={issuePending.targets}
+          onConfirm={note=>{
+            const pending = issuePending
+            setIssuePending(null)
+            if (pending.bulk) void runBulkStageMove("Issues", note)
+            else void handleMove(pending.targets[0].id, "Issues", { resetWorkflow: pending.resetWorkflow, issueNote: note })
+          }}
+          onCancel={()=>setIssuePending(null)}
+        />
+      )}
+
       {resetBlocked&&(
         <ResetWorkflowDialog
           influencerName={resetBlocked.inf.influencer}
           target={resetBlocked.target}
           onConfirm={async()=>{
-            const { inf, target } = resetBlocked
+            const { inf, target, issueNote } = resetBlocked
             setResetBlocked(null)
             // Same handler, now with the explicit administrator override.
-            await handleMove(inf.id, target, { resetWorkflow: true })
+            await handleMove(inf.id, target, { resetWorkflow: true, issueNote })
           }}
           onCancel={()=>setResetBlocked(null)}
         />
@@ -1181,10 +2338,12 @@ function PostTrackerContent() {
           // Remount when the target or the "jump to Post URL" intent changes,
           // so initialTab/focus apply even if the drawer is already open.
           key={`${selectedInf.id}${drawerFocusPostUrl ? ":post" : ""}`}
-          inf={selectedInf} brandId={brandId}
+          inf={liveSelectedInf ?? selectedInf} brandId={brandId}
           onClose={()=>{ setSelectedInf(null); setDrawerFocusPostUrl(false) }}
+          onNotify={showToast}
           onColumnChange={handleMove} onCollabTypeChange={handleCollabTypeChange}
-          onPostUrlChange={handlePostUrlChange} canApproveInfluencers={canApprove}
+          onPostDetailsChange={handlePostDetailsChange} onRefreshMetrics={handleRefreshMetrics} onOrderDetailsChange={handleOrderDetailsChange}
+          canApproveInfluencers={canApprove}
           subscriptionStatus={subscriptionStatus}
           initialTab={drawerFocusPostUrl ? 2 : 0} focusPostUrl={drawerFocusPostUrl}/>
       )}
@@ -1195,12 +2354,14 @@ function PostTrackerContent() {
         <div className="relative flex-1 min-w-[200px] max-w-xs">
           <IconSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search influencer..."
+            data-tour="post-tracker-search"
             className="w-full pl-9 pr-3 h-9 border border-[#0F6B3E]/20 rounded-lg outline-none focus:ring-2 focus:ring-[#1FAE5B] text-sm"/>
         </div>
 
         {/* Filters */}
         <div className="relative">
           <button onClick={()=>setShowFilterPanel(!showFilterPanel)}
+            data-tour="post-tracker-filters"
             className={`h-9 px-3 rounded-lg text-sm flex items-center gap-1.5 border transition-colors ${hasActiveFilters?"bg-[#1FAE5B] text-white border-[#1FAE5B]":"border-[#0F6B3E]/20 hover:border-[#0F6B3E]/40"}`}>
             <IconFilter size={15}/> Filters
             {activeFilterCount > 0 && (
@@ -1254,12 +2415,16 @@ function PostTrackerContent() {
           {filteredData.length} of {data.length} influencer{data.length!==1?"s":""}
         </span>
 
+        {/* Real freshness, from the shared cache entry this board renders
+            from — same component and placement on every board. */}
+        <DataSyncStatus cacheKey={brandId ? `/api/brand/${brandId}/closed` : null} />
+
         {/* Spacer */}
         <div className="flex-1"/>
 
         {/* View toggle */}
 {/* View toggle */}
-<div className="inline-flex h-9 items-center rounded-lg border border-[#0F6B3E]/20 bg-white p-1">
+<div className="inline-flex h-9 items-center rounded-lg border border-[#0F6B3E]/20 bg-white p-1" data-tour="post-tracker-view-toggle">
   <button
     onClick={() => {
       setView("Board")
@@ -1295,17 +2460,24 @@ function PostTrackerContent() {
       {/* ── KANBAN ── */}
       {view==="Board"&&(
         <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-          <div className="rounded-xl border border-[#0F6B3E]/10 bg-white p-5 overflow-x-auto" style={{ scrollSnapType: "x proximity" }}>
+          <div ref={boardPanelRef} className="rounded-xl border border-[#0F6B3E]/10 bg-white px-5 pt-5 pb-6 overflow-x-auto" style={{ scrollSnapType: "x proximity" }}>
             <div className="flex gap-4 min-w-max">
 
               {/* Main columns */}
-              {COLUMNS.filter(c=>c.key!=="No post").map(col => {
-                const items = getItemsByColumn(col.key)
+              {/* The two hand-placed columns are excluded here and rendered after the
+                  Exit separator below, in order: No post, then Issues. */}
+              {COLUMNS.filter(c=>c.key!=="No post"&&c.key!=="Issues").map((col, colIndex) => {
+                const items = col.key==="Posted"
+                  ? getItemsByColumn(col.key).filter(inf=>!isCompleted(inf))
+                  : getItemsByColumn(col.key)
                 return (
-                  <div key={col.key} className="w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0" style={{ scrollSnapAlign: "start" }}>
+                  <div key={col.key} className="w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0" style={{ scrollSnapAlign: "start", height: columnHeight ?? undefined }}>
                     <DroppableColumn id={col.key}>
                       {/* ── Column header — identical structure to pipeline ── */}
-                      <div className={`${col.color} text-white rounded-lg px-3 py-2 text-sm font-semibold flex items-center justify-between`}>
+                      <div
+                        className={`${col.color} text-white rounded-lg px-3 py-2 text-sm font-semibold flex items-center justify-between`}
+                        data-tour={colIndex===0?"post-tracker-stage-columns":undefined}
+                      >
                         <span
                           onClick={() => handleColumnClick(col)}
                           className="flex-1 cursor-pointer hover:opacity-90 transition-opacity truncate mr-2"
@@ -1318,12 +2490,12 @@ function PostTrackerContent() {
                       </div>
                       </div>
                       {/* No description text here — it's in the tooltip */}
-                      <div className="flex flex-col gap-2 min-h-[400px] mt-2">
+                      <div className="flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto mt-2 pr-1">
                         {items.length===0?(
                           <div className="border-2 border-dashed border-gray-200 rounded-lg p-4 text-center text-xs text-gray-400">Drop here</div>
                         ):items.map(inf=>(
                           <DraggableCard key={inf.id} id={inf.id} onClick={()=>setSelectedInf(inf)} disabled={!canApprove}>
-                            <PostTrackerCard inf={inf} onOpen={setSelectedInf} onMove={handleMove} canApproveInfluencers={canApprove}/>
+                            <PostTrackerCard inf={inf} onOpen={setSelectedInf} onMove={handleMove} onComplete={handleComplete} canApproveInfluencers={canApprove}/>
                           </DraggableCard>
                         ))}
                       </div>
@@ -1331,6 +2503,32 @@ function PostTrackerContent() {
                   </div>
                 )
               })}
+
+              {/* Completed — Posted rows marked completed. Not a drop target: a
+                  card lands here through "Mark as completed" on the Posted
+                  card, which requires every deliverable to have a post link. */}
+              {(()=>{
+                const items = getItemsByColumn("Posted").filter(isCompleted)
+                return (
+                  <div className="w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0" style={{ scrollSnapAlign: "start", height: columnHeight ?? undefined }}>
+                    <div className="flex flex-col gap-3 h-full rounded-lg">
+                      <div className="bg-[#1FAE5B] text-white rounded-lg px-3 py-2 text-sm font-semibold flex items-center justify-between">
+                        <span className="flex-1 truncate mr-2">Completed</span>
+                        <span className="bg-white/20 text-white rounded-full px-2 py-0.5 text-xs flex-shrink-0">{items.length}</span>
+                      </div>
+                      <div className="flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto mt-2 pr-1">
+                        {items.length===0?(
+                          <div className="border-2 border-dashed border-gray-200 rounded-lg p-4 text-center text-xs text-gray-400">All deliverables posted</div>
+                        ):items.map(inf=>(
+                          <DraggableCard key={inf.id} id={inf.id} onClick={()=>setSelectedInf(inf)} disabled={!canApprove}>
+                            <PostTrackerCard inf={inf} onOpen={setSelectedInf} onMove={handleMove} onComplete={handleComplete} canApproveInfluencers={canApprove}/>
+                          </DraggableCard>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })()}
 
               {/* Exit separator */}
               <div className="flex flex-col items-center justify-center px-2 flex-shrink-0">
@@ -1344,7 +2542,7 @@ function PostTrackerContent() {
                 const col   = COLUMNS.find(c=>c.key==="No post")!
                 const items = getItemsByColumn(col.key)
                 return (
-                  <div className="w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0" style={{ scrollSnapAlign: "start" }}>
+                  <div className="w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0" style={{ scrollSnapAlign: "start", height: columnHeight ?? undefined }}>
                     <DroppableColumn id={col.key} isExit>
                       {/* Soft red style matching pipeline NI header */}
                       <div className="bg-red-100 text-red-700 border border-red-200 rounded-lg px-3 py-2 text-sm font-semibold flex items-center justify-between">
@@ -1359,12 +2557,49 @@ function PostTrackerContent() {
                           <span className="bg-red-200 text-red-700 rounded-full px-2 py-0.5 text-xs">{items.length}</span>
                         </div>
                       </div>
-                      <div className="flex flex-col gap-2 min-h-[400px] mt-2">
+                      <div className="flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto mt-2 pr-1">
                         {items.length===0?(
                           <div className="border-2 border-dashed border-red-200 rounded-lg p-4 text-center text-xs text-gray-400">Drop here</div>
                         ):items.map(inf=>(
                           <DraggableCard key={inf.id} id={inf.id} onClick={()=>setSelectedInf(inf)} disabled={!canApprove}>
-                            <PostTrackerCard inf={inf} onOpen={setSelectedInf} onMove={handleMove} canApproveInfluencers={canApprove}/>
+                            <PostTrackerCard inf={inf} onOpen={setSelectedInf} onMove={handleMove} onComplete={handleComplete} canApproveInfluencers={canApprove}/>
+                          </DraggableCard>
+                        ))}
+                      </div>
+                    </DroppableColumn>
+                  </div>
+                )
+              })()}
+
+              {/* Issues — to the right of No post, past the Exit boundary.
+                  Styled like the No post column (soft header, not the solid
+                  bars the active stages use) because both sit outside the
+                  forward flow, but purple rather than red: a row here is
+                  stalled, not finished, and is expected to come back. */}
+              {(()=>{
+                const col   = COLUMNS.find(c=>c.key==="Issues")!
+                const items = getItemsByColumn(col.key)
+                return (
+                  <div className="w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0" style={{ scrollSnapAlign: "start", height: columnHeight ?? undefined }}>
+                    <DroppableColumn id={col.key}>
+                      <div className="bg-purple-100 text-purple-700 border border-purple-200 rounded-lg px-3 py-2 text-sm font-semibold flex items-center justify-between">
+                        <span
+                          onClick={() => handleColumnClick(col)}
+                          className="flex-1 cursor-pointer hover:opacity-90 transition-opacity truncate mr-2"
+                        >
+                          {col.title}
+                        </span>
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          <ColumnInfoTooltip colKey={col.key} variant="light" />
+                          <span className="bg-purple-200 text-purple-700 rounded-full px-2 py-0.5 text-xs">{items.length}</span>
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto mt-2 pr-1">
+                        {items.length===0?(
+                          <div className="border-2 border-dashed border-purple-200 rounded-lg p-4 text-center text-xs text-gray-400">Drop here</div>
+                        ):items.map(inf=>(
+                          <DraggableCard key={inf.id} id={inf.id} onClick={()=>setSelectedInf(inf)} disabled={!canApprove}>
+                            <PostTrackerCard inf={inf} onOpen={setSelectedInf} onMove={handleMove} onComplete={handleComplete} canApproveInfluencers={canApprove}/>
                           </DraggableCard>
                         ))}
                       </div>
@@ -1469,7 +2704,7 @@ function PostTrackerContent() {
                 {filteredData.length===0?(
                   <tr><td colSpan={10} className="px-4 py-8 text-center text-gray-500">No influencers found</td></tr>
                 ):filteredData.map(inf=>(
-                  <tr key={inf.id} className={`border-t hover:bg-gray-50 cursor-pointer transition ${selectedIds.has(inf.id)?"bg-blue-50/60":""}`} onClick={()=>setSelectedInf(inf)}>
+                  <tr key={inf.id} style={{ contentVisibility: "auto", containIntrinsicSize: "auto 49px" }} className={`border-t hover:bg-gray-50 cursor-pointer transition ${selectedIds.has(inf.id)?"bg-blue-50/60":""}`} onClick={()=>setSelectedInf(inf)}>
                     <td className="px-4 py-3" onClick={e=>e.stopPropagation()}>
                       <input
                         type="checkbox"
@@ -1480,7 +2715,12 @@ function PostTrackerContent() {
                       />
                     </td>
                     <td className="px-4 py-3"><div className="flex items-center gap-3">{inf.profileImageUrl?<img src={inf.profileImageUrl} alt="" className="w-8 h-8 rounded-full object-cover flex-shrink-0"/>:<div className={`w-8 h-8 rounded-full flex-shrink-0 ${getAvatarColor(inf.influencer)} bg-opacity-20 flex items-center justify-center text-[#0F6B3E] font-semibold text-xs`}>{inf.influencer.charAt(0).toUpperCase()}</div>}<span className="font-medium">{inf.influencer}</span></div></td>
-                    <td className="px-4 py-3">{inf.platform||"Instagram"}</td>
+                    <td className="px-4 py-3">
+                      <span className="inline-flex min-w-0 items-center gap-1.5 leading-none">
+                        <PlatformIcon platform={inf.platform} size={14} className="shrink-0" />
+                        <span className="truncate">{getPlatformLabel(inf.platform) || "—"}</span>
+                      </span>
+                    </td>
                     <td className="px-4 py-3 text-[#0F6B3E] font-medium">@{inf.handle}</td>
                     <td className="px-4 py-3"><div className="flex items-center gap-1"><IconLocation size={14} className="text-gray-400"/>{inf.location||"—"}</div></td>
                     <td className="px-4 py-3">{inf.followers}</td>

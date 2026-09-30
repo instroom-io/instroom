@@ -1,14 +1,15 @@
 "use client"
 // table-sheet/profile-sidebar.tsx
 
-import React, { useState, useEffect } from "react"
+import React, { useState, useEffect, useRef } from "react"
 import type { InfluencerRow, CustomColumn } from "./types"
 import { platforms } from "./constants"
 import { STATUS_LABEL, JOURNEY_STATUSES, getJourneyStatus, journeyStatusToFields, type JourneyStatus } from "./constants"
 import { getProfileUrl, handleApprovalChange, formatFollowers } from "./utils"
 import { ProfilePicture } from "./ui-atoms"
-import { DeclineConfirmationModal } from "./modals"
+import { DeclineModal } from "@/components/shared/decline-modal"
 import { EmailModal } from "@/components/shared/email-modal"
+import type { CampaignDeliverable } from "@/lib/deliverables"
 
 // Instagram's official "message me" shortlink opens a DM composer directly.
 // No platform exposes an equivalent deep link for an arbitrary handle, so
@@ -18,6 +19,15 @@ function getDmUrl(platform: string, handle: string): string {
   if (platform === "instagram") return `https://ig.me/m/${clean}`
   return getProfileUrl(platform, handle)
 }
+
+/**
+ * How long the History tab waits for its activity log before giving up.
+ *
+ * Shorter than the profile lookup's 15s: this is a same-origin read of our own
+ * database behind an already-open panel, so a slow answer is a problem, and the
+ * tab has a perfectly good error state to fall back to.
+ */
+const HISTORY_FETCH_TIMEOUT_MS = 10_000
 
 // ─── Activity log types ───────────────────────────────────────────────────────
 interface ActivityLog {
@@ -86,13 +96,34 @@ function HistoryTab({ brandId, biId }: { brandId?: string; biId: string }) {
     }
     setLoading(true)
     setError(null)
-    fetch(`/api/brand/${brandId}/influencers/${biId}/activity`)
+    // Aborted on cleanup, so switching influencer (or closing the panel) drops
+    // the previous request instead of letting it land on the new one's tab —
+    // and the timeout stops an unreachable backend leaving this stuck on
+    // "loading" forever. Both failures are contained in this tab: an inline
+    // line of text, never a dialog over the sheet.
+    const controller = new AbortController()
+    // `cancelled` separates the two reasons this request can abort. Both raise
+    // an AbortError, but only one of them should stay silent: a cleanup abort
+    // means the component moved on and setting state would flash an error onto
+    // the influencer the user just switched to, while a TIMEOUT abort is a real
+    // failure the tab has to report — swallowing it would leave the panel
+    // spinning forever.
+    let cancelled = false
+    const timeout = setTimeout(() => controller.abort(), HISTORY_FETCH_TIMEOUT_MS)
+    fetch(`/api/brand/${brandId}/influencers/${biId}/activity`, { signal: controller.signal })
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.json()
       })
-      .then(d => { setLogs(d.logs ?? []); setLoading(false) })
-      .catch(err => { console.error("[HistoryTab]", err); setError("Failed to load history"); setLoading(false) })
+      .then(d => { if (!cancelled) { setLogs(d.logs ?? []); setLoading(false) } })
+      .catch(err => {
+        if (cancelled) return
+        console.error("[HistoryTab]", err)
+        setError("Failed to load history")
+        setLoading(false)
+      })
+      .finally(() => clearTimeout(timeout))
+    return () => { cancelled = true; clearTimeout(timeout); controller.abort() }
   }, [brandId, biId])
 
   if (!brandId) {
@@ -206,7 +237,9 @@ function HistoryTab({ brandId, biId }: { brandId?: string; biId: string }) {
 }
 
 // ─── Paid Collab Details tab ────────────────────────────────────────────────────
-type StepStatus = "pending" | "submitted" | "revision_requested" | "resubmitted" | "approved"
+// "n_a": this deliverable has no script / content review step. Treated as
+// done — it never blocks the content step or the "all approved" rollups.
+type StepStatus = "n_a" | "pending" | "submitted" | "revision_requested" | "resubmitted" | "approved"
 type ContractStatus = "not_started" | "draft" | "sent" | "signed"
 type PostStatus = "pending" | "submitted" | "live"
 type PayStructure = "upfront" | "5050" | "after" | "custom"
@@ -238,12 +271,14 @@ const PC_STATUS_STYLE: Record<string, { bg: string; color: string; border: strin
   due: { bg: "#faeeda", color: "#854f0b", border: "#fac775" },
   unpaid: { bg: "#fcebeb", color: "#a32d2d", border: "#f7c1c1" },
   off: { bg: "#f1f0eb", color: "#aaaaaa", border: "#e8e7e0" },
+  n_a: { bg: "#f1f0eb", color: "#aaaaaa", border: "#e8e7e0" },
 }
 
 const PC_STATUS_LABEL: Record<string, string> = {
   not_started: "Not started", draft: "Draft", sent: "Sent — awaiting signature", signed: "Signed",
   pending: "Pending", submitted: "Submitted", revision_requested: "Revision requested",
   resubmitted: "Resubmitted", approved: "Approved", live: "All live", paid: "Paid", due: "Due", unpaid: "Pending",
+  n_a: "N/A",
 }
 
 function pcStatusSelectStyle(status: string, disabled?: boolean) {
@@ -256,7 +291,12 @@ function pcStatusSelectStyle(status: string, disabled?: boolean) {
   }
 }
 
-export function PaidCollabTab({ influencerName, rateHint }: { influencerName: string; rateHint?: number }) {
+export function PaidCollabTab({ influencerName, rateHint, initialDeliverables }: {
+  influencerName: string
+  rateHint?: number
+  /** The influencer's saved campaign deliverables (lib/deliverables), when known. */
+  initialDeliverables?: CampaignDeliverable[]
+}) {
   const [contractEnabled, setContractEnabled] = useState(false)
   const [contractStatus, setContractStatus] = useState<ContractStatus>("not_started")
   const [contractLink, setContractLink] = useState("")
@@ -265,11 +305,20 @@ export function PaidCollabTab({ influencerName, rateHint }: { influencerName: st
   const [scriptEnabled, setScriptEnabled] = useState(true)
   const [postStatus, setPostStatus] = useState<PostStatus>("pending")
 
-  const [deliverables, setDeliverables] = useState<PaidDeliverable[]>(() => [
-    { id: 1, name: "", scriptStatus: "pending", scriptLink: "", contentStatus: "pending", contentLink: "", postUrl: "", postDate: "" },
-    { id: 2, name: "", scriptStatus: "pending", scriptLink: "", contentStatus: "pending", contentLink: "", postUrl: "", postDate: "" },
-  ])
-  const nextIdRef = React.useRef(3)
+  const [deliverables, setDeliverables] = useState<PaidDeliverable[]>(() =>
+    initialDeliverables?.length
+      ? initialDeliverables.map(d => ({
+          id: d.id, name: d.name ?? "",
+          scriptStatus: (d.scriptStatus || "pending") as StepStatus, scriptLink: d.scriptLink ?? "",
+          contentStatus: (d.contentStatus || "pending") as StepStatus, contentLink: d.contentLink ?? "",
+          postUrl: d.postUrl ?? "", postDate: d.postDate ?? "",
+        }))
+      : [
+          { id: 1, name: "", scriptStatus: "pending", scriptLink: "", contentStatus: "pending", contentLink: "", postUrl: "", postDate: "" },
+          { id: 2, name: "", scriptStatus: "pending", scriptLink: "", contentStatus: "pending", contentLink: "", postUrl: "", postDate: "" },
+        ]
+  )
+  const nextIdRef = React.useRef(deliverables.reduce((m, d) => Math.max(m, Number(d.id) || 0), 0) + 1)
 
   // Payment starts in a blank / zero state. An agreed fee already stored on the
   // record is real data and is still honoured; everything else (no rate, or 0)
@@ -302,8 +351,8 @@ export function PaidCollabTab({ influencerName, rateHint }: { influencerName: st
   const anyPostUrl = deliverables.some(d => d.postUrl.trim().length > 0)
   const anyContractLink = contractLink.trim().length > 0
   const n = deliverables.length
-  const scriptAllApproved = n > 0 && deliverables.every(d => d.scriptStatus === "approved")
-  const contentAllApproved = n > 0 && deliverables.every(d => d.contentStatus === "approved")
+  const scriptAllApproved = n > 0 && deliverables.every(d => d.scriptStatus === "approved" || d.scriptStatus === "n_a")
+  const contentAllApproved = n > 0 && deliverables.every(d => d.contentStatus === "approved" || d.contentStatus === "n_a")
 
   const steps: boolean[] = []
   if (contractEnabled) steps.push(contractStatus === "signed")
@@ -445,7 +494,7 @@ export function PaidCollabTab({ influencerName, rateHint }: { influencerName: st
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: "#fff", borderBottom: "1px solid #f0f0f0" }}>
                   <span style={{ fontSize: 12, fontWeight: 600, color: "#333" }}>{i + 1}. {d.name || `Deliverable ${i + 1}`}</span>
                   <select value={d.scriptStatus} disabled={!d.scriptLink} onChange={e => updateDeliverable(d.id, { scriptStatus: e.target.value as StepStatus })} style={pcStatusSelectStyle(d.scriptStatus, !d.scriptLink)}>
-                    <option value="pending">Pending</option><option value="submitted">Submitted</option>
+                    <option value="n_a">N/A</option><option value="pending">Pending</option><option value="submitted">Submitted</option>
                     <option value="revision_requested">Revision requested</option><option value="resubmitted">Resubmitted</option>
                     <option value="approved">Approved</option>
                   </select>
@@ -473,13 +522,13 @@ export function PaidCollabTab({ influencerName, rateHint }: { influencerName: st
         <div style={{ borderTop: "1px solid #eee", padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
           {n === 0 && <div style={{ fontSize: 12, color: "#ccc" }}>Add deliverables above first.</div>}
           {deliverables.map((d, i) => {
-            const scriptDone = !scriptEnabled || d.scriptStatus === "approved"
+            const scriptDone = !scriptEnabled || d.scriptStatus === "approved" || d.scriptStatus === "n_a"
             return (
               <div key={d.id} style={{ border: "1px solid #eee", borderRadius: 8, background: "#f9f9f9" }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: "#fff", borderBottom: "1px solid #f0f0f0" }}>
                   <span style={{ fontSize: 12, fontWeight: 600, color: "#333" }}>{i + 1}. {d.name || `Deliverable ${i + 1}`}</span>
                   <select value={d.contentStatus} disabled={!scriptDone || !d.contentLink} onChange={e => updateDeliverable(d.id, { contentStatus: e.target.value as StepStatus })} style={pcStatusSelectStyle(d.contentStatus, !scriptDone || !d.contentLink)}>
-                    <option value="pending">Pending</option><option value="submitted">Submitted</option>
+                    <option value="n_a">N/A</option><option value="pending">Pending</option><option value="submitted">Submitted</option>
                     <option value="revision_requested">Revision requested</option><option value="resubmitted">Resubmitted</option>
                     <option value="approved">Approved</option>
                   </select>
@@ -709,12 +758,38 @@ export default function ProfileSidebar({
     setPostData({ postLink: "", likes: "", sales: "", driveLink: "", comments: "", amount: "", usageRights: "", views: "", clicks: "" })
   }
 
+  // Keyed on the row's IDENTITY, not the row object.
+  //
+  // Every edit below now flows straight back out through `onUpdate`, so the
+  // `row` prop changes on each keystroke. Resetting on that would have wiped
+  // the Order and Post tab fields — which are local, unsaved form state — while
+  // the user was typing. Switching to a different influencer still resets, so
+  // the panel always shows (and saves) the record it is actually pointed at.
   useEffect(() => {
     if (row) {
       resetFormToRow()
       setProfileTab(0)
     }
-  }, [row])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [row?.id])
+
+  // ── Autosave ──────────────────────────────────────────────────────────────
+  // The sidebar has no save of its own. An edit is handed to the table, which
+  // is the ONE save pipeline in this feature (TableSheet → onRowsChange → the
+  // Influencer List page's debounced, serialised PUT queue). That is what makes
+  // an edit survive closing the panel, switching influencer or navigating away,
+  // collapses a burst of edits into a single write of the latest state, and
+  // keeps a second, competing request from racing the first.
+  const lastPropagated = useRef<string | null>(null)
+  useEffect(() => {
+    if (!row || !editedRow || editedRow.id !== row.id) return
+    const next = JSON.stringify(editedRow)
+    // Nothing edited (or the table has already caught up) — nothing to send.
+    if (next === JSON.stringify(row)) { lastPropagated.current = next; return }
+    if (next === lastPropagated.current) return
+    lastPropagated.current = next
+    onUpdate(editedRow)
+  }, [editedRow, row, onUpdate])
 
   const handleCancel = () => resetFormToRow()
 
@@ -787,66 +862,52 @@ export default function ProfileSidebar({
     }
   }
 
+  // The influencer fields are already persisted by the autosave above — this
+  // does NOT issue a second PUT for them, which is what used to race the
+  // table's own save and write the same row twice per click.
+  //
+  // What is left here is the attribution record (coupon, affiliate link, spark
+  // ads), which lives on its own endpoint and has no autosave of its own. The
+  // in-flight guard makes a double-click a no-op rather than a second request.
   const handleSave = async () => {
-    if (!editedRow || !row?.id) return
+    if (!editedRow || !row?.id || isSaving) return
     if (row.id.trim() === "") { onToast?.("error", "Cannot save: Influencer ID is missing."); return }
     setIsSaving(true)
     try {
-      const url = brandId ? `/api/brand/${brandId}/influencers/${row.id}` : `/api/influencers/${row.id}`
       const existingLastName = editedRow.full_name ? editedRow.full_name.split(" ").slice(1).join(" ") : ""
       const rebuiltFullName = editedRow.first_name
         ? existingLastName ? `${editedRow.first_name} ${existingLastName}` : editedRow.first_name
         : editedRow.full_name || null
 
-      const payload = {
-        handle: editedRow.handle, platform: editedRow.platform, full_name: rebuiltFullName,
-        email: editedRow.contact_info || editedRow.email || null,
-        gender: editedRow.gender || null, niche: editedRow.niche || null,
-        location: editedRow.location || null, bio: editedRow.bio || null,
-        profile_image_url: editedRow.profile_image_url || null, social_link: editedRow.social_link || null,
-        follower_count: parseInt(String(editedRow.follower_count)) || 0,
-        engagement_rate: parseFloat(String(editedRow.engagement_rate)) || 0,
-        avg_likes: parseInt(String(editedRow.avg_likes)) || 0,
-        avg_comments: parseInt(String(editedRow.avg_comments)) || 0,
-        avg_views: parseInt(String(editedRow.avg_views)) || 0,
-        approval_status: editedRow.approval_status, approval_notes: editedRow.approval_notes || null,
-        contact_status: editedRow.contact_status, agreed_rate: editedRow.agreed_rate || null,
-        notes: editedRow.notes || null, stage: editedRow.stage, transferred_date: editedRow.transferred_date || null,
-      }
+      // Flushed through the same single pipeline every other edit takes.
+      const synced = { ...editedRow, full_name: rebuiltFullName || editedRow.full_name }
+      setEditedRow(synced)
 
-      const response = await fetch(url, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
-      if (response.ok) {
-        const synced = { ...editedRow, full_name: rebuiltFullName || editedRow.full_name }
-
-        setAttributionSaveMessage(null)
-        if (brandId && row.brand_influencer_id) {
-          try {
-            const attrRes = await fetch(`/api/brand/${brandId}/attribution/${row.brand_influencer_id}`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                coupon: orderData.discountCode || null,
-                affiliateLink: orderData.affiliateLink || null,
-                sparkAds: orderData.sparkAds || null,
-              }),
-            })
-            if (attrRes.ok) {
-              const attrJson = await attrRes.json()
-              if (attrJson.goAffPro?.synced === false && attrJson.goAffPro?.reason) {
-                setAttributionSaveMessage(`GoAffPro sync skipped: ${attrJson.goAffPro.reason}`)
-              }
+      setAttributionSaveMessage(null)
+      if (brandId && row.brand_influencer_id) {
+        try {
+          const attrRes = await fetch(`/api/brand/${brandId}/attribution/${row.brand_influencer_id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              coupon: orderData.discountCode || null,
+              affiliateLink: orderData.affiliateLink || null,
+              sparkAds: orderData.sparkAds || null,
+            }),
+          })
+          if (attrRes.ok) {
+            const attrJson = await attrRes.json()
+            if (attrJson.goAffPro?.synced === false && attrJson.goAffPro?.reason) {
+              setAttributionSaveMessage(`GoAffPro sync skipped: ${attrJson.goAffPro.reason}`)
             }
-          } catch { /* non-critical — main influencer save already succeeded */ }
+          } else {
+            onToast?.("error", "Could not save the attribution details")
+          }
+        } catch {
+          onToast?.("error", "Could not save the attribution details")
         }
-
-        setEditedRow(synced); onUpdate(synced); onToast?.("success", "Saved successfully")
-      } else if (response.status === 404) {
-        onToast?.("error", "Influencer not found. Try refreshing.")
-      } else {
-        const error = await response.json(); onToast?.("error", error.error || "Failed to save")
       }
-    } catch { onToast?.("error", "Failed to save. Check your connection.") }
-    finally { setIsSaving(false) }
+    } finally { setIsSaving(false) }
   }
 
   const S = {
@@ -896,9 +957,31 @@ export default function ProfileSidebar({
 
   return (
     <>
-      <DeclineConfirmationModal isOpen={showDeclineModal} onClose={() => setShowDeclineModal(false)}
-        onConfirm={r => { if (editedRow) setEditedRow(handleApprovalChange(editedRow, "Declined", r)) }}
-        influencerName={editedRow.full_name || editedRow.handle || "this influencer"} />
+      {/* The SAME modal and reason list the Pipeline board uses — see
+          components/shared/decline-modal.tsx. */}
+      {showDeclineModal && (
+        <DeclineModal
+          name={editedRow.full_name || editedRow.handle || "this influencer"}
+          handle={editedRow.handle}
+          profileImageUrl={editedRow.profile_image_url}
+          /* Above S.panel's zIndex 500 — otherwise the sidebar stays painted
+             over the modal's right-hand reason column. */
+          zIndex={600}
+          onCancel={() => setShowDeclineModal(false)}
+          onConfirm={(r, declineNotes) => {
+            setShowDeclineModal(false)
+            if (!editedRow) return
+            // Confirm is the final action, exactly as it is on the Pipeline
+            // board — commit straight through the table's save pipeline and
+            // close the panel, rather than staging the change and leaving the
+            // sidebar open waiting for a Save Changes the user has no reason
+            // to expect. The row is declined and off the active list, so
+            // there is nothing left to edit in it.
+            onUpdate(handleApprovalChange(editedRow, "Declined", r, declineNotes))
+            onClose()
+          }}
+        />
+      )}
 
       {showEmailModal && (
         <EmailModal
@@ -913,7 +996,7 @@ export default function ProfileSidebar({
 
       <div style={S.overlay} onClick={onClose} />
 
-      <div style={S.panel}>
+      <div data-profile-panel style={S.panel}>
         {/* ── Header ── */}
         <div style={S.header}>
           <div style={{ fontSize: 11, fontWeight: 600, color: "#9ca3af", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 12 }}>Influencer Profile</div>

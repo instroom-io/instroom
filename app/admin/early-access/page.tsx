@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react"
 import { IconSearch, IconDownload } from "@tabler/icons-react"
+import { useCachedFetch } from "@/lib/data-cache"
 
 interface EarlyAccessUser {
   id: string
@@ -22,28 +23,35 @@ const GHL_STATUS_STYLE: Record<string, string> = {
 }
 
 export default function AdminEarlyAccessPage() {
-  const [rows, setRows] = useState<EarlyAccessUser[]>([])
   const [q, setQ] = useState("")
-  const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
 
-  const load = useCallback(async (query: string) => {
-    setLoading(true)
-    try {
-      const res = await fetch(`/api/admin/early-access${query ? `?q=${encodeURIComponent(query)}` : ""}`)
-      const json = await res.json()
-      setRows(json.users || [])
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => { load("") }, [load])
+  // Debounced query is part of the cache key: each search keeps its own entry,
+  // so re-running a search — or returning to this page — renders from cache.
+  const [query, setQuery] = useState("")
   useEffect(() => {
-    const t = setTimeout(() => load(q), 300)
+    const t = setTimeout(() => setQuery(q), 300)
     return () => clearTimeout(t)
-  }, [q, load])
+  }, [q])
+
+  const url = `/api/admin/early-access${query ? `?q=${encodeURIComponent(query)}` : ""}`
+
+  const fetchSignups = useCallback(async () => {
+    const res = await fetch(url)
+    if (!res.ok) throw new Error(`Failed to load early access users (${res.status})`)
+    return (await res.json()) as { users?: EarlyAccessUser[] }
+  }, [url])
+
+  const { data, isLoading: loading, mutate } = useCachedFetch(url, fetchSignups)
+  const rows = data?.users ?? []
+
+  const setRows = useCallback(
+    (updater: (prev: EarlyAccessUser[]) => EarlyAccessUser[]) => {
+      mutate({ users: updater(rows) })
+    },
+    [mutate, rows]
+  )
 
   const exportCsv = () => {
     window.location.href = `/api/admin/early-access?format=csv${q ? `&q=${encodeURIComponent(q)}` : ""}`

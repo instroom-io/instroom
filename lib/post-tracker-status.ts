@@ -1,0 +1,260 @@
+// Shared Post Tracker kanban status logic — used by both the manual
+// drag-and-drop PATCH route (app/api/brand/[brandId]/closed/[brandInfluencerId]/route.ts)
+// and the Shopify pull-sync path (lib/shopify-orders.ts), so a human move and
+// an automated move always write identical field shapes.
+
+// Post tab metric fields (Likes, Comments, Engagement) are free-text, so a
+// human types shorthand into them — "10K", "1.5M", "25%" — not a plain
+// integer. likes_count/comments_count/engagement_count are non-nullable
+// Prisma Int columns, so an unparsed value (NaN, or a decimal like "4.5")
+// would either throw a Prisma validation error or need silently dropping to
+// 0, discarding what the user actually typed.
+//
+// Used identically on both sides of the same write: the server route (so
+// what's persisted matches what was typed) and the client's optimistic
+// update in useClosedData.ts (so what renders immediately, before the
+// server round-trip resolves, is the same number rather than a raw NaN).
+//
+// Deliberately permissive about "%" and stray commas: "25%" for Engagement
+// stores as the plain number 25 (the "%" is display-only formatting, added
+// back by the UI wherever it renders an engagement percentage — see
+// formatEngagementPercent below), and "1,000" is treated as "1000" rather
+// than rejected.
+export function parseMetricInput(raw: string | null | undefined): number {
+  if (raw === null || raw === undefined) return 0
+  const trimmed = String(raw).trim()
+  if (!trimmed) return 0
+
+  const match = trimmed.match(/^([\d,]*\.?\d+)\s*([kKmM%]?)$/)
+  if (!match) return 0
+
+  const numeric = parseFloat(match[1].replace(/,/g, ""))
+  if (!Number.isFinite(numeric)) return 0
+
+  const suffix = match[2].toLowerCase()
+  const multiplier = suffix === "k" ? 1_000 : suffix === "m" ? 1_000_000 : 1
+
+  return Math.trunc(numeric * multiplier)
+}
+
+// Inverse of the "%" case above, for display: an engagement_count of 25
+// (persisted from a typed "25%") renders back as "25%", matching the Post
+// tab's own input convention rather than a bare "25" that looks like a count.
+export function formatEngagementPercent(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—"
+  return `${value}%`
+}
+
+export type ClosedColumn =
+  | "For Order Creation"
+  | "In-Transit"
+  | "Delivered"
+  | "Posted"
+  | "No post"
+  | "Issues"
+
+/**
+ * Every valid ClosedColumn value, as data.
+ *
+ * The type alone cannot be checked at runtime, so the PATCH route and the read
+ * route each kept their own hardcoded copy of this list — adding a column meant
+ * remembering both, and a miss showed up as a 400 "Invalid closedStatus" on a
+ * column the UI was already rendering. Derived from one place now.
+ */
+export const CLOSED_COLUMNS: readonly ClosedColumn[] = [
+  "For Order Creation",
+  "In-Transit",
+  "Delivered",
+  "Posted",
+  "No post",
+  "Issues",
+] as const
+
+export function isClosedColumn(value: unknown): value is ClosedColumn {
+  return typeof value === "string" && (CLOSED_COLUMNS as readonly string[]).includes(value)
+}
+
+// Ranks only cover the automated forward-progress states — "Posted" and
+// "No post" are terminal/human-decided and are never targeted by sync.
+export const SHOPIFY_STAGE_RANK: Record<"For Order Creation" | "In-Transit" | "Delivered", number> = {
+  "For Order Creation": 0,
+  "In-Transit": 1,
+  "Delivered": 2,
+}
+
+// ✅ Strict mapping (no stale data)
+export function mapClosedToPipelineFields(
+  closedStatus: ClosedColumn,
+  currentRecord: any
+) {
+  switch (closedStatus) {
+    case "For Order Creation":
+      return {
+        contact_status: "for_order_creation",
+        stage: 5,
+        order_status: "pending",
+
+        shipped_at: null,
+        delivered_at: null,
+
+        content_posted: false,
+        posted_at: null,
+
+        approval_status: "Approved",
+        approval_notes: null,
+      }
+
+    case "In-Transit":
+      return {
+        contact_status: "for_order_creation",
+        stage: 6,
+        order_status: "shipped",
+
+        shipped_at: currentRecord.shipped_at || new Date(),
+        delivered_at: null,
+
+        content_posted: false,
+        posted_at: null,
+
+        approval_status: "Approved",
+      }
+
+    case "Delivered":
+      return {
+        contact_status: "for_order_creation",
+        stage: 7,
+        order_status: "delivered",
+
+        shipped_at: currentRecord.shipped_at || null,
+        delivered_at: currentRecord.delivered_at || new Date(),
+
+        content_posted: false,
+        posted_at: null,
+
+        approval_status: "Approved",
+      }
+
+    case "Posted":
+      return {
+        contact_status: "for_order_creation",
+        stage: 8,
+        order_status: "delivered",
+
+        shipped_at: currentRecord.shipped_at || null,
+        delivered_at: currentRecord.delivered_at || new Date(),
+
+        content_posted: true,
+        posted_at: currentRecord.posted_at || new Date(),
+
+        approval_status: "Approved",
+      }
+
+    case "No post":
+      return {
+        contact_status: "not_interested",
+        stage: 0,
+        order_status: null,
+
+        shipped_at: null,
+        delivered_at: null,
+
+        content_posted: false,
+        posted_at: null,
+
+        approval_status: "Declined",
+        approval_notes: "No content published - exited",
+      }
+
+    // Delivery problems: a failed or returned delivery, a wrong address, a
+    // damaged item, or any other campaign issue that has stalled the row.
+    //
+    // NOT an exit, unlike "No post" — the influencer is still in the campaign
+    // and the expectation is that the issue gets resolved and the row moves
+    // back into the flow. So this keeps contact_status "for_order_creation"
+    // and an Approved approval_status, exactly like the active stages, rather
+    // than the not_interested/Declined pair that marks a row as finished.
+    //
+    // stage 9 sits above Posted (8): it is outside the linear fulfilment
+    // sequence rather than a step within it, and a number below 5 would drop
+    // the row out of the closed route's `stage >= 5` fetch. The dates are
+    // preserved, not cleared — a delivery that failed still shipped, and
+    // discarding shipped_at/delivered_at would lose the history the issue is
+    // about.
+    case "Issues":
+      return {
+        contact_status: "for_order_creation",
+        stage: 9,
+        order_status: currentRecord.order_status ?? null,
+
+        shipped_at: currentRecord.shipped_at || null,
+        delivered_at: currentRecord.delivered_at || null,
+
+        content_posted: false,
+        posted_at: null,
+
+        approval_status: "Approved",
+      }
+
+    default:
+      throw new Error("Invalid closedStatus")
+  }
+}
+
+/**
+ * Fields that take a row out of Post Tracker when it moves back to stages 1–4.
+ * Without this it keeps order_status/content_posted/closedStatus and shows on
+ * both boards. Dates, post URL and other product_details keys are kept.
+ */
+export function clearPostTrackerState(productDetails: string | null | undefined): {
+  order_status: null
+  content_posted: false
+  product_details?: string
+} {
+  const fields: { order_status: null; content_posted: false; product_details?: string } = {
+    order_status: null,
+    content_posted: false,
+  }
+  if (productDetails) {
+    try {
+      const details = JSON.parse(productDetails)
+      if (details && typeof details === "object" && "closedStatus" in details) {
+        delete details.closedStatus
+        fields.product_details = JSON.stringify(details)
+      }
+    } catch {
+      // Leave unparseable JSON as stored.
+    }
+  }
+  return fields
+}
+
+type ShopifyFulfillment = {
+  status?: string | null
+  shipment_status?: string | null
+}
+
+type ShopifyOrderLike = {
+  cancelled_at?: string | null
+  fulfillments?: ShopifyFulfillment[] | null
+}
+
+// Reads a Shopify order's embedded fulfillments to decide how far along
+// Post Tracker's kanban should move. Returns null when there's nothing to
+// apply (e.g. cancelled/refunded, or no fulfillment progress yet).
+export function deriveShopifyTargetStatus(
+  order: ShopifyOrderLike
+): "For Order Creation" | "In-Transit" | "Delivered" | null {
+  if (order.cancelled_at) {
+    return null
+  }
+
+  const fulfillments = order.fulfillments ?? []
+  const hasSuccessfulFulfillment = fulfillments.some((f) => f?.status === "success")
+
+  if (!hasSuccessfulFulfillment) {
+    return "For Order Creation"
+  }
+
+  const isDelivered = fulfillments.some((f) => f?.shipment_status === "delivered")
+  return isDelivered ? "Delivered" : "In-Transit"
+}

@@ -2,7 +2,7 @@ import { Button, Heading, Section, Text } from "react-email"
 import * as React from "react"
 import { EmailLayout, colors, btn, bodyText } from "./layout"
 
-export type NotifType = "influencer_reply" | "stage_change" | "deal_agreed"
+export type NotifType = "influencer_reply" | "stage_change" | "deal_agreed" | "refund_approved" | "refund_denied"
 
 interface NotificationEmailProps {
   name:       string
@@ -30,6 +30,18 @@ const typeConfig: Record<NotifType, { icon: string; label: string; bg: string; c
     label: "Deal confirmed",
     bg:    "#ECFDF5",
     color: "#059669",
+  },
+  refund_approved: {
+    icon:  "✅",
+    label: "Refund approved",
+    bg:    "#ECFDF5",
+    color: "#059669",
+  },
+  refund_denied: {
+    icon:  "💳",
+    label: "Refund update",
+    bg:    "#F3F4F6",
+    color: "#4B5563",
   },
 }
 

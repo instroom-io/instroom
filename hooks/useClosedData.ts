@@ -7,14 +7,33 @@
 //   4. On failure: silent rollback via snapshot
 //   5. updatePaidCollab / updateCampaignType: same pattern
 
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useCallback, useRef, useState } from "react"
+import {
+  useCachedFetch,
+  getCachedData,
+  setCachedData,
+  markCacheWrite,
+  beginExternalRequest,
+  endExternalRequest,
+  beginKeyWrite,
+  endKeyWrite,
+  beginRowWrite,
+  rowFetch,
+  isLatestRowWrite,
+} from "@/lib/data-cache"
+import { invalidateInfluencerDerivedCaches, closedCacheKey } from "@/lib/cache-invalidation"
+import { parseMetricInput } from "@/lib/post-tracker-status"
+import type { CampaignDeliverable } from "@/lib/deliverables"
+import { mutationErrorMessage } from "@/lib/user-facing-error"
 
-export type ClosedColumn =
-  | "For Order Creation"
-  | "In-Transit"
-  | "Delivered"
-  | "Posted"
-  | "No post"
+/** Stable empty reference used before the first payload arrives. */
+const EMPTY_CLOSED: ClosedInfluencer[] = []
+
+// Re-exported, not redeclared: lib/post-tracker-status.ts owns this union and
+// the mapping that turns each value into DB fields, so a column added there is
+// immediately known here rather than needing the same list edited twice.
+export type { ClosedColumn } from "@/lib/post-tracker-status"
+import { CLOSED_COLUMNS, type ClosedColumn } from "@/lib/post-tracker-status"
 
 export interface ClosedInfluencer {
   id: string
@@ -61,11 +80,23 @@ export interface ClosedInfluencer {
 
   postUrl: string | null
   postedAt: string | null
+  /**
+   * Number of posts Automatic Post Detection has found for this influencer.
+   * Counted from DetectedPost by the closed list route. 0 when detection has
+   * found nothing yet or was never enabled.
+   */
+  detectedPostCount: number
+  /** When detection last found a post, or null if it never has. */
+  latestDetectedAt: string | null
   likesCount: number
   commentsCount: number
   engagementCount: number
+  /** Post views — fetched from the post link or detection, or typed by hand. */
+  viewsCount: number
 
   paidCollabData: PaidCollabData | null
+  /** Marked completed from the Posted column — shown in the Completed column. */
+  completed: boolean
 
   internalRating: number | null
   lastContact: string
@@ -85,16 +116,8 @@ export interface PaidCollabData {
   milestoneProofLinks: string[]
 }
 
-export interface CollabDeliverable {
-  id: number
-  name: string
-  scriptStatus: string
-  scriptLink: string
-  scriptRevs: { num: number; date: string; notes: string }[]
-  contentStatus: string
-  contentLink: string
-  contentRevs: { num: number; date: string; notes: string }[]
-}
+// One shape for campaign deliverables everywhere — see lib/deliverables.ts.
+export type CollabDeliverable = CampaignDeliverable
 
 /**
  * Result of a stage move. An object rather than a bare boolean so the caller
@@ -110,18 +133,90 @@ export interface UpdateColumnResult {
   error?: string
 }
 
+export interface OrderDetailsFields {
+  /** Human-typed product note — kept separate from the Shopify-order JSON
+   *  that shares the same underlying column. */
+  note?: string
+  trackingNumber?: string
+  shippedAt?: string
+  deliveredAt?: string
+  deadline?: string
+  currency?: string
+  deliverables?: string
+  /** BrandInfluencer.notes — unrelated to `note` (singular) above. */
+  notes?: string
+}
+
+export interface PostMetricsResult {
+  ok: boolean
+  likes: number | null
+  comments: number | null
+  views: number | null
+  /** Set when nothing was fetched: add-on off, no link, provider error… */
+  error?: string
+}
+
+export interface PostDetailsFields {
+  postUrl?: string
+  postedAt?: string
+  likes?: string
+  comments?: string
+  engagement?: string
+  views?: string
+  internalRating?: string
+  /** Rollup applied to every deliverable — see the route's own comment. */
+  scriptStatus?: string
+  contentStatus?: string
+  /** Full deliverables write (per-deliverable post links); supersedes the rollup. */
+  paidCollabData?: PaidCollabData
+}
+
 interface UseClosedDataReturn {
   data: ClosedInfluencer[]
   isLoading: boolean
   error: string | null
+  /**
+   * True only once a read has failed AND no automatic retry is still coming.
+   * Gate any visible fallback on this, not on `error` — a transient blip that
+   * is still being retried should leave the page's own neutral state alone.
+   */
+  hasGivenUp: boolean
   updateColumn: (
     id: string,
     newColumn: ClosedColumn,
-    options?: { resetWorkflow?: boolean }
+    options?: { resetWorkflow?: boolean; deferDerivedInvalidation?: boolean; notes?: string }
   ) => Promise<UpdateColumnResult>
   updatePaidCollab: (id: string, paidCollabData: PaidCollabData) => Promise<boolean>
+  /** "Mark as completed" on a Posted row — moves it to the Completed column. */
+  markCompleted: (id: string, completed: boolean) => Promise<UpdateColumnResult>
   updateCampaignType: (id: string, campaignType: string) => Promise<boolean>
   updatePostUrl: (id: string, postUrl: string) => Promise<boolean>
+  updateOrderDetails: (id: string, fields: OrderDetailsFields) => Promise<boolean>
+  /**
+   * Post tab's Save: persists every manual post field in one write, and — when
+   * `markPosted` is set and a post URL is present (this call's own field or
+   * whatever is already stored) — moves closedStatus to "Posted" in the SAME
+   * request, through the identical stage-mapping the Stage dropdown uses. One
+   * request means one place either both happen or neither does; the server's
+   * "Posted needs proof of a post" / "Posted is terminal" guards still apply.
+   */
+  updatePostDetails: (
+    id: string,
+    fields: PostDetailsFields,
+    options?: { markPosted?: boolean }
+  ) => Promise<UpdateColumnResult>
+  /**
+   * Fetch Likes, Comments and Views from the row's post link(s) and store them
+   * (POST /api/post-tracker/metrics). Called after a link is saved; the board's
+   * cached row is updated in place, so no refresh is needed.
+   */
+  refreshPostMetrics: (id: string) => Promise<PostMetricsResult>
+  /** True while at least one write is in flight — drives the saving indicator. */
+  isSaving: boolean
+  /** True when the write that just finished failed, so the pill skips "Saved". */
+  saveFailed: boolean
+  /** Processing wording for the write in flight; null takes "Saving changes…". */
+  saveMessage: string | null
   refetch: () => void
 }
 
@@ -130,20 +225,22 @@ function inferContentStatuses(inf: { paidCollabData?: PaidCollabData | null }) {
   const paid = inf.paidCollabData
   if (!paid?.deliverables?.length) return { scriptStatus: null, contentStatus: null }
 
-  const scripts  = paid.deliverables.map((d) => d.scriptStatus)
-  const contents = paid.deliverables.map((d) => d.contentStatus)
+  // "n_a" (N/A — this collab has no script / content review step) is neutral:
+  // all N/A rolls up to N/A, otherwise it is ignored so it neither blocks
+  // "approved" nor counts as pending.
+  const rollup = (values: string[]) => {
+    if (values.every((s) => s === "n_a")) return "n_a"
+    const relevant = values.filter((s) => s !== "n_a")
+    return relevant.every((s) => s === "approved")
+      ? "approved"
+      : relevant.some((s) => ["pending", "revision_requested"].includes(s))
+      ? "pending"
+      : null
+  }
 
   return {
-    scriptStatus: scripts.every((s) => s === "approved")
-      ? "approved"
-      : scripts.some((s) => ["pending", "revision_requested"].includes(s))
-      ? "pending"
-      : null,
-    contentStatus: contents.every((s) => s === "approved")
-      ? "approved"
-      : contents.some((s) => ["pending", "revision_requested"].includes(s))
-      ? "pending"
-      : null,
+    scriptStatus:  rollup(paid.deliverables.map((d) => d.scriptStatus)),
+    contentStatus: rollup(paid.deliverables.map((d) => d.contentStatus)),
   }
 }
 
@@ -233,13 +330,15 @@ function applyColumnChange(
   }
 }
 
-const VALID_COLUMNS: ClosedColumn[] = [
-  "For Order Creation",
-  "In-Transit",
-  "Delivered",
-  "Posted",
-  "No post",
-]
+// The canonical list, not a copy.
+//
+// This WAS a hand-written literal, and because `ClosedColumn[]` only constrains
+// each element to be a member of the union — never that every member is
+// present — adding "Issues" to the union left this array silently short and
+// typechecked clean. The guard below then rejected a status the API was
+// legitimately returning. Deriving it from CLOSED_COLUMNS means a column added
+// to the union cannot go missing here again.
+const VALID_COLUMNS = CLOSED_COLUMNS
 
 // ─── Map raw API item to ClosedInfluencer ─────────────────────────────────────
 // The API's closedStatus is authoritative and is used verbatim. There is no
@@ -278,107 +377,250 @@ function mapItem(inf: any): ClosedInfluencer {
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
+/**
+ * Fetch and shape a brand's Post Tracker rows — the exact value cached under
+ * `/api/brand/{brandId}/closed`. Exported for lib/dashboard-prefetch, so the
+ * prefetch stores the shaped rows rather than the raw response.
+ */
+export async function fetchClosedRows(brandId: string): Promise<ClosedInfluencer[]> {
+  const res = await fetch(`/api/brand/${brandId}/closed`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    // The status is included so isTransientError (lib/user-facing-error) can
+    // recognise a 503 from databaseCapacityResponse() and schedule a retry.
+    // This text is for logs and that classification only — useCachedFetch
+    // replaces it with a user-facing sentence before anything renders it.
+    throw new Error(`[${res.status}] ${err.error || "Fetch failed"}`)
+  }
+  const json = await res.json()
+  return (json.data || []).map(mapItem)
+}
+
 export function useClosedData(brandId?: string): UseClosedDataReturn {
-  const [data,      setData]      = useState<ClosedInfluencer[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [error,     setError]     = useState<string | null>(null)
+  // Shared cache key — the tracker re-renders from cache on return visits and
+  // revalidates in the background. Keying by brandId also removes the
+  // stale-response race the manual ref-tracking used to guard against.
+  const cacheKey = brandId ? `/api/brand/${brandId}/closed` : null
+
   const pendingRef  = useRef(0)
-  // Tracks the brandId this hook is "currently" fetching for, so a response
-  // from a stale in-flight request (previous brandId) can't overwrite the
-  // newer brand's data if it resolves after a subsequent fetch has started.
-  const latestBrandIdRef = useRef(brandId)
+  // Mirrored into state so the board can show a saving indicator while a write
+  // is actually in flight (a ref alone never triggers a render).
+  const [pendingWrites, setPendingWrites] = useState(0)
+  // Whether the write that finished most recently failed. Read by the shared
+  // SaveStatusPill so a failed save shows nothing instead of "Saved" — the
+  // failure itself is still reported by the page's own notification.
+  const [saveFailed, setSaveFailed] = useState(false)
+  // What the shared SaveStatusPill says while a write is out. Null takes the
+  // standard "Saving changes…"; a stage/status move names itself "Updating…"
+  // so the wording matches the operation, as it does on every other screen.
+  const [saveMessage, setSaveMessage] = useState<string | null>(null)
+
+  // Bracketing the write bumps the cache's write generation, so a revalidation
+  // that started before this mutation cannot overwrite the newer state when it
+  // resolves. Both edges are marked — a rollback is also newer than that
+  // in-flight response.
+  const beginWrite = useCallback((message?: string) => {
+    // Only the first write of a batch names it — a later one joining the same
+    // in-flight window must not relabel what is already on screen.
+    if (pendingRef.current === 0) setSaveMessage(message ?? null)
+    pendingRef.current += 1
+    setPendingWrites((n) => n + 1)
+    setSaveFailed(false)
+    // Counted into inFlightCount() so the background prefetch yields while a
+    // save is in flight. These PATCHes do not go through the cache, so without
+    // this the prefetch saw an idle app and took one of the three pooled
+    // connections mid-write.
+    // Also opens a per-key write window, so the board's freshness indicator
+    // reports "Syncing…" for a SAVE and not only for a page load.
+    beginExternalRequest()
+    if (cacheKey) { markCacheWrite(cacheKey); beginKeyWrite(cacheKey) }
+  }, [cacheKey])
+  const endWrite = useCallback((succeeded = true) => {
+    pendingRef.current = Math.max(0, pendingRef.current - 1)
+    setPendingWrites((n) => Math.max(0, n - 1))
+    if (!succeeded) setSaveFailed(true)
+    endExternalRequest()
+    // `succeeded` is what stops a failed save from stamping a fresh "updated"
+    // time: the rollback writes to the cache too, and without this the
+    // indicator would report a refresh that never happened.
+    if (cacheKey) { markCacheWrite(cacheKey); endKeyWrite(cacheKey, succeeded) }
+  }, [cacheKey])
 
   // ── Fetch ─────────────────────────────────────────────────────────────────
-  const fetchData = useCallback(async (showSpinner = true) => {
-    latestBrandIdRef.current = brandId
+  const fetchClosed = useCallback(() => fetchClosedRows(brandId!), [brandId])
 
-    if (!brandId) {
-      setData([])
-      setIsLoading(false)
-      return
-    }
+  const { data: cached, error, isLoading, hasGivenUp, refetch } = useCachedFetch<ClosedInfluencer[]>(
+    cacheKey,
+    fetchClosed
+  )
 
-    const requestedBrandId = brandId
+  // The shared cache is the rendered state, so optimistic writers just write to
+  // it — local edits stay visible everywhere and survive navigation.
+  const data = cached ?? EMPTY_CLOSED
 
-    try {
-      if (showSpinner) setIsLoading(true)
-      setError(null)
-
-      const res = await fetch(`/api/brand/${brandId}/closed`)
-      if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.error || "Fetch failed")
-      }
-
-      const json = await res.json()
-      const mapped = (json.data || []).map(mapItem)
-
-      // Ignore this response if a newer brandId has since taken over.
-      if (latestBrandIdRef.current !== requestedBrandId) return
-      setData(mapped)
-    } catch (err: any) {
-      if (latestBrandIdRef.current !== requestedBrandId) return
-      setError(err.message || "Error loading data")
-    } finally {
-      if (latestBrandIdRef.current === requestedBrandId && showSpinner) setIsLoading(false)
-    }
-  }, [brandId])
-
-  useEffect(() => { fetchData(true) }, [fetchData])
+  const setDataCached = useCallback(
+    (value: React.SetStateAction<ClosedInfluencer[]>) => {
+      if (!cacheKey) return
+      const prev = getCachedData<ClosedInfluencer[]>(cacheKey) ?? []
+      const next = typeof value === "function"
+        ? (value as (p: ClosedInfluencer[]) => ClosedInfluencer[])(prev)
+        : value
+      setCachedData(cacheKey, next)
+    },
+    [cacheKey]
+  )
 
   // ── Update Column (optimistic, no spinner) ────────────────────────────────
   const updateColumn = useCallback(
     async (
       id: string,
       newColumn: ClosedColumn,
-      options?: { resetWorkflow?: boolean }
+      options?: {
+        resetWorkflow?: boolean
+        /**
+         * Skip marking the OTHER views stale after this row succeeds.
+         *
+         * A bulk move calls this once per row, and each call invalidated five
+         * derived keys. The caller sets this and invalidates once at the end of
+         * the run instead.
+         */
+        deferDerivedInvalidation?: boolean
+        /**
+         * Replaces BrandInfluencer.notes in the same PATCH — the move to Issues
+         * requires a note, which lands in the influencer's profile notes.
+         */
+        notes?: string
+      }
     ): Promise<UpdateColumnResult> => {
       if (!brandId) return { ok: false, error: "No brand selected" }
 
-      let snapshot: ClosedInfluencer[] = []
+      // Claim this row's newest write and open the write window BEFORE the
+      // optimistic change — see the note in usePipelineData.updateStatus.
+      const writeSeq = cacheKey ? beginRowWrite(cacheKey, id) : 0
+      beginWrite("Updating…")
 
-      setData((prev) => {
-        snapshot = prev
+      // Only THIS row is remembered for rollback. Restoring a whole-list
+      // snapshot also reverted every other card moved since this call started,
+      // so one failed move undid its neighbours' successful ones.
+      let previous: ClosedInfluencer | undefined
+
+      setDataCached((prev) => {
+        previous = prev.find((item) => item.id === id)
         return prev.map((item) =>
-          item.id === id ? applyColumnChange(item, newColumn) : item
+          item.id === id
+            // Leaving Posted clears "completed", mirroring the PATCH route.
+            ? {
+                ...applyColumnChange(item, newColumn),
+                completed: newColumn === "Posted" ? item.completed : false,
+                ...(options?.notes !== undefined && { notes: options.notes }),
+              }
+            : item
         )
       })
 
-      pendingRef.current += 1
+      // Flipped by `rollback`, which every failure path calls and no success
+      // path does. `endWrite(writeOk)` then keeps the previous "updated" time
+      // on a failed save instead of stamping a refresh that did not happen.
+      let writeOk = true
+      const rollback = () => {
+        writeOk = false
+        // A later change to this row has already been applied, so this
+        // snapshot is out of date: restoring it would undo the newer value.
+        // See beginRowWrite in lib/data-cache.
+        if (cacheKey && !isLatestRowWrite(cacheKey, id, writeSeq)) return
+        if (!previous) return
+        setDataCached((prev) => prev.map((item) => (item.id === id ? previous! : item)))
+      }
+
 
       try {
-        const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
+        const res = await rowFetch(id, `/api/brand/${brandId}/closed/${id}`, {
           method:  "PATCH",
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify({
             closedStatus: newColumn,
             ...(options?.resetWorkflow ? { resetWorkflow: true } : {}),
+            ...(options?.notes !== undefined ? { notes: options.notes } : {}),
           }),
         })
 
         if (!res.ok) {
           // Roll the optimistic change back — the persisted stage is the truth.
-          setData(snapshot)
+          rollback()
           const body = await res.json().catch(() => ({}))
           return {
             ok: false,
-            // 409 = the row is Posted and Posted is terminal.
-            terminal: res.status === 409 || Boolean(body.terminalState),
+            // A 409 also covers "Posted needs proof of a post"
+            // (body.needsPostEvidence) when moving TO Posted — that's a
+            // distinct, recoverable failure, not the row already being
+            // Posted. Only body.terminalState means the row is terminal.
+            terminal: Boolean(body.terminalState),
             forbidden: res.status === 403,
-            error: body.error || "Failed to move",
+            error: mutationErrorMessage(res, body, "Failed to move"),
           }
         }
 
-        // ✅ State already correct — no refetch, no spinner
+        // ✅ This tracker's own entry is already correct from the optimistic
+        // update; every other view of these rows (Pipeline, Influencer List,
+        // Brand Partners, Analytics) is now stale and refreshes on next open.
+        if (!options?.deferDerivedInvalidation) {
+          invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId!)])
+        }
         return { ok: true }
       } catch {
-        setData(snapshot)
+        rollback()
         return { ok: false, error: "Network error" }
       } finally {
-        pendingRef.current -= 1
+        endWrite(writeOk)
       }
     },
-    [brandId]
+    [brandId, cacheKey, setDataCached, beginWrite, endWrite]
+  )
+
+  // ── Mark Completed (optimistic) ───────────────────────────────────────────
+  // Same write pattern as updatePaidCollab below.
+  const markCompleted = useCallback(
+    async (id: string, completed: boolean): Promise<UpdateColumnResult> => {
+      if (!brandId) return { ok: false, error: "No brand selected" }
+
+      const writeSeq = cacheKey ? beginRowWrite(cacheKey, id) : 0
+      beginWrite()
+
+      let previous: ClosedInfluencer | undefined
+      setDataCached((prev) => {
+        previous = prev.find((item) => item.id === id)
+        return prev.map((item) => (item.id !== id ? item : { ...item, completed }))
+      })
+
+      let writeOk = true
+      const rollback = () => {
+        writeOk = false
+        if (cacheKey && !isLatestRowWrite(cacheKey, id, writeSeq)) return
+        if (!previous) return
+        setDataCached((prev) => prev.map((item) => (item.id === id ? previous! : item)))
+      }
+
+      try {
+        const res = await rowFetch(id, `/api/brand/${brandId}/closed/${id}`, {
+          method:  "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ completed }),
+        })
+        if (!res.ok) {
+          rollback()
+          const body = await res.json().catch(() => ({}))
+          return { ok: false, error: mutationErrorMessage(res, body, "Failed to mark as completed") }
+        }
+        invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId!)])
+        return { ok: true }
+      } catch {
+        rollback()
+        return { ok: false, error: "Network error" }
+      } finally {
+        endWrite(writeOk)
+      }
+    },
+    [brandId, cacheKey, setDataCached, beginWrite, endWrite]
   )
 
   // ── Update Paid Collab (optimistic) ───────────────────────────────────────
@@ -386,10 +628,16 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
     async (id: string, paidCollabData: PaidCollabData): Promise<boolean> => {
       if (!brandId) return false
 
-      let snapshot: ClosedInfluencer[] = []
+      // Claim this row's newest write and open the write window BEFORE the
+      // optimistic change — see the note in usePipelineData.updateStatus.
+      const writeSeq = cacheKey ? beginRowWrite(cacheKey, id) : 0
+      beginWrite()
 
-      setData((prev) => {
-        snapshot = prev
+      // Per-row rollback — see updateColumn.
+      let previous: ClosedInfluencer | undefined
+
+      setDataCached((prev) => {
+        previous = prev.find((item) => item.id === id)
         return prev.map((item) =>
           item.id !== id ? item : {
             ...item,
@@ -399,25 +647,46 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         )
       })
 
+      // Flipped by `rollback`, which every failure path calls and no success
+      // path does. `endWrite(writeOk)` then keeps the previous "updated" time
+      // on a failed save instead of stamping a refresh that did not happen.
+      let writeOk = true
+      const rollback = () => {
+        writeOk = false
+        // A later change to this row has already been applied, so this
+        // snapshot is out of date: restoring it would undo the newer value.
+        // See beginRowWrite in lib/data-cache.
+        if (cacheKey && !isLatestRowWrite(cacheKey, id, writeSeq)) return
+        if (!previous) return
+        setDataCached((prev) => prev.map((item) => (item.id === id ? previous! : item)))
+      }
+
+      // Bracketed like updateColumn. Without it this write never bumped the
+      // cache's write generation, so a background revalidation that started
+      // before it could resolve afterwards and put the old value back — and the
+      // saving indicator never showed for it either.
       try {
-        const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
+        const res = await rowFetch(id, `/api/brand/${brandId}/closed/${id}`, {
           method:  "PATCH",
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify({ paidCollabData }),
         })
 
         if (!res.ok) {
-          setData(snapshot)
+          rollback()
           return false
         }
 
+        invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId!)])
         return true
       } catch {
-        setData(snapshot)
+        rollback()
         return false
+      } finally {
+        endWrite(writeOk)
       }
     },
-    [brandId]
+    [brandId, cacheKey, setDataCached, beginWrite, endWrite]
   )
 
   // ── Update Campaign Type (optimistic) ─────────────────────────────────────
@@ -425,34 +694,61 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
     async (id: string, campaignType: string): Promise<boolean> => {
       if (!brandId) return false
 
-      let snapshot: ClosedInfluencer[] = []
+      // Claim this row's newest write and open the write window BEFORE the
+      // optimistic change — see the note in usePipelineData.updateStatus.
+      const writeSeq = cacheKey ? beginRowWrite(cacheKey, id) : 0
+      beginWrite()
 
-      setData((prev) => {
-        snapshot = prev
+      // Per-row rollback — see updateColumn.
+      let previous: ClosedInfluencer | undefined
+
+      setDataCached((prev) => {
+        previous = prev.find((item) => item.id === id)
         return prev.map((item) =>
           item.id !== id ? item : { ...item, campaignType }
         )
       })
 
+      // Flipped by `rollback`, which every failure path calls and no success
+      // path does. `endWrite(writeOk)` then keeps the previous "updated" time
+      // on a failed save instead of stamping a refresh that did not happen.
+      let writeOk = true
+      const rollback = () => {
+        writeOk = false
+        // A later change to this row has already been applied, so this
+        // snapshot is out of date: restoring it would undo the newer value.
+        // See beginRowWrite in lib/data-cache.
+        if (cacheKey && !isLatestRowWrite(cacheKey, id, writeSeq)) return
+        if (!previous) return
+        setDataCached((prev) => prev.map((item) => (item.id === id ? previous! : item)))
+      }
+
+      // Bracketed like updateColumn. Without it this write never bumped the
+      // cache's write generation, so a background revalidation that started
+      // before it could resolve afterwards and put the old value back — and the
+      // saving indicator never showed for it either.
       try {
-        const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
+        const res = await rowFetch(id, `/api/brand/${brandId}/closed/${id}`, {
           method:  "PATCH",
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify({ campaignType }),
         })
 
         if (!res.ok) {
-          setData(snapshot)
+          rollback()
           return false
         }
 
+        invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId!)])
         return true
       } catch {
-        setData(snapshot)
+        rollback()
         return false
+      } finally {
+        endWrite(writeOk)
       }
     },
-    [brandId]
+    [brandId, cacheKey, setDataCached, beginWrite, endWrite]
   )
 
   // ── Update Post URL (optimistic) ──────────────────────────────────────────
@@ -462,44 +758,331 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
       if (!brandId) return false
 
       const trimmed = postUrl.trim()
-      let snapshot: ClosedInfluencer[] = []
+      // Claim this row's newest write and open the write window BEFORE the
+      // optimistic change — see the note in usePipelineData.updateStatus.
+      const writeSeq = cacheKey ? beginRowWrite(cacheKey, id) : 0
+      beginWrite()
 
-      setData((prev) => {
-        snapshot = prev
+      // Per-row rollback — see updateColumn.
+      let previous: ClosedInfluencer | undefined
+
+      setDataCached((prev) => {
+        previous = prev.find((item) => item.id === id)
         return prev.map((item) =>
           item.id !== id ? item : { ...item, postUrl: trimmed || null }
         )
       })
 
+      // Flipped by `rollback`, which every failure path calls and no success
+      // path does. `endWrite(writeOk)` then keeps the previous "updated" time
+      // on a failed save instead of stamping a refresh that did not happen.
+      let writeOk = true
+      const rollback = () => {
+        writeOk = false
+        // A later change to this row has already been applied, so this
+        // snapshot is out of date: restoring it would undo the newer value.
+        // See beginRowWrite in lib/data-cache.
+        if (cacheKey && !isLatestRowWrite(cacheKey, id, writeSeq)) return
+        if (!previous) return
+        setDataCached((prev) => prev.map((item) => (item.id === id ? previous! : item)))
+      }
+
+      // Bracketed like updateColumn. Without it this write never bumped the
+      // cache's write generation, so a background revalidation that started
+      // before it could resolve afterwards and put the old value back — and the
+      // saving indicator never showed for it either.
       try {
-        const res = await fetch(`/api/brand/${brandId}/closed/${id}`, {
+        const res = await rowFetch(id, `/api/brand/${brandId}/closed/${id}`, {
           method:  "PATCH",
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify({ postUrl: trimmed }),
         })
 
         if (!res.ok) {
-          setData(snapshot)
+          rollback()
           return false
         }
 
+        invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId!)])
         return true
       } catch {
-        setData(snapshot)
+        rollback()
         return false
+      } finally {
+        endWrite(writeOk)
       }
     },
-    [brandId]
+    [brandId, cacheKey, setDataCached, beginWrite, endWrite]
+  )
+
+  // ── Update Order Details (optimistic) ─────────────────────────────────────
+  // Everything the Post Tracker's "Order" tab Save button covers except
+  // stage — that stays on updateColumn, the same path the Stage dropdown
+  // uses, so the two never disagree about what stage this influencer is in.
+  const updateOrderDetails = useCallback(
+    async (id: string, fields: OrderDetailsFields): Promise<boolean> => {
+      if (!brandId) return false
+
+      // Claim this row's newest write and open the write window BEFORE the
+      // optimistic change — see the note in usePipelineData.updateStatus.
+      const writeSeq = cacheKey ? beginRowWrite(cacheKey, id) : 0
+      beginWrite()
+
+      // Per-row rollback, matching every other mutation in this hook. This one
+      // kept a WHOLE-LIST snapshot and restored it on failure, which also
+      // reverted any other row written while this request was in flight — a
+      // bulk stage move running in the background, for instance.
+      let previous: ClosedInfluencer | undefined
+
+      setDataCached((prev) => {
+        previous = prev.find((item) => item.id === id)
+        return prev.map((item) => {
+          if (item.id !== id) return item
+          return {
+            ...item,
+            ...(fields.trackingNumber !== undefined && { trackingNumber: fields.trackingNumber || null }),
+            ...(fields.shippedAt !== undefined && { shippedAt: fields.shippedAt || null }),
+            ...(fields.deliveredAt !== undefined && { deliveredAt: fields.deliveredAt || null }),
+            ...(fields.deadline !== undefined && { deadline: fields.deadline || null }),
+            ...(fields.currency !== undefined && { currency: fields.currency || null }),
+            ...(fields.deliverables !== undefined && { deliverables: fields.deliverables || null }),
+            ...(fields.notes !== undefined && { notes: fields.notes || "" }),
+          }
+        })
+      })
+
+      // Flipped by `rollback`, which every failure path calls and no success
+      // path does. `endWrite(writeOk)` then keeps the previous "updated" time
+      // on a failed save instead of stamping a refresh that did not happen.
+      let writeOk = true
+      const rollback = () => {
+        writeOk = false
+        // A later change to this row has already been applied, so this
+        // snapshot is out of date: restoring it would undo the newer value.
+        // See beginRowWrite in lib/data-cache.
+        if (cacheKey && !isLatestRowWrite(cacheKey, id, writeSeq)) return
+        if (!previous) return
+        setDataCached((prev) => prev.map((item) => (item.id === id ? previous! : item)))
+      }
+
+      // Bracketed like updateColumn. Without it this write never bumped the
+      // cache's write generation, so a background revalidation that started
+      // before it could resolve afterwards and put the old value back — and the
+      // saving indicator never showed for it either.
+      try {
+        const res = await rowFetch(id, `/api/brand/${brandId}/closed/${id}`, {
+          method:  "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify(fields),
+        })
+
+        if (!res.ok) {
+          rollback()
+          return false
+        }
+
+        invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId!)])
+        return true
+      } catch {
+        rollback()
+        return false
+      } finally {
+        endWrite(writeOk)
+      }
+    },
+    [brandId, cacheKey, setDataCached, beginWrite, endWrite]
+  )
+
+  // ── Update Post Details (optimistic) ──────────────────────────────────────
+  // Everything the Post Tracker's "Post" tab Save button covers, including —
+  // when the caller asks for it — the move to Posted. Bundled into the one
+  // PATCH request applyColumnChange's "Posted" case would otherwise need a
+  // second call for, so a Save can never persist the fields but silently skip
+  // the status flip (or vice versa) because the second request happened to
+  // fail on its own.
+  const updatePostDetails = useCallback(
+    async (
+      id: string,
+      fields: PostDetailsFields,
+      options?: { markPosted?: boolean }
+    ): Promise<UpdateColumnResult> => {
+      if (!brandId) return { ok: false, error: "No brand selected" }
+
+      // Claim this row's newest write and open the write window BEFORE the
+      // optimistic change — see the note in usePipelineData.updateStatus.
+      const writeSeq = cacheKey ? beginRowWrite(cacheKey, id) : 0
+      beginWrite(options?.markPosted ? "Updating…" : undefined)
+
+      // Per-row rollback — see updateColumn.
+      let previous: ClosedInfluencer | undefined
+
+      setDataCached((prev) => {
+        previous = prev.find((item) => item.id === id)
+        return prev.map((item) => {
+          if (item.id !== id) return item
+          const withFields: ClosedInfluencer = {
+            ...item,
+            ...(fields.postUrl !== undefined && { postUrl: fields.postUrl.trim() || null }),
+            ...(fields.postedAt !== undefined && { postedAt: fields.postedAt || null }),
+            // parseMetricInput matches the server's own parsing exactly (see
+            // lib/post-tracker-status.ts) — "10K"/"1.5M"/"25%" shorthand and a
+            // guaranteed finite whole number, so the optimistic render never
+            // shows a raw NaN before the server round-trip resolves.
+            ...(fields.likes !== undefined && { likesCount: parseMetricInput(fields.likes) }),
+            ...(fields.comments !== undefined && { commentsCount: parseMetricInput(fields.comments) }),
+            ...(fields.engagement !== undefined && { engagementCount: parseMetricInput(fields.engagement) }),
+            ...(fields.views !== undefined && { viewsCount: parseMetricInput(fields.views) }),
+            ...(fields.internalRating !== undefined && {
+              internalRating: fields.internalRating === "" ? null : Number(fields.internalRating),
+            }),
+          }
+          const withDeliverables =
+            fields.paidCollabData !== undefined
+              ? { paidCollabData: fields.paidCollabData, ...inferContentStatuses({ paidCollabData: fields.paidCollabData }) }
+              : fields.scriptStatus !== undefined || fields.contentStatus !== undefined
+              ? (() => {
+                  const existing = withFields.paidCollabData?.deliverables ?? []
+                  const nextDeliverables: CollabDeliverable[] = existing.length
+                    ? existing.map((d) => ({
+                        ...d,
+                        ...(fields.scriptStatus !== undefined && { scriptStatus: fields.scriptStatus }),
+                        ...(fields.contentStatus !== undefined && { contentStatus: fields.contentStatus }),
+                      }))
+                    : [
+                        {
+                          id: 1,
+                          name: "",
+                          scriptStatus: fields.scriptStatus ?? "pending",
+                          scriptLink: "",
+                          scriptRevs: [],
+                          contentStatus: fields.contentStatus ?? "pending",
+                          contentLink: "",
+                          contentRevs: [],
+                        },
+                      ]
+                  const paidCollabData: PaidCollabData = {
+                    ...(withFields.paidCollabData ?? ({} as PaidCollabData)),
+                    deliverables: nextDeliverables,
+                  }
+                  return { paidCollabData, ...inferContentStatuses({ paidCollabData }) }
+                })()
+              : {}
+          const merged = { ...withFields, ...withDeliverables }
+          return options?.markPosted ? applyColumnChange(merged, "Posted") : merged
+        })
+      })
+
+      // Flipped by `rollback`, which every failure path calls and no success
+      // path does. `endWrite(writeOk)` then keeps the previous "updated" time
+      // on a failed save instead of stamping a refresh that did not happen.
+      let writeOk = true
+      const rollback = () => {
+        writeOk = false
+        // A later change to this row has already been applied, so this
+        // snapshot is out of date: restoring it would undo the newer value.
+        // See beginRowWrite in lib/data-cache.
+        if (cacheKey && !isLatestRowWrite(cacheKey, id, writeSeq)) return
+        if (!previous) return
+        setDataCached((prev) => prev.map((item) => (item.id === id ? previous! : item)))
+      }
+
+      try {
+        const res = await rowFetch(id, `/api/brand/${brandId}/closed/${id}`, {
+          method:  "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({
+            ...fields,
+            ...(options?.markPosted ? { closedStatus: "Posted" } : {}),
+          }),
+        })
+
+        if (!res.ok) {
+          rollback()
+          const body = await res.json().catch(() => ({}))
+          return {
+            // A 409 also covers "Posted needs proof of a post"
+            // (body.needsPostEvidence) — that is a distinct, non-terminal
+            // failure the caller can recover from by supplying a Post URL, not
+            // the row already being Posted. Only body.terminalState means that.
+            ok: false,
+            terminal: Boolean(body.terminalState),
+            forbidden: res.status === 403,
+            error: mutationErrorMessage(res, body, "Failed to save post details"),
+          }
+        }
+
+        invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId!)])
+        return { ok: true }
+      } catch {
+        rollback()
+        return { ok: false, error: "Network error" }
+      } finally {
+        endWrite(writeOk)
+      }
+    },
+    [brandId, cacheKey, setDataCached, beginWrite, endWrite]
+  )
+
+  const refreshPostMetrics = useCallback(
+    async (id: string): Promise<PostMetricsResult> => {
+      const none = { likes: null, comments: null, views: null }
+      if (!brandId) return { ok: false, ...none, error: "No brand selected" }
+      try {
+        const res = await fetch("/api/post-tracker/metrics", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ brandId, biId: id }),
+        })
+        const body = await res.json().catch(() => ({}))
+        if (!res.ok || !body.ok) {
+          return { ok: false, ...none, error: body.error || body.reason || "Could not fetch post metrics" }
+        }
+        const result: PostMetricsResult = {
+          ok: true,
+          likes: body.likes ?? null,
+          comments: body.comments ?? null,
+          views: body.views ?? null,
+        }
+        setDataCached((prev) =>
+          prev.map((item) =>
+            item.id === id
+              ? {
+                  ...item,
+                  ...(result.likes != null && { likesCount: result.likes }),
+                  ...(result.comments != null && { commentsCount: result.comments }),
+                  ...(result.views != null && { viewsCount: result.views }),
+                }
+              : item
+          )
+        )
+        // Analytics reads these metrics — mark it (and the other views) stale.
+        invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId)])
+        return result
+      } catch {
+        return { ok: false, ...none, error: "Network error" }
+      }
+    },
+    [brandId, setDataCached]
   )
 
   return {
     data,
-    isLoading,
+    isLoading: Boolean(brandId) && isLoading,
     error,
+    hasGivenUp,
     updateColumn,
     updatePaidCollab,
+    markCompleted,
     updateCampaignType,
     updatePostUrl,
-    refetch: () => fetchData(false), // background sync, no spinner
+    updateOrderDetails,
+    updatePostDetails,
+    refreshPostMetrics,
+    isSaving: pendingWrites > 0,
+    saveFailed,
+    saveMessage,
+    // Skipped while a write is in flight: its response would predate the
+    // mutation, which is what pendingRef is here to prevent.
+    refetch: () => { if (pendingRef.current === 0) void refetch() }, // background sync, no spinner
   }
 }

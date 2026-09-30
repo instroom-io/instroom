@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/prisma"
+import { prisma, withUtf8mb4 } from "@/lib/prisma"
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
@@ -74,14 +74,22 @@ export async function POST(req: NextRequest) {
       completed_at: new Date(),
     }
 
-    const [, onboarding] = await prisma.$transaction([
-      prisma.$executeRawUnsafe(`SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci`),
-      prisma.onboarding.upsert({
+    // withUtf8mb4, not a `$transaction([...])` array: this host forces
+    // `SET NAMES utf8` (= utf8mb3) on every new connection via init_connect
+    // (see lib/prisma.ts), and the array form of $transaction does not
+    // guarantee its statements share one physical connection — so the SET
+    // NAMES here previously had no effect on whichever connection the upsert
+    // actually landed on. Confirmed directly against this database: an
+    // emoji-prefixed answer (every real option in this form starts with one)
+    // was silently written as "?". withUtf8mb4 pins one connection for both
+    // statements, the same fix already used for Instagram/TikTok captions.
+    const onboarding = await withUtf8mb4((tx) =>
+      tx.onboarding.upsert({
         where: { user_id },
         update: data,
         create: { user_id, ...data },
-      }),
-    ])
+      })
+    )
 
     return NextResponse.json(
       {

@@ -1,7 +1,7 @@
 "use client"
 
-import { useEffect, useState } from "react"
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts"
+import { useCachedFetch } from "@/lib/data-cache"
 
 interface AnalyticsData {
   days: string[]
@@ -26,15 +26,14 @@ function ChartCard({ title, children }: { title: string; children: React.ReactNo
 }
 
 export default function AdminAnalyticsPage() {
-  const [data, setData] = useState<AnalyticsData | null>(null)
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    fetch("/api/admin/analytics")
-      .then((r) => r.json())
-      .then(setData)
-      .finally(() => setLoading(false))
-  }, [])
+  const { data, isLoading: loading } = useCachedFetch<AnalyticsData>(
+    "/api/admin/analytics",
+    async () => {
+      const res = await fetch("/api/admin/analytics")
+      if (!res.ok) throw new Error(`Failed to load analytics (${res.status})`)
+      return res.json()
+    }
+  )
 
   return (
     <div className="flex flex-col gap-5">

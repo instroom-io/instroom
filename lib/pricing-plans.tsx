@@ -39,6 +39,19 @@ export function getPlanFeatures(plan: any): ReactNode[] {
   return []
 }
 
+// Shared with onboarding, which checks out a preselected paid plan directly
+// without routing through /pricing/payment first.
+export const LEMON_SQUEEZY_VARIANTS: Record<string, Record<string, string>> = {
+  solo: {
+    monthly: process.env.NEXT_PUBLIC_LEMON_SQUEEZY_SOLO_MONTHLY || "1532578",
+    yearly: process.env.NEXT_PUBLIC_LEMON_SQUEEZY_SOLO_YEARLY || "1532542",
+  },
+  team: {
+    monthly: process.env.NEXT_PUBLIC_LEMON_SQUEEZY_TEAM_MONTHLY || "1532585",
+    yearly: process.env.NEXT_PUBLIC_LEMON_SQUEEZY_TEAM_YEARLY || "1532588",
+  },
+}
+
 export function formatPrice(plan: any, cycle: "monthly" | "yearly") {
   const price = cycle === "yearly" ? plan.price_yearly : plan.price_monthly
   if (Number(price) === 0) return { amount: "Free", period: "" }

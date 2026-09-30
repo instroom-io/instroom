@@ -52,8 +52,12 @@ export async function PATCH(
 
     // ── DB write happens first — local save always succeeds even if the ─────
     // GoAffPro push below fails.
+    // Normalized so Shopify's discount-code fallback matching (which also
+    // normalizes with .trim().toUpperCase()) compares like-for-like.
+    const normalizedCoupon = coupon ? coupon.trim().toUpperCase() : coupon
+
     const fields: Record<string, unknown> = {}
-    if (coupon !== undefined) fields.coupon = coupon || null
+    if (coupon !== undefined) fields.coupon = normalizedCoupon || null
     if (affiliateLink !== undefined) fields.affiliate_link = affiliateLink || null
     if (sparkAds !== undefined) fields.spark_ads = sparkAds || null
 
@@ -71,16 +75,16 @@ export async function PATCH(
     let goAffPro: { synced: boolean; reason?: string } = { synced: false }
 
     const previousCoupon = brandInfluencer.attribution?.coupon ?? null
-    const couponChanged = coupon !== undefined && (coupon || null) !== previousCoupon
+    const couponChanged = coupon !== undefined && (normalizedCoupon || null) !== previousCoupon
     const affiliateId = brandInfluencer.attribution?.affiliate_id
 
     if (couponChanged) {
       if (!affiliateId) {
         goAffPro = { synced: false, reason: "Not yet provisioned with GoAffPro" }
-      } else if (!coupon) {
+      } else if (!normalizedCoupon) {
         goAffPro = { synced: false, reason: "Discount code cleared — not pushed to GoAffPro" }
       } else {
-        const result = await assignGoAffProCoupon({ brandId, affiliateId, coupon })
+        const result = await assignGoAffProCoupon({ brandId, affiliateId, coupon: normalizedCoupon })
         goAffPro = result.success ? { synced: true } : { synced: false, reason: result.reason }
       }
     }

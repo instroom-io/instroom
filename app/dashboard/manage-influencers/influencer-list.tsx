@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback } from "react"
 import { useParams } from "next/navigation"
 import { useSession } from "next-auth/react"
-import { Input } from "@/components/ui/input"
 import {
   IconSearch,
   IconTrash,
@@ -659,7 +658,15 @@ export default function InfluencerList() {
   const [modalType, setModalType] = useState<ModalType>("select")
   const [historyTarget, setHistoryTarget] = useState<InfluencerRow | null>(null)
   const [showTrialLimitModal, setShowTrialLimitModal] = useState(false)
-  const [subscriptionStatus, setSubscriptionStatus] = useState<{ status: string; isExpired: boolean } | null>(null)
+  const [subscriptionStatus, setSubscriptionStatus] = useState<{
+    status: string
+    isExpired: boolean
+    subscription?: { plan?: { name?: string } } | null
+  } | null>(null)
+
+  // Import/Export are a Solo & Team feature — Basic (the free plan) doesn't
+  // include them, regardless of subscription status.
+  const isOnBasicPlan = subscriptionStatus?.subscription?.plan?.name === "basic"
 
   const { data: session } = useSession()
 
@@ -743,118 +750,123 @@ export default function InfluencerList() {
 
   return (
     <div className="relative">
-      <div className="p-6 flex flex-col gap-6">
+      <div className="p-6 flex flex-col gap-4">
 
-        {/* HEADER */}
-        <div className="flex items-center justify-between gap-3 sm:gap-6 flex-wrap">
-          <div className="w-full sm:flex-1 sm:w-auto sm:min-w-[280px] sm:max-w-[560px] relative">
+        {/* ── Single inline toolbar row — matches the Post Tracker layout ── */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative flex-1 min-w-[200px] max-w-xs">
             <IconSearch
               size={16}
               className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
             />
-            <Input
-              placeholder="Search influencer"
-              className="pl-9 h-10 w-full"
+            {/* Raw input, not the shared <Input>: that component carries its own
+                rounded-md, shadow and focus ring, which read differently from the
+                Pipeline / Post Tracker / Analytics search fields. Same classes as
+                those (post-tracker/page.tsx) so the four are identical. */}
+            <input
+              placeholder="Search influencer..."
+              className="w-full pl-9 pr-3 h-9 border border-[#0F6B3E]/20 rounded-lg outline-none focus:ring-2 focus:ring-[#1FAE5B] text-sm"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <div className="flex gap-2 flex-wrap">
+          {/* Filters — same geometry and colours as the Post Tracker's. */}
+          <button
+            onClick={() => setOpenFilter(true)}
+            className={`h-9 px-3 rounded-lg text-sm flex items-center gap-1.5 border transition-colors ${
+              activeFilterCount > 0
+                ? "bg-[#1FAE5B] text-white border-[#1FAE5B]"
+                : "border-[#0F6B3E]/20 hover:border-[#0F6B3E]/40"
+            }`}
+          >
+            <IconFilter size={15} /> Filters
+            {activeFilterCount > 0 && (
+              <span className="text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center bg-white/20 text-white">
+                {activeFilterCount}
+              </span>
+            )}
+          </button>
+
+          {/* Count — same slot and wording as the Post Tracker's. */}
+          <span className="text-sm text-gray-500 whitespace-nowrap ml-1">
+            {loading
+              ? "Loading..."
+              : `${filtered.length} of ${influencers.length} influencer${influencers.length !== 1 ? "s" : ""}`}
+          </span>
+
+          {/* Spacer */}
+          <div className="flex-1" />
+
+          <div className="flex items-center gap-2 flex-wrap">
             <button
               onClick={() => {
                 setModalType("select")
                 setOpenModal(true)
               }}
-              className="bg-[#1FAE5B] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#0f6b3e] transition"
+              className="bg-[#1FAE5B] text-white h-9 px-4 rounded-lg text-sm font-medium hover:bg-[#0f6b3e] transition"
             >
               + New Influencer
             </button>
             <button
               onClick={() => {
-                if (subscriptionStatus?.status === "trialing") {
+                if (isOnBasicPlan) {
                   setShowTrialLimitModal(true)
                   return
                 }
                 setOpenImport(true)
               }}
               disabled={subscriptionStatus?.status === "trialing"}
-              className={`h-10 px-4 border rounded-lg text-sm transition ${
+              className={`h-9 px-4 border rounded-lg text-sm transition-colors ${
                 subscriptionStatus?.status === "trialing"
                   ? "opacity-50 cursor-not-allowed bg-gray-50 border-gray-200 text-gray-400"
-                  : "hover:bg-gray-50 text-gray-600"
+                  : "border-[#0F6B3E]/20 hover:border-[#0F6B3E]/40 text-gray-600"
               }`}
-              title={subscriptionStatus?.status === "trialing" ? "Import is not available during your free trial" : undefined}
+              title={isOnBasicPlan ? "Import is not available on the Basic plan" : undefined}
             >
               Import
             </button>
             <button
               onClick={() => {
-                if (subscriptionStatus?.status === "trialing") {
+                if (isOnBasicPlan) {
                   setShowTrialLimitModal(true)
                   return
                 }
               }}
               disabled={subscriptionStatus?.status === "trialing"}
-              className={`h-10 px-4 border rounded-lg text-sm transition ${
+              className={`h-9 px-4 border rounded-lg text-sm transition-colors ${
                 subscriptionStatus?.status === "trialing"
                   ? "opacity-50 cursor-not-allowed bg-gray-50 border-gray-200 text-gray-400"
-                  : "hover:bg-gray-50 text-gray-600"
+                  : "border-[#0F6B3E]/20 hover:border-[#0F6B3E]/40 text-gray-600"
               }`}
-              title={subscriptionStatus?.status === "trialing" ? "Export is not available during your free trial" : undefined}
+              title={isOnBasicPlan ? "Export is not available on the Basic plan" : undefined}
             >
               Export
             </button>
 
-            {/* Filter button — solid green when active with inline count badge */}
-            <button
-              onClick={() => setOpenFilter(true)}
-              className={`relative h-10 px-4 rounded-lg text-sm transition flex items-center gap-1.5 border font-medium ${
-                activeFilterCount > 0
-                  ? "bg-[#1FAE5B] border-[#1FAE5B] text-white hover:bg-[#0f6b3e]"
-                  : "bg-white border-gray-200 text-gray-600 hover:bg-gray-50"
-              }`}
-            >
-              <IconFilter size={14} />
-              Filters
-              {activeFilterCount > 0 && (
-                <span className="bg-white/25 text-white text-[11px] font-bold px-1.5 py-0.5 rounded-md leading-none">
-                  {activeFilterCount}
-                </span>
-              )}
-            </button>
-          </div>
-        </div>
-
-        {/* ACTION BAR */}
-        <div className="flex justify-between items-center">
-          <p className="text-sm text-gray-500">
-            {loading
-              ? "Loading..."
-              : `${filtered.length} influencer${filtered.length !== 1 ? "s" : ""}${
-                  activeFilterCount > 0 ? " (filtered)" : ""
+            {/* View toggle — the Post Tracker's segmented control, holding this
+                page's own two views. */}
+            <div className="inline-flex h-9 items-center rounded-lg border border-[#0F6B3E]/20 bg-white p-1">
+              <button
+                onClick={() => setView("table")}
+                className={`h-7 px-3 rounded-md text-sm flex items-center gap-1.5 transition-all ${
+                  view === "table"
+                    ? "bg-[#1FAE5B] text-white shadow-sm"
+                    : "text-gray-600 hover:bg-gray-50 hover:text-[#0F6B3E]"
                 }`}
-          </p>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setView("table")}
-              className={`h-9 w-9 flex items-center justify-center border rounded-md transition ${
-                view === "table"
-                  ? "border-[#1FAE5B] bg-[#1FAE5B]/10 text-[#0F6B3E]"
-                  : "border-gray-300 text-gray-500 hover:bg-gray-50"
-              }`}
-            >
-              <IconList size={16} />
-            </button>
-            <button
-              onClick={() => setView("kanban")}
-              className={`h-9 w-9 flex items-center justify-center border rounded-md transition ${
-                view === "kanban"
-                  ? "border-[#1FAE5B] bg-[#1FAE5B]/10 text-[#0F6B3E]"
-                  : "border-gray-300 text-gray-500 hover:bg-gray-50"
-              }`}
-            >
-              <IconLayoutKanban size={16} />
-            </button>
+              >
+                <IconList size={16} />
+              </button>
+              <button
+                onClick={() => setView("kanban")}
+                className={`h-7 px-3 rounded-md text-sm flex items-center gap-1.5 transition-all ${
+                  view === "kanban"
+                    ? "bg-[#1FAE5B] text-white shadow-sm"
+                    : "text-gray-600 hover:bg-gray-50 hover:text-[#0F6B3E]"
+                }`}
+              >
+                <IconLayoutKanban size={16} />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1242,13 +1254,13 @@ export default function InfluencerList() {
                 className="text-xl font-semibold leading-tight"
                 style={{ color: "#111827", letterSpacing: "-0.025em" }}
               >
-                Import unavailable on trial
+                Import unavailable on Basic plan
               </h2>
               <p
                 className="text-sm leading-relaxed mx-auto"
                 style={{ color: "#6b7280", maxWidth: 280 }}
               >
-                You're currently on a free trial with a 100-influencer limit. Upgrade to a paid plan to import influencers in bulk.
+                You're currently on the Basic plan. Upgrade to Solo or Team to import influencers in bulk.
               </p>
             </div>
 

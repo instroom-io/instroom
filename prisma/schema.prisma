@@ -4,8 +4,12 @@ generator client {
 }
 
 datasource db {
-  provider = "mysql"
-  url      = env("DATABASE_URL")
+  provider  = "mysql"
+  url       = env("DATABASE_URL")
+  // Accelerate (see lib/prisma.ts) doesn't support schema-level operations —
+  // prisma generate/migrate/introspection need a real direct connection
+  // regardless of what the app's own client does at runtime.
+  directUrl = env("DIRECT_DATABASE_URL")
 }
 
 model User {
@@ -15,6 +19,7 @@ model User {
   password_hash String?
   image         String?  @map("avatar_url")
   platform_role String   @default("user") @db.VarChar(20)
+  job_title     String?  @db.VarChar(150)
   is_active     Boolean  @default(true)
   created_at    DateTime @default(now())
   updated_at    DateTime @updatedAt
@@ -24,10 +29,22 @@ model User {
   two_factor_secret_pending String? @db.Text
   two_factor_backup_codes   Json?
 
+  // Array of tour scene keys the user has finished or skipped (e.g.
+  // ["onboarding","influencers","pipeline"]) — each page's contextual tour
+  // is tracked independently, so seeing one never marks the others seen.
+  product_tour_seen_scenes Json?
+
+  // Display preferences from Settings → Profile → Preferences. Null until the
+  // user saves once; the UI falls back to its own defaults in that case.
+  timezone         String? @db.VarChar(64)
+  currency_display String? @db.VarChar(10)
+  date_format      String? @db.VarChar(20)
+
   onboarding   Onboarding?
   subscription UserSubscription?
   brandMembers BrandMember[]
   activityLogs ActivityLog[]
+  pollVotes    CommunityPollVote[]
 
   // Discord account linkage. Populated by the OAuth link flow; read on every
   // Discord request to compute which channels this user may see.
@@ -51,6 +68,19 @@ model Account {
   token_type        String? @db.VarChar(50)
   scope             String? @db.VarChar(255)
   id_token          String? @db.Text
+
+  // Populated by /api/gmail/callback from Google's userinfo endpoint at
+  // connect time. Lets the inbox tell "this thread's other party" apart from
+  // "this thread is with my own connected mailbox" without a live API call.
+  email String? @db.VarChar(255)
+
+  // Set explicitly by /api/gmail/callback on every deliberate connect or
+  // reconnect — NOT touched by refreshGmailToken's silent background token
+  // refresh. This is what "most recently connected wins" actually orders by;
+  // the row's own id can't be used for that, since reconnecting an account
+  // used before updates its existing row rather than creating a new one, so
+  // the id stays fixed at whenever that row was first ever created.
+  last_selected_at DateTime?
 
   @@unique([provider, providerAccountId])
   @@index([userId])
@@ -81,9 +111,14 @@ model VerificationToken {
 model Onboarding {
   id                 String    @id @default(cuid()) @db.VarChar(30)
   user_id            String    @unique @db.VarChar(30)
-  operator_type      String?   @db.VarChar(20)
-  business_type      String?   @db.VarChar(20)
-  campaign_goal      String?   @db.VarChar(20)
+  // 60, not 20: every option in components/onboarding-form.tsx starts with an
+  // emoji, and the longest real option per field is 31/28/27 chars —
+  // confirmed by writing one through /api/onboarding and reading it back,
+  // which silently truncated at the old varchar(20). influencer_count's
+  // longest option is well inside 30 and was left as-is.
+  operator_type      String?   @db.VarChar(60)
+  business_type      String?   @db.VarChar(60)
+  campaign_goal      String?   @db.VarChar(60)
   influencer_count   String?   @db.VarChar(30)
   acquisition_source Json?
   completed_at       DateTime?
@@ -137,6 +172,7 @@ model UserSubscription {
   current_period_start    DateTime  @default(now())
   current_period_end      DateTime?
   reminder_sent_at        DateTime?
+  last_webhook_event_at   DateTime?
   created_at              DateTime  @default(now())
   updated_at              DateTime  @updatedAt
 
@@ -175,6 +211,36 @@ model PaymentHistory {
   @@index([user_id])
   @@index([brand_id])
   @@index([subscription_id])
+}
+
+// A request to refund a specific PaymentHistory row, reviewed by an admin.
+// This is a request/review record only — approving it does NOT call Lemon
+// Squeezy's refund API. The actual refund is still issued manually in their
+// dashboard, exactly as before this feature existed.
+model RefundRequest {
+  id                 String @id @default(cuid()) @db.VarChar(30)
+  user_id            String @db.VarChar(30)
+  payment_history_id String @db.VarChar(30)
+
+  // Snapshot at request time — protects this record from ever silently
+  // changing even though PaymentHistory is treated as immutable.
+  amount    Decimal @db.Decimal(65, 30)
+  currency  String  @default("USD") @db.VarChar(10)
+  plan_name String? @db.VarChar(50)
+
+  reason      String  @db.Text
+  status      String  @default("pending") @db.VarChar(20) // "pending" | "approved" | "denied"
+  admin_notes String? @db.Text
+
+  decided_by String?   @db.VarChar(255)
+  decided_at DateTime?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([user_id])
+  @@index([status])
+  @@index([payment_history_id])
 }
 
 model Brand {
@@ -258,6 +324,21 @@ model Influencer {
   // distinct from the per-brand BrandInfluencer.approval_status workflow.
   verification_status String   @default("pending") @db.VarChar(20)
   is_suspended        Boolean  @default(false)
+  // A blank row the user added in the Influencer List but has not filled in.
+  // It exists so the row survives a refresh; it is NOT an influencer yet.
+  //
+  // Drafts are excluded from every count and every other view (plan limits,
+  // analytics, Pipeline, approvals, admin metrics, exports, and the
+  // existing-influencer picker) — see the `is_draft: false` filters across
+  // app/api. The Influencer List is the only place that reads them.
+  //
+  // `handle` stays NOT NULL and `@@unique([handle, platform])` is untouched:
+  // real influencers still dedupe on it. A draft is given a generated unique
+  // handle instead (DRAFT_HANDLE_PREFIX in lib/influencer-draft), which the
+  // read paths blank out, so drafts cannot collide with each other or with a
+  // real handle. Typing a real handle promotes the row in place: the same
+  // record gets the handle and `is_draft` flips to false.
+  is_draft            Boolean  @default(false)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
@@ -270,6 +351,7 @@ model Influencer {
   @@index([verification_status])
   @@index([email])
   @@index([niche])
+  @@index([is_draft])
 }
 
 model Campaign {
@@ -310,6 +392,9 @@ model BrandInfluencer {
   likes_count      Int       @default(0)
   comments_count   Int       @default(0)
   engagement_count Int       @default(0)
+  // Post views — fetched from the post link (EnsembleData) or typed on the
+  // Post Tracker Post tab. Counted in Analytics when no detected post has one.
+  views_count      Int       @default(0)
   agreed_rate      Decimal?
   currency         String?   @db.VarChar(10)
   deliverables     String?   @db.Text
@@ -318,6 +403,10 @@ model BrandInfluencer {
   internal_rating  Decimal?
   approval_status  String?   @db.VarChar(20)
   approval_notes   String?   @db.Text
+  // Free-text explanation accompanying an "Others" decline. Kept OUT of
+  // approval_notes because Analytics matches that column exactly against the
+  // reason list — see prisma/migrations/20260916_add_decline_notes.
+  decline_notes    String?   @db.Text
   transferred_date DateTime?
   created_at       DateTime  @default(now())
   updated_at       DateTime  @updatedAt
@@ -327,6 +416,7 @@ model BrandInfluencer {
   campaign       Campaign?       @relation(fields: [campaign_id], references: [id], onDelete: SetNull)
   partner        BrandPartner? // new (1:1 back-relation)
   goaffproOrders GoAffProOrder[]
+  shopifyOrders  ShopifyOrder[]
   attribution    Attribution?
 
   @@unique([brand_id, influencer_id])
@@ -385,6 +475,49 @@ model GoAffProOrder {
   @@index([brand_id, affiliate_id])
   @@index([brand_influencer_id])
   @@index([status])
+}
+
+model ShopifyOrder {
+  id                  String    @id @default(cuid()) @db.VarChar(30)
+  brand_id            String    @db.VarChar(30)
+  shopify_order_id    String    @db.VarChar(100)
+  brand_influencer_id String?   @db.VarChar(30)
+  discount_code       String?   @db.VarChar(100)
+  source              String    @default("synced") @db.VarChar(20) // "instroom" | "synced"
+  financial_status    String?   @db.VarChar(30)
+  fulfillment_status  String?   @db.VarChar(30)
+  shipment_status     String?   @db.VarChar(30)
+  raw                 Json
+  shopify_created_at  DateTime?
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @updatedAt
+
+  brandInfluencer BrandInfluencer? @relation(fields: [brand_influencer_id], references: [id], onDelete: SetNull)
+
+  @@unique([brand_id, shopify_order_id])
+  @@index([brand_id, discount_code])
+  @@index([brand_influencer_id])
+}
+
+// Logs Shopify's three mandatory GDPR compliance webhooks (customers/data_request,
+// customers/redact, shop/redact) so someone can act on the request within its
+// legal deadline (30 days for the first two, 48 hours for shop/redact).
+// No FK to Brand — shop/redact fires when a store's connection is being torn
+// down, and a data_request/redact can arrive for a shop that's since
+// disconnected, so brand_id is a plain nullable scalar, not a relation.
+model ShopifyComplianceRequest {
+  id                  String    @id @default(cuid()) @db.VarChar(30)
+  brand_id            String?   @db.VarChar(30)
+  shop_domain         String    @db.VarChar(255)
+  request_type        String    @db.VarChar(30) // "customers_data_request" | "customers_redact" | "shop_redact"
+  shopify_customer_id String?   @db.VarChar(100)
+  order_ids           Json?
+  payload             Json
+  resolved_at         DateTime?
+  created_at          DateTime  @default(now())
+
+  @@index([brand_id])
+  @@index([resolved_at])
 }
 
 model OutreachLog {
@@ -505,6 +638,29 @@ model IntegrationConnection {
   @@index([integration_key])
 }
 
+model Signature {
+  id           String   @id @default(cuid()) @db.VarChar(30)
+  user_id      String   @unique @db.VarChar(30)
+  is_enabled   Boolean  @default(true)
+  full_name    String?  @db.VarChar(150)
+  title        String?  @db.VarChar(150)
+  company      String?  @db.VarChar(150)
+  phone        String?  @db.VarChar(50)
+  email        String?  @db.VarChar(150)
+  website      String?  @db.VarChar(255)
+  social_links Json?
+  photo_url    String?  @db.VarChar(500)
+  accent_color String?  @db.VarChar(7)
+  // If true, getUserSignatureHtml sends gmail_signature_html as-is instead of
+  // the fields above (kept intact so unchecking restores the built version).
+  use_gmail_signature  Boolean @default(false)
+  gmail_signature_html String? @db.Text
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  @@index([user_id])
+}
+
 model CommunityChannel {
   id          String   @id @default(cuid()) @db.VarChar(30)
   brand_id    String   @db.VarChar(30)
@@ -608,8 +764,21 @@ model PostTrackerAddon {
   amount               Decimal?
   currency             String    @default("USD") @db.VarChar(10)
   activated_by_user_id String?   @db.VarChar(30)
-  created_at           DateTime  @default(now())
-  updated_at           DateTime  @updatedAt
+
+  // ── What to look for, configured once per brand ───────────────────────────
+  // Automatic Post Detection is a brand-level paid feature, so what it matches
+  // on is brand-level too: one set of hashtags and mentions used for every
+  // influencer handle the brand monitors. It lives on this row because this row
+  // IS the feature's brand-scoped record — same lifetime, one lookup.
+  //
+  // PostDetectionSetting keeps its own hashtags/mentions columns for brands
+  // configured before this existed; the monitor prefers these and falls back to
+  // those, so nothing already working stops working.
+  detection_hashtags String? @db.VarChar(255)
+  detection_mentions String? @db.VarChar(255)
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
 
   @@index([status])
 }
@@ -682,6 +851,19 @@ model BrandCustomField {
   @@index([brand_id])
   @@index([brand_id, sort_order])
   @@index([created_by], map: "BrandCustomField_created_by_fkey")
+}
+
+model EmailTemplate {
+  id         String   @id @default(cuid()) @db.VarChar(30)
+  brand_id   String   @db.VarChar(30)
+  name       String   @db.VarChar(100)
+  subject    String   @db.VarChar(255)
+  body       String   @db.Text
+  created_by String?  @db.VarChar(30)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([brand_id])
 }
 
 model BrandInfluencerCustomValue {
@@ -820,4 +1002,52 @@ model BrandDiscordConnection {
   // attaching to a server someone else already connected.
   @@unique([guild_id])
   @@index([status])
+}
+
+// Per-user votes on a Community poll.
+//
+// ── Why this table exists when "Discord is the backend, nothing here is
+//    mirrored" everywhere else in Community ──
+//
+// A poll's QUESTION, OPTIONS, expiry and layout are never stored here — those
+// still come from Discord's own `message.poll` object on every read, exactly
+// like every other message field (see normaliseMessage). This table holds
+// only the one thing Discord's poll API structurally cannot give a
+// multi-Instroom-user app: who voted for what.
+//
+// Discord's poll vote is tracked per DISCORD ACCOUNT, and the bot is the only
+// Discord account this app holds (the same constraint already accepted for
+// messages, reactions and pins — see sendMessage's and toggleReaction's own
+// comments). If two different Instroom users voted through the bot, the
+// second vote would overwrite or be indistinguishable from the first in
+// Discord's own tally, which cannot satisfy "results update correctly for all
+// users" for more than one voter. So this table is the real vote store the UI
+// reads and writes; the bot's own vote on the live Discord poll is kept in
+// sync best-effort so the object still reads correctly if opened directly in
+// Discord, but is not what Instroom's UI counts from.
+model CommunityPollVote {
+  id String @id @default(cuid()) @db.VarChar(30)
+
+  // The Discord message id carrying the poll — not a local id, matching the
+  // rest of this integration's convention of keying on Discord's own ids
+  // rather than mirroring a message table that doesn't exist here.
+  message_id String @db.VarChar(30)
+  brand_id   String @db.VarChar(30)
+  user_id    String @db.VarChar(30)
+  // Discord's own answer_id (a small integer, 1-10) for the option chosen.
+  answer_id  Int
+
+  created_at DateTime @default(now())
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  // One row per (user, option) they picked — this is what makes multi-select
+  // possible: a single-select poll simply never has more than one row per
+  // (message_id, user_id), enforced in the route, not the schema, since a
+  // poll's allow_multiselect is a Discord-side setting that can only be read
+  // at request time.
+  @@unique([message_id, user_id, answer_id])
+  @@index([message_id])
+  @@index([brand_id])
+  @@index([user_id])
 }

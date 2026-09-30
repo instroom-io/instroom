@@ -274,9 +274,9 @@ export function LandingPage() {
               Instroom is the system. Every creator, every campaign, every result — in one workspace. Built by people who've done the work.
             </p>
             <div className={styles.heroCtas}>
-              <Link href="/early-access">
+              <Link href="/signup?plan=basic">
                 <Button className="bg-gradient-to-r from-[#0F6B3E] to-[#1FAE5B] text-white font-semibold h-12 px-8 hover:from-[#0a5a2f] hover:to-[#158a48] shadow-lg shadow-emerald-500/25 rounded-xl">
-                  Get Early Access
+                  Sign Up for Free
                 </Button>
               </Link>
               <a href="#features">
@@ -307,8 +307,8 @@ export function LandingPage() {
                     >
                       <Icon size={10} stroke={1.75} className="text-white shrink-0" />
                       <span className="text-[7.5px] font-medium text-white truncate">{label}</span>
-                    </div>
-                  ))}
+                    </div> 
+                    ))}
                 </div>
               </div>
 
@@ -454,15 +454,67 @@ export function LandingPage() {
         </div>
       </section>
 
-      {/* PROBLEM */}
-      <section className={`${styles.section} ${styles.secOdd} ${styles.problemSection}`}>
+      {/* SOLUTIONS PREVIEW */}
+      <section className={`${styles.section} ${styles.secOdd}`}>
+        <div className={styles.containerMd}>
+          <div className={`${styles.sectionHeader} ${styles.accentHeader}`}>
+            <h2>Whatever your team looks like, the system doesn't change.</h2>
+            <p>One person or fifty clients — same platform, same structure, same results.</p>
+          </div>
+          <div className={styles.solutionsGrid}>
+            <Link href="/solutions?type=freelancer" className={styles.solutionCard}>
+              <div className={styles.solutionCardHead}>
+                <div className={styles.solutionIcon} style={{ background: "#e8f8ef" }}>
+                  <svg width="20" height="20" viewBox="0 0 18 18" fill="none">
+                    <circle cx="9" cy="6" r="3" stroke="#1FAE5B" strokeWidth="1.6" />
+                    <path d="M3.5 15c0-3 2.5-5 5.5-5s5.5 2 5.5 5" stroke="#1FAE5B" strokeWidth="1.6" strokeLinecap="round" />
+                  </svg>
+                </div>
+                <h3>For Freelancers</h3>
+              </div>
+              <p>Run client campaigns that look like an agency built them — without the overhead.</p>
+            </Link>
+            <Link href="/solutions?type=agency" className={styles.solutionCard}>
+              <div className={styles.solutionCardHead}>
+                <div className={styles.solutionIcon} style={{ background: "#e8f3fa" }}>
+                  <svg width="20" height="20" viewBox="0 0 18 18" fill="none">
+                    <rect x="3" y="3" width="8" height="12" rx="1" stroke="#2C8EC4" strokeWidth="1.6" />
+                    <path d="M11 15V7l4 2v6" stroke="#2C8EC4" strokeWidth="1.6" strokeLinejoin="round" />
+                    <path d="M5.5 6h1M5.5 9h1M5.5 12h1" stroke="#2C8EC4" strokeWidth="1.4" strokeLinecap="round" />
+                  </svg>
+                </div>
+                <h3>For Agency Owners</h3>
+              </div>
+              <p>Manage every client, every campaign, without duct-taping five tools together.</p>
+            </Link>
+            <Link href="/solutions?type=dtc" className={styles.solutionCard}>
+              <div className={styles.solutionCardHead}>
+                <div className={styles.solutionIcon} style={{ background: "#fdf1e6" }}>
+                  <svg width="20" height="20" viewBox="0 0 18 18" fill="none">
+                    <path d="M3 6l1-3h10l1 3" stroke="#E08D3C" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M3 6v8a1 1 0 001 1h10a1 1 0 001-1V6" stroke="#E08D3C" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M3 6a2 2 0 004 0 2 2 0 004 0 2 2 0 004 0" stroke="#E08D3C" strokeWidth="1.6" strokeLinecap="round" />
+                  </svg>
+                </div>
+                <h3>For DTC Founders</h3>
+              </div>
+              <p>Run your creator program like a system, without hiring a team to manage it.</p>
+            </Link>
+          </div>
+          <div className={styles.solutionsMore}>
+            <Link href="/solutions" className={styles.insideFeatLink}>See all solutions &rarr;</Link>
+          </div>
+        </div>
+      </section>
+
+      {/* PROBLEM + OUTCOMES */}
+      <section className={`${styles.section} ${styles.secEven} ${styles.problemSection}`}>
         <div className={styles.containerMd} style={{ position: "relative" }}>
           <div className={styles.sketchAnnotation} style={{ top: 220, left: "100%", marginLeft: 28 }}>
             <span className={`${styles.sketchLabel} ${styles.fontHand}`}>Before</span>
             <SketchArrow />
           </div>
-          <div className={`${styles.sectionHeader} ${styles.problemHeaderGap}`}>
-            <div className={styles.founderLabel}>« The Problem »</div>
+          <div className={`${styles.sectionHeader} ${styles.problemHeaderGap} ${styles.accentHeader}`}>
             <h2>You didn't start your brand to<br />live in a spreadsheet.</h2>
             <p>But here you are. Multiple tabs. Multiple tools. A nagging feeling that you're paying creators and hoping it's working.</p>
           </div>
@@ -476,11 +528,7 @@ export function LandingPage() {
             ))}
           </div>
         </div>
-      </section>
-
-      {/* OUTCOMES */}
-      <section className={`${styles.section} ${styles.secEven}`}>
-        <div className={styles.containerMd} style={{ position: "relative" }}>
+        <div className={`${styles.containerMd} ${styles.outcomesGap}`} style={{ position: "relative" }}>
           <div className={styles.sketchAnnotation} style={{ top: -12, right: "100%", marginRight: 28 }}>
             <span className={`${styles.sketchLabel} ${styles.fontHand}`}>Now</span>
             <SketchArrow flip />
@@ -764,9 +812,9 @@ export function LandingPage() {
           <p className={`${styles.fontHand} text-3xl font-semibold text-[#0F6B3E] mb-8 leading-snug`}>
             Hopefully yours will live here soon.<br />Fingers crossed.
           </p>
-          <Link href="/early-access">
+          <Link href="/signup?plan=basic">
             <Button className="bg-gradient-to-r from-[#0F6B3E] to-[#1FAE5B] text-white font-semibold h-12 px-8 hover:from-[#0a5a2f] hover:to-[#158a48] rounded-xl shadow-lg shadow-emerald-600/20">
-              Get Early Access
+              Sign Up for Free
             </Button>
           </Link>
         </div>
@@ -806,9 +854,9 @@ export function LandingPage() {
           <h2>The system is ready. Your next campaign is waiting.</h2>
           <p className={styles.finalCtaLead}>Stop building the process. Start running the campaign.</p>
           <div className={styles.heroCtas} style={{ justifyContent: "center" }}>
-            <Link href="/early-access">
+            <Link href="/signup?plan=basic">
               <Button className="bg-[#1FAE5B] text-white font-bold h-13 px-9 rounded-xl hover:bg-[#158a48] shadow-lg shadow-emerald-500/40 text-base transition-all duration-150" style={{ height: "52px", fontSize: "1rem" }}>
-                Get Early Access
+                Sign Up for Free
               </Button>
             </Link>
             <Button

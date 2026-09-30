@@ -8,14 +8,10 @@ export async function GET(req: NextRequest) {
   if (!session?.user?.id) {
     return NextResponse.redirect(new URL("/login", req.url))
   }
-
-  // Build the Google OAuth URL with Gmail scopes.
-  // We pass the user's internal ID as `state` so the callback
-  // knows which DB user to attach the tokens to.
   const state = Buffer.from(
     JSON.stringify({
       userId: session.user.id,
-      returnTo: req.nextUrl.searchParams.get("returnTo") || "/inbox",
+      returnTo: req.nextUrl.searchParams.get("returnTo") || "/dashboard/inbox",
     })
   ).toString("base64url")
 
@@ -29,9 +25,11 @@ export async function GET(req: NextRequest) {
       "profile",
       "https://www.googleapis.com/auth/gmail.readonly",
       "https://www.googleapis.com/auth/gmail.send",
+      "https://www.googleapis.com/auth/gmail.modify",
+      "https://www.googleapis.com/auth/gmail.settings.basic", 
     ].join(" "),
     access_type: "offline",
-    prompt: "consent",        // force consent so we always get a refresh_token
+    prompt: "consent select_account",
     state,
   })
 

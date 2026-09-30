@@ -7,9 +7,10 @@
 // ============================================================================
 
 import { NextResponse } from "next/server"
-import { prisma } from "@/lib/prisma"
+import { prisma, withDbRetry } from "@/lib/prisma"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
+import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 import { userHasActiveSubscription } from "@/lib/subscription-limits"
 
 export async function GET() {
@@ -22,7 +23,7 @@ export async function GET() {
     const userId = session.user.id
 
     // Get brands the user owns
-    const ownedBrands = await prisma.brand.findMany({
+    const ownedBrands = await withDbRetry(() => prisma.brand.findMany({
       where: {
         owner_id: userId,
         is_active: true,
@@ -35,10 +36,10 @@ export async function GET() {
         description: true,
       },
       orderBy: { created_at: "asc" },
-    })
+    }))
 
     // Get brands the user is a member of (but doesn't own)
-    const memberships = await prisma.brandMember.findMany({
+    const memberships = await withDbRetry(() => prisma.brandMember.findMany({
       where: {
         user_id: userId,
       },
@@ -55,7 +56,7 @@ export async function GET() {
           },
         },
       },
-    })
+    }))
 
     // Filter member brands where owner has active subscription
     const memberBrands = []
@@ -85,9 +86,20 @@ export async function GET() {
       defaultBrandId: allBrands.length > 0 ? allBrands[0].id : null,
     })
   } catch (error: any) {
-    console.error("Failed to fetch user brands:", error)
+    console.error("Failed to fetch user brands:", error?.code, error?.message)
+
+    // This route is mounted by several components at once and competes for the
+    // same small pool as the dashboard reads, so an empty pool is its most
+    // likely failure. 503 + Retry-After tells the client this is transient
+    // rather than a dead end — the same handling the other reads use.
+    if (isDatabaseCapacityError(error)) {
+      return databaseCapacityResponse()
+    }
+
+    // `details` carried the raw driver text to the browser. It belongs in the
+    // log above: it is unreadable to the user and describes storage internals.
     return NextResponse.json(
-      { error: "Failed to fetch brands", details: error?.message },
+      { error: "Failed to fetch brands" },
       { status: 500 }
     )
   }

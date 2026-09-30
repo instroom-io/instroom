@@ -28,6 +28,10 @@ export async function GET(req: NextRequest) {
 
     const influencers = await prisma.influencer.findMany({
       where: {
+        // Drafts excluded. This query is global, not brand-scoped, so without
+        // this one workspace's blank rows would be offered to every other
+        // workspace as pickable influencers.
+        is_draft: false,
         ...(excludedInfluencerIds.length > 0
           ? { id: { notIn: excludedInfluencerIds } }
           : {}),

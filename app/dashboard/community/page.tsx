@@ -15,7 +15,16 @@ import { useLastBrand } from "./_discord/ServerSwitcher"
 function CommunityContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
-  const brandId = searchParams.get("brandId")
+  // Split defensively: `brandId` feeds straight into the /api/brands/{brandId}/
+  // path, so a value carrying a stray "?..." or "&..." would be encoded into
+  // that path (%3F...) and answered with 403 rather than failing visibly. A
+  // brand id is an opaque cuid and never contains either character, so anything
+  // from the first one onwards is not part of it.
+  //
+  // The redirect that produced such a value is fixed at its source (the Discord
+  // account callback's returnTo join). This is the backstop, so a hand-edited or
+  // future malformed url degrades to "wrong brand" rather than a puzzling 403.
+  const brandId = searchParams.get("brandId")?.split(/[?&]/)[0] || null
 
   // Arriving with no brand: reopen whichever server was last used here rather
   // than making the user pick one again every time. `replace`, not `push`, so
@@ -23,9 +32,15 @@ function CommunityContent() {
   const lastBrand = useLastBrand()
   useEffect(() => {
     if (!brandId && lastBrand) {
-      router.replace(`/dashboard/community?brandId=${encodeURIComponent(lastBrand)}`)
+      // Existing params are carried over rather than dropped. A Discord
+      // authorization tab can land here with ?discordLinked=1 / ?discordConnected=1
+      // and no brandId; rebuilding the url from brandId alone threw that verdict
+      // away, so the tab had nothing left to report and never closed itself.
+      const next = new URLSearchParams(searchParams.toString())
+      next.set("brandId", lastBrand)
+      router.replace(`/dashboard/community?${next.toString()}`)
     }
-  }, [brandId, lastBrand, router])
+  }, [brandId, lastBrand, router, searchParams])
 
   if (!brandId) {
     // A redirect is already in flight — show the shell rather than flashing an

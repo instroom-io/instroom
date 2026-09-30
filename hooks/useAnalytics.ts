@@ -7,6 +7,7 @@
 
 import { useEffect, useState, useCallback } from "react"
 import { useSession } from "next-auth/react"
+import type { DeclineBucket } from "@/lib/decline-reasons"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -20,7 +21,7 @@ export interface AnalyticsInfluencer {
 
   pipelineStatus: string
   rejectionReason: string | null
-  rejectionBucket: "hard" | "soft" | null
+  rejectionBucket: DeclineBucket | null
 
   views:    number
   likes:    number

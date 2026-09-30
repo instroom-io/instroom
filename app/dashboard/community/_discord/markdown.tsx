@@ -44,6 +44,11 @@ const clockSnapshot = () => Math.floor(Date.now() / TICK_MS)
 /** 0 on the server — the renderer falls back to an absolute date for that pass. */
 const serverClockSnapshot = () => 0
 
+// Exported for anything else on the page that needs "the current time" during
+// render — a poll's own expiry check, for one — rather than each reaching for
+// Date.now() directly (impure during render) or standing up a second timer.
+export { subscribeClock, clockSnapshot, serverClockSnapshot, TICK_MS }
+
 /** Resolves raw Discord ids into display names for mentions. */
 export type MentionResolver = {
   user: (id: string) => string | null
@@ -172,7 +177,7 @@ function mentionPill(label: string, key: string) {
   return (
     <span
       key={key}
-      className="rounded bg-[#5865F2]/12 px-1 font-medium text-[#4752C4] transition-colors hover:bg-[#5865F2]/20"
+      className="rounded bg-[#0F6B3E]/12 px-1 font-medium text-[#0F6B3E] transition-colors hover:bg-[#0F6B3E]/20"
     >
       {label}
     </span>

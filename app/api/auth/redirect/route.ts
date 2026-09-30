@@ -37,7 +37,7 @@ export async function GET(req: NextRequest) {
     const isComplete = !!onboarding?.completed_at
 
     return NextResponse.redirect(
-      new URL(isComplete ? "/dashboard/influencer-discovery" : "/onboarding", req.url)
+      new URL(isComplete ? "/dashboard/manage-influencers" : "/onboarding", req.url)
     )
   } catch (error) {
     console.error("Auth redirect error:", error)

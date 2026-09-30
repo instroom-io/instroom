@@ -1,7 +1,6 @@
 "use client"
 
 import { useEffect, useState, useRef, useCallback } from "react"
-import { signOutEverywhere } from "@/lib/sign-out"
 import { createPortal } from "react-dom"
 import { useRouter, usePathname } from "next/navigation"
 import { useSession } from "next-auth/react"
@@ -10,9 +9,10 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Plus, Zap, AlertCircle, Check, ChevronDown, LogOut, Users } from "lucide-react"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { Plus, Zap, AlertCircle, Check, ChevronDown, Users } from "lucide-react"
 import { WorkspaceUnavailableModal } from "@/components/workspace-unavailable-modal"
+import { fetchCached } from "@/lib/data-cache"
 
 interface Brand {
   id: string
@@ -45,6 +45,7 @@ export function BrandSelector() {
   const [selectedBrandId, setSelectedBrandId] = useState<string>("")
   const [mounted, setMounted] = useState(false)
   const [error, setError] = useState("")
+  const [upgradeRequired, setUpgradeRequired] = useState(false)
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const [dropdownPos, setDropdownPos] = useState<DropdownPosition>({ top: 0, right: 0 })
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -64,6 +65,8 @@ export function BrandSelector() {
 
   const [unavailableModalOpen, setUnavailableModalOpen] = useState(false)
   const [unavailableBrand, setUnavailableBrand] = useState<Brand | null>(null)
+
+  const [planInfo, setPlanInfo] = useState<{ name: string; displayName: string } | null>(null)
 
   const handleUnavailableModalClose = () => {
     setUnavailableModalOpen(false)
@@ -86,9 +89,17 @@ export function BrandSelector() {
 
     const fetchBrands = async () => {
       try {
-        const response = await fetch("/api/brand/list")
-        if (response.ok) {
-          const data = await response.json()
+        // This effect re-runs on every route change. Going through the shared
+        // cache means the workspace list is fetched once and reused across
+        // navigations (and refreshed in the background once stale) instead of
+        // re-requested — and re-rendered behind a loading state — every time.
+        const data = await fetchCached<{ brands: Brand[] }>("/api/brand/list", async () => {
+          const response = await fetch("/api/brand/list")
+          if (!response.ok) throw new Error(`Failed to load brands (${response.status})`)
+          return response.json()
+        })
+
+        if (data?.brands) {
           setBrands(data.brands)
           if (brandId) {
             setSelectedBrandId(brandId)
@@ -97,6 +108,11 @@ export function BrandSelector() {
             const newParams = new URLSearchParams()
             newParams.set("brandId", data.brands[0].id)
             router.push(`${pathname}?${newParams.toString()}`)
+          } else if (pathname !== "/dashboard/brand/create") {
+            // No workspace yet — send them straight into setup instead of
+            // making them find the "Create Workspace" button themselves.
+            // Covers post-payment redirects and any other brandless landing.
+            router.push("/dashboard/brand/create")
           }
         }
       } catch (error) {
@@ -108,6 +124,29 @@ export function BrandSelector() {
 
     fetchBrands()
   }, [pathname, router])
+
+  // Current plan, shown at the top of the dropdown with an upgrade shortcut —
+  // same endpoint/cache key the Billing page and its Settings prefetch use
+  // (lib/settings-prefetch.ts), so whichever loads first primes it for both.
+  useEffect(() => {
+    const userId = session?.user?.id
+    if (!userId) return
+    fetchCached<any>(`/api/subscription/check?user=${userId}`, async () => {
+      const res = await fetch("/api/subscription/check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: userId }),
+      })
+      if (!res.ok) throw new Error(`Failed to check subscription (${res.status})`)
+      return res.json()
+    })
+      .then((d: any) => {
+        if (d?.subscription?.plan) {
+          setPlanInfo({ name: d.subscription.plan.name, displayName: d.subscription.plan.display_name })
+        }
+      })
+      .catch(() => {})
+  }, [session?.user?.id])
 
   // Close on outside click
   useEffect(() => {
@@ -155,6 +194,7 @@ export function BrandSelector() {
   const checkBrandLimitAndBuy = async () => {
     try {
       setError("")
+      if (upgradeRequired) { router.push("/dashboard/settings/billing"); return }
       const res = await fetch("/api/subscription/check-brand-limit")
       const data = await res.json()
       if (!res.ok) { setError(data.error || "Failed to check brand limit"); return }
@@ -171,7 +211,7 @@ export function BrandSelector() {
       } else if (data.allowed) {
         router.push("/dashboard/brand/create")
       } else {
-        setError(data.message || "You've reached your brand limit and cannot purchase more.")
+        setUpgradeRequired(true)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred")
@@ -241,8 +281,6 @@ export function BrandSelector() {
   const getInitials = (name: string) => name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2)
   const ownedBrands = brands.filter((b) => b.isOwner)
   const sharedBrands = brands.filter((b) => !b.isOwner)
-  const userName = session?.user?.name || "User"
-  const userAvatar = session?.user?.image || "/avatars/default.jpg"
 
   // Dropdown via portal — right-aligned to trigger, escapes any overflow clipping
   const dropdown = (
@@ -252,37 +290,60 @@ export function BrandSelector() {
         position: "fixed",
         top: dropdownPos.top,
         right: dropdownPos.right,
-        width: 260,
+        width: 268,
         zIndex: 9999,
       }}
-      className="bg-white rounded-xl shadow-2xl border border-gray-100 overflow-hidden"
+      className="bg-white rounded-xl border border-gray-200 shadow-lg overflow-hidden"
     >
+      {/* Current plan + upgrade shortcut.
+          px-4 to match every row below it — this was px-6 while the rows were
+          effectively px-6 too (px-3 wrapper + px-3 button), but the plan row
+          had no wrapper, so the two never actually lined up. */}
+      {planInfo && (
+        <>
+          <div className="flex items-center justify-between gap-2 px-4 pt-3 pb-2.5">
+            <span className="text-[13px] font-semibold text-gray-900">{planInfo.displayName} Plan</span>
+            {planInfo.name !== "team" && (
+              <button
+                onClick={() => { router.push("/pricing"); setDropdownOpen(false) }}
+                className="text-[11px] font-semibold text-[#0F6B3E] bg-[#0F6B3E]/10 hover:bg-[#0F6B3E]/15 px-2 py-0.5 rounded-md transition-colors"
+              >
+                Upgrade
+              </button>
+            )}
+          </div>
+          <div className="h-px bg-gray-100" />
+        </>
+      )}
+
       {/* Team */}
-      <div className="px-3 py-2">
+      <div className="p-1.5">
         <button
           onClick={() => { router.push("/dashboard/settings/collaborators"); setDropdownOpen(false) }}
-          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-gray-50 transition-colors"
+          className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-gray-50 transition-colors"
         >
-          <div className="h-8 w-8 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0">
-            <Users className="h-4 w-4 text-gray-500" />
+          <div className="h-7 w-7 rounded-md bg-gray-100 flex items-center justify-center flex-shrink-0">
+            <Users className="h-3.5 w-3.5 text-gray-500" />
           </div>
-          <div className="text-left">
-            <p className="text-sm font-medium text-gray-900">Team</p>
-            <p className="text-xs text-gray-400">Team settings</p>
+          <div className="text-left leading-tight">
+            <p className="text-[13px] font-medium text-gray-900">Team</p>
+            <p className="text-[11px] text-gray-400">Team settings</p>
           </div>
         </button>
       </div>
 
-      <div className="h-px bg-gray-100 mx-3" />
+      <div className="h-px bg-gray-100" />
 
       {/* Owned Workspaces */}
       {ownedBrands.length > 0 && (
-        <div className="px-3 py-2">
-          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-3 pb-1">
+        <div className="p-1.5">
+          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-2.5 pt-1 pb-1.5">
             Workspaces
           </p>
-          <div className="space-y-0.5">
-            {ownedBrands.map((brand) => (
+          <div className="space-y-px">
+            {ownedBrands.map((brand) => {
+              const isSelected = brand.id === selectedBrandId
+              return (
               <button
                 key={brand.id}
                 onClick={() => {
@@ -296,61 +357,85 @@ export function BrandSelector() {
                   setDropdownOpen(false)
                 }}
                 disabled={!brand.subscriptionActive && !brand.isOwner}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${
+                // The selected row carries a tinted background AND a brand-green
+                // left rule, not just the trailing check: at a glance the check
+                // alone was easy to miss against a list of identically-styled
+                // rows, which is the whole job this control has to do.
+                className={`relative w-full flex items-center gap-2.5 rounded-lg py-2 pr-2.5 transition-colors ${
+                  isSelected ? "bg-[#0F6B3E]/[0.07] pl-3.5" : "pl-2.5"
+                } ${
                   !brand.subscriptionActive && !brand.isOwner
                     ? "opacity-50 cursor-not-allowed"
-                    : "hover:bg-gray-50"
+                    : isSelected ? "" : "hover:bg-gray-50"
                 }`}
               >
+                {isSelected && (
+                  <span
+                    aria-hidden="true"
+                    className="absolute left-1 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-[#0F6B3E]"
+                  />
+                )}
                 {brand.logo_url ? (
                   <img src={brand.logo_url} alt={brand.name}
-                    className={`h-8 w-8 rounded-md flex-shrink-0 object-cover ${!brand.subscriptionActive && !brand.isOwner ? "grayscale" : ""}`}
+                    className={`h-7 w-7 rounded-md flex-shrink-0 object-cover ${!brand.subscriptionActive && !brand.isOwner ? "grayscale" : ""}`}
                   />
                 ) : (
-                  <Avatar className="h-8 w-8 rounded-md flex-shrink-0">
-                    <AvatarFallback className="rounded-md text-xs font-bold bg-gray-100 text-gray-700">
+                  <Avatar className="h-7 w-7 rounded-md flex-shrink-0">
+                    <AvatarFallback className="rounded-md text-[11px] font-bold bg-gray-100 text-gray-700">
                       {getInitials(brand.name)}
                     </AvatarFallback>
                   </Avatar>
                 )}
-                <div className="flex-1 text-left min-w-0">
-                  <p className="text-sm font-medium text-gray-900 truncate">{brand.name}</p>
-                  <p className="text-xs text-gray-400">
+                <div className="flex-1 text-left min-w-0 leading-tight">
+                  <p className={`text-[13px] truncate ${isSelected ? "font-semibold text-gray-900" : "font-medium text-gray-900"}`}>
+                    {brand.name}
+                  </p>
+                  <p className={`text-[11px] ${isSelected ? "text-[#0F6B3E]" : "text-gray-400"}`}>
                     {!brand.subscriptionActive && !brand.isOwner ? "⚠️ Unavailable" : "Owner"}
                   </p>
                 </div>
-                {brand.id === selectedBrandId && (
-                  <Check className="h-4 w-4 text-[#0F6B3E] flex-shrink-0" />
+                {isSelected && (
+                  <Check className="h-3.5 w-3.5 text-[#0F6B3E] flex-shrink-0" strokeWidth={3} />
                 )}
               </button>
-            ))}
+              )
+            })}
           </div>
         </div>
       )}
 
-      {/* Add Workspace */}
-      <div className={`px-3 ${ownedBrands.length > 0 ? "pb-2" : "py-2"}`}>
+      {/* Add Workspace — a secondary action, so it reads lighter than the
+          workspace rows above rather than competing with them: a small inline
+          icon tile instead of a full 28px dashed avatar. */}
+      <div className={`px-1.5 ${ownedBrands.length > 0 ? "pb-1.5" : "py-1.5"}`}>
         <button
           onClick={() => { checkBrandLimitAndBuy(); setDropdownOpen(false) }}
-          className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 transition-colors"
+          className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg hover:bg-gray-50 transition-colors group"
         >
-          <div className="h-8 w-8 rounded-md border-2 border-dashed border-gray-200 flex items-center justify-center flex-shrink-0">
-            <Plus className="h-3.5 w-3.5 text-gray-400" />
+          <div className="h-7 w-7 rounded-md border border-dashed border-gray-300 flex items-center justify-center flex-shrink-0 transition-colors group-hover:border-gray-400">
+            <Plus className="h-3.5 w-3.5 text-gray-400 transition-colors group-hover:text-gray-600" />
           </div>
-          <span className="text-sm font-medium text-gray-500">Add Workspace</span>
+          <span className="text-[13px] font-medium text-gray-600">Add Workspace</span>
+          {upgradeRequired && (
+            <span className="ml-auto text-[10px] font-semibold text-[#0F6B3E] bg-[#0F6B3E]/10 px-1.5 py-0.5 rounded">
+              Upgrade
+            </span>
+          )}
         </button>
       </div>
 
       {/* Shared Workspaces */}
       {sharedBrands.length > 0 && (
         <>
-          <div className="h-px bg-gray-100 mx-3" />
-          <div className="px-3 py-2">
-            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-3 pb-1">
+          <div className="h-px bg-gray-100" />
+          <div className="p-1.5">
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-2.5 pt-1 pb-1.5">
               Shared Workspaces
             </p>
-            <div className="space-y-0.5">
-              {sharedBrands.map((brand) => (
+            <div className="space-y-px">
+              {sharedBrands.map((brand) => {
+                const isSelected = brand.id === selectedBrandId
+                return (
                 <button
                   key={brand.id}
                   onClick={() => {
@@ -364,68 +449,69 @@ export function BrandSelector() {
                     setDropdownOpen(false)
                   }}
                   disabled={!brand.subscriptionActive}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${
-                    !brand.subscriptionActive ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-50"
+                  // Same selected treatment as the owned list above, so the
+                  // active workspace looks identical wherever it appears.
+                  className={`relative w-full flex items-center gap-2.5 rounded-lg py-2 pr-2.5 transition-colors ${
+                    isSelected ? "bg-[#0F6B3E]/[0.07] pl-3.5" : "pl-2.5"
+                  } ${
+                    !brand.subscriptionActive
+                      ? "opacity-50 cursor-not-allowed"
+                      : isSelected ? "" : "hover:bg-gray-50"
                   }`}
                 >
+                  {isSelected && (
+                    <span
+                      aria-hidden="true"
+                      className="absolute left-1 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-[#0F6B3E]"
+                    />
+                  )}
                   {brand.logo_url ? (
                     <img src={brand.logo_url} alt={brand.name}
-                      className={`h-8 w-8 rounded-md flex-shrink-0 object-cover ${!brand.subscriptionActive ? "grayscale" : ""}`}
+                      className={`h-7 w-7 rounded-md flex-shrink-0 object-cover ${!brand.subscriptionActive ? "grayscale" : ""}`}
                     />
                   ) : (
-                    <Avatar className="h-8 w-8 rounded-md flex-shrink-0">
-                      <AvatarFallback className="rounded-md text-xs font-bold bg-gray-100 text-gray-700">
+                    <Avatar className="h-7 w-7 rounded-md flex-shrink-0">
+                      <AvatarFallback className="rounded-md text-[11px] font-bold bg-gray-100 text-gray-700">
                         {getInitials(brand.name)}
                       </AvatarFallback>
                     </Avatar>
                   )}
-                  <div className="flex-1 text-left min-w-0">
-                    <p className="text-sm font-medium text-gray-900 truncate">{brand.name}</p>
-                    <p className="text-xs text-gray-400">
+                  <div className="flex-1 text-left min-w-0 leading-tight">
+                    <p className={`text-[13px] truncate ${isSelected ? "font-semibold text-gray-900" : "font-medium text-gray-900"}`}>
+                      {brand.name}
+                    </p>
+                    <p className={`text-[11px] ${isSelected ? "text-[#0F6B3E]" : "text-gray-400"}`}>
                       {!brand.subscriptionActive ? "⚠️ Unavailable" : "Member"}
                     </p>
                   </div>
-                  {brand.id === selectedBrandId && (
-                    <Check className="h-4 w-4 text-[#0F6B3E] flex-shrink-0" />
+                  {isSelected && (
+                    <Check className="h-3.5 w-3.5 text-[#0F6B3E] flex-shrink-0" strokeWidth={3} />
                   )}
                 </button>
-              ))}
+                )
+              })}
             </div>
           </div>
         </>
       )}
-
-      {/* Account + Logout */}
-      <div className="h-px bg-gray-100" />
-      <div className="px-3 py-2">
-        <button
-          onClick={() => { router.push("/dashboard/settings"); setDropdownOpen(false) }}
-          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-gray-50 transition-colors"
-        >
-          <Avatar className="h-8 w-8 rounded-full flex-shrink-0">
-            <AvatarImage src={userAvatar} alt={userName} />
-            <AvatarFallback className="text-xs font-bold bg-gray-100 text-gray-700">
-              {getInitials(userName)}
-            </AvatarFallback>
-          </Avatar>
-          <div className="flex-1 text-left min-w-0">
-            <p className="text-sm font-medium text-gray-900 truncate">{userName}</p>
-            <p className="text-xs text-[#0F6B3E] font-medium">Account settings</p>
-          </div>
-        </button>
-        <button
-          onClick={() => signOutEverywhere()}
-          className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-red-50 transition-colors mt-0.5"
-        >
-          <LogOut className="h-4 w-4 text-red-500" />
-          <span className="text-sm font-medium text-red-500">Log out</span>
-        </button>
-      </div>
     </div>
   )
 
   return (
     <>
+      {upgradeRequired && (
+        <div className="flex items-center gap-3 px-3 py-1.5 rounded-md bg-amber-50 text-amber-800 border border-amber-100 text-sm transition-colors">
+          <span>You&apos;ve reached your brand limit. Upgrade your plan to add more brands.</span>
+          <Button
+            size="sm"
+            className="h-7 px-3 ml-auto bg-[#0F6B3E] hover:bg-[#0F6B3E]/90 text-white text-xs"
+            onClick={() => router.push("/dashboard/settings/billing")}
+          >
+            Upgrade
+          </Button>
+        </div>
+      )}
+
       {error && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-red-50 text-red-700 border border-red-200 text-sm">
           <AlertCircle className="h-4 w-4 flex-shrink-0" />
@@ -436,6 +522,7 @@ export function BrandSelector() {
       {/* Trigger — styled for white topbar */}
       <button
         ref={triggerRef}
+        data-tour="brand-selector"
         onClick={handleToggleDropdown}
         className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors"
       >

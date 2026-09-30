@@ -1,14 +1,20 @@
 import { NextRequest, NextResponse } from "next/server"
 import { guardBrandGuild, statusForCode } from "@/lib/discord/route-guard"
-import { getMessages, sendMessage } from "@/lib/discord/bot-provider"
+import { getMessages, sendMessage, editMessage, deleteMessage } from "@/lib/discord/bot-provider"
+import { attachPollVotes } from "@/lib/discord/polls"
 
-// GET  ?channelId=&before=&limit=   — history, newest last
-// POST { channelId, content, replyToId? } — send as the bot, attributed
-//      Also accepts multipart/form-data with the same fields plus `files`.
+// GET    ?channelId=&before=&limit=   — history, newest last
+// POST   { channelId, content, replyToId? } — send as the bot, attributed
+//        Also accepts multipart/form-data with the same fields plus `files`.
+// PATCH  { channelId, messageId, content } — edit a message THIS user sent
+// DELETE { channelId, messageId } (as JSON body — see the note on DELETE below)
 //
-// Both re-derive the caller's channel access inside the provider, so a
+// All four re-derive the caller's channel access inside the provider, so a
 // channelId belonging to another brand's guild (or to a private channel the
 // caller can't see) resolves to "not found" rather than leaking anything.
+// PATCH/DELETE additionally re-derive OWNERSHIP inside the provider — see
+// isOwnMessage's comment — so a messageId someone else sent 403s regardless of
+// what the client believes about it.
 
 /** Discord's own per-file ceiling on an unboosted guild. */
 const MAX_FILE_BYTES = 25 * 1024 * 1024
@@ -38,7 +44,8 @@ export async function GET(
       return NextResponse.json({ error: result.error, code: result.code }, { status: statusForCode(result.code) })
     }
 
-    return NextResponse.json({ messages: result.messages, hasMore: result.hasMore })
+    const messages = await attachPollVotes(guard.userId, result.messages)
+    return NextResponse.json({ messages, hasMore: result.hasMore })
   } catch (error) {
     console.error("[GET discord/messages]", error)
     return NextResponse.json({ error: "Failed to load messages" }, { status: 500 })
@@ -109,9 +116,89 @@ export async function POST(
       return NextResponse.json({ error: result.error, code: result.code }, { status: statusForCode(result.code) })
     }
 
-    return NextResponse.json({ message: result.message })
+    const [withVotes] = await attachPollVotes(guard.userId, [result.message])
+    return NextResponse.json({ message: withVotes })
   } catch (error) {
     console.error("[POST discord/messages]", error)
     return NextResponse.json({ error: "Failed to send message" }, { status: 500 })
+  }
+}
+
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: Promise<{ brandId: string }> }
+) {
+  try {
+    const { brandId } = await params
+    const guard = await guardBrandGuild(brandId)
+    if (!guard.ok) return guard.response
+
+    const body = await req.json().catch(() => ({}))
+    const { channelId, messageId, content } = body ?? {}
+
+    if (typeof channelId !== "string" || !channelId) {
+      return NextResponse.json({ error: "channelId is required" }, { status: 400 })
+    }
+    if (typeof messageId !== "string" || !messageId) {
+      return NextResponse.json({ error: "messageId is required" }, { status: 400 })
+    }
+    if (typeof content !== "string" || !content.trim()) {
+      return NextResponse.json({ error: "content is required" }, { status: 400 })
+    }
+
+    const result = await editMessage(
+      guard.guildId,
+      guard.discordUserId,
+      channelId,
+      messageId,
+      guard.displayName,
+      content
+    )
+
+    if (!result.ok) {
+      return NextResponse.json({ error: result.error, code: result.code }, { status: statusForCode(result.code) })
+    }
+
+    const [withVotes] = await attachPollVotes(guard.userId, [result.message])
+    return NextResponse.json({ message: withVotes })
+  } catch (error) {
+    console.error("[PATCH discord/messages]", error)
+    return NextResponse.json({ error: "Failed to edit message" }, { status: 500 })
+  }
+}
+
+// A JSON body rather than query params: consistent with every other action
+// route in this integration (reactions, typing, the POST above), all of which
+// take channelId/messageId in the body — a caller building one of these
+// requests already knows that shape.
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ brandId: string }> }
+) {
+  try {
+    const { brandId } = await params
+    const guard = await guardBrandGuild(brandId)
+    if (!guard.ok) return guard.response
+
+    const body = await req.json().catch(() => ({}))
+    const { channelId, messageId } = body ?? {}
+
+    if (typeof channelId !== "string" || !channelId) {
+      return NextResponse.json({ error: "channelId is required" }, { status: 400 })
+    }
+    if (typeof messageId !== "string" || !messageId) {
+      return NextResponse.json({ error: "messageId is required" }, { status: 400 })
+    }
+
+    const result = await deleteMessage(guard.guildId, guard.discordUserId, channelId, messageId, guard.displayName)
+
+    if (!result.ok) {
+      return NextResponse.json({ error: result.error, code: result.code }, { status: statusForCode(result.code) })
+    }
+
+    return NextResponse.json({ ok: true })
+  } catch (error) {
+    console.error("[DELETE discord/messages]", error)
+    return NextResponse.json({ error: "Failed to delete message" }, { status: 500 })
   }
 }

@@ -5,13 +5,11 @@ import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
+import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
+// The canonical union — redeclared locally before, so adding a column meant
+// editing the same list in three files and the route silently disagreeing.
+import { CLOSED_COLUMNS, type ClosedColumn } from "@/lib/post-tracker-status"
 
-type ClosedColumn =
-  | "For Order Creation"
-  | "In-Transit"
-  | "Delivered"
-  | "Posted"
-  | "No post"
 
 function deriveClosedStatus(
   contactStatus: string,
@@ -20,13 +18,8 @@ function deriveClosedStatus(
   approvalStatus: string | null,
   storedClosedStatus: string | null
 ): ClosedColumn {
-  const valid: ClosedColumn[] = [
-    "For Order Creation",
-    "In-Transit",
-    "Delivered",
-    "Posted",
-    "No post",
-  ]
+  // The canonical list, not a copy — see CLOSED_COLUMNS.
+  const valid = CLOSED_COLUMNS
 
   // 1. The saved stage ALWAYS wins.
   //
@@ -106,13 +99,29 @@ export async function GET(
     //   A) contact_status = 'for_order_creation'  → For Order Creation column
     //   B) stage >= 6                              → In-Transit / Delivered / Posted
     //      (stage 5 = For Order Creation, set by pipeline PATCH)
-    //      (stage 6 = In-Transit, 7 = Delivered, 8 = Posted)
+    //      (stage 6 = In-Transit, 7 = Delivered, 8 = Posted, 9 = Issues)
     //   C) content_posted = true                  → Posted column
     //   D) order_status IN shipped/delivered       → In-Transit or Delivered
     //
-    // NOT included (naturally excluded because none of A-D match):
+    //   E) product_details carries closedStatus "No post" → No post column
+    //
+    //      Not derivable from the columns above, and its absence is what made a
+    //      manual Delivered → No post move look like the card had been deleted.
+    //      mapClosedToPipelineFields("No post") writes contact_status =
+    //      "not_interested", stage = 0, content_posted = false and order_status =
+    //      null, which fails A, B, C and D at once — so the row was excluded by
+    //      this WHERE before deriveClosedStatus could classify it. The note below
+    //      always claimed such rows were fetched and then classified; they were
+    //      never fetched.
+    //
+    //      Matched on the saved stage itself, which deriveClosedStatus already
+    //      treats as the source of truth. That keeps it precise: only rows a user
+    //      deliberately parked in No post from THIS board come back, not every
+    //      pipeline "Not Interested" influencer that never reached Post Tracker.
+    //
+    // NOT included (naturally excluded because none of A-E match):
     //   - contacted, negotiating, agreed, etc. → stage 1-4, no for_order_creation
-    //   - not_interested → deriveClosedStatus returns "No post" for these
+    //   - not_interested that never entered Post Tracker → no saved stage
     const rows = await prisma.brandInfluencer.findMany({
       where: {
         brand_id: brandId,
@@ -121,6 +130,9 @@ export async function GET(
           { stage: { gte: 5 } },
           { content_posted: true },
           { order_status: { in: ["shipped", "delivered"] } },
+          // product_details is written with JSON.stringify, so the key and its
+          // value sit adjacent with no whitespace between them.
+          { product_details: { contains: '"closedStatus":"No post"' } },
         ],
       },
       // `select` instead of `include` — only pull the columns this route actually
@@ -148,6 +160,7 @@ export async function GET(
         likes_count: true,
         comments_count: true,
         engagement_count: true,
+        views_count: true,
         internal_rating: true,
         updated_at: true,
         created_at: true,
@@ -175,7 +188,42 @@ export async function GET(
       take: 500,
     })
 
+    // ── Automatic Post Detection evidence ───────────────────────────────────
+    // The Post Tracker only allows a manual move to "Posted" when there is
+    // evidence of a published post. A manually entered post_url is one form of
+    // evidence; a post found by Automatic Post Detection is the other, and the
+    // rows already exist in DetectedPost — so surface a count per influencer
+    // instead of making the client fetch the detection endpoint per card.
+    //
+    // Only posts published since tracking started count — the row's In-Transit
+    // date (shipped_at, else delivered_at), the same cutoff the detection pass
+    // uses (lib/post-tracker/monitor.ts). That cutoff differs per row, so the
+    // count is taken over a narrow select rather than a groupBy. Scoped by
+    // brand_id as well as the id list so another workspace's rows can never be
+    // counted.
+    const detectionRows = rows.length
+      ? await prisma.detectedPost.findMany({
+          where: {
+            brand_id: brandId,
+            brand_influencer_id: { in: rows.map((r) => r.id) },
+          },
+          select: { brand_influencer_id: true, published_at: true, detected_at: true },
+        })
+      : []
+
+    const trackingSinceById = new Map(rows.map((r) => [r.id, r.shipped_at ?? r.delivered_at ?? null]))
+    const detectionByInfluencer = new Map<string, { count: number; latest: Date | null }>()
+    for (const d of detectionRows) {
+      const since = trackingSinceById.get(d.brand_influencer_id)
+      if (since && (!d.published_at || d.published_at < since)) continue
+      const entry = detectionByInfluencer.get(d.brand_influencer_id) ?? { count: 0, latest: null }
+      entry.count += 1
+      if (!entry.latest || d.detected_at > entry.latest) entry.latest = d.detected_at
+      detectionByInfluencer.set(d.brand_influencer_id, entry)
+    }
+
     const data = rows.map((row) => {
+      const detection = detectionByInfluencer.get(row.id)
       const productDetails = safeJSONParse(row.product_details)
       const inf = row.influencer
 
@@ -236,11 +284,19 @@ export async function GET(
         postUrl:         row.post_url,
         postedAt:        row.posted_at?.toISOString()    || null,
 
+        // Automatic Post Detection results for this influencer. 0 means
+        // detection has found nothing yet (or was never enabled), in which case
+        // the manual Post URL requirement still applies.
+        detectedPostCount:  detection?.count ?? 0,
+        latestDetectedAt:   detection?.latest?.toISOString() ?? null,
+
         likesCount:      row.likes_count      || 0,
         commentsCount:   row.comments_count   || 0,
         engagementCount: row.engagement_count || 0,
+        viewsCount:      row.views_count      || 0,
 
         paidCollabData:  productDetails.paidCollab || null,
+        completed:       productDetails.completed === true,
 
         internalRating:  row.internal_rating ? Number(row.internal_rating) : null,
         lastContact:     row.updated_at.toISOString(),
@@ -251,6 +307,8 @@ export async function GET(
     return NextResponse.json({ success: true, data })
   } catch (error: any) {
     console.error("GET closed error:", error)
+    // Same capacity handling as the influencer list and the Pipeline board.
+    if (isDatabaseCapacityError(error)) return databaseCapacityResponse()
     return NextResponse.json(
       { error: "Failed to fetch data", detail: error?.message },
       { status: 500 }

@@ -6,4 +6,4 @@
 //   import type { InfluencerRow, CustomColumn } from "@/components/table-sheet"
 
 export { default } from "./table-sheet"              // main component
-export type { InfluencerRow, CustomColumn, SortOrder, FilterState } from "./types"
+export type { InfluencerRow, CustomColumn, SortOrder, FilterState, BulkApprovalResult } from "./types"

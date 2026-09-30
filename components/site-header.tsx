@@ -36,7 +36,11 @@ export function SiteHeader() {
         <SidebarTrigger className="-ml-1" />
         <Separator orientation="vertical" className="mx-2 h-4" />
 
-        <h1 className="text-base font-medium">{title}</h1>
+        {/* 17px/semibold: the page title is the top of the type hierarchy on
+            every dashboard page, and text-base/medium left it competing with
+            the section headings below it. Height is unchanged (h-48px), so no
+            page gains or loses vertical space. */}
+        <h1 className="text-[17px] font-semibold tracking-tight">{title}</h1>
 
         <div className="ml-auto flex items-center gap-4">
           <BrandSelector />

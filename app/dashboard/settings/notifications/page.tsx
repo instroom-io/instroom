@@ -9,6 +9,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Bell } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { SettingsSkeleton } from "@/components/shared/skeletons"
+import { fetchCached, getCachedData } from "@/lib/data-cache"
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
 
@@ -116,6 +117,22 @@ const DEFAULT_GROUPS: NotifGroup[] = [
   },
 ]
 
+/** Overlay saved preference values onto the default group definitions. */
+function applySavedPrefs(
+  groups: NotifGroup[],
+  saved: Record<string, boolean> | undefined,
+): NotifGroup[] {
+  if (!saved) return groups
+  return groups.map((group) => ({
+    ...group,
+    items: group.items.map((item) => {
+      if (!item.apiKey) return item
+      const value = saved[item.apiKey]
+      return value !== undefined ? { ...item, on: value } : item
+    }),
+  }))
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function NotificationsPage() {
@@ -123,8 +140,14 @@ export default function NotificationsPage() {
   const router                   = useRouter()
   const { toast, show }          = useToast()
 
-  const [groups,       setGroups]       = useState<NotifGroup[]>(DEFAULT_GROUPS)
-  const [notifsLoaded, setNotifsLoaded] = useState(false)
+  // Seeded from the shared cache: returning to this page shows the saved
+  // preferences immediately while they revalidate in the background.
+  const cachedPrefs = getCachedData<Record<string, boolean>>("/api/settings/notifications")
+
+  const [groups,       setGroups]       = useState<NotifGroup[]>(
+    () => applySavedPrefs(DEFAULT_GROUPS, cachedPrefs)
+  )
+  const [notifsLoaded, setNotifsLoaded] = useState(cachedPrefs !== undefined)
   const [toggling,     setToggling]     = useState<string | null>(null)
 
   // ── Load saved preferences ────────────────────────────────────────────────
@@ -135,19 +158,13 @@ export default function NotificationsPage() {
     }
     if (status !== "authenticated") return
 
-    fetch("/api/settings/notifications")
-      .then((r) => r.json())
+    fetchCached<any>("/api/settings/notifications", async () => {
+      const r = await fetch("/api/settings/notifications")
+      if (!r.ok) throw new Error(`Request failed (${r.status})`)
+      return r.json()
+    })
       .then((data: Record<string, boolean>) => {
-        setGroups((prev) =>
-          prev.map((group) => ({
-            ...group,
-            items: group.items.map((item) => {
-              if (!item.apiKey) return item
-              const saved = data[item.apiKey]
-              return saved !== undefined ? { ...item, on: saved } : item
-            }),
-          })),
-        )
+        setGroups((prev) => applySavedPrefs(prev, data))
       })
       .catch(() => {})
       .finally(() => setNotifsLoaded(true))

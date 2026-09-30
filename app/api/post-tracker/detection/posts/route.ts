@@ -43,7 +43,7 @@ export async function GET(req: NextRequest) {
     // biId from another workspace can't leak rows.
     const influencer = await prisma.brandInfluencer.findFirst({
       where: { id: biId, brand_id: brandId },
-      select: { id: true },
+      select: { id: true, shipped_at: true, delivered_at: true },
     })
     if (!influencer) {
       return NextResponse.json({ error: "Influencer not found" }, { status: 404 })
@@ -59,9 +59,16 @@ export async function GET(req: NextRequest) {
     const since = parseDate(sp.get("since"))
     const before = parseDate(sp.get("before"))
 
+    // Tracking starts when the order went In-Transit (shipped_at, else
+    // delivered_at) — the same cutoff the detection pass uses. Posts published
+    // before it, including any imported before that rule existed, are not
+    // shown, so the list only ever holds this collaboration's latest posts.
+    const trackingSince = influencer.shipped_at ?? influencer.delivered_at ?? null
+
     const posts = await prisma.detectedPost.findMany({
       where: {
         brand_influencer_id: biId,
+        ...(trackingSince ? { published_at: { gte: trackingSince } } : {}),
         ...(since ? { detected_at: { gt: since } } : {}),
         ...(before ? { detected_at: { lt: before } } : {}),
       },

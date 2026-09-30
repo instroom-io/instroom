@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
+import { checkBrandAccess } from "@/lib/brand-access"
 
 export async function GET(
   req: NextRequest,
@@ -15,6 +16,9 @@ export async function GET(
     }
 
     const { brandId, campaignId } = await context.params
+    if (!(await checkBrandAccess(brandId, session.user.id))) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
 
     const campaign = await prisma.campaign.findFirst({
       where: { id: campaignId, brand_id: brandId },
@@ -52,6 +56,9 @@ export async function PATCH(
     }
 
     const { brandId, campaignId } = await context.params
+    if (!(await checkBrandAccess(brandId, session.user.id))) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
     const body = await req.json()
 
     if (body.name !== undefined || body.description !== undefined || body.status !== undefined) {
@@ -104,6 +111,9 @@ export async function DELETE(
     }
 
     const { brandId, campaignId } = await context.params
+    if (!(await checkBrandAccess(brandId, session.user.id))) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
 
     await prisma.brandInfluencer.updateMany({
       where: { campaign_id: campaignId, brand_id: brandId },

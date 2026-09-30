@@ -40,6 +40,18 @@ export type Reaction = {
   me: boolean
 }
 
+export type PollOption = { answerId: number; text: string; count: number }
+
+export type Poll = {
+  question: string
+  options: PollOption[]
+  totalVotes: number
+  allowMultiselect: boolean
+  /** null = never expires; otherwise an ISO timestamp. */
+  expiresAt: string | null
+  isFinalized: boolean
+}
+
 export type Message = {
   id: string
   channelId: string
@@ -56,6 +68,10 @@ export type Message = {
   thread: { id: string; name: string; messageCount: number } | null
   link: string
   pinned: boolean
+  poll: Poll | null
+  /** The CURRENT user's own picks on this poll, by answerId. Always present
+   *  (empty array) even when `poll` is null, matching the API's own shape. */
+  myVotes: number[]
 }
 
 export type Member = {

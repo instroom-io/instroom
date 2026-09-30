@@ -7,6 +7,7 @@ import {
   Loader2, CheckCircle2, AlertCircle, Search, RefreshCw,
   Plus, Users, UserPlus, Check
 } from "lucide-react"
+import { INSTROOM_PROFILE_ENDPOINTS, isInstroomApiConfigured } from "@/components/table-sheet/constants"
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 type Creator = {
@@ -33,10 +34,10 @@ type Creator = {
 }
 
 // ─── API Config ─────────────────────────────────────────────────────────────
-const API_ENDPOINTS = {
-  instagram: (u: string) => `https://api.instroom.io/v2/${u}/instagram`,
-  tiktok: (u: string) => `https://api.instroom.io/${u}/tiktok`,
-}
+// Shared with the Influencer List so the host lives in one place. The paths are
+// unchanged — /v2/{u}/instagram and /{u}/tiktok — only the hardcoded
+// api.instroom.io host (which no longer resolves) is gone.
+const API_ENDPOINTS = INSTROOM_PROFILE_ENDPOINTS
 
 // ─── Shared localStorage key for influencer list ────────────────────────────
 const INFLUENCER_LIST_KEY = "instroom_influencer_list"
@@ -223,6 +224,19 @@ async function fetchCreatorFromAPI(
   const platformKey = platformName.toLowerCase() as "instagram" | "tiktok"
 
   if (platformKey !== "instagram" && platformKey !== "tiktok") return null
+
+  // No API host configured — do not send the request. With a blank base URL the
+  // endpoint builders produce a relative path, so every lookup would hit this
+  // app's own 404 page and return null, and a whole misconfigured environment
+  // would read as "no results" with nothing in the console to say why.
+  if (!isInstroomApiConfigured()) {
+    console.error(
+      "Influencer API is not configured (INSTROOM_API_BASE_URL is unset or blank), so no lookup " +
+        `request was made for @${clean}. It is inlined into the client bundle at build time, so ` +
+        "set it for this environment and redeploy."
+    )
+    return null
+  }
 
   try {
     const url = API_ENDPOINTS[platformKey](clean)

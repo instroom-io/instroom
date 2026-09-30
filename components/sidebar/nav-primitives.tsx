@@ -80,17 +80,20 @@ export function SidebarNavItem({
   icon: Icon,
   active,
   onNavigate,
+  tourId,
 }: {
   href: string
   label: string
   icon: React.ComponentType<{ size?: number | string; strokeWidth?: number; className?: string }>
   active: boolean
   onNavigate?: () => void
+  tourId?: string
 }) {
   return (
     <Link
       href={href}
       onClick={onNavigate}
+      data-tour={tourId}
       aria-current={active ? "page" : undefined}
       className={cn(
         "group relative flex items-center rounded-[var(--sb-item-radius)]",
@@ -128,18 +131,22 @@ export function SidebarUserCard({
   name,
   email,
   image,
+  settingsHref,
+  onNavigate,
   onSignOut,
 }: {
   name: string
   email?: string
   image?: string | null
+  settingsHref?: string
+  onNavigate?: () => void
   onSignOut: () => void
 }) {
   const initials =
     (name.trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("") || "A").toUpperCase()
 
-  return (
-    <div className="flex h-16 items-center gap-2.5 rounded-[var(--sb-item-radius)] border border-white/10 bg-white/[0.05] px-2.5">
+  const identity = (
+    <>
       {image ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={image} alt="" className="h-8 w-8 shrink-0 rounded-full object-cover" />
@@ -152,8 +159,29 @@ export function SidebarUserCard({
       {/* min-w-0 + truncate: a long email must not widen the rail */}
       <div className="min-w-0 flex-1">
         <p className="truncate text-[13px] font-medium leading-tight text-white">{name}</p>
-        {email && <p className="mt-0.5 truncate text-[11px] leading-tight text-white/55">{email}</p>}
+        {settingsHref ? (
+          <p className="mt-0.5 truncate text-[11px] leading-tight text-[var(--sb-accent)]">Account settings</p>
+        ) : (
+          email && <p className="mt-0.5 truncate text-[11px] leading-tight text-white/55">{email}</p>
+        )}
       </div>
+    </>
+  )
+
+  return (
+    <div className="flex h-16 items-center gap-2.5 rounded-[var(--sb-item-radius)] border border-white/10 bg-white/[0.05] px-2.5">
+      {settingsHref ? (
+        <Link
+          href={settingsHref}
+          onClick={onNavigate}
+          title={email}
+          className="-ml-1 flex min-w-0 flex-1 items-center gap-2.5 rounded-md py-1.5 pl-1 outline-none transition-colors duration-[var(--sb-transition)] hover:bg-white/[0.07] focus-visible:ring-2 focus-visible:ring-white/70"
+        >
+          {identity}
+        </Link>
+      ) : (
+        identity
+      )}
 
       <button
         type="button"
@@ -172,9 +200,19 @@ export function SidebarUserCard({
    Shared by both <Sidebar> instances so background, font and the
    single-scroll-region rule are defined once.
    ------------------------------------------------------------------------ */
+// One continuous green surface. The positioner and the panel it contains carry
+// the SAME background, so the `inset` variant's p-3 gutter is indistinguishable
+// from the panel and the rail reads as a single sheet.
+//
+// shadow-none! is what keeps it that way. The `inset` variant puts shadow-sm on
+// the panel, which casts onto the gutter and turns that 12px band into a
+// visibly darker strip — a seam that looks like a second container, most
+// obviously down the right edge. The important flag is required: the variant's
+// rule is a group-data selector that outranks a plain utility.
 export const SIDEBAR_ROOT_CLASS =
   "border-none bg-[var(--sb-bg)] font-[family-name:var(--font-inter)] text-white " +
-  "[&>[data-sidebar=sidebar]]:overflow-hidden [&>[data-sidebar=sidebar]]:bg-[var(--sb-bg)]"
+  "[&>[data-sidebar=sidebar]]:overflow-hidden [&>[data-sidebar=sidebar]]:bg-[var(--sb-bg)] " +
+  "[&>[data-sidebar=sidebar]]:shadow-none!"
 
 // px-5/py-5 = 20px all round: enough for the 40px logo to breathe without
 // making the rail header tall. pb-5 is what sets the gap between the logo and

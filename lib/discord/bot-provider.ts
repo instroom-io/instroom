@@ -28,6 +28,19 @@ export type DiscordAttachment = {
 
 export type DiscordReaction = { emoji: string; emojiId: string | null; count: number; me: boolean }
 
+export type DiscordPollOption = { answerId: number; text: string; count: number }
+
+export type DiscordPollView = {
+  question: string
+  options: DiscordPollOption[]
+  totalVotes: number
+  allowMultiselect: boolean
+  /** null = never expires; otherwise an ISO timestamp. */
+  expiresAt: string | null
+  /** True once Discord (or expirePoll below) has closed it to further votes. */
+  isFinalized: boolean
+}
+
 export type DiscordMessageView = {
   id: string
   channelId: string
@@ -47,6 +60,9 @@ export type DiscordMessageView = {
   /** Permalink for "Copy message link". */
   link: string
   pinned: boolean
+  /** Set when this message carries a poll. Discord's own tally — see the
+   *  route layer for why the UI does not read vote counts from here. */
+  poll: DiscordPollView | null
 }
 
 export type DiscordChannelView = {
@@ -151,6 +167,27 @@ function normaliseMessage(raw: any, guildId: string): DiscordMessageView {
       : null,
     link: `https://discord.com/channels/${guildId}/${raw.channel_id}/${raw.id}`,
     pinned: Boolean(raw.pinned),
+    poll: raw.poll
+      ? {
+          question: raw.poll.question?.text ?? "",
+          options: (raw.poll.answers ?? []).map((a: any) => ({
+            answerId: a.answer_id,
+            text: a.poll_media?.text ?? "",
+            // Discord omits `results` until it has tallied the poll at least
+            // once — a poll one second old has no results object at all, not
+            // an empty one. Zero is the correct read for that, not "unknown".
+            count:
+              raw.poll.results?.answer_counts?.find((c: any) => c.id === a.answer_id)?.count ?? 0,
+          })),
+          totalVotes: (raw.poll.results?.answer_counts ?? []).reduce(
+            (sum: number, c: any) => sum + (c.count ?? 0),
+            0
+          ),
+          allowMultiselect: Boolean(raw.poll.allow_multiselect),
+          expiresAt: raw.poll.expiry ?? null,
+          isFinalized: Boolean(raw.poll.results?.is_finalized),
+        }
+      : null,
   }
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -248,6 +285,35 @@ async function assertChannelAccess(guildId: string, discordUserId: string | null
   return { ok: true as const, channel }
 }
 
+/**
+ * Access check for a THREAD id rather than a regular channel.
+ *
+ * `GET /guilds/{id}/channels` — what getChannelsForUser lists from — does not
+ * return threads at all; Discord treats them as a separate concept with their
+ * own listing endpoints. assertChannelAccess would therefore reject every
+ * thread id as "not found", including one this very caller just created.
+ *
+ * A thread's own channel object (fetched directly, one request) carries
+ * `parent_id`: the channel it branched from. Checking that the PARENT is one
+ * of the caller's visible channels is the same inherited-permission rule
+ * Discord itself uses for threads, and reuses the existing visibility list
+ * rather than a second permission computation.
+ */
+async function assertThreadAccess(guildId: string, discordUserId: string | null, threadId: string) {
+  const visible = await getChannelsForUser(guildId, discordUserId)
+  if (!visible.ok) return visible
+
+  const threadRes = await discordRest<{ id: string; parent_id?: string | null }>(`/channels/${threadId}`)
+  if (!threadRes.ok) {
+    return { ok: false as const, error: "Thread not found.", code: "not_found" as const }
+  }
+  const parentId = threadRes.data.parent_id
+  if (!parentId || !visible.channels.some((c) => c.id === parentId)) {
+    return { ok: false as const, error: "Thread not found.", code: "not_found" as const }
+  }
+  return { ok: true as const, threadId, parentId }
+}
+
 export async function getMessages(
   guildId: string,
   discordUserId: string | null,
@@ -267,6 +333,35 @@ export async function getMessages(
   // Discord returns newest-first; the UI renders oldest-first.
   const messages = res.data.map((m) => normaliseMessage(m, guildId)).reverse()
   return { ok: true as const, messages, hasMore: res.data.length === limit }
+}
+
+/**
+ * Fetch a single message — used before voting, to read its poll's CURRENT
+ * finalized/expiry state rather than trusting whatever the client last saw.
+ *
+ * `channelId` may name either a regular channel OR a thread — a poll message
+ * can live inside a thread, and Discord's vote endpoints are scoped to
+ * whichever channel the message actually lives in (threads ARE channels in
+ * Discord's model). assertChannelAccess alone would reject a thread id, the
+ * exact gap assertThreadAccess exists to close (see its own comment), so this
+ * tries the regular check first and only falls back to the thread check —
+ * cheaper for the overwhelmingly common case of voting in a normal channel.
+ */
+export async function getMessage(
+  guildId: string,
+  discordUserId: string | null,
+  channelId: string,
+  messageId: string
+) {
+  const channelAccess = await assertChannelAccess(guildId, discordUserId, channelId)
+  const access = channelAccess.ok
+    ? channelAccess
+    : await assertThreadAccess(guildId, discordUserId, channelId)
+  if (!access.ok) return access
+
+  const res = await discordRest<unknown>(`/channels/${channelId}/messages/${messageId}`)
+  if (!res.ok) return { ok: false as const, error: res.error, code: res.code }
+  return { ok: true as const, message: normaliseMessage(res.data, guildId) }
 }
 
 /**
@@ -366,6 +461,332 @@ export async function triggerTyping(guildId: string, discordUserId: string | nul
   if (!access.ok) return access
   const res = await discordRest(`/channels/${channelId}/typing`, { method: "POST" })
   return res.ok ? { ok: true as const } : { ok: false as const, error: res.error, code: res.code }
+}
+
+/**
+ * Is this message the one Instroom sent on behalf of `displayName`?
+ *
+ * Every message this app posts is attributed by a `**DisplayName**: ` prefix
+ * — see sendMessage's own comment on why (the bot is the only Discord identity
+ * we hold). That prefix is therefore also the only reliable signal for "did
+ * THIS Instroom user send this", so edit/delete check it rather than
+ * `authorId`, which is the bot's id on every message regardless of who typed
+ * it. `authorIsBot` is checked too: a message a real person posted directly in
+ * Discord (not through Instroom) is never editable/deletable from here, no
+ * matter what its text happens to start with.
+ */
+function isOwnMessage(raw: { author?: { bot?: boolean }; content?: string }, displayName: string): boolean {
+  return Boolean(raw.author?.bot) && (raw.content ?? "").startsWith(`**${displayName}**: `)
+}
+
+/**
+ * Fetch one message and confirm it belongs to `displayName` before an
+ * edit/delete is allowed to proceed. A single extra request, but the
+ * alternative — trusting the client's own idea of which messages are "mine" —
+ * would let anyone edit or delete anyone else's message by id.
+ */
+async function assertOwnMessage(channelId: string, messageId: string, displayName: string) {
+  const res = await discordRest<any>(`/channels/${channelId}/messages/${messageId}`) // eslint-disable-line @typescript-eslint/no-explicit-any
+  if (!res.ok) return { ok: false as const, error: res.error, code: res.code }
+  if (!isOwnMessage(res.data, displayName)) {
+    return { ok: false as const, error: "You can only edit or delete your own messages.", code: "forbidden" as const }
+  }
+  return { ok: true as const, raw: res.data }
+}
+
+/**
+ * Edit a message THIS Instroom user sent.
+ *
+ * The `**DisplayName**: ` prefix is preserved and re-applied — the caller only
+ * ever supplies the text after it, matching what the composer already shows
+ * on screen (see DiscordClient's editingMessage state), so a user editing
+ * their own message never sees or has to know the attribution prefix exists.
+ */
+export async function editMessage(
+  guildId: string,
+  discordUserId: string | null,
+  channelId: string,
+  messageId: string,
+  displayName: string,
+  content: string
+) {
+  const access = await assertChannelAccess(guildId, discordUserId, channelId)
+  if (!access.ok) return access
+
+  const trimmed = content.trim()
+  if (!trimmed) {
+    return { ok: false as const, error: "Message cannot be empty.", code: "invalid" as const }
+  }
+
+  const owns = await assertOwnMessage(channelId, messageId, displayName)
+  if (!owns.ok) return owns
+
+  const prefix = `**${displayName}**: `
+  const body = `${prefix}${trimmed}`.slice(0, 2000)
+
+  const res = await discordRest<unknown>(`/channels/${channelId}/messages/${messageId}`, {
+    method: "PATCH",
+    json: { content: body },
+  })
+  if (!res.ok) return { ok: false as const, error: res.error, code: res.code }
+  return { ok: true as const, message: normaliseMessage(res.data, guildId) }
+}
+
+/** Delete a message THIS Instroom user sent. */
+export async function deleteMessage(
+  guildId: string,
+  discordUserId: string | null,
+  channelId: string,
+  messageId: string,
+  displayName: string
+) {
+  const access = await assertChannelAccess(guildId, discordUserId, channelId)
+  if (!access.ok) return access
+
+  const owns = await assertOwnMessage(channelId, messageId, displayName)
+  if (!owns.ok) return owns
+
+  const res = await discordRest(`/channels/${channelId}/messages/${messageId}`, { method: "DELETE" })
+  return res.ok ? { ok: true as const } : { ok: false as const, error: res.error, code: res.code }
+}
+
+/**
+ * Pin or unpin a message.
+ *
+ * Not restricted to the message's own author — pinning is a channel-curation
+ * action about a message, not an edit of it, the same distinction Discord
+ * itself draws (Manage Messages, not "message author"). This app has no
+ * brand-level moderator role yet (tracked separately under "moderation
+ * controls"), so for now it is open to anyone who can already post in the
+ * channel — the same access level every other action in this file already
+ * uses, and strictly narrower than nothing.
+ */
+export async function togglePin(
+  guildId: string,
+  discordUserId: string | null,
+  channelId: string,
+  messageId: string,
+  on: boolean
+) {
+  const access = await assertChannelAccess(guildId, discordUserId, channelId)
+  if (!access.ok) return access
+  const res = await discordRest(`/channels/${channelId}/pins/${messageId}`, { method: on ? "PUT" : "DELETE" })
+  return res.ok ? { ok: true as const } : { ok: false as const, error: res.error, code: res.code }
+}
+
+/** Every currently pinned message in a channel, newest first (Discord's own order). */
+export async function getPinnedMessages(guildId: string, discordUserId: string | null, channelId: string) {
+  const access = await assertChannelAccess(guildId, discordUserId, channelId)
+  if (!access.ok) return access
+  const res = await discordRest<unknown[]>(`/channels/${channelId}/pins`)
+  if (!res.ok) return { ok: false as const, error: res.error, code: res.code }
+  return { ok: true as const, messages: res.data.map((m) => normaliseMessage(m, guildId)) }
+}
+
+/**
+ * Start a thread off an existing message.
+ *
+ * Discord requires a name (max 100 chars); this app doesn't collect one from
+ * the user, so the first line of the source message stands in for it, the
+ * same way email clients derive a subject from a reply.
+ */
+export async function createThread(
+  guildId: string,
+  discordUserId: string | null,
+  channelId: string,
+  messageId: string,
+  seedName: string
+) {
+  const access = await assertChannelAccess(guildId, discordUserId, channelId)
+  if (!access.ok) return access
+
+  const name = seedName.replace(/\s+/g, " ").trim().slice(0, 100) || "Thread"
+  const res = await discordRest<any>( // eslint-disable-line @typescript-eslint/no-explicit-any
+    `/channels/${channelId}/messages/${messageId}/threads`,
+    { method: "POST", json: { name } }
+  )
+  if (!res.ok) return { ok: false as const, error: res.error, code: res.code }
+  return {
+    ok: true as const,
+    thread: { id: res.data.id as string, name: res.data.name as string, messageCount: 0 },
+  }
+}
+
+/** Discord's own hard ceiling on poll answers. */
+const MAX_POLL_ANSWERS = 10
+/** Discord's own hard ceiling on poll duration, in hours (32 days). */
+const MAX_POLL_DURATION_HOURS = 768
+
+/**
+ * Post a new poll. Its own function, not a mode of sendMessage: a poll's
+ * validation (a question, 2–10 answers, a duration) is unrelated to plain
+ * message content, the same reasoning that already keeps createThread
+ * separate from sendMessage above.
+ *
+ * Text-only — no reply/attachments — matching the composer's own poll flow,
+ * which is its own dedicated screen rather than a poll bolted onto a message
+ * someone is also typing.
+ */
+export async function sendPoll(
+  guildId: string,
+  discordUserId: string | null,
+  channelId: string,
+  displayName: string,
+  question: string,
+  answers: string[],
+  allowMultiselect: boolean,
+  durationHours: number
+) {
+  const access = await assertChannelAccess(guildId, discordUserId, channelId)
+  if (!access.ok) return access
+  if (!access.channel.canSend) {
+    return { ok: false as const, error: "You don't have permission to post in this channel.", code: "forbidden" as const }
+  }
+
+  const q = question.trim().slice(0, 300)
+  if (!q) return { ok: false as const, error: "A poll needs a question.", code: "invalid" as const }
+
+  const cleanAnswers = answers.map((a) => a.trim()).filter(Boolean).slice(0, MAX_POLL_ANSWERS)
+  if (cleanAnswers.length < 2) {
+    return { ok: false as const, error: "A poll needs at least 2 options.", code: "invalid" as const }
+  }
+
+  const duration = Math.min(Math.max(Math.round(durationHours) || 24, 1), MAX_POLL_DURATION_HOURS)
+
+  // The attribution prefix goes on the QUESTION, not a separate content field
+  // — a poll message has no content of its own, and this is the only place
+  // Discord shows text for who started it, matching every other action this
+  // app attributes the same way.
+  const payload = {
+    poll: {
+      question: { text: `${q} — via ${displayName}`.slice(0, 300) },
+      answers: cleanAnswers.map((text) => ({ poll_media: { text: text.slice(0, 55) } })),
+      duration,
+      allow_multiselect: allowMultiselect,
+    },
+  }
+
+  const res = await discordRest<unknown>(`/channels/${channelId}/messages`, { method: "POST", json: payload })
+  if (!res.ok) return { ok: false as const, error: res.error, code: res.code }
+  return { ok: true as const, message: normaliseMessage(res.data, guildId) }
+}
+
+/**
+ * Cast (or move) the bot's OWN vote on a poll, so the live Discord poll stays
+ * in sync with what Instroom's UI shows — see CommunityPollVote's schema
+ * comment on why the bot's vote is not what the UI counts from.
+ *
+ * `answerIds` is the caller's FULL current selection after this change (not a
+ * single toggle): Discord's vote-add/remove endpoints are per-answer, and a
+ * single-select poll's move from one answer to another has to clear the old
+ * one and set the new one as two calls. Passing the whole target set here
+ * keeps that sequencing in one place instead of the route working it out.
+ */
+export async function syncPollBotVote(
+  guildId: string,
+  discordUserId: string | null,
+  channelId: string,
+  messageId: string,
+  previousAnswerIds: number[],
+  nextAnswerIds: number[]
+) {
+  // Same channel-then-thread fallback getMessage uses — a poll can live in
+  // a thread, whose id assertChannelAccess alone does not recognise.
+  const channelAccess = await assertChannelAccess(guildId, discordUserId, channelId)
+  const access = channelAccess.ok ? channelAccess : await assertThreadAccess(guildId, discordUserId, channelId)
+  if (!access.ok) return access
+
+  const toRemove = previousAnswerIds.filter((id) => !nextAnswerIds.includes(id))
+  const toAdd = nextAnswerIds.filter((id) => !previousAnswerIds.includes(id))
+
+  // Sequential, not Promise.all: these are the SAME message's poll, and firing
+  // add/remove calls concurrently risks Discord processing them out of order
+  // — an add that lands before its matching remove would (briefly, but
+  // visibly if polled) show the wrong answer selected.
+  for (const id of toRemove) {
+    const res = await discordRest(`/channels/${channelId}/polls/${messageId}/answers/${id}/@me`, { method: "DELETE" })
+    if (!res.ok) return { ok: false as const, error: res.error, code: res.code }
+  }
+  for (const id of toAdd) {
+    const res = await discordRest(`/channels/${channelId}/polls/${messageId}/answers/${id}/@me`, { method: "PUT" })
+    if (!res.ok) return { ok: false as const, error: res.error, code: res.code }
+  }
+  return { ok: true as const }
+}
+
+/** Close a poll to further votes before its natural expiry. */
+export async function expirePoll(
+  guildId: string,
+  discordUserId: string | null,
+  channelId: string,
+  messageId: string
+) {
+  const access = await assertChannelAccess(guildId, discordUserId, channelId)
+  if (!access.ok) return access
+  const res = await discordRest<unknown>(`/channels/${channelId}/polls/${messageId}/expire`, { method: "POST" })
+  if (!res.ok) return { ok: false as const, error: res.error, code: res.code }
+  return { ok: true as const, message: normaliseMessage(res.data, guildId) }
+}
+
+/**
+ * A thread's own message history — its "own conversation view" while still
+ * attached to the message it branched from (that origin message is what the
+ * thread's `parent_id`/name already point back to on the client).
+ *
+ * Deliberately its own function rather than reusing getMessages: the access
+ * check is different (assertThreadAccess, not assertChannelAccess — see its
+ * own comment on why a thread id is invisible to the normal channel list),
+ * and duplicating this much smaller body keeps that difference explicit
+ * instead of getMessages growing an "is this a thread?" branch.
+ */
+export async function getThreadMessages(
+  guildId: string,
+  discordUserId: string | null,
+  threadId: string,
+  options: { before?: string; limit?: number } = {}
+) {
+  const access = await assertThreadAccess(guildId, discordUserId, threadId)
+  if (!access.ok) return access
+
+  const limit = Math.min(Math.max(options.limit ?? 50, 1), 100)
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (options.before) params.set("before", options.before)
+
+  const res = await discordRest<unknown[]>(`/channels/${threadId}/messages?${params}`)
+  if (!res.ok) return { ok: false as const, error: res.error, code: res.code }
+
+  const messages = res.data.map((m) => normaliseMessage(m, guildId)).reverse()
+  return { ok: true as const, messages, hasMore: res.data.length === limit }
+}
+
+/**
+ * Send a message inside a thread. Text only for this pass — the composer's
+ * file-upload path stays scoped to the main channel view until threads need
+ * it, matching how this task's own sequencing puts attachments after actions.
+ */
+export async function sendThreadMessage(
+  guildId: string,
+  discordUserId: string | null,
+  threadId: string,
+  content: string,
+  displayName: string
+) {
+  const access = await assertThreadAccess(guildId, discordUserId, threadId)
+  if (!access.ok) return access
+
+  const trimmed = content.trim()
+  if (!trimmed) {
+    return { ok: false as const, error: "Message is empty.", code: "invalid" as const }
+  }
+  const prefix = `**${displayName}**: `
+  const body = `${prefix}${trimmed}`.slice(0, 2000)
+
+  const res = await discordRest<unknown>(`/channels/${threadId}/messages`, {
+    method: "POST",
+    json: { content: body, allowed_mentions: { parse: ["users"] } },
+  })
+  if (!res.ok) return { ok: false as const, error: res.error, code: res.code }
+  return { ok: true as const, message: normaliseMessage(res.data, guildId) }
 }
 
 export { normaliseMessage }

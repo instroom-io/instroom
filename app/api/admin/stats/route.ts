@@ -21,12 +21,15 @@ export async function GET() {
     recentAuditLogs,
   ] = await Promise.all([
     prisma.user.count(),
-    prisma.influencer.count(),
+    // Drafts excluded from both influencer figures: a blank row is not a
+    // platform influencer, and its verification_status defaults to "pending",
+    // which would otherwise put every draft in the moderation queue's count.
+    prisma.influencer.count({ where: { is_draft: false } }),
     prisma.brand.count(),
     prisma.campaign.count(),
     prisma.brandInfluencer.count({ where: { approval_status: "Approved" } }),
     prisma.user.count({ where: { created_at: { gte: startOfDay } } }),
-    prisma.influencer.count({ where: { verification_status: "pending" } }),
+    prisma.influencer.count({ where: { verification_status: "pending", is_draft: false } }),
     prisma.user.findMany({
       orderBy: { created_at: "desc" },
       take: 5,

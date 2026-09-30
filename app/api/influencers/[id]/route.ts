@@ -2,6 +2,7 @@
 
 import { NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
+import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 
@@ -36,8 +37,17 @@ export async function GET(
 
     return NextResponse.json(influencer)
   } catch (error: any) {
+    // Logged in full; the response carries no driver text. `details` used to
+    // echo error.message straight back, which put collation names, SQL and
+    // storage internals in front of the user.
+    console.error("GET /api/influencers/[id]:", error?.code, error?.message)
+
+    if (isDatabaseCapacityError(error)) {
+      return databaseCapacityResponse()
+    }
+
     return NextResponse.json(
-      { error: "Failed to fetch influencer", details: error?.message || String(error) },
+      { error: "Couldn't load this influencer. Please try again." },
       { status: 500 }
     )
   }
@@ -71,7 +81,7 @@ export async function PUT(
     if (!existingInfluencer) {
       console.error(`Influencer not found for update: ${id}`)
       return NextResponse.json(
-        { error: "Influencer not found", details: `No influencer record exists with ID: ${id}` },
+        { error: "This influencer no longer exists. Try refreshing." },
         { status: 404 }
       )
     }
@@ -94,25 +104,58 @@ export async function PUT(
     if (data.avg_comments !== undefined) updateData.avg_comments = Number(data.avg_comments)
     if (data.avg_views !== undefined) updateData.avg_views = Number(data.avg_views)
 
-    // Update influencer
-    const influencer = await prisma.influencer.update({
+    // ── Write ────────────────────────────────────────────────────────────────
+    // updateMany, not update().
+    //
+    // MEASURED against this deployment's database (median of 5, ~317ms baseline
+    // round trip to the shared host): raw UPDATE 412ms, updateMany 1430ms,
+    // update({ select }) 1839ms. `update` wraps itself in an implicit
+    // transaction and reads the row back (BEGIN, UPDATE, SELECT, COMMIT) — and
+    // on MyISAM, which every table here uses, the transaction does nothing at
+    // all. There was no `select` either, so the read-back pulled the whole row
+    // including its Text columns.
+    //
+    // This runs after every auto-fetch enrichment in the Influencer List
+    // (components/table-sheet/table-sheet.tsx saveRowToDatabase), and neither
+    // caller reads this body: the table passes its own local row to
+    // onFetchComplete, and the profile sidebar builds `synced` from editedRow.
+    const writeResult = await prisma.influencer.updateMany({
       where: { id },
       data: updateData,
     })
 
-    return NextResponse.json(influencer)
+    // update() threw P2025 for a missing row and the catch below turned that
+    // into a 404. updateMany reports a count, so the same answer is produced
+    // here instead of by an exception.
+    if (writeResult.count === 0) {
+      return NextResponse.json(
+        { error: "This influencer no longer exists. Try refreshing." },
+        { status: 404 }
+      )
+    }
+
+    // Same shape the callers already ignore, built from what was written.
+    return NextResponse.json({ id, ...updateData })
   } catch (error: any) {
     const errorMessage = error?.message || String(error)
     
     // Handle case where record doesn't exist
     if (error?.code === 'P2025') {
       return NextResponse.json(
-        { error: "Influencer not found", details: "This influencer does not exist or was not saved to the database" },
+        { error: "This influencer no longer exists. Try refreshing." },
         { status: 404 }
       )
     }
+    console.error("PUT /api/influencers/[id]:", errorMessage)
+
+    // Transient pool exhaustion: the save did not happen, so this must not read
+    // as success, but it is worth retrying and a 500 would not say that.
+    if (isDatabaseCapacityError(error)) {
+      return databaseCapacityResponse()
+    }
+
     return NextResponse.json(
-      { error: "Failed to update influencer", details: errorMessage },
+      { error: "Couldn't save this influencer. Please try again." },
       { status: 500 }
     )
   }
@@ -136,9 +179,42 @@ export async function DELETE(
       return NextResponse.json({ error: "Influencer ID is required" }, { status: 400 })
     }
 
-    await prisma.influencer.delete({
-      where: { id },
+    // The schema declares onDelete: Cascade from Influencer to BrandInfluencer
+    // (and onward to its own children), but these tables are MyISAM, where MySQL
+    // accepts foreign keys and then ignores them — so nothing actually cascades.
+    // Deleting the Influencer alone left BrandInfluencer rows pointing at a row
+    // that no longer exists, and Prisma then failed every read of that required
+    // relation with "Field influencer is required to return data, got null",
+    // which is what took /api/analytics down. Perform the declared cascade
+    // explicitly, in dependency order, in one transaction.
+    const memberships = await prisma.brandInfluencer.findMany({
+      where: { influencer_id: id },
+      select: { id: true },
     })
+    const membershipIds = memberships.map((m) => m.id)
+
+    await prisma.$transaction([
+      ...(membershipIds.length
+        ? [
+            prisma.brandPartner.deleteMany({ where: { brand_influencer_id: { in: membershipIds } } }),
+            prisma.attribution.deleteMany({ where: { brand_influencer_id: { in: membershipIds } } }),
+            prisma.brandInfluencerCustomValue.deleteMany({ where: { brand_influencer_id: { in: membershipIds } } }),
+            prisma.outreachLog.deleteMany({ where: { brand_influencer_id: { in: membershipIds } } }),
+            // GoAffPro / Shopify orders are onDelete: SetNull — the order history
+            // survives the influencer, it just loses the link.
+            prisma.goAffProOrder.updateMany({
+              where: { brand_influencer_id: { in: membershipIds } },
+              data: { brand_influencer_id: null },
+            }),
+            prisma.shopifyOrder.updateMany({
+              where: { brand_influencer_id: { in: membershipIds } },
+              data: { brand_influencer_id: null },
+            }),
+            prisma.brandInfluencer.deleteMany({ where: { influencer_id: id } }),
+          ]
+        : []),
+      prisma.influencer.delete({ where: { id } }),
+    ])
 
     return NextResponse.json({ success: true })
   } catch (error: any) {
@@ -147,12 +223,19 @@ export async function DELETE(
     // Handle case where record doesn't exist
     if (error?.code === 'P2025') {
       return NextResponse.json(
-        { error: "Influencer not found", details: "This influencer does not exist" },
+        { error: "This influencer no longer exists. Try refreshing." },
         { status: 404 }
       )
     }
+
+    console.error("DELETE /api/influencers/[id]:", errorMessage)
+
+    if (isDatabaseCapacityError(error)) {
+      return databaseCapacityResponse()
+    }
+
     return NextResponse.json(
-      { error: "Failed to delete influencer", details: errorMessage },
+      { error: "Couldn't remove this influencer. Please try again." },
       { status: 500 }
     )
   }

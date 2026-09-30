@@ -8,7 +8,7 @@
 
 "use client"
 
-import { useState, useEffect, useMemo, useRef, type ReactNode } from "react"
+import { useState, useEffect, useMemo, useRef, useCallback, memo, type CSSProperties } from "react"
 import ReactDOM from "react-dom"
 import {
   DndContext,
@@ -28,7 +28,6 @@ import {
   IconFilter,
   IconSearch,
   IconLocation,
-  IconBrandTwitter,
   IconX,
   IconLayoutList,
   IconChevronDown,
@@ -51,48 +50,40 @@ import InfluencerProfileSidebar, {
 } from "@/components/InfluencerProfileSidebar"
 
 import { usePipelineData, type PipelineInfluencer } from "@/hooks/usePipelineData"
+import { invalidateInfluencerDerivedCaches, pipelineCacheKey } from "@/lib/cache-invalidation"
+import { DataSyncStatus } from "@/components/data-sync-status"
+import { SaveStatusPill } from "@/components/save-status-pill"
+import { StaleDataNotice } from "@/components/stale-data-notice"
+import { ProfilePicture, PlatformIcon } from "@/components/table-sheet/ui-atoms"
+import { getPlatformLabel } from "@/components/table-sheet/utils"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { BoardSkeleton } from "@/components/shared/skeletons"
-
-// ─── Platform Icons ──────────────────────────────────────────────────────────
-export const PLATFORM_ICONS: Record<string, ReactNode> = {
-  Instagram: (
-    <img src="https://upload.wikimedia.org/wikipedia/commons/e/e7/Instagram_logo_2016.svg" alt="Instagram" className="w-4 h-4" />
-  ),
-  TikTok: (
-    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M19.589 6.686a4.793 4.793 0 0 1-3.77-4.245V2h-3.445v13.672a2.896 2.896 0 0 1-2.89 2.89 2.896 2.896 0 0 1-2.889-2.89 2.896 2.896 0 0 1 2.89-2.889c.302 0 .595.05.872.137V9.257a6.339 6.339 0 0 0-5.053 2.212 6.339 6.339 0 0 0-1.33 5.52 6.34 6.34 0 0 0 5.766 4.731 6.34 6.34 0 0 0 6.34-6.34V8.898a7.756 7.756 0 0 0 4.422 1.393V6.825a4.8 4.8 0 0 1-2.443-.139z" />
-    </svg>
-  ),
-  YouTube: (
-    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.376.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.376-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
-    </svg>
-  ),
-  Twitter: <IconBrandTwitter size={14} className="text-blue-400" />,
-}
+import { DeclineModal } from "@/components/shared/decline-modal"
+import { StageActionButton } from "@/components/shared/stage-action-button"
+import { InfoTooltip } from "@/components/shared/anchored-tooltip"
+import { DELIVERABLE_COLLAB_TYPES, MAX_DELIVERABLES } from "@/lib/deliverables"
+import {
+  allowedTransitions,
+  isTerminalStage,
+  isTransitionAllowed,
+  suggestedTransitions,
+  transitionRefusalReason,
+} from "@/lib/pipeline-transitions"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const NICHES    = ["Beauty", "Fitness", "Lifestyle", "Food", "Tech", "Fashion", "Travel"]
 const LOCATIONS = ["Philippines", "Singapore", "United States", "Australia", "United Kingdom", "Malaysia", "Indonesia", "Thailand", "Vietnam"]
 
-const NI_REASONS = [
-  { r: "Fee too low / unpaid",                   bucket: "hard", color: "#E24B4A" },
-  { r: "Brief too scripted",                     bucket: "hard", color: "#E8724A" },
-  { r: "Won't allow content reuse",              bucket: "hard", color: "#F4A240" },
-  { r: "Working with a competitor",              bucket: "hard", color: "#C97B3A" },
-  { r: "Product doesn't fit their brand",        bucket: "hard", color: "#888780" },
-  { r: "Wrong audience fit",                     bucket: "hard", color: "#6B7F7A" },
-  { r: "Seen bad reviews about us",              bucket: "hard", color: "#A32D2D" },
-  { r: "Fully booked",                           bucket: "soft", color: "#2C8EC4" },
-  { r: "Temporarily unavailable / can't shoot",  bucket: "soft", color: "#5BAFD4" },
-  { r: "Can't ship to their location",           bucket: "soft", color: "#7DC4E4" },
-  { r: "Ghosted / no longer active",             bucket: "soft", color: "#B4B2A9" },
-  { r: "Rate / deadline too tight",              bucket: "soft", color: "#F4B740" },
-  { r: "Others",                                 bucket: "hard", color: "#D3D1C7" },
-]
-
 // ─── Collaboration Types ──────────────────────────────────────────────────────
+/**
+ * How many bulk status writes may be in flight at once.
+ *
+ * Two, not unbounded: the Prisma pool is capped at connection_limit=3, so a
+ * request per selected row queues against three connections and crosses the
+ * 10s pool timeout. Two leaves one connection for whatever the user does next.
+ */
+const BULK_CONCURRENCY = 2
+
 const COLLAB_TYPES = [
   {
     id: "gifting",
@@ -225,33 +216,57 @@ function ColumnInfoTooltip({ status, variant }: { status: string; variant: "ligh
   const textColor   = variant === "dark" ? "text-white"      : "text-red-700"
 
   return (
-    <div className="relative group/info flex-shrink-0">
-      <span
-        className={`text-[10px] font-medium border ${borderColor} ${textColor} rounded-full w-4 h-4 flex items-center justify-center opacity-70 cursor-default select-none hover:opacity-100 transition-opacity`}
-      >
-        i
-      </span>
-      {/* Tooltip panel */}
-      <div className="absolute top-full right-0 mt-1.5 w-64 bg-white border border-gray-200 rounded-xl p-3 text-xs text-gray-700 leading-relaxed z-[60] hidden group-hover/info:block shadow-lg pointer-events-none">
-        <p className="font-semibold text-gray-900 mb-1 text-[11px]">{status}</p>
-        <p className="text-gray-600">{info.short}</p>
-        {info.move && (
-          <p className="mt-1.5 text-gray-400 border-t border-gray-100 pt-1.5">
-            <span className="font-medium text-gray-500">Next → </span>{info.move}
-          </p>
-        )}
-        {info.terminal && (
-          <p className="mt-1.5 text-[10px] font-medium text-red-500 border-t border-gray-100 pt-1.5 uppercase tracking-wide">
-            Terminal — cannot be moved
-          </p>
-        )}
-      </div>
-    </div>
+    <InfoTooltip iconClassName={`${borderColor} ${textColor}`}>
+      <p className="font-semibold text-gray-900 mb-1 text-[11px]">{status}</p>
+      <p className="text-gray-600">{info.short}</p>
+      {info.move && (
+        <p className="mt-1.5 text-gray-400 border-t border-gray-100 pt-1.5">
+          <span className="font-medium text-gray-500">Next → </span>{info.move}
+        </p>
+      )}
+      {info.terminal && (
+        <p className="mt-1.5 text-[10px] font-medium text-red-500 border-t border-gray-100 pt-1.5 uppercase tracking-wide">
+          Terminal — cannot be moved
+        </p>
+      )}
+    </InfoTooltip>
   )
 }
 
-const isTerminal            = (status: string) => status === "Not Interested" || status === "For Order Creation"
+// Same terminal set the shared transition rules use — see isTerminalStage.
+const isTerminal            = isTerminalStage
 const getStatusFromColumnKey = (key: string)   => columns.find((c) => c.key === key)?.status ?? key
+
+/**
+ * Does an influencer belong under `columnStatus` on this board?
+ *
+ * Deal Agreed is the one status that is wider than a plain equality check.
+ * Confirming a Collaboration Type sends the row straight to Post Tracker's
+ * entry stage, so derivePipelineStatus (app/api/brand/[brandId]/pipeline)
+ * reports it as "For Order Creation" — a column this board does not show.
+ * Deal Agreed therefore covers both: the deal IS agreed either way, and the
+ * later stage is where the order lives, not a different outcome.
+ *
+ * Shared by every view so they cannot disagree. The board column applied this
+ * widening and the list view did not, so clicking the Deal Agreed header —
+ * which switches to the list — filtered on the narrow status and showed
+ * "0 influencers" for a column that had just rendered cards.
+ */
+const matchesColumnStatus = (pipelineStatus: string, columnStatus: string) =>
+  columnStatus === "Deal Agreed"
+    ? pipelineStatus === "Deal Agreed" || pipelineStatus === "For Order Creation"
+    : pipelineStatus === columnStatus
+
+/**
+ * The column title a status is shown as on the board.
+ *
+ * The same lookup the bulk move already did inline, named so every message
+ * about a stage reads the label the user is actually looking at rather than
+ * the raw status string. Falls back to the status itself, which is what the
+ * inline version did.
+ */
+const getStatusTitle = (status: string) =>
+  columns.find((c) => c.status === status)?.title ?? status
 
 const getStatusColor = (status: string) => {
   const col = columns.find((c) => c.status === status)
@@ -268,36 +283,24 @@ const getStatusColor = (status: string) => {
 }
 
 const getOptionDotColor = (status: string) => columns.find((c) => c.status === status)?.color ?? "bg-gray-400"
-const getPlatformIcon   = (platform?: string): ReactNode => PLATFORM_ICONS[platform ?? ""] || PLATFORM_ICONS.Instagram
 const getAvatarColor    = (name: string) => {
   const colors = ["bg-pink-500","bg-purple-500","bg-indigo-500","bg-blue-500","bg-cyan-500","bg-teal-500","bg-green-500","bg-yellow-500","bg-orange-500","bg-red-500","bg-rose-500"]
   return colors[name.charCodeAt(0) % colors.length]
 }
 
-// ─── Sequential pipeline: each stage only moves to the NEXT stage + Not Interested ──
-// For Outreach    → Contacted (no NI shortcut — see below)
-// Contacted       → In Conversation + Not Interested
-// In Conversation → Deal Agreed (triggers collab type modal) + Not Interested
-// Deal Agreed     → (only Move to Post Tracker button, + Not Interested)
-// Terminal stages → nothing
+// ─── Sequential pipeline ──────────────────────────────────────────────────────
+// The rule itself now lives in lib/pipeline-transitions.ts, shared with the
+// Influencer Details dropdown and — crucially — with the PATCH route, so the
+// board, the panel and the server cannot disagree about what is allowed.
 //
-// "Not Interested" is a destructive, terminal move, so the card shortcut is
-// hidden at For Outreach — nobody has been contacted yet, so there's nothing to
-// decline, and a stray click would drop the influencer out of the pipeline. The
-// status is still reachable there from the profile drawer, the list-view status
-// dropdown and by dragging onto the Not Interested column.
-const getNextStages = (currentStatus: string): string[] => {
-  if (isTerminal(currentStatus)) return []
-  const sequence: Record<string, string> = {
-    "For Outreach":    "Contacted",
-    "Contacted":       "In Conversation",
-    "In Conversation": "Deal Agreed",
-  }
-  const next = sequence[currentStatus]
-  if (!next) return ["Not Interested"] // Deal Agreed: only NI (move to PT is a dedicated button)
-  if (currentStatus === "For Outreach") return [next]
-  return [next, "Not Interested"]
-}
+// It used to live only here, which is exactly how the dropdown was able to
+// bypass it: the panel listed all six stages and called straight through.
+//
+// SUGGESTED, not allowed: the card shows the obvious next step (one forward,
+// plus declining), while the dropdowns offer every permitted move and
+// isTransitionAllowed decides what is actually permitted. Pointing this at
+// allowedTransitions would put a button for every stage on every card.
+const getNextStages = suggestedTransitions
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const MONTHS = ["Nov", "Dec", "Jan", "Feb", "Mar", "Apr"]
@@ -312,7 +315,11 @@ function influencerToPartner(inf: PipelineInfluencer, brandId?: string): Partner
     firstName,
     lastName,
     birthday:     "",
-    plat:         inf.platform || "Instagram",
+    // No Instagram default: the stored platform is carried as-is, so a row
+    // with no platform reads as having none instead of claiming one it does
+    // not have (which also mis-sorted it under the Brand Partners platform
+    // filter).
+    plat:         inf.platform || "",
     niche:        inf.niche || "",
     gend:         "",
     loc:          inf.location || "",
@@ -355,9 +362,13 @@ function influencerToPartner(inf: PipelineInfluencer, brandId?: string): Partner
     hCVR:         0,
     hPosts:       0,
     email:              inf.email || null,
+    // The avatar the Influencer List persisted on the Influencer record; the
+    // pipeline route already returns it, it just was not carried across.
+    profileImageUrl:    inf.profileImageUrl,
     brandId:            brandId,
     brandInfluencerId:  inf.id,
     collabType:         inf.collabType,
+    notes:              inf.notes,
   }
 }
 
@@ -523,129 +534,12 @@ function SearchableMultiSelect({ label, options, selected, onChange, allLabel }:
   )
 }
 
-// ─── Not Interested Modal ─────────────────────────────────────────────────────
-interface NIModalProps {
-  influencer: PipelineInfluencer
-  onConfirm: (reason: string) => void
-  onCancel: () => void
-  /** Set when the modal drives a bulk move — the single-influencer card is
-   *  swapped for a "N influencers" summary and one reason applies to all. */
-  bulkCount?: number
-}
-
-function NotInterestedModal({ influencer, onConfirm, onCancel, bulkCount }: NIModalProps) {
-  const [selectedReason, setSelectedReason] = useState<string | null>(null)
-  const hardReasons = NI_REASONS.filter((r) => r.bucket === "hard")
-  const softReasons = NI_REASONS.filter((r) => r.bucket === "soft")
-  const initials = influencer.influencer.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onCancel}>
-      <div className="bg-white rounded-2xl shadow-2xl w-[800px] max-w-[95vw] max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-start justify-between px-7 pt-6 pb-4 border-b border-gray-100">
-          <div>
-            <h2 className="text-base font-semibold text-gray-900">Mark as not interested</h2>
-            <p className="text-xs text-gray-500 mt-0.5">
-              {bulkCount
-                ? `Select the reason to apply to all ${bulkCount} selected influencers.`
-                : "Select the reason why this influencer declined or is not moving forward."}
-            </p>
-          </div>
-          <button onClick={onCancel} className="text-gray-400 hover:text-gray-600 transition ml-4 mt-0.5"><IconX size={18} /></button>
-        </div>
-        <div className="px-7 pt-5">
-          <div className="flex items-center gap-3 bg-gray-50 rounded-xl px-4 py-3 border border-gray-100">
-            {bulkCount ? (
-              <>
-                <div className="w-9 h-9 rounded-full bg-red-100 flex items-center justify-center text-red-600 font-semibold text-sm">{bulkCount}</div>
-                <div>
-                  <p className="text-sm font-semibold text-gray-900">{bulkCount} influencers selected</p>
-                  <p className="text-xs text-gray-500">The reason below applies to all of them</p>
-                </div>
-              </>
-            ) : (
-              <>
-                {influencer.profileImageUrl ? (
-                  <img src={influencer.profileImageUrl} alt={influencer.influencer} className="w-9 h-9 rounded-full object-cover" />
-                ) : (
-                  <div className="w-9 h-9 rounded-full bg-red-100 flex items-center justify-center text-red-600 font-semibold text-sm">{initials}</div>
-                )}
-                <div>
-                  <p className="text-sm font-semibold text-gray-900">{influencer.influencer}</p>
-                  <p className="text-xs text-gray-500">{influencer.instagramHandle}</p>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-        <div className="px-7 pt-5 pb-3 grid grid-cols-2 gap-x-5 gap-y-5">
-          <div>
-            <div className="flex items-center gap-2 mb-2.5">
-              <span className="text-[10px] font-bold uppercase tracking-widest text-red-700">Hard pass</span>
-              <span className="text-[10px] text-gray-400">— don't reach out soon</span>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              {hardReasons.map((reason) => (
-                <button key={reason.r} onClick={() => setSelectedReason(reason.r)}
-                  className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl border text-left transition-all w-full ${selectedReason === reason.r ? "border-red-400 bg-red-50" : "border-gray-100 hover:border-gray-200 hover:bg-gray-50"}`}>
-                  <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: reason.color }} />
-                  <span className="text-sm text-gray-700 flex-1 leading-snug">{reason.r}</span>
-                  {selectedReason === reason.r && (
-                    <span className="w-4 h-4 rounded-full bg-red-500 flex items-center justify-center flex-shrink-0">
-                      <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 4L3.2 5.7L6.5 2.3" stroke="white" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div>
-            <div className="flex items-center gap-2 mb-2.5">
-              <span className="text-[10px] font-bold uppercase tracking-widest text-blue-700">Soft pass</span>
-              <span className="text-[10px] text-gray-400">— follow up next campaign</span>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              {softReasons.map((reason) => (
-                <button key={reason.r} onClick={() => setSelectedReason(reason.r)}
-                  className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl border text-left transition-all w-full ${selectedReason === reason.r ? "border-blue-400 bg-blue-50" : "border-gray-100 hover:border-gray-200 hover:bg-gray-50"}`}>
-                  <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: reason.color }} />
-                  <span className="text-sm text-gray-700 flex-1 leading-snug">{reason.r}</span>
-                  {selectedReason === reason.r && (
-                    <span className="w-4 h-4 rounded-full bg-blue-500 flex items-center justify-center flex-shrink-0">
-                      <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 4L3.2 5.7L6.5 2.3" stroke="white" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-            {selectedReason && (
-              <div className="mt-3 px-3.5 py-2.5 rounded-xl bg-gray-50 border border-gray-100">
-                <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-0.5">Selected reason</p>
-                <p className="text-sm font-medium text-gray-800">{selectedReason}</p>
-                <p className="text-[11px] text-gray-400 mt-0.5">
-                  {NI_REASONS.find((r) => r.r === selectedReason)?.bucket === "soft"
-                    ? "This influencer can be re-approached in a future campaign."
-                    : "This influencer should not be contacted again soon."}
-                </p>
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="flex items-center justify-end gap-2 px-7 py-4 border-t border-gray-100">
-          <button onClick={onCancel} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 rounded-lg border border-gray-200 hover:bg-gray-50 transition">Cancel</button>
-          <button onClick={() => selectedReason && onConfirm(selectedReason)} disabled={!selectedReason}
-            className="px-6 py-2 text-sm font-medium text-white bg-red-500 rounded-lg hover:bg-red-600 transition disabled:opacity-40 disabled:cursor-not-allowed">Confirm</button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 // ─── Collaboration Type Modal ─────────────────────────────────────────────────
 // Now fires when moving TO "Deal Agreed" — user picks collab type first, THEN it moves
 interface CollabTypeModalProps {
   influencer: PipelineInfluencer
-  onConfirm: (collabType: CollabType) => void
+  /** `deliverables` is set for Gifting / Paid types — one name per expected post. */
+  onConfirm: (collabType: CollabType, deliverables?: string[]) => void
   onCancel: () => void
   /** Set when the modal drives a bulk move — one collab type applies to all. */
   bulkCount?: number
@@ -653,15 +547,20 @@ interface CollabTypeModalProps {
 
 function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabTypeModalProps) {
   const [selectedType, setSelectedType] = useState<CollabType | null>(null)
+  // Campaign deliverables for Post Tracker — one entry per expected post.
+  const [deliverableNames, setDeliverableNames] = useState<string[]>([""])
   const initials = influencer.influencer.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()
 
   const selectedCollab = COLLAB_TYPES.find((c) => c.id === selectedType)
+  const needsDeliverables = selectedType !== null && DELIVERABLE_COLLAB_TYPES.has(selectedType)
+  const setDeliverableCount = (n: number) =>
+    setDeliverableNames((prev) => Array.from({ length: n }, (_, i) => prev[i] ?? ""))
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onCancel}>
-      <div className="bg-white rounded-2xl shadow-2xl w-[700px] max-w-[95vw] max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4" onClick={onCancel}>
+      <div className="bg-white rounded-2xl shadow-2xl w-[760px] max-w-[calc(100vw-2rem)] max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
-        <div className="flex items-start justify-between px-7 pt-6 pb-4 border-b border-gray-100">
+        <div className="flex items-start justify-between px-4 sm:px-6 pt-5 sm:pt-6 pb-4 border-b border-gray-100">
           <div>
             <h2 className="text-base font-semibold text-gray-900">Select Collaboration Type</h2>
             <p className="text-xs text-gray-500 mt-0.5">
@@ -676,8 +575,8 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
         </div>
 
         {/* Influencer Info */}
-        <div className="px-7 pt-5 pb-2">
-          <div className="flex items-center gap-3 bg-gray-50 rounded-xl px-4 py-3 border border-gray-100">
+        <div className="px-4 sm:px-6 pt-4 sm:pt-5 pb-2">
+          <div className="flex flex-wrap items-center gap-3 bg-gray-50 rounded-xl px-3 sm:px-4 py-3 border border-gray-100">
             {bulkCount ? (
               <>
                 <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center text-green-600 font-semibold text-sm">{bulkCount}</div>
@@ -699,17 +598,22 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
                 </div>
               </>
             )}
-            <div className="ml-auto flex items-center gap-1.5 text-xs text-gray-400">
-              <IconArrowRight size={14} />
-              <span>Moving to Post Tracker</span>
-            </div>
+            {selectedCollab && (
+              <div className="ml-auto text-right">
+                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Selected Collaboration</p>
+                <div className="flex items-center justify-end gap-2 mt-0.5">
+                  <span className={`w-2 h-2 rounded-full ${selectedCollab.dotColor}`} />
+                  <span className="text-sm font-semibold text-gray-900">{selectedCollab.title}</span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
         {/* Collaboration Types Grid */}
-        <div className="px-7 pt-5 pb-3">
+        <div className="px-4 sm:px-6 pt-4 sm:pt-5 pb-3">
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Collaboration Type</p>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 sm:gap-3">
             {COLLAB_TYPES.map((type) => (
               <button
                 key={type.id}
@@ -737,26 +641,50 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
           </div>
         </div>
 
-        {/* Selected Type Summary */}
-        {selectedCollab && (
-          <div className="px-7 pb-3">
-            <div className="rounded-xl bg-gray-50 border border-gray-100 p-4">
-              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Selected Collaboration</p>
-              <div className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded-full ${selectedCollab.dotColor}`} />
-                <span className="text-sm font-semibold text-gray-900">{selectedCollab.title}</span>
-              </div>
-              <p className="text-xs text-gray-500 mt-1">{selectedCollab.description}</p>
+        {/* Campaign deliverables — saved to the influencer's record and used by
+            Post Tracker as the number of posts it expects. */}
+        {needsDeliverables && (
+          <div className="px-4 sm:px-6 pt-2 pb-4">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Campaign Deliverables</p>
+              <label className="flex items-center gap-2 text-[11px] text-gray-500">
+                How many?
+                <select
+                  value={deliverableNames.length}
+                  onChange={(e) => setDeliverableCount(parseInt(e.target.value, 10))}
+                  className="text-xs px-2 py-1 rounded-lg border border-gray-200 bg-white text-gray-700 focus:outline-none focus:border-green-500"
+                >
+                  {Array.from({ length: MAX_DELIVERABLES }, (_, i) => i + 1).map((v) => (
+                    <option key={v} value={v}>{v}</option>
+                  ))}
+                </select>
+              </label>
             </div>
+            <div className="flex flex-col gap-2">
+              {deliverableNames.map((name, i) => (
+                <div key={i} className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 rounded-lg">
+                  <span className="text-[11px] font-semibold text-gray-400 min-w-[16px]">{i + 1}</span>
+                  <input
+                    value={name}
+                    placeholder="e.g. 1x IG Reel, TikTok video… (optional)"
+                    onChange={(e) => setDeliverableNames((prev) => prev.map((n, idx) => (idx === i ? e.target.value : n)))}
+                    className="flex-1 text-xs text-gray-700 bg-transparent focus:outline-none"
+                  />
+                </div>
+              ))}
+            </div>
+            <p className="text-[11px] text-gray-400 mt-2">
+              Each deliverable is one expected post. Post Tracker marks the influencer Completed once every deliverable has a post link.
+            </p>
           </div>
         )}
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-7 py-4 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl">
+        <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 px-4 sm:px-6 py-3 sm:py-4 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl">
           <p className="text-[11px] text-gray-400">
             This marks the deal agreed and moves the influencer to Post Tracker
           </p>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center justify-end gap-2">
             <button
               onClick={onCancel}
               className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 rounded-lg border border-gray-200 hover:bg-gray-50 transition bg-white"
@@ -764,12 +692,12 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
               Cancel
             </button>
             <button
-              onClick={() => selectedType && onConfirm(selectedType)}
+              onClick={() => selectedType && onConfirm(selectedType, needsDeliverables ? deliverableNames : undefined)}
               disabled={!selectedType}
-              className="px-6 py-2 text-sm font-medium text-white bg-green-500 rounded-lg hover:bg-green-600 transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
+              className="px-4 sm:px-6 py-2 text-sm font-medium text-white bg-green-500 rounded-lg hover:bg-green-600 transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 whitespace-nowrap"
             >
               <IconArrowRight size={14} />
-              Confirm &amp; Move to Post Tracker
+              Move to Post Tracker
             </button>
           </div>
         </div>
@@ -779,93 +707,192 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
 }
 
 // ─── Pipeline Card ────────────────────────────────────────────────────────────
-function PipelineCard({ influencer, onOpenSidebar, onStatusChange, canApproveInfluencers }: {
+// Off-screen list items are skipped by the browser's own layout and paint pass
+// (`content-visibility: auto`), with `contain-intrinsic-size` standing in for
+// their height so the scrollbar geometry stays honest.
+//
+// Containment rather than JS windowing, deliberately: every item stays in the
+// DOM, so dnd-kit keeps its drag sources and drop targets, find-in-page still
+// works, and no interaction, measurement or markup changes — only the work the
+// browser does for items nobody is looking at.
+const OFFSCREEN_SKIP: CSSProperties = {
+  contentVisibility: "auto",
+  containIntrinsicSize: "auto 178px",
+}
+
+function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApproveInfluencers }: {
   influencer: PipelineInfluencer
   onOpenSidebar: (inf: PipelineInfluencer) => void
   onStatusChange: (id: string, newStatus: string) => void
   canApproveInfluencers: boolean
 }) {
-  // See getNextStages: [next stage] at For Outreach, [next stage, "Not Interested"]
-  // for the middle stages, ["Not Interested"] at Deal Agreed, [] when terminal
+  // See getNextStages: one forward step plus declining for the active stages,
+  // ["For Outreach"] to reopen a declined row, [] for For Order Creation.
   const nextStages = getNextStages(influencer.pipelineStatus)
+  // Only "For Order Creation" now — a declined row keeps its buttons so it can
+  // be put back into the funnel from the card itself.
   const terminal   = isTerminal(influencer.pipelineStatus)
 
   return (
-    <div className={`bg-white border rounded-lg p-3 hover:shadow-md transition-shadow ${
+    <div style={OFFSCREEN_SKIP} className={`bg-white border rounded-lg p-3 hover:shadow-md transition-shadow ${
       influencer.pipelineStatus === "Not Interested"      ? "border-red-100 bg-red-50/30"     :
       influencer.pipelineStatus === "For Order Creation"  ? "border-emerald-100 bg-emerald-50/30" :
       "border-gray-200"
     }`}>
       <div className="cursor-pointer" onClick={() => onOpenSidebar(influencer)}>
-        <div className="flex flex-col text-sm mb-2">
-          <span className="font-medium text-gray-900">{influencer.influencer}</span>
-          <span className="text-xs text-gray-500">{influencer.instagramHandle}</span>
+        {/* Avatar + name/handle. The image is the permanent Cloudinary URL the
+            Influencer List persisted on the Influencer record, already carried
+            in this row by the pipeline payload — nothing extra is fetched or
+            uploaded here. ProfilePicture supplies the initials fallback. */}
+        <div className="flex items-center gap-2 mb-2">
+          <ProfilePicture
+            src={influencer.profileImageUrl ?? undefined}
+            name={influencer.influencer}
+            handle={influencer.handle}
+            size={36}
+          />
+          <div className="flex flex-col text-sm min-w-0">
+            <span className="font-medium text-gray-900">{influencer.influencer}</span>
+            <span className="text-xs text-gray-500">@{influencer.handle}</span>
+          </div>
         </div>
-        <div className="flex items-center gap-2 text-xs text-gray-500 mb-1.5">
-          <span className="flex items-center gap-1">{getPlatformIcon(influencer.platform)}{influencer.platform || "Instagram"}</span>
+        <div className="flex items-center gap-2 text-xs text-gray-500 mb-2">
+          {/* Icon then name, in the one treatment every board uses: the mark at
+              14px, centred against the label, gap-1.5. Narrow columns take
+              their space out of the TEXT — min-w-0 on the pair with truncate on
+              the label — while shrink-0 keeps the mark at full size, so it can
+              never squash or disappear. Both halves come from the shared
+              platform list the Influencer List reads; the board's own icon
+              table used to be keyed by the CAPITALISED display name while the
+              stored value is lowercase, so every lookup missed and a TikTok
+              creator showed as Instagram. */}
+          <span className="inline-flex min-w-0 items-center gap-1.5 leading-none">
+            <PlatformIcon platform={influencer.platform} size={14} className="shrink-0" />
+            <span className="truncate">{getPlatformLabel(influencer.platform) || "—"}</span>
+          </span>
           <span>•</span>
-          <span>{influencer.location || "—"}</span>
+          <span className="flex items-center gap-0.5">
+            <IconLocation size={11} />{influencer.location || "—"}
+          </span>
         </div>
         <div className="flex items-center gap-3 text-xs text-gray-500">
-          <span>{influencer.followerCount?.toLocaleString() || influencer.followers || "—"} followers</span>
-          <span>{influencer.engagementRate || "—"}% eng</span>
+          <span>{influencer.followers || "—"} followers</span>
+          <span>{influencer.engagementRate || "—"} eng</span>
         </div>
 
-        {/* NI reason pill */}
+        {/* NI reason pill, plus the free-text note when there is one.
+            The note only ever accompanies an "Others" decline, so nothing is
+            rendered for the predefined reasons that explain themselves. */}
         {influencer.pipelineStatus === "Not Interested" && influencer.niReason && (
-          <div className="mt-2 text-xs text-red-600 bg-red-100 rounded-full px-2.5 py-1 inline-block font-medium">
-            {influencer.niReason}
+          <div className="mt-2">
+            <div className="text-[10px] text-red-500 bg-red-50 rounded-full px-2.5 py-1 inline-block font-medium">
+              {influencer.niReason}
+            </div>
+            {influencer.declineNotes && (
+              <p className="mt-1 text-[10px] text-gray-500 leading-snug break-words">
+                {influencer.declineNotes}
+              </p>
+            )}
           </div>
         )}
 
-        {/* For Order Creation badge */}
-        {influencer.pipelineStatus === "For Order Creation" && (
-          <div className="mt-2 flex items-center gap-1 text-xs text-emerald-700 bg-emerald-100 rounded-full px-2.5 py-1 inline-flex font-medium">
-            <IconPackage size={12} />
-            In Post Tracker
-          </div>
-        )}
+        {/* ── Status row ──────────────────────────────────────────────────────
+            "In Post Tracker" and the collaboration/payment type (Paid, Gifting,
+            Affiliate, UGC — whatever the Pipeline's Deal Agreed step stored on
+            this row) share ONE row now. They used to be two stacked blocks,
+            each with its own mt-2, so a card that had both was 2 rows taller
+            than a card that had one. Both badges keep their own styling; the
+            row's `mt-2` and `gap-1.5` replace their individual margins, and it
+            renders only when at least one of them has something to show. */}
+        {(() => {
+          const inPostTracker = influencer.pipelineStatus === "For Order Creation"
+          // Deal Agreed now cascades straight to For Order Creation on confirm,
+          // but legacy rows can still rest at Deal Agreed.
+          const collab =
+            (influencer.pipelineStatus === "For Order Creation" || influencer.pipelineStatus === "Deal Agreed") &&
+            influencer.collabType
+              ? COLLAB_TYPES.find((c) => c.id === influencer.collabType)
+              : undefined
 
-        {/* Collab type badge — Deal Agreed now cascades straight to For Order
-            Creation on confirm, but legacy rows can still rest at Deal Agreed */}
-        {(influencer.pipelineStatus === "For Order Creation" || influencer.pipelineStatus === "Deal Agreed") && influencer.collabType && (
-          <div className="mt-1.5">
-            {(() => {
-              const collab = COLLAB_TYPES.find((c) => c.id === influencer.collabType)
-              if (!collab) return null
-              return (
+          if (!inPostTracker && !collab) return null
+
+          return (
+            <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+              {inPostTracker && (
+                <span className="text-[10px] text-green-600 bg-green-50 rounded-full px-2.5 py-1 inline-flex items-center gap-1 font-medium">
+                  <IconPackage size={10} />
+                  In Post Tracker
+                </span>
+              )}
+              {collab && (
                 <span className={`inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full border ${collab.color.split(" ")[0]} ${collab.color.split(" ")[1]}`}>
                   {collab.icon}
                   {collab.title}
                 </span>
-              )
-            })()}
-          </div>
-        )}
+              )}
+            </div>
+          )
+        })()}
       </div>
 
-      {/* Quick-move buttons — only for non-terminal cards */}
+      {/* Quick-move buttons — only for non-terminal cards.
+          Solid StageActionButton, shared with the Post Tracker board. The
+          destination comes from getNextStages, so the tooltip always names the
+          stage this card would actually land in rather than a fixed string. */}
       {nextStages.length > 0 && !terminal && (
-        <div className="flex gap-1.5 mt-3 pt-2 border-t border-gray-100 flex-nowrap">
-          {nextStages.map((stage) => (
-            <button key={stage}
-              onClick={(e) => { e.stopPropagation(); if (!canApproveInfluencers) return; onStatusChange(influencer.id, stage) }}
+        <div className="flex gap-1.5 mt-2.5 pt-2 border-t border-gray-100 flex-nowrap">
+          {/* The hand-over to Post Tracker, on the one stage it starts from.
+              Dropping a card on the Deal Agreed column used to trigger this
+              cascade implicitly, which left the row at the terminal
+              "For Order Creation" stage while the board still drew it under
+              Deal Agreed — it looked moved, but could never be moved again.
+              Deal Agreed is now an ordinary reversible stage and the cascade
+              is this explicit button, so the step is deliberate and the card
+              stays draggable until it is taken. Routed through the same
+              onStatusChange → collab modal path the For Order Creation column
+              uses, so the modal, its copy and the resulting write are all
+              unchanged. */}
+          {influencer.pipelineStatus === "Deal Agreed" && (
+            <StageActionButton
+              destination="For Order Creation"
+              label="Move influencer to Post Tracker"
+              tone="forward"
               disabled={!canApproveInfluencers}
-              title={!canApproveInfluencers ? "Only Owners and Managers can approve influencers" : undefined}
-              className={`text-[11px] font-medium px-2 py-1 rounded-full border transition flex items-center gap-1 min-w-0 flex-1 justify-center disabled:opacity-40 disabled:cursor-not-allowed ${
-                stage === "Not Interested"
-                  ? "bg-red-50 text-red-600 border-red-200 hover:bg-red-100"
-                  : "bg-[#EAF7EF] text-[#0F6B3E] border-[#bfe5cf] hover:bg-[#d7f0e0]"
-              }`}>
-              {stage === "Not Interested" ? <IconX size={11} className="flex-shrink-0" /> : <IconArrowRight size={11} className="flex-shrink-0" />}
-              <span className="truncate">{stage}</span>
-            </button>
+              disabledReason="Only Owners and Managers can approve influencers"
+              icon={<IconPackage size={11} className="flex-shrink-0" />}
+              onClick={(e) => { e.stopPropagation(); if (!canApproveInfluencers) return; onStatusChange(influencer.id, "For Order Creation") }}
+            />
+          )}
+          {nextStages.map((stage) => (
+            <StageActionButton
+              key={stage}
+              destination={stage}
+              label={`Move influencer to ${stage}`}
+              tone={stage === "Not Interested" ? "danger" : "forward"}
+              disabled={!canApproveInfluencers}
+              disabledReason="Only Owners and Managers can approve influencers"
+              icon={stage === "Not Interested"
+                ? <IconX size={11} className="flex-shrink-0" />
+                : <IconArrowRight size={11} className="flex-shrink-0" />}
+              onClick={(e) => { e.stopPropagation(); if (!canApproveInfluencers) return; onStatusChange(influencer.id, stage) }}
+            />
           ))}
         </div>
       )}
     </div>
   )
 }
+
+/**
+ * Compared on the fields a card actually renders. Without this, one keystroke in
+ * the search box re-rendered every card in every column.
+ */
+const PipelineCard = memo(PipelineCardBase, (prev, next) =>
+  prev.influencer === next.influencer &&
+  prev.canApproveInfluencers === next.canApproveInfluencers &&
+  prev.onOpenSidebar === next.onOpenSidebar &&
+  prev.onStatusChange === next.onStatusChange
+)
 
 // ─── Portal StatusDropdown ────────────────────────────────────────────────────
 function StatusDropdown({ currentStatus, onStatusChange, canApproveInfluencers }: { currentStatus: string; onStatusChange: (s: string) => void; canApproveInfluencers: boolean }) {
@@ -901,18 +928,39 @@ function StatusDropdown({ currentStatus, onStatusChange, canApproveInfluencers }
     return () => document.removeEventListener("mousedown", handler)
   }, [isOpen])
 
-  const visibleColumns = columns.filter((c) => c.visible)
+  // Only the stages this row may actually move to, plus the one it is in.
+  // This offered every visible column, so the list view presented the same
+  // stage-skipping jumps the Details panel did. handleStatusUpdate would now
+  // refuse them anyway — but offering a move only to reject it is worse than
+  // not offering it.
+  const allowed = allowedTransitions(currentStatus)
+  const visibleColumns = columns.filter(
+    (c) => c.visible && (c.status === currentStatus || allowed.includes(c.status))
+  )
 
   const dropdown = isOpen ? (
     <div id="status-dropdown-portal" style={dropdownStyle} className="bg-white border border-gray-200 rounded-lg shadow-xl overflow-hidden">
-      {visibleColumns.map((col, index) => (
-        <div key={col.status}
-          onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); onStatusChange(col.status); setIsOpen(false) }}
-          className={`px-3 py-2 text-xs cursor-pointer hover:bg-gray-50 flex items-center gap-2 ${index !== visibleColumns.length - 1 ? "border-b border-gray-100" : ""} ${currentStatus === col.status ? "bg-gray-50 font-semibold" : ""}`}>
-          <div className={`w-2 h-2 rounded-full flex-shrink-0 ${getOptionDotColor(col.status)}`} />
-          <span className="text-gray-700 whitespace-nowrap">{col.title}</span>
+      {visibleColumns.map((col, index) => {
+        const isCurrent = currentStatus === col.status
+        return (
+          <div key={col.status}
+            onMouseDown={(e) => {
+              e.stopPropagation(); e.preventDefault()
+              // Re-selecting the current stage is a no-op, not a move.
+              if (!isCurrent) onStatusChange(col.status)
+              setIsOpen(false)
+            }}
+            className={`px-3 py-2 text-xs flex items-center gap-2 ${isCurrent ? "cursor-default bg-gray-50 font-semibold" : "cursor-pointer hover:bg-gray-50"} ${index !== visibleColumns.length - 1 ? "border-b border-gray-100" : ""}`}>
+            <div className={`w-2 h-2 rounded-full flex-shrink-0 ${getOptionDotColor(col.status)}`} />
+            <span className="text-gray-700 whitespace-nowrap">{col.title}</span>
+          </div>
+        )
+      })}
+      {visibleColumns.length <= 1 && (
+        <div className="px-3 py-2 text-[11px] text-gray-400 border-t border-gray-100">
+          No further moves from {currentStatus}.
         </div>
-      ))}
+      )}
     </div>
   ) : null
 
@@ -937,13 +985,13 @@ function StatusDropdown({ currentStatus, onStatusChange, canApproveInfluencers }
 }
 
 // ─── Droppable / Draggable ────────────────────────────────────────────────────
-function DroppableColumn({ id, children }: { id: string; children: React.ReactNode }) {
+function DroppableColumn({ id, children, height }: { id: string; children: React.ReactNode; height?: number | null }) {
   const { setNodeRef, isOver } = useDroppable({ id })
   const isExit = id === "not-interested" || id === "for-order-creation"
   return (
     <div ref={setNodeRef}
-      style={{ scrollSnapAlign: "start" }}
-      className={`flex flex-col gap-3 w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0 transition-colors rounded-lg ${
+      style={{ scrollSnapAlign: "start", height: height ?? undefined }}
+      className={`flex flex-col gap-2.5 w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0 transition-all rounded-lg ${
         isOver ? (isExit ? "bg-red-50" : "bg-gray-50") : ""
       }`}>
       {children}
@@ -992,6 +1040,11 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   const [view,                 setView]                 = useState<"Board" | "list">("Board")
   const [search,               setSearch]               = useState("")
   const [showSuccessMessage,   setShowSuccessMessage]   = useState<string | null>(null)
+  // Every message used to render in the green success colour, including
+  // "Failed to move …" and the permission refusals — a failure that looks like
+  // a success. Same split the Post Tracker and Influencer List docks use:
+  // green by default, red for an actual failure.
+  const [toastType,            setToastType]            = useState<"success" | "error">("success")
   const [activeId,             setActiveId]             = useState<string | null>(null)
   const [sidebarOpen,          setSidebarOpen]          = useState(false)
   const [selectedPartner,      setSelectedPartner]      = useState<Partner | null>(null)
@@ -1019,29 +1072,71 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   const bulkBtnRef   = useRef<HTMLButtonElement>(null)
   const selectAllRef = useRef<HTMLInputElement>(null)
 
-  const { data, isLoading, error, updateStatus, refetch } = usePipelineData(brandId)
+  const { data, isLoading, error, hasGivenUp, updateStatus, lastUpdateError, isSaving, saveFailed, saveMessage, refetch } = usePipelineData(brandId)
+
+  /**
+   * The message for a move that failed.
+   *
+   * Prefers the server's own sentence — a 409 names the stage the row must
+   * move through first, a 503 says the database is momentarily out of
+   * connections and to retry — and falls back to the generic line only when
+   * the request never reached the server (a network drop).
+   */
+  const moveFailureMessage = useCallback((who: string | undefined) =>
+    lastUpdateError.current || `Failed to move ${who ?? "influencer"}`,
+  [lastUpdateError])
+
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
   const { canApproveInfluencers, loading: capabilitiesLoading } = useBrandCapabilities(brandId)
   const canApprove = !capabilitiesLoading && canApproveInfluencers
 
-  const toast = (msg: string, duration = 3000) => {
+  // Column height is measured from the real viewport rather than a flat vh
+  // guess, so each column's scrollbar appears only once it genuinely doesn't
+  // fit — not before, not with dead space left over.
+  //
+  // Depends on `isLoading`: the board panel isn't in the DOM until it's false
+  // (a BoardSkeleton renders in its place before then), so an empty-deps
+  // effect would measure nothing during that phase and never fire again.
+  const boardPanelRef = useRef<HTMLDivElement>(null)
+  const [columnHeight, setColumnHeight] = useState<number | null>(null)
+
+  useEffect(() => {
+    function recomputeColumnHeight() {
+      const panel = boardPanelRef.current
+      if (!panel) return
+      const top = panel.getBoundingClientRect().top
+      // Tuned empirically against the real page — adjust if columns end up
+      // clipped or leave dead space above the horizontal scrollbar.
+      const RESERVED_BELOW_TOP = 76
+      const available = window.innerHeight - top - RESERVED_BELOW_TOP
+      setColumnHeight(Math.max(220, Math.round(available)))
+    }
+    recomputeColumnHeight()
+    window.addEventListener("resize", recomputeColumnHeight)
+    return () => window.removeEventListener("resize", recomputeColumnHeight)
+  }, [isLoading])
+
+  const toast = useCallback((msg: string, duration = 3000, type: "success" | "error" = "success") => {
+    setToastType(type)
     setShowSuccessMessage(msg)
     setTimeout(() => setShowSuccessMessage(null), duration)
-  }
+  }, [])
 
   // ── Collab type confirmed → deal agreed AND straight into Post Tracker ────
   // Confirming a Collaboration Type is the single action that both marks the
   // deal agreed and moves the influencer into Post Tracker with its default
   // initial status — no separate "Move to Post Tracker" click needed anymore.
-  const handleCollabTypeConfirm = async (collabType: CollabType) => {
+  const handleCollabTypeConfirm = async (collabType: CollabType, deliverables?: string[]) => {
     if (!pendingCollabId || !collabModalInfluencer) return
-    const success = await updateStatus(pendingCollabId, "Deal Agreed", { collaborationType: collabType })
+    const success = await updateStatus(pendingCollabId, "Deal Agreed", { collaborationType: collabType, campaignDeliverables: deliverables })
     const collabName = COLLAB_TYPES.find((c) => c.id === collabType)?.title ?? collabType
     toast(
       success
         ? `${collabModalInfluencer.influencer} moved to Post Tracker · ${collabName} ✓`
-        : `Failed to move ${collabModalInfluencer.influencer}`
+        : `Failed to move ${collabModalInfluencer.influencer}`,
+      3000,
+      success ? "success" : "error"
     )
     setCollabModalInfluencer(null)
     setPendingCollabId(null)
@@ -1057,12 +1152,58 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     if (success) {
       setSelectedPartner((prev) => (prev ? { ...prev, collabType: newType } : prev))
     }
-    toast(success ? "Collaboration type updated ✓" : "Failed to update collaboration type")
+    toast(success ? "Collaboration type updated ✓" : "Failed to update collaboration type", 3000, success ? "success" : "error")
   }
 
   const handleCollabTypeCancel = () => {
     setCollabModalInfluencer(null)
     setPendingCollabId(null)
+  }
+
+  // ── Stage change from the profile sidebar's Stage dropdown ────────────────
+  // Deliberately routed through the SAME handlers a column move uses, rather
+  // than writing its own update: the dropdown previously had no handler wired
+  // at all, so it changed only the sidebar's local state — the value snapped
+  // back on reopen and nothing was ever persisted or moved on the board.
+  //
+  // Not Interested is the one case that cannot call handleStatusUpdate: that
+  // opens the BOARD's reason modal, and the sidebar has already collected the
+  // reason through its own. It goes straight to the same `updateStatus` the
+  // board's own handleNiConfirm calls, with the reason the sidebar captured,
+  // so both paths still write identically.
+  //
+  // Every other stage — forward or backward — goes through handleStatusUpdate,
+  // which owns the permission check, the Deal Agreed collaboration-type modal,
+  // the optimistic move and the toast.
+  const handlePipelineStatusChangeFromSidebar = async (
+    biId: string,
+    newStatus: string,
+    niReason?: string,
+    declineNotes?: string
+  ) => {
+    if (newStatus === "Not Interested") {
+      if (!canApprove) {
+        toast("Only Owners and Managers can approve influencers", 2500, "error")
+        return
+      }
+      const influencer = data.find((i) => i.id === biId)
+      // The same transition rule handleStatusUpdate applies. This branch does
+      // not go through it (the sidebar has already collected the reason, so it
+      // must not re-open the board's modal), which means the check has to be
+      // repeated here or declining would be the one move the panel could still
+      // make from a stage that forbids it.
+      if (influencer && !isTransitionAllowed(influencer.pipelineStatus, "Not Interested")) {
+        toast(transitionRefusalReason(influencer.pipelineStatus, "Not Interested"), 3500, "error")
+        return
+      }
+      const success = await updateStatus(biId, "Not Interested", { niReason, declineNotes })
+      toast(success
+        ? `${influencer?.influencer} marked as Not Interested${niReason ? ` · ${niReason}` : ""}`
+        : moveFailureMessage(influencer?.influencer), 3500, success ? "success" : "error")
+      return
+    }
+
+    await handleStatusUpdate(biId, newStatus)
   }
 
   const handleDragStart = (event: DragStartEvent) => setActiveId(event.active.id as string)
@@ -1078,24 +1219,39 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     if (!dragged) return
 
     if (!canApprove) {
-      toast("Only Owners and Managers can approve influencers", 2500)
+      toast("Only Owners and Managers can approve influencers", 2500, "error")
       return
     }
 
     const newStatus = getStatusFromColumnKey(destKey)
     if (dragged.pipelineStatus === newStatus) return
+    // An "In Post Tracker" card is drawn under Deal Agreed, so dropping it back
+    // on that column is a drop onto its own column — nothing to move.
+    if (dragged.pipelineStatus === "For Order Creation" && newStatus === "Deal Agreed") return
 
-    if (isTerminal(dragged.pipelineStatus)) {
-      toast(`Cannot move from "${dragged.pipelineStatus}"`, 2000)
+    // Hand-over to Post Tracker — checked BEFORE the transition rule, which
+    // would refuse it: "For Order Creation" is deliberately not a selectable
+    // destination, because it must be reached by confirming a collaboration
+    // type rather than picked directly. Same branch, same reason, same order
+    // as handleStatusUpdate.
+    // A move to Deal Agreed opens the collaboration-type modal and, once
+    // confirmed, hands the row straight over to Post Tracker's For Order
+    // Creation with the chosen type and deliverables.
+    if (newStatus === "For Order Creation" || newStatus === "Deal Agreed") {
+      setPendingCollabId(draggedId)
+      setCollabModalInfluencer(dragged)
       return
     }
 
-    // Drag to Deal Agreed (or directly to the hidden For Order Creation column)
-    // → open the collab type modal first. Confirming it both agrees the deal
-    // and cascades straight into Post Tracker — there's no manual move step.
-    if (newStatus === "Deal Agreed" || newStatus === "For Order Creation") {
-      setPendingCollabId(draggedId)
-      setCollabModalInfluencer(dragged)
+    // One check, the same rule the buttons and dropdowns use.
+    //
+    // A separate `isTerminal(source)` branch used to sit above this and emit
+    // "Cannot move to <destination>" — which named the stage the user picked
+    // when the actual cause was the stage the card came FROM. It is gone: this
+    // check already covers a terminal source, and transitionRefusalReason
+    // names the source, so the message says what is really wrong.
+    if (!isTransitionAllowed(dragged.pipelineStatus, newStatus)) {
+      toast(transitionRefusalReason(dragged.pipelineStatus, newStatus), 3500, "error")
       return
     }
 
@@ -1107,15 +1263,15 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
 
     const success = await updateStatus(draggedId, newStatus)
     const colTitle = columns.find((col) => col.key === destKey)?.title
-    toast(success ? `${dragged.influencer} moved to ${colTitle}` : `Failed to move ${dragged.influencer}`)
+    toast(success ? `${dragged.influencer} moved to ${colTitle}` : `Failed to move ${dragged.influencer}`, 3000, success ? "success" : "error")
   }
 
-  const handleNiConfirm = async (reason: string) => {
+  const handleNiConfirm = async (reason: string, declineNotes?: string) => {
     if (!pendingNiId || !niModalInfluencer) return
-    const success = await updateStatus(pendingNiId, "Not Interested", { niReason: reason })
+    const success = await updateStatus(pendingNiId, "Not Interested", { niReason: reason, declineNotes })
     toast(success
       ? `${niModalInfluencer.influencer} marked as Not Interested · ${reason}`
-      : `Failed to update ${niModalInfluencer.influencer}`)
+      : moveFailureMessage(niModalInfluencer.influencer), 3500, success ? "success" : "error")
     setNiModalInfluencer(null)
     setPendingNiId(null)
   }
@@ -1123,9 +1279,40 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   const handleNiCancel = () => { setNiModalInfluencer(null); setPendingNiId(null) }
 
   // ── Status update from card buttons / list dropdown ───────────────────────
-  const handleStatusUpdate = async (id: string, newStatus: string) => {
+  const handleStatusUpdate = useCallback(async (id: string, newStatus: string) => {
     if (!canApprove) {
-      toast("Only Owners and Managers can approve influencers", 2500)
+      toast("Only Owners and Managers can approve influencers", 2500, "error")
+      return
+    }
+    // ── Hand-over to Post Tracker ─────────────────────────────────────────
+    // Checked BEFORE the transition rule below, because it is not a plain
+    // stage move and that rule would refuse it: "For Order Creation" is
+    // deliberately not a selectable destination (see SELECTABLE_STAGES), as
+    // it must be reached by confirming a collaboration type rather than
+    // picked directly. The modal supplies that type, and the PATCH it then
+    // sends is the one the server accepts for this cascade.
+    // Deal Agreed opens the same modal (see handleDragEnd). A row already in
+    // Post Tracker is drawn under Deal Agreed, so there is nothing to do.
+    if (newStatus === "For Order Creation" || newStatus === "Deal Agreed") {
+      const handover = data.find((i) => i.id === id)
+      if (handover?.pipelineStatus === "For Order Creation") return
+      if (handover) {
+        setPendingCollabId(id)
+        setCollabModalInfluencer(handover)
+      }
+      return
+    }
+
+    // ── Transition check ──────────────────────────────────────────────────
+    // Every movement control funnels through here — card quick-move buttons,
+    // the list-view status dropdown and the Details panel's stage dropdown —
+    // so this is the one client-side place the rule has to hold. It is the
+    // same rule the server enforces (lib/pipeline-transitions.ts); this copy
+    // exists to give an immediate, specific message instead of a round trip
+    // ending in a 409, not to be the enforcement.
+    const current = data.find((i) => i.id === id)
+    if (current && !isTransitionAllowed(current.pipelineStatus, newStatus)) {
+      toast(transitionRefusalReason(current.pipelineStatus, newStatus), 3500, "error")
       return
     }
     if (newStatus === "Not Interested") {
@@ -1133,21 +1320,12 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
       if (influencer) { setPendingNiId(id); setNiModalInfluencer(influencer) }
       return
     }
-    // Moving to Deal Agreed → show collab type modal first
-    if (newStatus === "Deal Agreed") {
-      const influencer = data.find((i) => i.id === id)
-      if (influencer) {
-        setPendingCollabId(id)
-        setCollabModalInfluencer(influencer)
-      }
-      return
-    }
     const influencer = data.find((i) => i.id === id)
     const success = await updateStatus(id, newStatus)
     toast(success
-      ? `${influencer?.influencer} updated to ${newStatus}`
-      : `Failed to update ${influencer?.influencer}`, 2000)
-  }
+      ? `${influencer?.influencer} moved to ${newStatus}`
+      : moveFailureMessage(influencer?.influencer), success ? 2000 : 3500, success ? "success" : "error")
+  }, [data, canApprove, updateStatus, toast, moveFailureMessage])
 
   // ── Bulk selection helpers ────────────────────────────────────────────────
   const clearSelection = () => setSelectedIds(new Set())
@@ -1162,33 +1340,82 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
 
   // ── Bulk stage move ───────────────────────────────────────────────────────
   // Reuses the exact same per-row `updateStatus` the single-row dropdown and
-  // drag-and-drop use — no new endpoint, no duplicated status logic. Runs
-  // sequentially on purpose: `updateStatus` rolls back from a full-list
-  // snapshot on failure, so overlapping calls could roll back each other's
-  // successful writes. Sequential keeps every success intact when one fails.
+  // drag-and-drop use — no new endpoint, no duplicated status logic.
+  //
+  // Concurrency is capped rather than unbounded OR strictly serial:
+  //
+  //   * unbounded would put one request per selected row into a Prisma pool
+  //     capped at connection_limit=3, which is what produced P2024 timeouts
+  //     (see lib/dashboard-prefetch.ts for the measurements);
+  //   * strictly serial was the previous behaviour, and its stated reason —
+  //     that a failure rolls back a full-list snapshot — is no longer true.
+  //     `updateStatus` restores only its own row now, so overlapping calls can
+  //     no longer undo each other's successful writes.
+  //
+  // Two at a time leaves a connection free for whatever the user does next.
   const runBulkUpdate = async (
     newStatus: string,
-    extra?: { niReason?: string; collaborationType?: string }
+    extra?: { niReason?: string; declineNotes?: string; collaborationType?: string; campaignDeliverables?: string[] }
   ) => {
     const selected = data.filter((d) => selectedIds.has(d.id))
-    // Same guards the single-row paths apply: terminal rows can't move, and
-    // rows already in the target stage are a no-op.
-    const targets = selected.filter((d) => !isTerminal(d.pipelineStatus) && d.pipelineStatus !== newStatus)
+
+    // The hand-over into Post Tracker, which is sent as "Deal Agreed" plus a
+    // collaboration type (the pair the PATCH route cascades to stage 5).
+    //
+    // It needs its own target rule. The plain rule below excludes a row whose
+    // stage already EQUALS the destination, which is right for an ordinary
+    // move but wrong here: a row sitting at Deal Agreed is precisely the one
+    // this action is for, and it would have been filtered out of its own
+    // hand-over. Rows already in Post Tracker are still excluded — that stage
+    // is terminal and there is nothing left to hand over.
+    const isHandover = newStatus === "Deal Agreed" && extra?.collaborationType !== undefined
+
+    // Same rule the single-row paths apply, asked the same way: a row is a
+    // target only if this exact move is permitted from where it currently is.
+    // (`isTransitionAllowed` returns true for a no-op, so the second clause
+    // still excludes rows already in the target stage.)
+    const targets = selected.filter((d) =>
+      isHandover
+        ? d.pipelineStatus !== "For Order Creation"
+        : isTransitionAllowed(d.pipelineStatus, newStatus) && d.pipelineStatus !== newStatus
+    )
     const skipped = selected.length - targets.length
-    const stageTitle = columns.find((c) => c.status === newStatus)?.title ?? newStatus
+    // Named for where the rows actually land, so the toast does not report a
+    // hand-over as a move to "Deal Agreed".
+    const stageTitle = isHandover ? "Post Tracker" : getStatusTitle(newStatus)
 
     if (targets.length === 0) {
-      toast(`Nothing to move — the selected influencers are already in ${stageTitle} or can't be moved`, 3500)
+      toast(`Nothing to move — the selected influencers are already in ${stageTitle} or can't be moved`, 3500, "error")
       return
     }
 
     setBulkBusy(true)
     const failedIds: string[] = []
     let moved = 0
-    for (const target of targets) {
-      const success = await updateStatus(target.id, newStatus, extra)
-      if (success) moved += 1
-      else failedIds.push(target.id)
+
+    // Each worker takes the next index, so `BULK_CONCURRENCY` requests are in
+    // flight at most, no matter how many rows are selected.
+    let cursor = 0
+    const worker = async () => {
+      while (cursor < targets.length) {
+        const target = targets[cursor++]
+        // Derived views are marked stale ONCE after the run, not per row.
+        const success = await updateStatus(target.id, newStatus, {
+          ...extra,
+          deferDerivedInvalidation: true,
+        })
+        if (success) moved += 1
+        else failedIds.push(target.id)
+      }
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(BULK_CONCURRENCY, targets.length) }, worker)
+    )
+
+    // One invalidation for the whole run. The board's own entry is excluded —
+    // it is already correct from the optimistic writes above.
+    if (moved > 0 && brandId) {
+      invalidateInfluencerDerivedCaches(brandId, [pipelineCacheKey(brandId)])
     }
     setBulkBusy(false)
 
@@ -1200,9 +1427,11 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     if (failedIds.length === 0) {
       toast(`${moved} influencer${moved === 1 ? "" : "s"} moved to ${stageTitle} ✓${skippedNote}`, 3500)
     } else {
+      // A partial failure is still a failure — the user has rows to retry.
       toast(
         `${moved} moved to ${stageTitle}, ${failedIds.length} failed${skippedNote} — the failed ones are still selected`,
-        5000
+        5000,
+        "error"
       )
     }
   }
@@ -1210,31 +1439,55 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   const handleBulkStageSelect = (newStatus: string) => {
     setShowBulkStageMenu(false)
     if (!canApprove) {
-      toast("Only Owners and Managers can approve influencers", 2500)
+      toast("Only Owners and Managers can approve influencers", 2500, "error")
       return
     }
     if (selectedIds.size === 0) return
     // These two stages need extra input before they can be written; reuse the
     // existing modals, collecting one answer that applies to the whole batch.
-    if (newStatus === "Not Interested") { setBulkNiOpen(true); return }
-    if (newStatus === "Deal Agreed")    { setBulkCollabOpen(true); return }
+    if (newStatus === "Not Interested")     { setBulkNiOpen(true); return }
+    // Deal Agreed and the explicit hand-over both collect a collaboration type
+    // (and deliverables) and move the selection into Post Tracker.
+    if (newStatus === "For Order Creation" || newStatus === "Deal Agreed") { setBulkCollabOpen(true); return }
     void runBulkUpdate(newStatus)
   }
 
-  const handleBulkNiConfirm = async (reason: string) => {
+  const handleBulkNiConfirm = async (reason: string, declineNotes?: string) => {
     setBulkNiOpen(false)
-    await runBulkUpdate("Not Interested", { niReason: reason })
+    // One note applies to the whole selection, the same way one reason does.
+    await runBulkUpdate("Not Interested", { niReason: reason, declineNotes })
   }
 
-  const handleBulkCollabConfirm = async (collabType: CollabType) => {
+  const handleBulkCollabConfirm = async (collabType: CollabType, deliverables?: string[]) => {
     setBulkCollabOpen(false)
-    await runBulkUpdate("Deal Agreed", { collaborationType: collabType })
+    // Still sent as "Deal Agreed" + a collaboration type: that is the pair the
+    // PATCH route turns into the cascade to stage 5 (see
+    // pipelineStatusToFields). Only the menu entry that reaches this changed.
+    await runBulkUpdate("Deal Agreed", { collaborationType: collabType, campaignDeliverables: deliverables })
   }
 
-  const openSidebar = (inf: PipelineInfluencer) => {
+  const openSidebar = useCallback((inf: PipelineInfluencer) => {
     setSelectedPartner(influencerToPartner(inf, brandId))
     setSidebarOpen(true)
-  }
+  }, [brandId])
+
+  // The partner actually rendered in the sidebar, rebuilt from the live row
+  // whenever that row changes.
+  //
+  // `selectedPartner` is a snapshot taken when the panel opened, so it went
+  // stale the moment anything moved the influencer — the Stage dropdown, a
+  // drag behind the panel, a card button or a bulk move all update `data`
+  // only. Re-deriving from `data` means the panel always shows the persisted
+  // stage, which is also what lets the dropdown roll back when a move does
+  // not commit (a cancelled Deal Agreed modal, or a failed write).
+  //
+  // Falls back to the snapshot if the row is gone from the current dataset
+  // (e.g. filtered out mid-session), so the panel never blanks out.
+  const sidebarPartner = useMemo(() => {
+    if (!selectedPartner) return null
+    const live = data.find((d) => d.id === selectedPartner.brandInfluencerId)
+    return live ? influencerToPartner(live, brandId) : selectedPartner
+  }, [selectedPartner, data, brandId])
 
   const handleColumnClick = (column: typeof columns[0]) => {
     setSelectedColumnStatus(column.status)
@@ -1257,11 +1510,16 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
         d.influencer.toLowerCase().includes(search.toLowerCase()) ||
         d.instagramHandle.toLowerCase().includes(search.toLowerCase())
       )
-      .filter((d) => selectedColumnStatus ? d.pipelineStatus === selectedColumnStatus : true)
+      // matchesColumnStatus, not a plain equality — the Deal Agreed column
+      // covers "For Order Creation" rows too, and this list is what its header
+      // opens. See matchesColumnStatus.
+      .filter((d) => selectedColumnStatus ? matchesColumnStatus(d.pipelineStatus, selectedColumnStatus) : true)
 
     if (filters.locations.length > 0) result = result.filter((p) => filters.locations.includes(p.location ?? ""))
     if (filters.niches.length > 0)    result = result.filter((p) => filters.niches.includes(p.niche ?? ""))
-    if (filters.stages.length > 0)    result = result.filter((p) => filters.stages.includes(p.pipelineStatus))
+    // Same widening as the column/list filter above: ticking "Deal Agreed" in
+    // the filter panel has to find the same rows the Deal Agreed column shows.
+    if (filters.stages.length > 0)    result = result.filter((p) => filters.stages.some((s) => matchesColumnStatus(p.pipelineStatus, s)))
     // A row with no approval decision yet reads as Pending
     if (filters.approvals.length > 0) result = result.filter((p) => filters.approvals.includes(p.approvalStatus ?? "Pending"))
     result = [...result].sort((a, b) => {
@@ -1327,8 +1585,14 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   const activeInfluencer   = activeId ? data.find((item) => item.id === activeId) : null
   const selectedColumnInfo = selectedColumnStatus ? columns.find((col) => col.status === selectedColumnStatus) : null
 
-  const getItemsByColumn = (columnKey: string) =>
-    filteredData.filter((item) => item.pipelineStatus === getStatusFromColumnKey(columnKey))
+  // Display-only: a row keeps rendering under Deal Agreed while the persisted
+  // stage (and Post Tracker) stay exactly as they are. One record, two views —
+  // see matchesColumnStatus, which the list view and filter panel share so all
+  // three agree on what Deal Agreed contains.
+  const getItemsByColumn = (columnKey: string) => {
+    const status = getStatusFromColumnKey(columnKey)
+    return filteredData.filter((item) => matchesColumnStatus(item.pipelineStatus, status))
+  }
 
   const renderCard = (inf: PipelineInfluencer) => (
     <PipelineCard
@@ -1343,18 +1607,33 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
 
   if (isLoading) return <BoardSkeleton columns={visibleColumns.length || 4} label="Fetching data..." />
 
-  if (error) return (
+  // Only take over the page when there is genuinely nothing to show. A failed
+  // BACKGROUND refresh on a board that already has cards used to replace the
+  // whole board with this screen, discarding data that was still good — the
+  // inline notice below reports that case and leaves the cards alone.
+  // hasGivenUp, not error: a transient blip is still being retried silently,
+  // and the skeleton above stays until it resolves or the budget is spent —
+  // see the equivalent gate in the Post Tracker.
+  if (hasGivenUp && data.length === 0) return (
     <div className="flex flex-col items-center justify-center gap-3 p-12">
-      <IconAlertCircle size={32} className="text-red-500" />
-      <span className="text-sm text-red-600">{error}</span>
+      <IconAlertCircle size={32} className="text-gray-400" />
+      <span className="text-sm text-gray-600">{error}</span>
       <button onClick={() => refetch()} className="px-4 py-2 bg-[#1FAE5B] text-white rounded-lg text-sm hover:bg-[#178a48] transition">Retry</button>
     </div>
   )
 
   return (
     <div className="flex flex-col gap-4 p-6">
+      {/* A refresh failed but the board still has its last good cards — say so
+          inline instead of replacing the board (see the error gate above).
+          hasGivenUp, not error: while the bounded retry is still running there
+          is nothing for the user to do, so the board just stays as it is. */}
+      {hasGivenUp && data.length > 0 && (
+        <StaleDataNotice message={error ?? ""} onRetry={() => refetch()} />
+      )}
+
       {niModalInfluencer && (
-        <NotInterestedModal influencer={niModalInfluencer} onConfirm={handleNiConfirm} onCancel={handleNiCancel} />
+        <DeclineModal name={niModalInfluencer.influencer} handle={niModalInfluencer.instagramHandle} profileImageUrl={niModalInfluencer.profileImageUrl} onConfirm={handleNiConfirm} onCancel={handleNiCancel} />
       )}
 
       {/* Collab type modal — fires before Deal Agreed */}
@@ -1368,8 +1647,8 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
 
       {/* Bulk variants of the same modals — one answer applied to the batch */}
       {bulkNiOpen && selectedCount > 0 && (
-        <NotInterestedModal
-          influencer={data.find((d) => selectedIds.has(d.id))!}
+        <DeclineModal
+          name={data.find((d) => selectedIds.has(d.id))?.influencer ?? ""}
           bulkCount={selectedCount}
           onConfirm={handleBulkNiConfirm}
           onCancel={() => setBulkNiOpen(false)}
@@ -1384,18 +1663,34 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
         />
       )}
 
-      {showSuccessMessage && (
-        <div className="fixed top-4 right-4 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg z-50 animate-in slide-in-from-top-2">
-          {showSuccessMessage}
-        </div>
-      )}
+      {/* The shared save pill in the bottom-right corner while a status write is
+          actually in flight, out of the way of the board. The outcome message
+          lands in the top dock below. */}
+      <div className="notice-dock">
+        <SaveStatusPill saving={isSaving} failed={saveFailed} message={saveMessage ?? undefined} />
+      </div>
 
-      {sidebarOpen && selectedPartner && (
+      {/* Outcome floating at the top right (`.notice-dock-top`,
+          app/globals.css) — the answer the user was waiting for, where they
+          are actually looking. h-9 is the toolbar Search field's height, so
+          the two match without forcing the message to a fixed width. Slides
+          in from the top to match the edge it now enters from; timing,
+          wording and dismissal are untouched. */}
+      <div className="notice-dock-top">
+        {showSuccessMessage && (
+          <div className={`flex h-9 max-w-full items-center rounded-lg px-3 shadow-lg text-white text-sm font-medium whitespace-nowrap animate-in slide-in-from-top-2 ${toastType === "error" ? "bg-red-600" : "bg-[#1FAE5B]"}`}>
+            <span className="truncate">{showSuccessMessage}</span>
+          </div>
+        )}
+      </div>
+
+      {sidebarOpen && sidebarPartner && (
         <InfluencerProfileSidebar
-          partner={selectedPartner}
+          partner={sidebarPartner}
           campaigns={[] as Campaign[]}
           allPartners={[]}
           onClose={() => setSidebarOpen(false)}
+          onPipelineStatusChange={handlePipelineStatusChangeFromSidebar}
           onCollabTypeChange={handleCollabTypeChangeFromSidebar}
         />
       )}
@@ -1406,6 +1701,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
         <div className="relative flex-1 min-w-[200px] max-w-xs">
           <IconSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search influencer..."
+            data-tour="pipeline-search"
             className="w-full pl-9 pr-3 h-9 border border-[#0F6B3E]/20 rounded-lg outline-none focus:ring-2 focus:ring-[#1FAE5B] text-sm" />
         </div>
 
@@ -1413,6 +1709,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
         <div className="relative">
           <button
             onClick={() => setShowFilterPanel(!showFilterPanel)}
+            data-tour="pipeline-filters"
             className={`h-9 px-3 rounded-lg text-sm flex items-center gap-1.5 border transition-colors ${
               hasActiveFilters ? "bg-[#1FAE5B] text-white border-[#1FAE5B]" : "border-[#0F6B3E]/20 hover:border-[#0F6B3E]/40"
             }`}
@@ -1512,16 +1809,21 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
           )}
         </div>
 
-        {/* Count */}
+        {/* Count — "N of M", as the Post Tracker toolbar reads, so a filtered
+            view shows how much of the total is on screen. */}
         <span className="text-sm text-gray-500 whitespace-nowrap ml-1">
-          {data.length} influencer{data.length !== 1 ? "s" : ""}
+          {filteredData.length} of {data.length} influencer{data.length !== 1 ? "s" : ""}
         </span>
+
+        {/* Real freshness, from the shared cache entry this board renders
+            from — same component and placement on every board. */}
+        <DataSyncStatus cacheKey={brandId ? `/api/brand/${brandId}/pipeline` : null} />
 
         {/* Spacer */}
         <div className="flex-1" />
 
         {/* View toggle */}
-        <div className="inline-flex h-9 items-center rounded-lg border border-[#0F6B3E]/20 bg-white p-1">
+        <div className="inline-flex h-9 items-center rounded-lg border border-[#0F6B3E]/20 bg-white p-1" data-tour="pipeline-view-toggle">
           <button
             onClick={() => { setView("Board"); setSelectedColumnStatus(null) }}
             className={`h-7 px-3 rounded-md text-sm flex items-center gap-1.5 transition-all ${
@@ -1548,14 +1850,17 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
       {/* ── KANBAN VIEW ── */}
       {view === "Board" && (
         <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-          <div className="rounded-xl border border-[#0F6B3E]/10 bg-white p-5 overflow-x-auto" style={{ scrollSnapType: "x proximity" }}>
+          <div ref={boardPanelRef} className="rounded-xl border border-[#0F6B3E]/10 bg-white px-5 pt-5 pb-6 overflow-x-auto" style={{ scrollSnapType: "x proximity" }}>
             <div className="flex gap-4 min-w-max">
 
-              {visibleColumns.filter((c) => c.key !== "not-interested").map((col) => {
+              {visibleColumns.filter((c) => c.key !== "not-interested").map((col, colIndex) => {
                 const items = getItemsByColumn(col.key)
                 return (
-                  <DroppableColumn key={col.key} id={col.key}>
-                    <div className={`${col.color} text-white rounded-lg px-3 py-2 text-sm font-semibold flex items-center justify-between`}>
+                  <DroppableColumn key={col.key} id={col.key} height={columnHeight}>
+                    <div
+                      className={`${col.color} text-white rounded-lg px-3 py-2 text-sm font-semibold flex items-center justify-between`}
+                      data-tour={colIndex === 0 ? "pipeline-board" : undefined}
+                    >
                       <span
                         onClick={() => handleColumnClick(col)}
                         className="flex-1 cursor-pointer hover:opacity-90 transition-opacity truncate mr-2"
@@ -1568,7 +1873,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                       </div>
                     </div>
 
-                    <div className="flex flex-col gap-2 min-h-[400px]">
+                    <div className="flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto mt-2 pr-1">
                       {items.map((inf) => (
                         <DraggableCard key={inf.id} id={inf.id} disabled={!canApprove}>
                           {renderCard(inf)}
@@ -1594,7 +1899,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                 const col   = columns.find((c) => c.key === "not-interested")!
                 const items = getItemsByColumn(col.key)
                 return (
-                  <DroppableColumn id={col.key}>
+                  <DroppableColumn id={col.key} height={columnHeight}>
                     <div className="bg-red-100 text-red-700 border border-red-200 rounded-lg px-3 py-2 text-sm font-semibold flex items-center justify-between">
                       <span
                         onClick={() => handleColumnClick(col)}
@@ -1603,12 +1908,12 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                         {col.title}
                       </span>
                       <div className="flex items-center gap-1.5 flex-shrink-0">
-                        <span className="bg-red-200 text-red-700 rounded-full px-2 py-0.5 text-xs">{items.length}</span>
                         <ColumnInfoTooltip status={col.status} variant="light" />
+                        <span className="bg-red-200 text-red-700 rounded-full px-2 py-0.5 text-xs">{items.length}</span>
                       </div>
                     </div>
 
-                    <div className="flex flex-col gap-2 min-h-[400px]">
+                    <div className="flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto mt-2 pr-1">
                       {items.map((inf) => (
                         <DraggableCard key={inf.id} id={inf.id} disabled={!canApprove}>
                           {renderCard(inf)}
@@ -1679,6 +1984,18 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                     {col.title}
                   </button>
                 ))}
+                {/* The hand-over, listed explicitly. "For Order Creation" is a
+                    hidden column so it is not in visibleColumns, and bulk
+                    "Deal Agreed" used to stand in for it — which is what sent
+                    whole selections to a terminal stage unintentionally. */}
+                <button
+                  role="menuitem"
+                  onClick={() => handleBulkStageSelect("For Order Creation")}
+                  className="flex items-center gap-2 w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 focus:bg-gray-50 focus:outline-none transition border-t border-gray-100 mt-1 pt-2"
+                >
+                  <span className="w-2 h-2 rounded-full bg-[#1FAE5B]" />
+                  Move to Post Tracker
+                </button>
               </div>
             )}
           </div>
@@ -1764,7 +2081,12 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                           <div>
                             <span className="font-medium">{inf.influencer}</span>
                             {inf.pipelineStatus === "Not Interested" && inf.niReason && (
+                              <>
                               <p className="text-[11px] text-red-500 mt-0.5">{inf.niReason}</p>
+                              {inf.declineNotes && (
+                                <p className="text-[10px] text-gray-500 mt-0.5 leading-snug">{inf.declineNotes}</p>
+                              )}
+                              </>
                             )}
                             {inf.pipelineStatus === "For Order Creation" && (
                               <>
@@ -1787,7 +2109,10 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        <div className="flex items-center gap-1">{getPlatformIcon(inf.platform)}<span>{inf.platform || "Instagram"}</span></div>
+                        <div className="inline-flex min-w-0 items-center gap-1.5 leading-none">
+                          <PlatformIcon platform={inf.platform} size={14} className="shrink-0" />
+                          <span className="truncate">{getPlatformLabel(inf.platform) || "—"}</span>
+                        </div>
                       </td>
                       <td className="px-4 py-3 text-[#0F6B3E] font-medium">{inf.instagramHandle}</td>
                       <td className="px-4 py-3">

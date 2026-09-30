@@ -13,6 +13,7 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { Button } from "@/components/ui/button"
 import { DetectedPostsList, type DetectedPost } from "./DetectedPostsList"
+import { invalidateInfluencerDerivedCaches } from "@/lib/cache-invalidation"
 
 type Quota = {
   apiRequests: number
@@ -30,11 +31,19 @@ const ADDON_PRICE = 19
 export default function AutoPostDetectionCard({
   brandId,
   biId,
+  onDetectedPost,
 }: {
   brandId: string
   biId: string
   /** Accepted for call-site compatibility; the gate is now the add-on, not the plan. */
   subscriptionStatus?: string
+  /**
+   * Called with the newest detected post whenever detection has one — on load
+   * and after "Check now". The Post tab uses it to offer that URL to the Post
+   * URL field. Purely a notification: this card performs no writes because of
+   * it, and the detection flow is unchanged when no handler is passed.
+   */
+  onDetectedPost?: (post: DetectedPost) => void
 }) {
   const [loading, setLoading] = useState(true)
   const [addonActive, setAddonActive] = useState<boolean | null>(null)
@@ -78,6 +87,19 @@ export default function AutoPostDetectionCard({
   useEffect(() => {
     load()
   }, [load])
+
+  // Hand the newest detected post up to the Post tab. `posts` is already
+  // newest-first from the API, so [0] is the latest detection — no extra
+  // request, no second source of truth. Keyed on the id so a poll that returns
+  // the same post doesn't re-notify.
+  const newest = posts[0]
+  const notifiedRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!newest || !onDetectedPost) return
+    if (notifiedRef.current === newest.id) return
+    notifiedRef.current = newest.id
+    onDetectedPost(newest)
+  }, [newest, onDetectedPost])
 
   /**
    * Leave for the app's existing Pricing page. `returnTo` carries the exact
@@ -248,6 +270,16 @@ export default function AutoPostDetectionCard({
       )
       if (data.quota) setQuota(data.quota)
       load()
+
+      // An imported post now also moves the influencer to Posted server-side
+      // (lib/post-tracker/monitor.ts applyDetectionToInfluencer), so the board
+      // and every view derived from these rows is out of date. Marked stale
+      // through the existing helper — data is kept, so nothing blanks out, and
+      // the next read revalidates. Only on an actual import, so a check that
+      // found nothing does not churn the caches.
+      if ((s.postsImported ?? 0) > 0) {
+        invalidateInfluencerDerivedCaches(brandId)
+      }
     } catch {
       setCheckMsg("Detection failed — see server logs")
     } finally {
@@ -256,6 +288,16 @@ export default function AutoPostDetectionCard({
   }, [brandId, load])
 
   const quotaReached = Boolean(quota?.exhausted)
+
+  /**
+   * Is there anything to look for?
+   *
+   * A pass with no hashtag and no mention cannot match a post — `matchPost`
+   * (lib/post-tracker/monitor.ts) needs one of them — so it would spend an API
+   * request to guarantee no result. "Check now" is gated on this rather than
+   * left clickable and silently useless.
+   */
+  const hasMonitoringInput = Boolean(hashtags.trim() || mentions.trim())
 
   return (
     <div className="rounded-xl border border-gray-100 bg-white">
@@ -329,6 +371,43 @@ export default function AutoPostDetectionCard({
             </div>
           ) : (
             <>
+              {/* What to look for comes FIRST, and stays editable whether or
+                  not monitoring is on. Detection has nothing to match without
+                  at least one of these, so asking for them before the toggle
+                  and before "Check now" is the order the feature actually
+                  works in. They were below the status row and disabled until
+                  `enabled`, which meant the toggle had to be flipped before the
+                  thing it needs could be typed. */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1">
+                  <label className="flex items-center gap-1 text-[11px] font-semibold text-gray-500">
+                    <IconHash size={12} />
+                    Hashtags monitored
+                  </label>
+                  <input
+                    className="w-full text-xs px-2.5 py-2 rounded-lg border border-gray-200 bg-gray-50 text-gray-900 outline-none focus:border-[#0F6B3E]/40 focus:bg-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                    placeholder="#brandname, #campaign2026"
+                    value={hashtags}
+                    onChange={(e) => setHashtags(e.target.value)}
+                    onBlur={() => patch({ hashtags })}
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="flex items-center gap-1 text-[11px] font-semibold text-gray-500">
+                    <IconAt size={12} />
+                    Mentions monitored
+                  </label>
+                  <input
+                    className="w-full text-xs px-2.5 py-2 rounded-lg border border-gray-200 bg-gray-50 text-gray-900 outline-none focus:border-[#0F6B3E]/40 focus:bg-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                    placeholder="@yourbrand"
+                    value={mentions}
+                    onChange={(e) => setMentions(e.target.value)}
+                    onBlur={() => patch({ mentions })}
+                  />
+                </div>
+              </div>
+              {saveMsg && <div className="text-[10px] text-gray-400">{saveMsg}</div>}
+
               <div className="flex items-center gap-2 text-[11px] font-medium">
                 <span className={`h-1.5 w-1.5 rounded-full ${enabled ? "bg-[#1FAE5B]" : "bg-gray-300"}`} />
                 {/* Deliberately does NOT say "active"/"running": there is no
@@ -342,7 +421,12 @@ export default function AutoPostDetectionCard({
                   <button
                     type="button"
                     onClick={() => void runNow()}
-                    disabled={checking || quotaReached}
+                    disabled={checking || quotaReached || !hasMonitoringInput}
+                    title={
+                      !hasMonitoringInput
+                        ? "Add a hashtag or mention above first — a check has nothing to match without one"
+                        : undefined
+                    }
                     className="ml-auto inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-[10px] font-medium text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-50"
                   >
                     {checking ? <IconLoader2 size={11} className="animate-spin" /> : <IconRefresh size={11} />}
@@ -351,13 +435,17 @@ export default function AutoPostDetectionCard({
                 )}
               </div>
 
-              {/* Scheduled background checks are switched off for now, so say
-                  so plainly rather than letting an enabled toggle imply the
-                  system is watching on its own. */}
+              {/* Background checks are live again — driven by server request
+                  traffic rather than a cron schedule (lib/post-tracker/scheduler.ts),
+                  so this no longer has to tell the user the system is asleep.
+                  The wording avoids promising a guaranteed clock tick, because
+                  the trigger is traffic-driven: "about every 5 minutes" is what
+                  it does on an app in use, which is when detection matters. */}
               {enabled && (
                 <div className="text-[10px] text-gray-400">
-                  Scheduled background checks are paused. Your hashtags and mentions are saved — use
-                  &ldquo;Check now&rdquo; to run a detection pass.
+                  Automatic background checks are active — your hashtags and mentions are polled
+                  about every 5 minutes, with no need to keep this page open. Use &ldquo;Check
+                  now&rdquo; to run a pass immediately.
                 </div>
               )}
 
@@ -391,38 +479,6 @@ export default function AutoPostDetectionCard({
                   </div>
                 )
               )}
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="flex flex-col gap-1">
-                  <label className="flex items-center gap-1 text-[11px] font-semibold text-gray-500">
-                    <IconHash size={12} />
-                    Hashtags monitored
-                  </label>
-                  <input
-                    className="w-full text-xs px-2.5 py-2 rounded-lg border border-gray-200 bg-gray-50 text-gray-900 outline-none focus:border-[#0F6B3E]/40 focus:bg-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-                    placeholder="#brandname, #campaign2026"
-                    value={hashtags}
-                    disabled={!enabled}
-                    onChange={(e) => setHashtags(e.target.value)}
-                    onBlur={() => patch({ hashtags })}
-                  />
-                </div>
-                <div className="flex flex-col gap-1">
-                  <label className="flex items-center gap-1 text-[11px] font-semibold text-gray-500">
-                    <IconAt size={12} />
-                    Mentions monitored
-                  </label>
-                  <input
-                    className="w-full text-xs px-2.5 py-2 rounded-lg border border-gray-200 bg-gray-50 text-gray-900 outline-none focus:border-[#0F6B3E]/40 focus:bg-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-                    placeholder="@yourbrand"
-                    value={mentions}
-                    disabled={!enabled}
-                    onChange={(e) => setMentions(e.target.value)}
-                    onBlur={() => patch({ mentions })}
-                  />
-                </div>
-              </div>
-              {saveMsg && <div className="text-[10px] text-gray-400">{saveMsg}</div>}
 
               <div className="flex flex-col gap-1.5 pt-1">
                 <div className="text-[11px] font-semibold text-gray-500">Recently detected posts</div>

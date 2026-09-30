@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma"
 import { NextRequest, NextResponse } from "next/server"
+import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 
 export async function POST(req: NextRequest) {
   try {
@@ -36,6 +37,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ active: true, subscription }, { status: 200 })
   } catch (error) {
+    if (isDatabaseCapacityError(error)) return databaseCapacityResponse()
     return NextResponse.json(
       { error: "Failed to check subscription", details: error instanceof Error ? error.message : String(error) },
       { status: 500 }

@@ -1,0 +1,23 @@
+-- Free-text explanation for a "Others" decline.
+--
+-- A Not Interested move stores its reason in `approval_notes`, and Analytics
+-- buckets declines by matching that column EXACTLY against the reason list in
+-- lib/decline-reasons.ts (see reasonsBreakdown in app/dashboard/analytics/
+-- page.tsx and declineBucket()). So the custom explanation the user types for
+-- "Others" cannot be appended to `approval_notes`: any row carrying
+-- "Others — they only do long-term deals" would stop matching "Others" and
+-- fall out of the reason breakdown entirely.
+--
+-- Hence a separate column. `approval_notes` keeps holding the reason verbatim,
+-- and every existing consumer — Analytics, the NI pill on the pipeline card,
+-- the list view, the activity log — keeps working untouched.
+--
+-- Purely additive and nullable: every existing decline has no custom note,
+-- which NULL states correctly. Nothing needs backfilling and no existing row
+-- changes meaning.
+--
+-- TEXT, matching `approval_notes` itself: this is prose typed by a human with
+-- no useful upper bound, and the app already trims it and refuses a
+-- whitespace-only value before it is ever written.
+
+ALTER TABLE `BrandInfluencer` ADD COLUMN `decline_notes` TEXT NULL;

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { randomUUID } from "crypto"
+import { randomUUID, timingSafeEqual } from "crypto"
 import {
   runMonitoringPass,
   acquireMonitoringLock,
@@ -8,22 +8,34 @@ import {
 
 // Background monitoring job for Automatic Post Detection.
 //
-// ─── CURRENTLY UNSCHEDULED ───────────────────────────────────────────────────
-// Nothing calls this on a timer today. The Vercel Cron entry was removed from
-// vercel.json because the Hobby plan only permits one cron invocation per day,
-// at daily-or-coarser granularity — a */5 schedule is rejected at deploy time.
-// The handler is kept intact and working; only the schedule was withdrawn.
+// ─── DRIVEN BY AN EXTERNAL SCHEDULER ─────────────────────────────────────────
+// This is the production entry point for automatic detection:
 //
-// Until then, detection runs on demand via the "Check now" button, which hits
-// POST /api/post-tracker/detection/run (session-authenticated, single brand).
+//   external scheduler → POST /api/cron/post-detection (Bearer CRON_SECRET)
+//                      → runMonitoringPass()  ← the single source of truth
+//                      → existing quota / MonitoringRun / import logic
 //
-// To re-enable on Vercel Pro:
-//   1. Restore the crons block in vercel.json:
-//        "crons": [{ "path": "/api/cron/post-detection", "schedule": "*/5 * * * *" }]
-//   2. Set CRON_SECRET in the Vercel project environment (see .env.example).
-//      Without it this handler fails closed with 401 — by design.
-//   3. Re-enable the list refresh in DetectedPostsList.tsx (POLL_ENABLED).
-// No code change is needed here.
+// Vercel Cron is deliberately NOT used (the Hobby plan rejects a */5 schedule,
+// and vercel.json carries no crons block). Any scheduler that can send an
+// authenticated HTTPS request works, because nothing here depends on Vercel:
+// GitHub Actions `schedule`, cron-job.org, EasyCron, Upstash QStash, an uptime
+// monitor with a custom header, or a cron line on any always-on box.
+//
+// Set up (production):
+//   1. Set CRON_SECRET in the Vercel project environment — a long random
+//      string. Without it this handler fails closed with 401, by design.
+//   2. Point the scheduler at it every 5 minutes:
+//        curl -X POST https://instroom.io/api/cron/post-detection //             -H "Authorization: Bearer $CRON_SECRET"
+//      A GET with the same header works too, for schedulers that only do GETs.
+//   3. Nothing else. The secret never reaches the browser: it is read only
+//      here, server-side.
+//
+// Polling faster than every 5 minutes is harmless but pointless —
+// runMonitoringPass only picks up settings whose last_synced_at is older than
+// MIN_POLL_INTERVAL_MS, so extra calls find nothing due and spend no quota.
+//
+// This works with zero user traffic and no browser session: the scheduler is
+// the only thing that has to be awake.
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Stateless by design: each invocation picks up whatever is due, so it resumes
@@ -53,7 +65,15 @@ function isAuthorized(req: NextRequest): boolean {
     return false
   }
   const header = req.headers.get("authorization")
-  return header === `Bearer ${secret}`
+  if (!header) return false
+
+  // Constant-time comparison so a wrong secret cannot be recovered by timing
+  // the responses. Lengths are compared first because timingSafeEqual throws
+  // on a length mismatch.
+  const expected = Buffer.from(`Bearer ${secret}`)
+  const provided = Buffer.from(header)
+  if (expected.length !== provided.length) return false
+  return timingSafeEqual(expected, provided)
 }
 
 async function handle(req: NextRequest) {

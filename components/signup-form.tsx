@@ -49,11 +49,15 @@ export function SignupForm({ ...props }: React.ComponentProps<typeof Card>) {
   const router = useRouter()
   const searchParams = useSearchParams()
   const invitationToken = searchParams.get("invitationToken")
-  
+  const plan = searchParams.get("plan")
+  const cycle = searchParams.get("cycle")
+  const onboardingUrl = plan
+    ? `/onboarding?plan=${encodeURIComponent(plan)}${cycle ? `&cycle=${encodeURIComponent(cycle)}` : ""}`
+    : "/onboarding"
+
   const [step, setStep] = useState<'form' | 'otp'>('form')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [needsEarlyAccess, setNeedsEarlyAccess] = useState(false)
   const [resendTimer, setResendTimer] = useState(0)
   const [formData, setFormData] = useState({
     name: "",
@@ -122,7 +126,6 @@ export function SignupForm({ ...props }: React.ComponentProps<typeof Card>) {
   const handleGenerateOTP = async (e: React.FormEvent) => {
     e.preventDefault()
     setError(null)
-    setNeedsEarlyAccess(false)
 
     if (!formData.name.trim()) {
       setError("Full name is required")
@@ -182,7 +185,6 @@ export function SignupForm({ ...props }: React.ComponentProps<typeof Card>) {
 
       if (!response.ok) {
         const data = await response.json()
-        if (data.requiresEarlyAccess) setNeedsEarlyAccess(true)
         throw new Error(data.error || "Failed to generate OTP")
       }
 
@@ -259,7 +261,7 @@ export function SignupForm({ ...props }: React.ComponentProps<typeof Card>) {
         }
       }
 
-      router.push("/onboarding")
+      router.push(onboardingUrl)
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred")
     } finally {
@@ -302,7 +304,7 @@ export function SignupForm({ ...props }: React.ComponentProps<typeof Card>) {
       // First, check if email already exists with email/password signup
       // We need to get the email from Google first or show an intermediate step
       // For now, proceed with Google signup and let the callback handle it
-      await signIn("google", { callbackUrl: "/onboarding" })
+      await signIn("google", { callbackUrl: onboardingUrl })
     } catch (err) {
       setError("Google signup failed. Please try again.")
     } finally {
@@ -328,14 +330,6 @@ export function SignupForm({ ...props }: React.ComponentProps<typeof Card>) {
           {error && (
             <div className="mb-2 rounded-lg border border-[#F4B740]/40 bg-[#F4B740]/8 p-1.5 text-xs sm:text-sm text-[#C87500]">
               {error}
-              {needsEarlyAccess && (
-                <>
-                  {" "}
-                  <Link href="/early-access" className="font-semibold underline hover:text-[#0F6B3E]">
-                    Request early access →
-                  </Link>
-                </>
-              )}
             </div>
           )}
           <form onSubmit={handleGenerateOTP}>

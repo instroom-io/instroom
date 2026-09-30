@@ -1,9 +1,12 @@
 import { prisma } from "@/lib/prisma"
+import { Prisma } from "@prisma/client"
 import { canAddInfluencer } from "@/lib/subscription-limits"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { logActivity } from "@/lib/activity-log"
 import { NextRequest, NextResponse } from "next/server"
+import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
+import { publicHandle } from "@/lib/influencer-draft"
 
 export async function GET(
   req: NextRequest,
@@ -19,6 +22,11 @@ export async function GET(
     const { searchParams } = new URL(req.url)
     const search = searchParams.get("search") || ""
     const unpartneredOnly = searchParams.get("unpartnered_only") === "true"
+    // Drafts are blank rows the user added in the Influencer List and has not
+    // filled in. Only that sheet has any use for them, and it is the only
+    // caller that opts in — every other consumer of this route (the Add Partner
+    // picker, the card list view) gets the default and never sees one.
+    const includeDrafts = searchParams.get("include_drafts") === "true"
 
     const brand = await prisma.brand.findUnique({ where: { id: brandId } })
     if (!brand) {
@@ -61,48 +69,34 @@ export async function GET(
       }
     }
 
-    const brandInfluencers = await prisma.brandInfluencer.findMany({
-      where: {
-        brand_id: brandId,
-        // Push the search filter down to the DB via the influencer relation
-        // when a caller supplies one, instead of always loading every row
-        // for the brand and filtering the full set in JS. No current caller
-        // passes `search`, so this is purely additive and changes nothing
-        // for existing behavior — it only narrows the query when used.
-        ...(search
-          ? {
-              influencer: {
-                OR: [
-                  { handle: { contains: search } },
-                  { full_name: { contains: search } },
-                  { niche: { contains: search } },
-                  { location: { contains: search } },
-                ],
-              },
-            }
-          : {}),
-      },
-      include: { attribution: true },
-      orderBy: { created_at: "desc" },
-    })
+    // brand_id + the caller's own filters, WITHOUT excluding any orphan — kept
+    // as its own object so the fallback below can reuse it unchanged and only
+    // add the exclusion, rather than the two queries drifting apart over time.
+    const brandInfluencerWhere = {
+      brand_id: brandId,
+      ...(includeDrafts ? {} : { influencer: { is_draft: false } }),
+      // Push the search filter down to the DB via the influencer relation
+      // when a caller supplies one, instead of always loading every row
+      // for the brand and filtering the full set in JS. No current caller
+      // passes `search`, so this is purely additive and changes nothing
+      // for existing behavior — it only narrows the query when used.
+      ...(search
+        ? {
+            influencer: {
+              OR: [
+                { handle: { contains: search } },
+                { full_name: { contains: search } },
+                { niche: { contains: search } },
+                { location: { contains: search } },
+              ],
+            },
+          }
+        : {}),
+    }
 
-    const influencerIds = [...new Set(brandInfluencers.map((bi) => bi.influencer_id))]
-
-    // Neither query depends on the other's result — both only depend on data
-    // already fetched above — so issue them concurrently instead of awaiting
-    // the partner lookup before starting the influencer lookup.
-    const [partnerRows, influencers] = await Promise.all([
-      unpartneredOnly
-        ? prisma.brandPartner.findMany({
-            where: { brand_id: brandId },
-            select: { brand_influencer_id: true },
-          })
-        : Promise.resolve([]),
-      // Fetch influencers so orphaned brand_influencer rows can be skipped safely.
-      // Tight select: only the fields the response below actually reads
-      // (skips e.g. verification_status/is_suspended, which aren't used here).
-      prisma.influencer.findMany({
-        where: { id: { in: influencerIds } },
+    const brandInfluencerInclude = {
+      attribution: true,
+      influencer: {
         select: {
           id: true,
           handle: true,
@@ -114,6 +108,7 @@ export async function GET(
           location: true,
           bio: true,
           profile_image_url: true,
+          is_draft: true,
           social_link: true,
           follower_count: true,
           engagement_rate: true,
@@ -123,14 +118,96 @@ export async function GET(
           created_at: true,
           updated_at: true,
         },
-      }),
-    ])
+      },
+    }
+
+    // The influencer is read through the relation rather than by a second
+    // findMany over the collected ids. Same tight field list as before — only
+    // what the response below reads — but one fewer database round trip, and
+    // so one fewer connection acquisition per request. That matters here: the
+    // MySQL user has a max_user_connections ceiling, and this is the heaviest
+    // route in the app, so it is the one that trips the ceiling first and
+    // surfaces as "Failed to load influencers".
+    //
+    // A row whose influencer_id no longer resolves is NOT quietly filtered
+    // below: `influencer` is a required relation, and MyISAM has no real FK
+    // (verified against this database — Influencer rows have gone missing
+    // while their BrandInfluencer link stayed behind), so Prisma cannot
+    // materialise it as `null` for that filter to catch. It instead refuses
+    // the WHOLE findMany with "Inconsistent query result: Field influencer is
+    // required to return data, got `null` instead" — one bad row taking down
+    // every influencer in the brand.
+    //
+    // Caught narrowly by MESSAGE, not by a broad catch that would also swallow
+    // a genuine fault. This is NOT a Prisma error code — reproduced directly
+    // against this database: Prisma reports it as a bare
+    // PrismaClientUnknownRequestError with `code: undefined`, so the message
+    // text is the only signal available to tell "a required relation is
+    // missing its row" apart from every other failure this query could have.
+    // On that one specific message, and nothing else, the same query runs once
+    // more excluding the specific influencer_id(s) found to be dangling — the
+    // rest of the brand's data is still real and still returned; nothing here
+    // creates, edits or removes any database row.
+    const isMissingRequiredRelationError = (err: unknown): boolean =>
+      err instanceof Prisma.PrismaClientUnknownRequestError &&
+      err.message.includes("Inconsistent query result") &&
+      err.message.includes("is required to return data")
+
+    let brandInfluencers
+    try {
+      brandInfluencers = await prisma.brandInfluencer.findMany({
+        where: brandInfluencerWhere,
+        include: brandInfluencerInclude,
+        orderBy: { created_at: "desc" },
+      })
+    } catch (err) {
+      if (!isMissingRequiredRelationError(err)) throw err
+
+      // Same query, id-only, so identifying WHICH influencer_id is dangling
+      // costs one narrow round trip rather than guessing or discarding the
+      // whole brand. is_draft is read here too — a draft's placeholder
+      // Influencer resolving fine means it isn't the dangling one.
+      const candidateIds = await prisma.brandInfluencer.findMany({
+        where: { brand_id: brandId },
+        select: { id: true, influencer_id: true },
+      })
+      const existingInfluencerIds = new Set(
+        (
+          await prisma.influencer.findMany({
+            where: { id: { in: candidateIds.map((c) => c.influencer_id) } },
+            select: { id: true },
+          })
+        ).map((i) => i.id)
+      )
+      const orphanIds = candidateIds
+        .filter((c) => !existingInfluencerIds.has(c.influencer_id))
+        .map((c) => c.id)
+
+      console.error(
+        `[GET /api/brand/${brandId}/influencers] excluded ${orphanIds.length} ` +
+          `BrandInfluencer row(s) whose Influencer no longer exists: ${orphanIds.join(", ")}`
+      )
+
+      brandInfluencers = await prisma.brandInfluencer.findMany({
+        where: { ...brandInfluencerWhere, id: { notIn: orphanIds } },
+        include: brandInfluencerInclude,
+        orderBy: { created_at: "desc" },
+      })
+    }
+
+    // Only asked for when the caller wants it; previously this sat in a
+    // Promise.all whose other branch was an already-resolved literal.
+    const partnerRows = unpartneredOnly
+      ? await prisma.brandPartner.findMany({
+          where: { brand_id: brandId },
+          select: { brand_influencer_id: true },
+        })
+      : []
 
     const partnerIds = new Set(partnerRows.map((partner) => partner.brand_influencer_id))
-    const influencerMap = new Map(influencers.map((i) => [i.id, i]))
 
     const filteredBrandInfluencers = brandInfluencers.filter((bi) => {
-      const inf = influencerMap.get(bi.influencer_id)
+      const inf = bi.influencer
       if (!inf) return false
       if (unpartneredOnly && partnerIds.has(bi.id)) return false
 
@@ -180,9 +257,9 @@ export async function GET(
     }
 
     const combined = filteredBrandInfluencers
-      .filter((bi) => influencerMap.has(bi.influencer_id))
+      .filter((bi) => bi.influencer !== null)
       .map((bi) => {
-        const inf = influencerMap.get(bi.influencer_id)!
+        const inf = bi.influencer!
         const addedLog = addedByMap.get(bi.id)
         const addedUser = addedLog ? userMap.get(addedLog.user_id) : null
 
@@ -213,6 +290,7 @@ export async function GET(
           internal_rating: bi.internal_rating ? bi.internal_rating.toString() : null,
           approval_status: bi.approval_status,
           approval_notes: bi.approval_notes,
+          decline_notes:  bi.decline_notes,
           transferred_date: bi.transferred_date?.toISOString() ?? null,
           affiliate_id: bi.attribution?.affiliate_id   ?? null,
           ref_code: bi.attribution?.ref_code           ?? null,
@@ -234,7 +312,11 @@ export async function GET(
             : null,
           influencer: {
             id: inf.id,
-            handle: inf.handle,
+            // A draft's stored handle is a generated placeholder that keeps it
+            // unique on @@unique([handle, platform]); the sheet must see the
+            // empty row the user actually added.
+            handle: publicHandle(inf.handle),
+            is_draft: inf.is_draft,
             platform: inf.platform,
             full_name: inf.full_name,
             email: inf.email,
@@ -257,13 +339,31 @@ export async function GET(
 
     return NextResponse.json({ influencers: combined }, { status: 200 })
   } catch (error) {
-    console.error(
-      "GET /api/brand/[brandId]/influencers:",
-      error instanceof Error ? error.message : String(error)
-    )
+    const message = error instanceof Error ? error.message : String(error)
+    console.error("GET /api/brand/[brandId]/influencers:", message)
+
+    // A database that is out of connections is a CAPACITY problem, not a broken
+    // request, and it clears on its own. Reporting it as 500 made the page show
+    // a dead-end "Failed to load influencers" for something a retry a moment
+    // later would have served.
+    //
+    // Two shapes reach here, from two different limits:
+    //   MySQL 1203  "User ... already has more than 'max_user_connections'
+    //               active connections" — the server-side ceiling on the DB
+    //               user, hit when a NEW connection is opened. Existing pooled
+    //               connections keep working, which is why this comes and goes.
+    //   Prisma P2024 pool timeout — DATABASE_URL's own connection_limit.
+    //
+    // 503 with Retry-After is what the client needs to tell "try again" from
+    // "this will never work"; the page renders a Retry button on this.
+    if (isDatabaseCapacityError(message)) {
+      return databaseCapacityResponse()
+    }
+
     return NextResponse.json({ error: "Failed to fetch influencers" }, { status: 500 })
   }
 }
+
 
 export async function POST(
   req: NextRequest,
@@ -317,18 +417,32 @@ export async function POST(
       return NextResponse.json({ error: "Influencer not found" }, { status: 404 })
     }
 
+    // The duplicate answer comes from the unique key, not from a separate read.
+    //
+    // `findUnique` then `create` is not atomic: two adds arriving together both
+    // saw no membership and both inserted, and the index then rejected the
+    // loser — a failure for what should have been a no-op. The upsert makes a
+    // repeat add idempotent, and a membership that was deleted earlier is
+    // recreated cleanly against the SAME global influencer.
+    //
+    // `update: {}` on purpose: an existing membership keeps its stage, status
+    // and history, so re-adding never resets someone's pipeline position.
     const existing = await prisma.brandInfluencer.findUnique({
       where: { brand_id_influencer_id: { brand_id: brandId, influencer_id } },
+      select: { id: true },
     })
     if (existing) {
+      // A REAL active duplicate — this influencer is on the list right now.
       return NextResponse.json(
-        { error: "This influencer is already added to your brand" },
+        { error: "This influencer is already in your list" },
         { status: 409 }
       )
     }
 
-    const brandInfluencer = await prisma.brandInfluencer.create({
-      data: { brand_id: brandId, influencer_id, contact_status: "not_contacted" },
+    const brandInfluencer = await prisma.brandInfluencer.upsert({
+      where: { brand_id_influencer_id: { brand_id: brandId, influencer_id } },
+      create: { brand_id: brandId, influencer_id, contact_status: "not_contacted" },
+      update: {},
       include: { influencer: true },
     })
 

@@ -4,6 +4,8 @@ import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 
 const GOAFFPRO_KEY = "goaffpro"
+const SHOPIFY_KEY = "shopify"
+const SUPPORTED_KEYS = [GOAFFPRO_KEY, SHOPIFY_KEY]
 
 export async function POST(req: NextRequest) {
   try {
@@ -14,7 +16,8 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json().catch(() => ({}))
-    if (body?.id !== "goaffpro") {
+    const integrationKey = body?.id as string | undefined
+    if (!integrationKey || !SUPPORTED_KEYS.includes(integrationKey)) {
       return NextResponse.json({ error: "Unsupported integration" }, { status: 400 })
     }
 
@@ -33,11 +36,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Brand not found" }, { status: 404 })
     }
 
+    // Soft disconnect — drops the encrypted secrets but keeps order history
+    // (GoAffProOrder / ShopifyOrder rows) intact for reconnection later.
     await prisma.integrationConnection.upsert({
-      where: { brand_id_integration_key: { brand_id: brandId, integration_key: GOAFFPRO_KEY } },
+      where: { brand_id_integration_key: { brand_id: brandId, integration_key: integrationKey } },
       create: {
         brand_id: brandId,
-        integration_key: GOAFFPRO_KEY,
+        integration_key: integrationKey,
         connected: false,
         connected_as: null,
         config: {
@@ -57,7 +62,7 @@ export async function POST(req: NextRequest) {
   } catch (error: any) {
     console.error("[POST /settings/integrations/disconnect]", error)
     return NextResponse.json(
-      { error: error?.message || "Failed to disconnect GoAffPro" },
+      { error: error?.message || "Failed to disconnect integration" },
       { status: 500 }
     )
   }

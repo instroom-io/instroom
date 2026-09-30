@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react"
 import { IconSearch } from "@tabler/icons-react"
+import { useCachedFetch } from "@/lib/data-cache"
 
 interface AdminCampaign {
   id: string
@@ -20,30 +21,37 @@ const STATUS_STYLE: Record<string, string> = {
 }
 
 export default function AdminCampaignsPage() {
-  const [rows, setRows] = useState<AdminCampaign[]>([])
   const [q, setQ] = useState("")
-  const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [editing, setEditing] = useState<AdminCampaign | null>(null)
   const [editName, setEditName] = useState("")
   const [editBudget, setEditBudget] = useState("")
 
-  const load = useCallback(async (query: string) => {
-    setLoading(true)
-    try {
-      const res = await fetch(`/api/admin/campaigns${query ? `?q=${encodeURIComponent(query)}` : ""}`)
-      const json = await res.json()
-      setRows(json.campaigns || [])
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => { load("") }, [load])
+  // Debounced query is part of the cache key: each search keeps its own entry,
+  // so re-running a search — or returning to this page — renders from cache.
+  const [query, setQuery] = useState("")
   useEffect(() => {
-    const t = setTimeout(() => load(q), 300)
+    const t = setTimeout(() => setQuery(q), 300)
     return () => clearTimeout(t)
-  }, [q, load])
+  }, [q])
+
+  const url = `/api/admin/campaigns${query ? `?q=${encodeURIComponent(query)}` : ""}`
+
+  const fetchCampaigns = useCallback(async () => {
+    const res = await fetch(url)
+    if (!res.ok) throw new Error(`Failed to load campaigns (${res.status})`)
+    return (await res.json()) as { campaigns?: AdminCampaign[] }
+  }, [url])
+
+  const { data, isLoading: loading, mutate } = useCachedFetch(url, fetchCampaigns)
+  const rows = data?.campaigns ?? []
+
+  const setRows = useCallback(
+    (updater: (prev: AdminCampaign[]) => AdminCampaign[]) => {
+      mutate({ campaigns: updater(rows) })
+    },
+    [mutate, rows]
+  )
 
   const applyStatus = async (id: string, action: "close" | "archive") => {
     setBusyId(id)

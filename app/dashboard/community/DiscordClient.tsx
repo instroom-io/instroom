@@ -18,6 +18,7 @@
 // lives in ./_discord/* so a poll tick re-renders as little as possible.
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react"
+import type { MouseEvent as ReactMouseEvent } from "react"
 import { useRouter } from "next/navigation"
 import { motion, AnimatePresence } from "framer-motion"
 import {
@@ -29,14 +30,17 @@ import {
 import { ChannelList } from "./_discord/ChannelList"
 import { MessageList } from "./_discord/MessageList"
 import { Composer, type PendingFile } from "./_discord/Composer"
+import { PollComposer, type NewPoll } from "./_discord/PollComposer"
 import { MemberList, type Presence } from "./_discord/MemberList"
 import { CommunitySkeleton } from "./_discord/CommunitySkeleton"
 import { rememberBrand } from "./_discord/ServerSwitcher"
 import { ConfirmDialog } from "./_discord/ConfirmDialog"
+import { ThreadPanel } from "./_discord/ThreadPanel"
 import { DiscordCta } from "./_discord/ui"
 import type { Channel, Message, Member } from "./_discord/types"
 import type { MentionResolver } from "./_discord/markdown"
 import { useUnread } from "./_discord/useUnread"
+import { getCachedData, useRestoredCache, setCachedData } from "@/lib/data-cache"
 
 const MESSAGE_POLL_MS = 5_000
 const CHANNEL_POLL_MS = 30_000
@@ -47,6 +51,21 @@ const TYPING_THROTTLE_MS = 8_000
 const RETURN_TO = encodeURIComponent("/dashboard/community")
 /** Starts the account link. Used by first-run setup, the gate, and Reconnect. */
 const ACCOUNT_LINK_URL = `/api/community/discord/oauth/start?returnTo=${RETURN_TO}`
+
+/**
+ * Where the authorization tab should come back to — the CURRENT url, query and
+ * all, exactly as the inbox builds it (`pathname + search`).
+ *
+ * RETURN_TO above is the bare "/dashboard/community" with no brandId, which
+ * lands the user on a page that has to re-pick a brand before it can mount
+ * DiscordClient — so the workspace they started in is not necessarily the one
+ * they come back to, and the ?discordLinked=1 verdict is dropped by that
+ * redirect. Carrying the current query through means Discord returns them to
+ * exactly the page they left.
+ */
+function currentReturnTo(): string {
+  return encodeURIComponent(window.location.pathname + window.location.search)
+}
 
 /* ── Setup progress ───────────────────────────────────────────────────────── */
 // Shows both steps at once — done, current, or pending — so the user can see
@@ -62,9 +81,11 @@ function StepProgress({
   serverDone: boolean
   accountDone: boolean
 }) {
+  // Account first: linking the account is what identifies the user in Discord,
+  // so it is the prerequisite the server step reads from.
   const steps = [
-    { n: 1, label: "Connect Discord Server", done: serverDone },
-    { n: 2, label: "Connect Discord Account", done: accountDone },
+    { n: 1, label: "Connect Discord Account", done: accountDone },
+    { n: 2, label: "Connect Discord Server", done: serverDone },
   ]
 
   return (
@@ -80,7 +101,7 @@ function StepProgress({
                   s.done
                     ? "bg-[#1FAE5B] text-white"
                     : isCurrent
-                      ? "bg-[#5865F2] text-white"
+                      ? "bg-[#0F6B3E] text-white"
                       : "bg-gray-100 text-gray-400"
                 }`}
               >
@@ -94,7 +115,7 @@ function StepProgress({
                 {s.label}
               </span>
             </div>
-            {i === 0 && <span aria-hidden className={`h-px w-6 ${serverDone ? "bg-[#1FAE5B]" : "bg-gray-200"}`} />}
+            {i === 0 && <span aria-hidden className={`h-px w-6 ${accountDone ? "bg-[#1FAE5B]" : "bg-gray-200"}`} />}
           </li>
         )
       })}
@@ -108,11 +129,20 @@ export function DiscordClient({ brandId }: { brandId: string }) {
   const base = `/api/brands/${encodeURIComponent(brandId)}/integrations/discord`
   const router = useRouter()
 
-  const [channels, setChannels] = useState<Channel[] | null>(null)
+  // Community data is seeded from the shared cache, so coming back to this page
+  // renders the last known channels / members / messages immediately while the
+  // existing polls refresh them in the background.
+  const [channels, setChannels] = useState<Channel[] | null>(
+    () => getCachedData<Channel[]>(`${base}/channels`) ?? null
+  )
   const [activeId, setActiveId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
-  const [members, setMembers] = useState<Member[]>([])
-  const [membersLoading, setMembersLoading] = useState(true)
+  const [members, setMembers] = useState<Member[]>(
+    () => getCachedData<Member[]>(`${base}/members`) ?? []
+  )
+  const [membersLoading, setMembersLoading] = useState(
+    () => getCachedData<Member[]>(`${base}/members`) === undefined
+  )
   const [membersError, setMembersError] = useState<string | null>(null)
   const [presenceById, setPresenceById] = useState<Record<string, Presence>>({})
   // Who is currently typing in the active channel.
@@ -131,6 +161,16 @@ export function DiscordClient({ brandId }: { brandId: string }) {
   const [files, setFiles] = useState<PendingFile[]>([])
   const [sending, setSending] = useState(false)
   const [replyTo, setReplyTo] = useState<Message | null>(null)
+  /** id of the message currently being edited in place, if any. */
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editDraft, setEditDraft] = useState("")
+  /** The open thread's own conversation view, or null when none is open. */
+  const [activeThread, setActiveThread] = useState<{ id: string; name: string; originMessage: Message } | null>(null)
+  /** Message awaiting delete confirmation — its own dialog, not the shared `confirm` union above, since it has to carry WHICH message. */
+  const [confirmDeleteMessage, setConfirmDeleteMessage] = useState<Message | null>(null)
+  const [deletingMessage, setDeletingMessage] = useState(false)
+  const [pollComposerOpen, setPollComposerOpen] = useState(false)
+  const [creatingPoll, setCreatingPoll] = useState(false)
   const [search, setSearch] = useState("")
   const [searchOpen, setSearchOpen] = useState(false)
   const [gate, setGate] = useState<{ code: string; error: string } | null>(null)
@@ -144,11 +184,13 @@ export function DiscordClient({ brandId }: { brandId: string }) {
     discordLinked: boolean
     /** Which Discord account is linked — shown in the account menu. */
     discordUsername: string | null
+    /** The `**DisplayName**: ` prefix this user's own sent messages carry. */
+    displayName: string | null
     botConfigured: boolean
     /** Last status request failed — state below is the last known good. */
     unreachable?: boolean
     lastError?: string | null
-  } | null>(null)
+  } | null>(() => getCachedData(`${base}/status`) ?? null)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const lastTypingRef = useRef(0)
@@ -193,6 +235,7 @@ export function DiscordClient({ brandId }: { brandId: string }) {
                 connection: null,
                 discordLinked: false,
                 discordUsername: null,
+                displayName: null,
                 // Unknown, not false — the button stays available.
                 botConfigured: true,
                 unreachable: true,
@@ -204,11 +247,22 @@ export function DiscordClient({ brandId }: { brandId: string }) {
 
       const data = await res.json()
       if (!aliveRef.current) return
+      setCachedData(`${base}/status`, {
+        connected: Boolean(data.connected),
+        connection: data.connection ?? null,
+        discordLinked: Boolean(data.discordLinked ?? data.accountLinked),
+        discordUsername: data.discordUsername ?? null,
+        displayName: data.displayName ?? null,
+        botConfigured: data.botConfigured !== false,
+        unreachable: false,
+        lastError: null,
+      })
       setStatus({
         connected: Boolean(data.connected),
         connection: data.connection ?? null,
         discordLinked: Boolean(data.discordLinked ?? data.accountLinked),
         discordUsername: data.discordUsername ?? null,
+        displayName: data.displayName ?? null,
         // Only an explicit `false` from a successful response counts as
         // unconfigured. A missing field means the server didn't say.
         botConfigured: data.botConfigured !== false,
@@ -226,6 +280,7 @@ export function DiscordClient({ brandId }: { brandId: string }) {
               connection: null,
               discordLinked: false,
               discordUsername: null,
+              displayName: null,
               botConfigured: true,
               unreachable: true,
               lastError: "Couldn't reach the server.",
@@ -255,15 +310,19 @@ export function DiscordClient({ brandId }: { brandId: string }) {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const connected = params.get("discordConnected")
+    const linked = params.get("discordLinked")
     const error = params.get("discordError")
     const cancelled = params.get("discordCancelled")
-    if (!connected && !error && !cancelled) return
+    if (!connected && !linked && !error && !cancelled) return
 
     if (connected) { showToast("Discord server connected"); loadStatus() }
+    else if (linked) { showToast("Discord account connected"); loadStatus() }
     else if (error) showToast(error)
     else showToast("Discord connection cancelled")
 
-    for (const k of ["discordConnected", "discordError", "discordCancelled"]) params.delete(k)
+    for (const k of ["discordConnected", "discordLinked", "discordError", "discordCancelled"]) {
+      params.delete(k)
+    }
     const qs = params.toString()
     window.history.replaceState({}, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -284,6 +343,7 @@ export function DiscordClient({ brandId }: { brandId: string }) {
       }
       setGate(null)
       const list: Channel[] = data.channels ?? []
+      setCachedData(`${base}/channels`, list)
       setChannels((prev) => {
         // Replace only on a real change, so the 30s channel poll doesn't
         // re-render the rail (and reset its collapse state) for nothing.
@@ -333,6 +393,7 @@ export function DiscordClient({ brandId }: { brandId: string }) {
           return
         }
         setMembersError(null)
+        setCachedData(`${base}/members`, data.members ?? [])
         setMembers(data.members ?? [])
         // Presence arrives only if a Gateway feed is supplying it. When the
         // route reports presenceAvailable:false the map stays empty and no
@@ -406,6 +467,7 @@ export function DiscordClient({ brandId }: { brandId: string }) {
         return merged
       })
       setHasMore(Boolean(data.hasMore))
+      setCachedData(`${base}/messages?channelId=${channelId}`, (data.messages ?? []) as Message[])
     } catch {
       /* transient — next tick retries */
     } finally {
@@ -413,18 +475,41 @@ export function DiscordClient({ brandId }: { brandId: string }) {
     }
   }, [base])
 
+  // Persisted payloads are handed over after mount: the initializers above read
+  // the cache during render, which must stay empty while React hydrates or the
+  // server's skeleton and the client's populated markup disagree. Every poll
+  // below still runs and refreshes these in the background.
+  useRestoredCache<Channel[]>(`${base}/channels`, (data) => {
+    setChannels((prev) => prev ?? data)
+  })
+  useRestoredCache<Member[]>(`${base}/members`, (data) => {
+    setMembers((prev) => (prev.length ? prev : data))
+    setMembersLoading(false)
+  })
+  useRestoredCache<any>(`${base}/status`, (data) => {
+    setStatus((prev) => prev ?? data)
+  })
+  // Keyed on the active channel, so switching channels promotes that channel's
+  // own persisted history before the effect below reads it.
+  useRestoredCache<Message[]>(
+    activeId ? `${base}/messages?channelId=${activeId}` : null,
+    (data) => { setMessages((prev) => (prev.length ? prev : data)) }
+  )
+
   useEffect(() => {
     if (!activeId) return
-    setMessages([])
+    const cachedMessages = getCachedData<Message[]>(`${base}/messages?channelId=${activeId}`)
+    setMessages(cachedMessages ?? [])
     setReplyTo(null)
     setSearch("")
     atBottomRef.current = true
-    loadMessages(activeId, true)
+    // Spinner only when this channel has nothing cached yet.
+    loadMessages(activeId, cachedMessages === undefined)
     const id = setInterval(() => {
       if (document.visibilityState === "visible") loadMessages(activeId, false)
     }, MESSAGE_POLL_MS)
     return () => clearInterval(id)
-  }, [activeId, loadMessages])
+  }, [activeId, loadMessages, base])
 
   // Auto-scroll only when already pinned to the bottom — otherwise reading
   // history would be yanked away every poll.
@@ -511,10 +596,47 @@ export function DiscordClient({ brandId }: { brandId: string }) {
   }, [])
 
   /* ── Send + typing ──────────────────────────────────────────────────────── */
+  /**
+   * Turn the human-readable "@DisplayName" the mention popup inserted into
+   * Discord's own `<@id>` syntax, which is what the composer stores and shows
+   * throughout typing — matching every other piece of text in the box.
+   *
+   * `sendMessage` in lib/discord/bot-provider already sets
+   * `allowed_mentions: { parse: ["users"] }`, so once the id lands in the
+   * outgoing content Discord notifies that user itself; nothing else has to.
+   *
+   * Matched against the CURRENT member list only, longest display name first,
+   * so "@Ann" cannot match inside a message meant for "@Annabelle" and a plain
+   * "@word" that names nobody on this brand is left as ordinary text rather
+   * than silently swallowed.
+   */
+  const encodeMentions = useCallback(
+    (text: string) => {
+      if (!members.length) return text
+      const byLength = [...members].sort((a, b) => b.displayName.length - a.displayName.length)
+      let out = text
+      for (const m of byLength) {
+        if (!m.displayName) continue
+        // Boundaries either side: whitespace/start and whitespace/punctuation/
+        // end, so "@Ann" only matches the whole name, never a prefix of it.
+        const escaped = m.displayName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+        const re = new RegExp(`(^|\\s)@${escaped}(?=$|\\s|[.,!?;:])`, "g")
+        out = out.replace(re, `$1<@${m.id}>`)
+      }
+      return out
+    },
+    [members]
+  )
+
   const send = useCallback(async () => {
-    const content = draft.trim()
+    // `draft` is what the box shows and what a failed send restores — always
+    // the human-readable "@DisplayName" form. `content` is only what goes over
+    // the wire; encoding happens once, here, so the composer itself never has
+    // to know Discord's mention syntax exists.
+    const typed = draft.trim()
+    const content = encodeMentions(typed)
     const attachments = files
-    if ((!content && attachments.length === 0) || !activeId || sending) return
+    if ((!typed && attachments.length === 0) || !activeId || sending) return
 
     setSending(true)
     setDraft("")
@@ -541,9 +663,11 @@ export function DiscordClient({ brandId }: { brandId: string }) {
 
       const data = await res.json()
       if (!res.ok) {
-        // Give the text back rather than losing it. Files can't be restored
-        // into an <input>, so the user is told explicitly.
-        setDraft(content)
+        // Give the text back rather than losing it — the ORIGINAL typed text,
+        // not the encoded wire form, so a retry still shows "@DisplayName"
+        // rather than a raw <@id>. Files can't be restored into an <input>,
+        // so the user is told explicitly.
+        setDraft(typed)
         if (replyTo) setReplyTo(replyTo)
         showToast(data.error ?? "Couldn't send")
         if (attachments.length > 0) showToast("Couldn't send — please re-attach your files.")
@@ -555,12 +679,12 @@ export function DiscordClient({ brandId }: { brandId: string }) {
       setMessages((prev) => (prev.some((m) => m.id === data.message.id) ? prev : [...prev, data.message]))
       atBottomRef.current = true
     } catch {
-      setDraft(content)
+      setDraft(typed)
       showToast("Couldn't send")
     } finally {
       setSending(false)
     }
-  }, [draft, files, activeId, sending, replyTo, base, showToast])
+  }, [draft, files, activeId, sending, replyTo, base, showToast, encodeMentions])
 
   const onDraftChange = useCallback((value: string) => {
     setDraft(value)
@@ -634,6 +758,238 @@ export function DiscordClient({ brandId }: { brandId: string }) {
     showToast("Message text copied")
   }, [showToast])
 
+  /* ── Edit ───────────────────────────────────────────────────────────────── */
+  // Own-message check on the client is a DISPLAY decision only — it decides
+  // whether the Edit/Delete buttons even render. The server re-derives and
+  // re-checks the identical thing (bot-provider's isOwnMessage) before either
+  // action is allowed to run, so this being wrong or stale can only hide a
+  // button a user was entitled to see, never grant one they weren't.
+  const isOwnMessage = useCallback(
+    (m: Message) => Boolean(m.authorIsBot) && Boolean(status?.displayName) && m.content.startsWith(`**${status?.displayName}**: `),
+    [status?.displayName]
+  )
+
+  const startEdit = useCallback((m: Message) => {
+    setEditingId(m.id)
+    setEditDraft(m.content.replace(/^\*\*[^*]+\*\*:\s/, ""))
+  }, [])
+
+  const cancelEdit = useCallback(() => {
+    setEditingId(null)
+    setEditDraft("")
+  }, [])
+
+  const submitEdit = useCallback(async () => {
+    if (!editingId || !activeId) return
+    const trimmed = editDraft.trim()
+    if (!trimmed) return
+
+    const messageId = editingId
+    const previous = messages.find((m) => m.id === messageId)
+    // Optimistic — the same pattern toggleReaction uses: applied immediately,
+    // rolled back only if the request actually fails.
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === messageId
+          ? { ...m, content: `${m.content.match(/^\*\*[^*]+\*\*:\s/)?.[0] ?? ""}${trimmed}`, editedAt: new Date().toISOString() }
+          : m
+      )
+    )
+    setEditingId(null)
+    setEditDraft("")
+
+    try {
+      const res = await fetch(`${base}/messages`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channelId: activeId, messageId, content: trimmed }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        if (previous) setMessages((prev) => prev.map((m) => (m.id === messageId ? previous : m)))
+        showToast(data.error ?? "Couldn't edit message")
+        return
+      }
+      // Reconciled from what Discord actually stored — matters if the server
+      // trimmed the content to Discord's 2000-char cap.
+      setMessages((prev) => prev.map((m) => (m.id === messageId ? data.message : m)))
+    } catch {
+      if (previous) setMessages((prev) => prev.map((m) => (m.id === messageId ? previous : m)))
+      showToast("Couldn't edit message")
+    }
+  }, [editingId, editDraft, activeId, messages, base, showToast])
+
+  /* ── Delete ─────────────────────────────────────────────────────────────── */
+  // Gated behind ConfirmDialog rather than optimistic-and-reversible like
+  // reactions/pins: unlike those, there is no toggling back — the message and
+  // whatever replies point at it are genuinely gone once this runs.
+  const confirmDeleteMessageHandler = useCallback(async () => {
+    const m = confirmDeleteMessage
+    if (!m || !activeId) return
+    setDeletingMessage(true)
+    try {
+      const res = await fetch(`${base}/messages`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channelId: activeId, messageId: m.id }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        showToast(data.error ?? "Couldn't delete message")
+        return
+      }
+      setMessages((prev) => prev.filter((x) => x.id !== m.id))
+      setConfirmDeleteMessage(null)
+    } catch {
+      showToast("Couldn't delete message")
+    } finally {
+      setDeletingMessage(false)
+    }
+  }, [confirmDeleteMessage, activeId, base, showToast])
+
+  /* ── Pin / unpin ────────────────────────────────────────────────────────── */
+  const togglePin = useCallback(
+    async (m: Message, on: boolean) => {
+      if (!activeId) return
+      setMessages((prev) => prev.map((x) => (x.id === m.id ? { ...x, pinned: on } : x)))
+
+      try {
+        const res = await fetch(`${base}/pins`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ channelId: activeId, messageId: m.id, on }),
+        })
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          setMessages((prev) => prev.map((x) => (x.id === m.id ? { ...x, pinned: !on } : x)))
+          showToast(data.error ?? "Couldn't update pin")
+        } else {
+          showToast(on ? "Message pinned" : "Message unpinned")
+        }
+      } catch {
+        setMessages((prev) => prev.map((x) => (x.id === m.id ? { ...x, pinned: !on } : x)))
+        showToast("Couldn't update pin")
+      }
+    },
+    [activeId, base, showToast]
+  )
+
+  /* ── Poll votes ─────────────────────────────────────────────────────────── */
+  // Optimistic, same pattern as togglePin/toggleReaction: the vote counts and
+  // this user's own picks are what the poll renders from, so applying the
+  // change locally first is what makes a vote feel instant. Rolled back only
+  // if the request actually fails.
+  const votePoll = useCallback(
+    async (m: Message, answerId: number, on: boolean) => {
+      if (!activeId || !m.poll) return
+      const previous = m
+
+      setMessages((prev) =>
+        prev.map((x) => {
+          if (x.id !== m.id || !x.poll) return x
+          // Single-select: turning ONE option on clears any other the user had.
+          const nextMyVotes = x.poll.allowMultiselect
+            ? on
+              ? [...x.myVotes.filter((id) => id !== answerId), answerId]
+              : x.myVotes.filter((id) => id !== answerId)
+            : on
+              ? [answerId]
+              : []
+          const delta = (id: number) =>
+            (nextMyVotes.includes(id) ? 1 : 0) - (x.myVotes.includes(id) ? 1 : 0)
+          const options = x.poll.options.map((o) => ({ ...o, count: Math.max(0, o.count + delta(o.answerId)) }))
+          return {
+            ...x,
+            myVotes: nextMyVotes,
+            poll: { ...x.poll, options, totalVotes: options.reduce((sum, o) => sum + o.count, 0) },
+          }
+        })
+      )
+
+      try {
+        const res = await fetch(`${base}/polls/votes`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ channelId: activeId, messageId: m.id, answerId, on }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          setMessages((prev) => prev.map((x) => (x.id === m.id ? previous : x)))
+          showToast(data.error ?? "Couldn't update your vote")
+          return
+        }
+        // Reconciled from the server's own tally rather than trusted from the
+        // optimistic guess above — the source of truth for counts is
+        // CommunityPollVote, and another user's vote could have landed between
+        // this request going out and its response coming back.
+        setMessages((prev) =>
+          prev.map((x) => (x.id === m.id && x.poll ? { ...x, myVotes: data.myVotes ?? x.myVotes } : x))
+        )
+      } catch {
+        setMessages((prev) => prev.map((x) => (x.id === m.id ? previous : x)))
+        showToast("Couldn't update your vote")
+      }
+    },
+    [activeId, base, showToast]
+  )
+
+  /* ── Threads ────────────────────────────────────────────────────────────── */
+  // Not optimistic — a real thread id from Discord is what the "own
+  // conversation view" opens against, and there is nothing sensible to show
+  // before that id exists.
+  const startThread = useCallback(
+    async (m: Message) => {
+      if (!activeId) return
+      try {
+        const res = await fetch(`${base}/threads`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ channelId: activeId, messageId: m.id }),
+        })
+        const data = await res.json()
+        if (!res.ok) {
+          showToast(data.error ?? "Couldn't create thread")
+          return
+        }
+        setMessages((prev) => prev.map((x) => (x.id === m.id ? { ...x, thread: data.thread } : x)))
+        setActiveThread({ id: data.thread.id, name: data.thread.name, originMessage: m })
+      } catch {
+        showToast("Couldn't create thread")
+      }
+    },
+    [activeId, base, showToast]
+  )
+
+  /* ── Polls ──────────────────────────────────────────────────────────────── */
+  // Not optimistic, same reasoning as startThread: a poll's answer_ids come
+  // from Discord and there is nothing sensible to render before they exist.
+  const createPoll = useCallback(
+    async (poll: NewPoll) => {
+      if (!activeId) return
+      setCreatingPoll(true)
+      try {
+        const res = await fetch(`${base}/polls`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ channelId: activeId, ...poll }),
+        })
+        const data = await res.json()
+        if (!res.ok) {
+          showToast(data.error ?? "Couldn't create poll")
+          return
+        }
+        setMessages((prev) => (prev.some((m) => m.id === data.message.id) ? prev : [...prev, data.message]))
+        atBottomRef.current = true
+        setPollComposerOpen(false)
+      } catch {
+        showToast("Couldn't create poll")
+      } finally {
+        setCreatingPoll(false)
+      }
+    },
+    [activeId, base, showToast]
+  )
+
   const selectChannel = useCallback((id: string) => {
     setActiveId(id)
     setChannelsOpen(false)
@@ -673,7 +1029,7 @@ export function DiscordClient({ brandId }: { brandId: string }) {
   // Discord account is untouched. Both are reversible from the setup screen,
   // which is what the confirmation copy promises.
 
-  const [confirm, setConfirm] = useState<null | "server" | "account">(null)
+  const [confirm, setConfirm] = useState<null | "server" | "account" | "all">(null)
   const [working, setWorking] = useState(false)
 
   /** Drop everything from the old connection so the setup screen isn't drawn
@@ -732,6 +1088,53 @@ export function DiscordClient({ brandId }: { brandId: string }) {
     }
   }, [loadStatus, resetClientState, showToast])
 
+  /**
+   * Log out of both at once.
+   *
+   * Calls the SAME two routes the individual actions call — no new endpoint and
+   * no second copy of the disconnect logic. This action only sequences them and
+   * reports one combined outcome.
+   *
+   * Run together rather than one-then-the-other: they are independent
+   * (`.../disconnect` authorizes on brand membership via guardBrand, not on the
+   * Discord link), so neither ordering can make the other fail.
+   *
+   * Both halves are reported even when one fails, because a partial result is
+   * exactly what the user needs to know — and `loadStatus` runs either way, so
+   * the UI reflects whatever actually happened instead of assuming both worked.
+   */
+  const logoutAll = useCallback(async () => {
+    setWorking(true)
+    try {
+      const attempt = async (url: string, label: string): Promise<string | null> => {
+        try {
+          const res = await fetch(url, { method: "DELETE" })
+          if (res.ok) return null
+          const data = await res.json().catch(() => ({}))
+          return (data.error as string | undefined) ?? `Couldn't disconnect the Discord ${label}`
+        } catch {
+          return `Couldn't disconnect the Discord ${label}`
+        }
+      }
+
+      const [serverError, accountError] = await Promise.all([
+        attempt(`${base}/disconnect`, "server"),
+        attempt("/api/community/discord/account", "account"),
+      ])
+
+      setConfirm(null)
+      resetClientState()
+      // Re-read rather than assuming: this is what returns the UI to the setup
+      // screen at step 1, and it also picks up a half-completed logout.
+      await loadStatus()
+
+      const failures = [serverError, accountError].filter((e): e is string => Boolean(e))
+      showToast(failures.length === 0 ? "Logged out of Discord" : failures.join(" · "))
+    } finally {
+      setWorking(false)
+    }
+  }, [base, loadStatus, resetClientState, showToast])
+
   const reconnectAccount = useCallback(() => {
     // Same entry point as first-time linking — prompt=consent makes Discord
     // show the account chooser rather than silently re-linking the same one.
@@ -776,7 +1179,7 @@ export function DiscordClient({ brandId }: { brandId: string }) {
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: 12 }}
-          className="fixed bottom-6 left-1/2 z-[70] max-w-[90vw] -translate-x-1/2 rounded-lg bg-gray-900 px-4 py-2 text-[12px] text-white shadow-lg"
+          className="fixed bottom-6 right-4 z-[70] max-w-[calc(100vw-2rem)] rounded-lg bg-gray-900 px-4 py-2 text-[12px] text-white shadow-lg sm:right-6"
           role="status"
         >
           {toast}
@@ -801,8 +1204,14 @@ export function DiscordClient({ brandId }: { brandId: string }) {
   // itself when a step completes (the 4s status poll above), so there is never
   // a "now refresh the page" moment.
   if (!setupComplete) {
-    const step = !status.connected ? 1 : 2
+    // Step 1 is the account link; the server step unlocks only once it is done.
+    const step = !status.discordLinked ? 1 : 2
     const botMissing = status.connection?.status === "bot_missing"
+    // Same URL construction as before, except returnTo now carries this page's
+    // brandId so the authorization tab lands on a page that actually mounts
+    // DiscordClient and can therefore close itself.
+    const serverInstallUrl = `/api/community/discord/install?brandId=${encodeURIComponent(brandId)}&returnTo=${currentReturnTo()}`
+    const accountLinkUrl = `/api/community/discord/oauth/start?returnTo=${currentReturnTo()}`
 
     return (
       // Fades/rises in so arriving here by disconnecting reads as a transition
@@ -814,7 +1223,9 @@ export function DiscordClient({ brandId }: { brandId: string }) {
         className="flex flex-col items-center justify-center gap-5 rounded-xl border border-gray-100 bg-white px-6 py-16 text-center"
       >
         {toastEl}
-        <StepProgress current={step} serverDone={status.connected} accountDone={status.discordLinked} />
+        <div data-tour="community-setup-progress">
+          <StepProgress current={step} serverDone={status.connected} accountDone={status.discordLinked} />
+        </div>
 
         <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#5865F2]">
           <IconBrandDiscord size={28} className="text-white" />
@@ -822,9 +1233,35 @@ export function DiscordClient({ brandId }: { brandId: string }) {
 
         {step === 1 ? (
           <>
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-1.5" data-tour="community-setup-heading">
+              <h2 className="text-[16px] font-semibold text-gray-900">No Discord account connected.</h2>
+              <p className="max-w-md text-[13px] leading-relaxed text-gray-500">
+                Start by linking your own Discord account. It&apos;s how we know who you are in Discord, so we can show
+                you exactly the channels you have access to — and nothing you don&apos;t.
+              </p>
+            </div>
+            {status.botConfigured ? (
+              <DiscordCta
+                href={accountLinkUrl}
+                icon={<IconLink size={16} />}
+                dataTour="community-connect-server"
+              >
+                Connect Discord Account
+              </DiscordCta>
+            ) : (
+              <p className="rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+                Discord isn&apos;t configured on this deployment yet. Ask an administrator to set it up.
+              </p>
+            )}
+            <p className="max-w-sm text-[11px] leading-relaxed text-gray-400">
+              We only read your Discord username and your roles. We never post as you.
+            </p>
+          </>
+        ) : (
+          <>
+            <div className="flex flex-col gap-1.5" data-tour="community-setup-heading">
               <h2 className="text-[16px] font-semibold text-gray-900">
-                {botMissing ? "Finish connecting your Discord server" : "No Discord server connected."}
+                {botMissing ? "Finish connecting your Discord server" : "Connect your Discord server"}
               </h2>
               <p className="max-w-md text-[13px] leading-relaxed text-gray-500">
                 {botMissing
@@ -834,8 +1271,8 @@ export function DiscordClient({ brandId }: { brandId: string }) {
             </div>
             {status.botConfigured ? (
               <DiscordCta
-                href={`/api/community/discord/install?brandId=${encodeURIComponent(brandId)}&returnTo=${RETURN_TO}`}
-                icon={<IconBrandDiscord size={17} />}
+                href={serverInstallUrl}
+                dataTour="community-connect-server"
               >
                 {botMissing ? "Authorize Instroom Bot" : "Connect Discord Server"}
               </DiscordCta>
@@ -846,23 +1283,6 @@ export function DiscordClient({ brandId }: { brandId: string }) {
             )}
             <p className="max-w-sm text-[11px] leading-relaxed text-gray-400">
               You&apos;ll pick your server on Discord and authorize the Instroom bot.
-            </p>
-          </>
-        ) : (
-          <>
-            <div className="flex flex-col gap-1.5">
-              <h2 className="text-[16px] font-semibold text-gray-900">Connect your Discord account</h2>
-              <p className="max-w-md text-[13px] leading-relaxed text-gray-500">
-                <span className="font-medium text-gray-700">{status.connection?.guildName ?? "Your server"}</span> is
-                connected. Now link your own Discord account so we can show you exactly the channels you have access
-                to — and nothing you don&apos;t.
-              </p>
-            </div>
-            <DiscordCta href={ACCOUNT_LINK_URL} icon={<IconLink size={16} />}>
-              Connect Discord Account
-            </DiscordCta>
-            <p className="max-w-sm text-[11px] leading-relaxed text-gray-400">
-              We only read your Discord username and your roles in this server. We never post as you.
             </p>
           </>
         )}
@@ -918,6 +1338,7 @@ export function DiscordClient({ brandId }: { brandId: string }) {
       onDisconnectServer={() => setConfirm("server")}
       onReconnectAccount={reconnectAccount}
       onLogoutAccount={() => setConfirm("account")}
+      onLogoutAll={() => setConfirm("all")}
     />
   )
 
@@ -1100,6 +1521,20 @@ export function DiscordClient({ brandId }: { brandId: string }) {
           onToggleReaction={toggleReaction}
           onCopyLink={copyLink}
           onCopyText={copyText}
+          isOwnMessage={isOwnMessage}
+          onEdit={startEdit}
+          onDelete={setConfirmDeleteMessage}
+          onTogglePin={togglePin}
+          onStartThread={startThread}
+          onOpenThread={(m) =>
+            m.thread && setActiveThread({ id: m.thread.id, name: m.thread.name, originMessage: m })
+          }
+          onVote={votePoll}
+          editingId={editingId}
+          editDraft={editDraft}
+          onEditDraftChange={setEditDraft}
+          onSubmitEdit={submitEdit}
+          onCancelEdit={cancelEdit}
         />
 
         <Composer
@@ -1110,11 +1545,13 @@ export function DiscordClient({ brandId }: { brandId: string }) {
           files={files}
           replyTo={replyTo}
           typingNames={typingNames}
+          members={members}
           onDraftChange={onDraftChange}
           onAddFiles={addFiles}
           onRemoveFile={removeFile}
           onCancelReply={() => setReplyTo(null)}
           onSend={send}
+          onOpenPollComposer={active?.canSend ? () => setPollComposerOpen(true) : undefined}
         />
       </main>
 
@@ -1148,6 +1585,28 @@ export function DiscordClient({ brandId }: { brandId: string }) {
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {activeThread && (
+          <ThreadPanel
+            base={base}
+            threadId={activeThread.id}
+            threadName={activeThread.name}
+            originMessage={activeThread.originMessage}
+            resolve={resolve}
+            onClose={() => setActiveThread(null)}
+            showToast={showToast}
+          />
+        )}
+      </AnimatePresence>
+
+      <PollComposer
+        open={pollComposerOpen}
+        channelName={active?.name ?? null}
+        busy={creatingPoll}
+        onSubmit={createPoll}
+        onCancel={() => setPollComposerOpen(false)}
+      />
+
       <ConfirmDialog
         open={confirm === "server"}
         title="Disconnect Discord Server?"
@@ -1168,6 +1627,28 @@ export function DiscordClient({ brandId }: { brandId: string }) {
         busy={working}
         onConfirm={logoutAccount}
         onCancel={() => setConfirm(null)}
+      />
+
+      <ConfirmDialog
+        open={confirm === "all"}
+        title="Log out all Discord connections?"
+        body="This disconnects both your Discord account and this workspace's Discord server, returning Community to first-run setup. Removing the server affects everyone in this workspace. Nothing changes in Discord itself, and you can reconnect both at any time."
+        confirmLabel="Log Out All"
+        busyLabel="Logging out…"
+        busy={working}
+        onConfirm={logoutAll}
+        onCancel={() => setConfirm(null)}
+      />
+
+      <ConfirmDialog
+        open={confirmDeleteMessage !== null}
+        title="Delete message?"
+        body="This permanently deletes the message from Discord. This cannot be undone."
+        confirmLabel="Delete"
+        busyLabel="Deleting…"
+        busy={deletingMessage}
+        onConfirm={confirmDeleteMessageHandler}
+        onCancel={() => setConfirmDeleteMessage(null)}
       />
     </div>
   )

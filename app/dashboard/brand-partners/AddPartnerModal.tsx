@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react"
 import { useBrandTaxonomy } from "@/hooks/useBrandTaxonomy"
+import { IconSearch, IconX, IconArrowRight, IconCheck } from "@tabler/icons-react"
 
 interface AddPartnerModalProps {
   isOpen: boolean
@@ -307,7 +308,7 @@ export default function AddPartnerModal({ isOpen, onClose, brandId, onAdded }: A
               color: "#888", cursor: "pointer",
             }}
           >
-            ✕
+            <IconX size={11} />
           </button>
         </div>
       )}
@@ -329,7 +330,9 @@ export default function AddPartnerModal({ isOpen, onClose, brandId, onAdded }: A
             <div style={{ fontSize: 15, fontWeight: 600 }}>Add Brand Partner</div>
             <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>Promote brand influencers to Brand Partners or add manually</div>
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, color: "#888", cursor: "pointer" }}>×</button>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "#888", cursor: "pointer", display: "flex", padding: 0 }}>
+            <IconX size={18} />
+          </button>
         </div>
 
         {/* Mode toggle */}
@@ -337,7 +340,7 @@ export default function AddPartnerModal({ isOpen, onClose, brandId, onAdded }: A
           <div style={{ display: "flex", gap: 8, background: "#f7f9f8", padding: 4, borderRadius: 10 }}>
             {(["search", "manual"] as const).map(m => (
               <button key={m} onClick={() => setMode(m)} style={{ flex: 1, padding: "8px 12px", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 500, fontFamily: "inherit", background: mode === m ? "#fff" : "transparent", color: mode === m ? "#1FAE5B" : "#555", boxShadow: mode === m ? "0 1px 3px rgba(0,0,0,0.1)" : "none" }}>
-                {m === "search" ? "🔍 Search influencer list" : "✏️ Add manually"}
+                {m === "search" ? "Search influencer list" : "Add manually"}
               </button>
             ))}
           </div>
@@ -352,7 +355,9 @@ export default function AddPartnerModal({ isOpen, onClose, brandId, onAdded }: A
 
             {/* Search input */}
             <div style={{ position: "relative" }}>
-              <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "#aaa" }}>🔍</span>
+              <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "#aaa", display: "flex" }}>
+                <IconSearch size={13} />
+              </span>
               <input style={{ ...fs, paddingLeft: 30 }} placeholder="Search…" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
             </div>
 
@@ -367,7 +372,7 @@ export default function AddPartnerModal({ isOpen, onClose, brandId, onAdded }: A
               ) : results.map(inf => (
                 <div key={inf.id} onClick={() => toggle(inf.id)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", cursor: "pointer", background: selectedIds.has(inf.id) ? "#f0faf5" : "transparent", borderBottom: "0.5px solid rgba(0,0,0,0.04)" }}>
                   <div style={{ width: 18, height: 18, borderRadius: 4, flexShrink: 0, border: `1.5px solid ${selectedIds.has(inf.id) ? "#1FAE5B" : "#ccc"}`, background: selectedIds.has(inf.id) ? "#1FAE5B" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#fff" }}>
-                    {selectedIds.has(inf.id) ? "✓" : ""}
+                    {selectedIds.has(inf.id) ? <IconCheck size={11} /> : null}
                   </div>
                   <div>
                     <div style={{ fontWeight: 500, fontSize: 12 }}>@{inf.influencer.handle}</div>
@@ -487,16 +492,23 @@ export default function AddPartnerModal({ isOpen, onClose, brandId, onAdded }: A
             </div>
           </>)}
 
-          {errMsg  && <div style={{ padding: "8px 12px", background: "#fdecea", border: "0.5px solid #E24B4A", borderRadius: 8, fontSize: 12, color: "#a32d2d" }}>⚠ {errMsg}</div>}
-          {success && <div style={{ padding: "8px 12px", background: "#e6f9ee", border: "0.5px solid #1FAE5B", borderRadius: 8, fontSize: 12, color: "#0F6B3E" }}>✓ Partner added successfully!</div>}
+          {errMsg  && <div style={{ padding: "8px 12px", background: "#fdecea", border: "0.5px solid #E24B4A", borderRadius: 8, fontSize: 12, color: "#a32d2d" }}>{errMsg}</div>}
+          {success && <div style={{ padding: "8px 12px", background: "#e6f9ee", border: "0.5px solid #1FAE5B", borderRadius: 8, fontSize: 12, color: "#0F6B3E" }}>Partner added successfully</div>}
         </div>
 
-        {/* Footer */}
-        <div style={{ padding: "14px 20px", borderTop: "0.5px solid rgba(0,0,0,0.08)", display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          <button onClick={onClose} style={{ fontSize: 11, padding: "6px 14px", borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.2)", background: "transparent", color: "#555", cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
-          <button onClick={handleSave} disabled={saving || success} style={{ fontSize: 11, padding: "6px 16px", borderRadius: 8, border: "none", background: saving || success ? "#aaa" : "#1FAE5B", color: "#fff", cursor: saving || success ? "not-allowed" : "pointer", fontFamily: "inherit", fontWeight: 500 }}>
-            {saving ? "Saving…" : success ? "✓ Saved!" : "+ Add as Brand Partner"}
-          </button>
+        {/* Footer — caption on the left, actions on the right, as in the
+            Collaboration Type ("Deal Agreed") modal. */}
+        <div style={{ padding: "14px 20px", borderTop: "0.5px solid rgba(0,0,0,0.08)", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+          <span style={{ fontSize: 11, color: "#aaa" }}>
+            This adds the influencer as a Brand Partner and moves them to Brand Partners
+          </span>
+          <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
+            <button onClick={onClose} style={{ fontSize: 11, padding: "6px 14px", borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.2)", background: "transparent", color: "#555", cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+            <button onClick={handleSave} disabled={saving || success} style={{ fontSize: 11, padding: "6px 16px", borderRadius: 8, border: "none", background: saving || success ? "#aaa" : "#1FAE5B", color: "#fff", cursor: saving || success ? "not-allowed" : "pointer", fontFamily: "inherit", fontWeight: 500, display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+              <IconArrowRight size={13} />
+              {saving ? "Saving…" : success ? "Saved" : "Add as Brand Partner"}
+            </button>
+          </div>
         </div>
       </div>
     </div>

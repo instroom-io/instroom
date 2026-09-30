@@ -1,7 +1,8 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback } from "react"
 import { useSession } from "next-auth/react"
+import { useCachedFetch } from "@/lib/data-cache"
 
 interface SubscriptionData {
   id: string
@@ -26,50 +27,35 @@ export interface SubscriptionStatus {
   error: string | null
 }
 
-export function useSubscriptionStatus() {
+const FALLBACK: Omit<SubscriptionStatus, "loading" | "error"> = {
+  status: "free",
+  subscription: null,
+  isExpired: false,
+  isExpiringSoon: false,
+  daysUntilExpiry: null,
+}
+
+export function useSubscriptionStatus(): SubscriptionStatus {
   const { data: session } = useSession()
-  const [subscriptionStatus, setSubscriptionStatus] = useState<SubscriptionStatus>({
-    status: "free",
-    subscription: null,
-    isExpired: false,
-    isExpiringSoon: false,
-    daysUntilExpiry: null,
-    loading: true,
-    error: null,
-  })
+  const userId = session?.user?.id
 
-  useEffect(() => {
-    if (!session?.user?.id) {
-      setSubscriptionStatus((prev) => ({ ...prev, loading: false }))
-      return
-    }
+  const fetcher = useCallback(async () => {
+    const response = await fetch("/api/subscription/status")
+    if (!response.ok) throw new Error("Failed to fetch subscription status")
+    return (await response.json()) as Omit<SubscriptionStatus, "loading" | "error">
+  }, [])
 
-    const fetchSubscriptionStatus = async () => {
-      try {
-        const response = await fetch("/api/subscription/status")
-        
-        if (!response.ok) {
-          throw new Error("Failed to fetch subscription status")
-        }
+  // Cached per user: the provider mounts on every page, so without this the
+  // status was refetched on each navigation.
+  const { data, error, isLoading } = useCachedFetch(
+    userId ? `/api/subscription/status?user=${userId}` : null,
+    fetcher
+  )
 
-        const data = await response.json()
-        setSubscriptionStatus({
-          ...data,
-          loading: false,
-          error: null,
-        })
-      } catch (error) {
-        console.error("Error fetching subscription status:", error)
-        setSubscriptionStatus((prev) => ({
-          ...prev,
-          loading: false,
-          error: error instanceof Error ? error.message : "Unknown error",
-        }))
-      }
-    }
-
-    fetchSubscriptionStatus()
-  }, [session?.user?.id])
-
-  return subscriptionStatus
+  return {
+    ...FALLBACK,
+    ...(data ?? {}),
+    loading: Boolean(userId) && isLoading,
+    error,
+  }
 }

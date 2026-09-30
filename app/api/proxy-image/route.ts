@@ -34,7 +34,26 @@ export async function GET(req: NextRequest) {
       },
     })
 
-    if (!response.ok) return new NextResponse("Failed", { status: response.status })
+    if (!response.ok) {
+      // Normalised to 404 rather than forwarding the CDN's status.
+      //
+      // Instagram/TikTok avatar URLs are time-signed, so an expired one answers
+      // 403 and a rotated one 404 — neither is a failure of THIS route, and
+      // forwarding a 5xx made an upstream expiry look like our own server error
+      // in monitoring. 404 is what it actually is: the image is not available.
+      //
+      // Still an error status, deliberately: ProfilePicture's onError is what
+      // swaps in the influencer's initials, and that fallback is better than a
+      // blank circle. Returning 200 with a placeholder pixel would suppress it.
+      //
+      // Cached briefly so a whole table of expired avatars does not re-request
+      // on every render, but not so long that a re-signed url stays hidden.
+      console.warn(`[proxy-image] upstream ${response.status} for ${new URL(url).host}`)
+      return new NextResponse(null, {
+        status: 404,
+        headers: { "Cache-Control": "public, max-age=300" },
+      })
+    }
 
     const contentType = response.headers.get("content-type") || "image/jpeg"
     const buffer = await response.arrayBuffer()

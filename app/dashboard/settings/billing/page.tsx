@@ -13,8 +13,17 @@ import {
 } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 import { SettingsSkeleton } from "@/components/shared/skeletons"
+import { fetchCached, getCachedData, useRestoredCache } from "@/lib/data-cache"
 
 type PaymentMethod = {
   cardBrand: string | null
@@ -30,42 +39,87 @@ type PaymentRecord = {
   description: string | null
   invoice_url: string | null
   created_at: string
+  eligibleForRefund: boolean
+  refundRequestStatus: "pending" | "approved" | "denied" | null
 }
 
 export default function BillingPage() {
   const { data: session, status } = useSession()
   const router = useRouter()
 
-  const [subscription, setSubscription] = useState<any>(null)
-  const [subscriptionLoaded, setSubscriptionLoaded] = useState(false)
-  const [brandCount, setBrandCount] = useState<number>(0)
+  const cachedCheck = session?.user?.id
+    ? getCachedData<any>(`/api/subscription/check?user=${session.user.id}`)
+    : undefined
+
+  const [subscription, setSubscription] = useState<any>(cachedCheck?.subscription ?? null)
+  const [subscriptionLoaded, setSubscriptionLoaded] = useState(cachedCheck !== undefined)
+  // Seeded from the shared cache — a revisit renders the real figures rather
+  // than the "loading" placeholders while they revalidate.
+  const cachedUsage = getCachedData<{ brandCount?: number }>("/api/user/brand-usage")
+  const cachedMethod = getCachedData<{ paymentMethod: PaymentMethod | null }>("/api/subscription/payment-method")
+  const cachedHistory = getCachedData<{ payments?: PaymentRecord[] }>("/api/subscription/payment-history")
+
+  const [brandCount, setBrandCount] = useState<number>(cachedUsage?.brandCount ?? 0)
   const [cancelling, setCancelling] = useState(false)
   const [confirmCancel, setConfirmCancel] = useState(false)
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null)
 
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(null)
-  const [paymentMethodLoaded, setPaymentMethodLoaded] = useState(false)
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(
+    cachedMethod?.paymentMethod ?? null
+  )
+  const [paymentMethodLoaded, setPaymentMethodLoaded] = useState(cachedMethod !== undefined)
 
-  const [payments, setPayments] = useState<PaymentRecord[]>([])
-  const [paymentsLoaded, setPaymentsLoaded] = useState(false)
+  const [payments, setPayments] = useState<PaymentRecord[]>(cachedHistory?.payments ?? [])
+  const [paymentsLoaded, setPaymentsLoaded] = useState(cachedHistory !== undefined)
+
+  const [refundDialogPayment, setRefundDialogPayment] = useState<PaymentRecord | null>(null)
+  const [refundReason, setRefundReason] = useState("")
+  const [submittingRefund, setSubmittingRefund] = useState(false)
 
   const showToast = (message: string, type: "success" | "error") => {
     setToast({ message, type })
     setTimeout(() => setToast(null), 3500)
   }
 
-  const fetchSubscription = () => {
-    if (!session?.user?.id) return
-    fetch("/api/subscription/check", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: session.user.id }),
-    })
-      .then((r) => r.json())
+  // The check is a read; caching it per user keeps the plan card populated
+  // across navigations. `force` is used after a cancellation, which must show
+  // the server's new answer rather than the cached one.
+  const subscriptionKey = session?.user?.id
+    ? `/api/subscription/check?user=${session.user.id}`
+    : null
+
+  const fetchSubscription = (force = false) => {
+    if (!session?.user?.id || !subscriptionKey) return
+    fetchCached<any>(subscriptionKey, async () => {
+      const r = await fetch("/api/subscription/check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: session.user.id }),
+      })
+      if (!r.ok) throw new Error(`Request failed (${r.status})`)
+      return r.json()
+    }, { force })
       .then((d) => setSubscription(d.subscription))
       .catch(() => {})
       .finally(() => setSubscriptionLoaded(true))
   }
+
+  // Persisted payloads arrive after mount — the initializers above must keep
+  // returning undefined during hydration, or the server's placeholders and the
+  // client's real figures disagree. Each existing fetch below still runs.
+  useRestoredCache<any>(
+    subscriptionKey,
+    (data) => { setSubscription(data?.subscription ?? null); setSubscriptionLoaded(true) }
+  )
+  useRestoredCache<{ brandCount?: number }>("/api/user/brand-usage", (data) => {
+    setBrandCount(data?.brandCount ?? 0)
+  })
+  useRestoredCache<{ paymentMethod: PaymentMethod | null }>("/api/subscription/payment-method", (data) => {
+    setPaymentMethod(data?.paymentMethod ?? null); setPaymentMethodLoaded(true)
+  })
+  useRestoredCache<{ payments?: PaymentRecord[] }>("/api/subscription/payment-history", (data) => {
+    setPayments(data?.payments ?? []); setPaymentsLoaded(true)
+  })
 
   useEffect(() => {
     if (status === "unauthenticated") {
@@ -78,16 +132,22 @@ export default function BillingPage() {
 
   useEffect(() => {
     if (!session?.user?.id) return
-    fetch("/api/user/brand-usage")
-      .then((r) => r.json())
+    fetchCached<any>("/api/user/brand-usage", async () => {
+      const r = await fetch("/api/user/brand-usage")
+      if (!r.ok) throw new Error(`Request failed (${r.status})`)
+      return r.json()
+    })
       .then((d) => setBrandCount(d.brandCount || 0))
       .catch(() => {})
   }, [session?.user?.id])
 
   useEffect(() => {
     if (!session?.user?.id) return
-    fetch("/api/subscription/payment-method")
-      .then((r) => r.json())
+    fetchCached<any>("/api/subscription/payment-method", async () => {
+      const r = await fetch("/api/subscription/payment-method")
+      if (!r.ok) throw new Error(`Request failed (${r.status})`)
+      return r.json()
+    })
       .then((d) => setPaymentMethod(d.paymentMethod))
       .catch(() => setPaymentMethod(null))
       .finally(() => setPaymentMethodLoaded(true))
@@ -95,8 +155,11 @@ export default function BillingPage() {
 
   useEffect(() => {
     if (!session?.user?.id) return
-    fetch("/api/subscription/payment-history")
-      .then((r) => r.json())
+    fetchCached<any>("/api/subscription/payment-history", async () => {
+      const r = await fetch("/api/subscription/payment-history")
+      if (!r.ok) throw new Error(`Request failed (${r.status})`)
+      return r.json()
+    })
       .then((d) => setPayments(d.payments || []))
       .catch(() => setPayments([]))
       .finally(() => setPaymentsLoaded(true))
@@ -134,12 +197,40 @@ export default function BillingPage() {
       if (!res.ok) throw new Error(data.error || "Failed to cancel subscription")
       showToast("Subscription cancelled. You'll retain access until the period ends.", "success")
       setConfirmCancel(false)
-      fetchSubscription()
+      fetchSubscription(true)
     } catch (err: any) {
       showToast(err.message || "Something went wrong", "error")
       setConfirmCancel(false)
     } finally {
       setCancelling(false)
+    }
+  }
+
+  async function submitRefundRequest() {
+    if (!refundDialogPayment) return
+    setSubmittingRefund(true)
+    try {
+      const res = await fetch("/api/subscription/refund-request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paymentHistoryId: refundDialogPayment.id, reason: refundReason }),
+      })
+      if (res.ok) {
+        const paidId = refundDialogPayment.id
+        setPayments((prev) =>
+          prev.map((x) => (x.id === paidId ? { ...x, refundRequestStatus: "pending" } : x))
+        )
+        showToast("Refund request submitted.", "success")
+        setRefundDialogPayment(null)
+        setRefundReason("")
+      } else {
+        const data = await res.json().catch(() => ({}))
+        showToast(data.error || "Could not submit refund request.", "error")
+      }
+    } catch {
+      showToast("Could not submit refund request.", "error")
+    } finally {
+      setSubmittingRefund(false)
     }
   }
 
@@ -418,7 +509,7 @@ export default function BillingPage() {
                         >
                           {p.status}
                         </span>
-                        {p.invoice_url ? (
+                        {p.invoice_url && (
                           <a
                             href={p.invoice_url}
                             target="_blank"
@@ -427,7 +518,31 @@ export default function BillingPage() {
                           >
                             View
                           </a>
-                        ) : (
+                        )}
+                        {p.refundRequestStatus === "pending" && (
+                          <span className="rounded-md px-2 py-1 text-xs font-medium bg-amber-50 text-amber-700">
+                            Refund requested
+                          </span>
+                        )}
+                        {p.refundRequestStatus === "approved" && (
+                          <span className="rounded-md px-2 py-1 text-xs font-medium bg-emerald-50 text-emerald-700">
+                            Refund approved
+                          </span>
+                        )}
+                        {p.refundRequestStatus === "denied" && (
+                          <span className="rounded-md px-2 py-1 text-xs font-medium bg-gray-100 text-gray-600">
+                            Refund denied
+                          </span>
+                        )}
+                        {p.eligibleForRefund && !p.refundRequestStatus && (
+                          <button
+                            onClick={() => { setRefundDialogPayment(p); setRefundReason("") }}
+                            className="rounded-md border border-emerald-200 px-2 py-1 text-xs font-medium bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:border-emerald-300 transition-colors"
+                          >
+                            Request refund
+                          </button>
+                        )}
+                        {!p.invoice_url && !p.refundRequestStatus && !p.eligibleForRefund && (
                           <span className="w-8" />
                         )}
                       </div>
@@ -437,6 +552,39 @@ export default function BillingPage() {
               )}
             </CardContent>
           </Card>
+
+          <Dialog
+            open={!!refundDialogPayment}
+            onOpenChange={(open) => { if (!open) { setRefundDialogPayment(null); setRefundReason("") } }}
+          >
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Request a refund</DialogTitle>
+                <DialogDescription>
+                  Refunds are reviewed manually and typically decided within 5 business days.
+                </DialogDescription>
+              </DialogHeader>
+              <textarea
+                value={refundReason}
+                onChange={(e) => setRefundReason(e.target.value)}
+                placeholder="Tell us why you're requesting a refund"
+                rows={4}
+                className="w-full rounded-lg border border-input px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-600/20 focus:border-emerald-600"
+              />
+              <DialogFooter>
+                <Button variant="outline" onClick={() => { setRefundDialogPayment(null); setRefundReason("") }}>
+                  Cancel
+                </Button>
+                <Button
+                  onClick={submitRefundRequest}
+                  disabled={submittingRefund || refundReason.trim().length < 10}
+                  className="bg-[#15803d] text-white hover:bg-[#166534]"
+                >
+                  {submittingRefund ? "Submitting…" : "Submit request"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </>
       )}
     </div>

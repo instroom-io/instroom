@@ -1,66 +1,21 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
-import { prisma } from "@/lib/prisma"
+import { getUserSignatureHtml, plainTextBodyToHtml } from "@/lib/signature"
+import { autoMarkContactedOnSend } from "@/lib/pipeline"
+import { getGmailAccessToken, sanitizeFilename } from "@/lib/gmail"
 
-// ─── Token helper ─────────────────────────────────────────────────────────────
+// Vercel Serverless Functions cap request bodies well under Gmail's own
+// ~25MB attachment limit, so that's the real binding constraint here.
+const MAX_TOTAL_ATTACHMENT_BYTES = 4 * 1024 * 1024
 
-async function getAccessToken(session: any): Promise<string | null> {
-  if (session.accessToken) return session.accessToken
-
-  const userId = session.user?.id
-  if (!userId) return null
-
-  const account = await prisma.account.findFirst({
-    where: { userId, provider: "google" },
-    select: { access_token: true, refresh_token: true, expires_at: true },
-  })
-
-  if (!account?.access_token) return null
-
-  const isExpired = account.expires_at
-    ? Date.now() > account.expires_at * 1000
-    : false
-
-  if (isExpired && account.refresh_token) {
-    return refreshToken(account.refresh_token, userId)
-  }
-
-  return account.access_token
-}
-
-async function refreshToken(refresh_token: string, userId: string): Promise<string | null> {
-  try {
-    const res = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: process.env.GOOGLE_CLIENT_ID!,
-        client_secret: process.env.GOOGLE_CLIENT_SECRET!,
-        grant_type: "refresh_token",
-        refresh_token,
-      }),
-    })
-    const data = await res.json()
-    if (!res.ok || !data.access_token) return null
-
-    await prisma.account.updateMany({
-      where: { userId, provider: "google" },
-      data: {
-        access_token: data.access_token,
-        expires_at: data.expires_in
-          ? Math.floor(Date.now() / 1000) + data.expires_in
-          : null,
-      },
-    })
-
-    return data.access_token
-  } catch {
-    return null
-  }
-}
+type Attachment = { filename: string; mimeType: string; data: Buffer }
 
 // ─── Build RFC 2822 email message ─────────────────────────────────────────────
+
+function wrapBase64(base64: string): string {
+  return base64.replace(/.{1,76}/g, "$&\r\n").trim()
+}
 
 function buildRawEmail({
   to,
@@ -69,6 +24,9 @@ function buildRawEmail({
   body,
   threadId,
   inReplyTo,
+  signatureHtml,
+  isHtmlBody = false,
+  attachments = [],
 }: {
   to: string
   from: string
@@ -76,21 +34,80 @@ function buildRawEmail({
   body: string
   threadId?: string
   inReplyTo?: string
+  signatureHtml?: string | null
+  isHtmlBody?: boolean
+  attachments?: Attachment[]
 }): string {
   const replySubject = subject.startsWith("Re:") ? subject : `Re: ${subject}`
 
-  const lines = [
+  // The body itself already has real HTML when it came from the rich compose
+  // editor (isHtmlBody) — running it through plainTextBodyToHtml would
+  // double-escape it. Plain-text callers (reply box) are unaffected since
+  // they never set isHtmlBody.
+  let bodyContentType: string
+  let bodyText: string
+  if (isHtmlBody) {
+    bodyContentType = "text/html"
+    bodyText = body + (signatureHtml ?? "")
+  } else if (signatureHtml) {
+    bodyContentType = "text/html"
+    bodyText = plainTextBodyToHtml(body) + signatureHtml
+  } else {
+    bodyContentType = "text/plain"
+    bodyText = body
+  }
+
+  const headerLines = [
     `From: ${from}`,
     `To: ${to}`,
     `Subject: ${replySubject}`,
-    `Content-Type: text/plain; charset="UTF-8"`,
     `MIME-Version: 1.0`,
     ...(inReplyTo ? [`In-Reply-To: ${inReplyTo}`] : []),
-    ``,
-    body,
   ]
 
-  const raw = lines.join("\r\n")
+  if (attachments.length === 0) {
+    const lines = [
+      ...headerLines,
+      `Content-Type: ${bodyContentType}; charset="UTF-8"`,
+      ``,
+      bodyText,
+    ]
+    return encodeRaw(lines.join("\r\n"))
+  }
+
+  const boundary = `----=_Part_${crypto.randomUUID()}`
+  const lines = [
+    ...headerLines,
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    ``,
+    `--${boundary}`,
+    `Content-Type: ${bodyContentType}; charset="UTF-8"`,
+    ``,
+    bodyText,
+    ``,
+  ]
+
+  for (const att of attachments) {
+    lines.push(
+      `--${boundary}`,
+      `Content-Type: ${att.mimeType || "application/octet-stream"}; name="${sanitizeFilename(att.filename)}"`,
+      `Content-Disposition: attachment; filename="${sanitizeFilename(att.filename)}"`,
+      `Content-Transfer-Encoding: base64`,
+      ``,
+      wrapBase64(att.data.toString("base64")),
+      ``
+    )
+  }
+  lines.push(`--${boundary}--`)
+
+  return encodeRaw(lines.join("\r\n"))
+}
+
+/** The OUTER base64url pass — runs once over the whole already-built raw
+ *  message for Gmail's `raw` field. Separate from (and unrelated to) the
+ *  per-attachment base64 wrapping above, which is an RFC 2045 requirement for
+ *  the inner MIME parts themselves. */
+function encodeRaw(raw: string): string {
   return Buffer.from(raw)
     .toString("base64")
     .replace(/\+/g, "-")
@@ -107,7 +124,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
 
-  const accessToken = await getAccessToken(session)
+  const accessToken = await getGmailAccessToken(session.user?.id)
 
   if (!accessToken) {
     return NextResponse.json(
@@ -116,14 +133,69 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  const { to, from, subject, body, threadId, inReplyTo } = await req.json()
+  let to: string, from: string | undefined, subject: string | undefined, body: string
+  let threadId: string | undefined, inReplyTo: string | undefined, brandId: string | undefined
+  let isHtmlBody = false
+  let includeSignature = true
+  const attachments: Attachment[] = []
+
+  const contentType = req.headers.get("content-type") || ""
+  if (contentType.includes("multipart/form-data")) {
+    // Compose or reply, whenever attachments are attached.
+    const form = await req.formData()
+    to = String(form.get("to") || "")
+    subject = String(form.get("subject") || "")
+    body = String(form.get("body") || "")
+    brandId = form.get("brandId") ? String(form.get("brandId")) : undefined
+    threadId = form.get("threadId") ? String(form.get("threadId")) : undefined
+    isHtmlBody = form.get("isHtmlBody") === "true"
+    includeSignature = form.get("includeSignature") !== "false"
+
+    const files = form.getAll("attachments").filter((v): v is File => v instanceof File)
+    const totalBytes = files.reduce((sum, f) => sum + f.size, 0)
+    if (totalBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
+      return NextResponse.json(
+        { error: `Attachments must total under ${Math.round(MAX_TOTAL_ATTACHMENT_BYTES / (1024 * 1024))}MB` },
+        { status: 400 }
+      )
+    }
+    for (const file of files) {
+      attachments.push({
+        filename: file.name,
+        mimeType: file.type || "application/octet-stream",
+        data: Buffer.from(await file.arrayBuffer()),
+      })
+    }
+  } else {
+    const jsonBody = await req.json()
+    to = jsonBody.to
+    from = jsonBody.from
+    subject = jsonBody.subject
+    body = jsonBody.body
+    threadId = jsonBody.threadId
+    inReplyTo = jsonBody.inReplyTo
+    brandId = jsonBody.brandId
+    isHtmlBody = Boolean(jsonBody.isHtmlBody)
+    includeSignature = jsonBody.includeSignature !== false
+  }
 
   if (!to || !body) {
     return NextResponse.json({ error: "Missing required fields: to, body" }, { status: 400 })
   }
 
   try {
-    const raw = buildRawEmail({ to, from, subject: subject || "", body, threadId, inReplyTo })
+    const signatureHtml = includeSignature ? await getUserSignatureHtml(session.user.id) : null
+    const raw = buildRawEmail({
+      to,
+      from: from || "",
+      subject: subject || "",
+      body,
+      threadId,
+      inReplyTo,
+      signatureHtml,
+      isHtmlBody,
+      attachments,
+    })
 
     const payload: any = { raw }
     if (threadId) payload.threadId = threadId
@@ -143,6 +215,13 @@ export async function POST(req: NextRequest) {
     }
 
     const sent = await sendRes.json()
+
+    try {
+      await autoMarkContactedOnSend(brandId, to)
+    } catch (err) {
+      console.error("Auto-advance to Contacted failed:", err)
+    }
+
     return NextResponse.json({ success: true, messageId: sent.id })
   } catch (err: any) {
     console.error("Gmail send error:", err)

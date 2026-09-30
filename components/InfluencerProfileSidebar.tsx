@@ -2,6 +2,10 @@
 
 import { useState, useEffect } from "react"
 import { EmailModal } from "@/components/shared/email-modal"
+import { ProfilePicture } from "@/components/table-sheet/ui-atoms"
+import { getProfileUrl } from "@/components/table-sheet/utils"
+import { DeclineModal } from "@/components/shared/decline-modal"
+import { allowedTransitions } from "@/lib/pipeline-transitions"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface MonthlyData {
@@ -48,9 +52,17 @@ export interface Partner {
   brandInfluencerId?: string
   brandId?: string
   email?: string | null
+  /**
+   * The influencer's stored avatar — the permanent Cloudinary URL the
+   * Influencer List saves on the Influencer record. Read straight from the
+   * pipeline payload; nothing is uploaded or re-fetched here.
+   */
+  profileImageUrl?: string | null
   /** Collaboration Type — same value persisted in product_details.campaignType,
    *  shared with the Pipeline board and Post Tracker so all three stay in sync. */
   collabType?: string
+  /** Basic tab's free-text notes — BrandInfluencer.notes. */
+  notes?: string
 }
 
 interface Deliverable { name: string; posted: boolean }
@@ -204,7 +216,8 @@ export function HistoryTab({ brandId, biId }: { brandId?: string; biId?: string 
 }
 
 // ─── LastEditedBy — compact "who touched this last" strip for the Basic tab ───
-function LastEditedBy({ brandId, biId }: { brandId?: string; biId?: string }) {
+// Exported: Post Tracker's Basic tab reuses this, same as HistoryTab below.
+export function LastEditedBy({ brandId, biId }: { brandId?: string; biId?: string }) {
   const [log, setLog]         = useState<ActivityLog | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -228,23 +241,6 @@ function LastEditedBy({ brandId, biId }: { brandId?: string; biId?: string }) {
     </div>
   )
 }
-
-// ─── NI Reasons ───────────────────────────────────────────────────────────────
-const NI_REASONS = [
-  { r: "Fee too low / unpaid",                  bucket: "hard", color: "#E24B4A" },
-  { r: "Brief too scripted",                    bucket: "hard", color: "#E8724A" },
-  { r: "Won't allow content reuse",             bucket: "hard", color: "#F4A240" },
-  { r: "Working with a competitor",             bucket: "hard", color: "#C97B3A" },
-  { r: "Product doesn't fit their brand",       bucket: "hard", color: "#888780" },
-  { r: "Wrong audience fit",                    bucket: "hard", color: "#6B7F7A" },
-  { r: "Seen bad reviews about us",             bucket: "hard", color: "#A32D2D" },
-  { r: "Fully booked",                          bucket: "soft", color: "#2C8EC4" },
-  { r: "Temporarily unavailable / can't shoot", bucket: "soft", color: "#5BAFD4" },
-  { r: "Can't ship to their location",          bucket: "soft", color: "#7DC4E4" },
-  { r: "Ghosted / no longer active",            bucket: "soft", color: "#B4B2A9" },
-  { r: "Rate / deadline too tight",             bucket: "soft", color: "#F4B740" },
-  { r: "Others",                                bucket: "hard", color: "#D3D1C7" },
-]
 
 // ─── Collaboration Types (from DTC "Final clean list") ────────────────────────
 const COLLAB_TYPES = [
@@ -284,134 +280,6 @@ const COLLAB_COLORS: Record<string, { bg: string; color: string; border: string 
 }
 
 // ─── NI Modal ────────────────────────────────────────────────────────────────
-function NIModal({
-  partnerName,
-  handle,
-  profileImageUrl,
-  onConfirm,
-  onCancel,
-}: {
-  partnerName:      string
-  handle:           string
-  profileImageUrl?: string | null
-  onConfirm:        (reason: string) => void
-  onCancel:         () => void
-}) {
-  const [sel, setSel] = useState<string | null>(null)
-  const hard     = NI_REASONS.filter((r) => r.bucket === "hard")
-  const soft     = NI_REASONS.filter((r) => r.bucket === "soft")
-  const initials = partnerName.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()
-
-  return (
-    <div
-      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 600, display: "flex", alignItems: "center", justifyContent: "center" }}
-      onClick={onCancel}
-    >
-      <div
-        style={{ background: "#fff", borderRadius: 16, boxShadow: "0 20px 60px rgba(0,0,0,0.2)", width: 780, maxWidth: "95vw", maxHeight: "90vh", overflowY: "auto", fontFamily: "'Inter',system-ui,sans-serif" }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", padding: "24px 28px 16px", borderBottom: "1px solid #f3f4f6" }}>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: "#111827" }}>Mark as not interested</div>
-            <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 3 }}>Select the reason why this influencer declined or is not moving forward.</div>
-          </div>
-          <button onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#9ca3af", lineHeight: 1, padding: 4 }}>✕</button>
-        </div>
-
-        {/* Influencer info */}
-        <div style={{ padding: "20px 28px 0" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, background: "#f9fafb", borderRadius: 12, padding: "12px 16px", border: "1px solid #f3f4f6" }}>
-            {profileImageUrl ? (
-              <img src={profileImageUrl} alt={partnerName} style={{ width: 36, height: 36, borderRadius: "50%", objectFit: "cover" }} />
-            ) : (
-              <div style={{ width: 36, height: 36, borderRadius: "50%", background: "#fee2e2", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, color: "#dc2626" }}>
-                {initials}
-              </div>
-            )}
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#111827" }}>{partnerName}</div>
-              <div style={{ fontSize: 12, color: "#9ca3af" }}>{handle}</div>
-            </div>
-          </div>
-        </div>
-
-        {/* Reasons grid */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px", padding: "20px 28px 12px" }}>
-          {/* Hard pass */}
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-              <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "#b91c1c" }}>Hard pass</span>
-              <span style={{ fontSize: 10, color: "#9ca3af" }}>— don't reach out soon</span>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {hard.map((reason) => (
-                <button key={reason.r} onClick={() => setSel(reason.r)}
-                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderRadius: 12, border: sel === reason.r ? "1.5px solid #f87171" : "1px solid #f3f4f6", background: sel === reason.r ? "#fef2f2" : "#fff", cursor: "pointer", textAlign: "left", transition: "all .15s" }}>
-                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: reason.color, flexShrink: 0 }} />
-                  <span style={{ fontSize: 13, color: "#374151", flex: 1, lineHeight: 1.4 }}>{reason.r}</span>
-                  {sel === reason.r && (
-                    <span style={{ width: 16, height: 16, borderRadius: "50%", background: "#ef4444", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                      <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 4L3.2 5.7L6.5 2.3" stroke="white" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Soft pass */}
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-              <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "#1d4ed8" }}>Soft pass</span>
-              <span style={{ fontSize: 10, color: "#9ca3af" }}>— follow up next campaign</span>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {soft.map((reason) => (
-                <button key={reason.r} onClick={() => setSel(reason.r)}
-                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderRadius: 12, border: sel === reason.r ? "1.5px solid #93c5fd" : "1px solid #f3f4f6", background: sel === reason.r ? "#eff6ff" : "#fff", cursor: "pointer", textAlign: "left", transition: "all .15s" }}>
-                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: reason.color, flexShrink: 0 }} />
-                  <span style={{ fontSize: 13, color: "#374151", flex: 1, lineHeight: 1.4 }}>{reason.r}</span>
-                  {sel === reason.r && (
-                    <span style={{ width: 16, height: 16, borderRadius: "50%", background: "#3b82f6", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                      <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 4L3.2 5.7L6.5 2.3" stroke="white" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-
-            {sel && (
-              <div style={{ marginTop: 12, padding: "10px 14px", background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6" }}>
-                <div style={{ fontSize: 10, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 2 }}>Selected reason</div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>{sel}</div>
-                <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
-                  {NI_REASONS.find((r) => r.r === sel)?.bucket === "soft"
-                    ? "This influencer can be re-approached in a future campaign."
-                    : "This influencer should not be contacted again soon."}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "16px 28px", borderTop: "1px solid #f3f4f6" }}>
-          <button onClick={onCancel}
-            style={{ padding: "8px 16px", fontSize: 13, color: "#6b7280", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, cursor: "pointer", fontFamily: "inherit" }}>
-            Cancel
-          </button>
-          <button onClick={() => sel && onConfirm(sel)} disabled={!sel}
-            style={{ padding: "8px 20px", fontSize: 13, fontWeight: 600, color: "#fff", background: sel ? "#ef4444" : "#fca5a5", border: "none", borderRadius: 8, cursor: sel ? "pointer" : "not-allowed", fontFamily: "inherit", transition: "background .15s" }}>
-            Confirm
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function formatMoney(v: number) { return "$" + Math.round(v).toLocaleString() }
 function formatROAS(rev: number, spend: number) { return spend > 0 ? (rev / spend).toFixed(1) + "x" : "—" }
@@ -426,14 +294,7 @@ function fmt(n: number | null | undefined): string {
   return String(num)
 }
 
-const PIPELINE_STAGES = [
-  "For Outreach",
-  "Contacted",
-  "In Conversation",
-  "Deal Agreed",
-  "For Order Creation",
-  "Not Interested",
-]
+
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function InfluencerProfileSidebar({
@@ -448,7 +309,7 @@ export default function InfluencerProfileSidebar({
   campaigns:                Campaign[]
   allPartners:              Partner[]
   onClose:                  () => void
-  onPipelineStatusChange?:  (biId: string, newStatus: string, niReason?: string) => void
+  onPipelineStatusChange?:  (biId: string, newStatus: string, niReason?: string, declineNotes?: string) => void
   /** Optional: called when collab type is changed, so parent can persist the value */
   onCollabTypeChange?:      (biId: string, newType: string) => void
 }) {
@@ -464,13 +325,25 @@ export default function InfluencerProfileSidebar({
   const [prevStatus,     setPrevStatus]     = useState(partner.commSt || "For Outreach")
   const [showEmailModal, setShowEmailModal] = useState(false)
 
+  // Follow the persisted stage whenever it changes underneath this panel.
+  //
+  // The dropdown sets `pipelineStatus` optimistically so it responds instantly,
+  // but the parent is the one that actually persists the move, and it can end
+  // up somewhere other than what was picked: moving to Deal Agreed opens a
+  // collaboration-type modal that the user can cancel, and any write can fail
+  // and roll back. Without this the dropdown would keep displaying a stage the
+  // record never reached. Re-syncing from the parent's value also keeps the
+  // panel correct when the same influencer is moved from the board behind it.
+  useEffect(() => {
+    const persisted = partner.commSt || "For Outreach"
+    setPipelineStatus(persisted)
+    setPrevStatus(persisted)
+  }, [partner.commSt])
+
   const [orderData, setOrderData] = useState({
-    firstName: partner.firstName, lastName: partner.lastName, contactNumber: "",
-    productName: "", orderNumber: "", productCost: "",
     discountCode: partner.coupon || partner.ref_code || "CODE" + partner.firstName.toUpperCase(),
     affiliateLink: partner.affiliate_link || "https://instroom.io/ref/" + partner.firstName.toLowerCase(),
     sparkAds: partner.spark_ads || "",
-    shippingAddress: "", trackingLink: "",
   })
   const [attributionSaveState, setAttributionSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle")
   const [attributionSaveMessage, setAttributionSaveMessage] = useState<string | null>(null)
@@ -489,29 +362,45 @@ export default function InfluencerProfileSidebar({
           sparkAds: orderData.sparkAds || null,
         }),
       })
-      if (!res.ok) throw new Error("Failed to save")
+      if (!res.ok) throw new Error("Failed to update")
       const json = await res.json()
       setAttributionSaveState("saved")
       if (json.goAffPro?.synced === false && json.goAffPro?.reason) {
-        setAttributionSaveMessage(`Saved — GoAffPro sync skipped: ${json.goAffPro.reason}`)
+        setAttributionSaveMessage(`Updated — GoAffPro sync skipped: ${json.goAffPro.reason}`)
       } else if (json.goAffPro?.synced) {
-        setAttributionSaveMessage("Saved and synced to GoAffPro")
+        setAttributionSaveMessage("Updated and synced to GoAffPro")
       }
     } catch {
       setAttributionSaveState("error")
-      setAttributionSaveMessage("Failed to save")
+      setAttributionSaveMessage("Failed to update")
     } finally {
       setTimeout(() => setAttributionSaveState("idle"), 3000)
     }
   }
-  const [postData, setPostData] = useState({
-    postLink: "", likes: "", sales: "", driveLink: "",
-    comments: "", amount: "", usageRights: "", views: "", clicks: "",
-  })
 
-  const tier    = partner.tierOverride || autoTier(partner.rev)
-  const postCVR = postData.clicks && parseFloat(postData.clicks) > 0
-    ? ((parseFloat(postData.sales || "0") / parseFloat(postData.clicks)) * 100).toFixed(2) + "%" : ""
+  // Notes uses the same pipeline route the Stage/Collaboration Type dropdowns use.
+  const [notesValue, setNotesValue] = useState(partner.notes ?? "")
+  const [notesSaveState, setNotesSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle")
+
+  const handleNotesSave = async () => {
+    if (!partner.brandId || !partner.brandInfluencerId) return
+    setNotesSaveState("saving")
+    try {
+      const res = await fetch(`/api/brand/${partner.brandId}/pipeline/${partner.brandInfluencerId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notes: notesValue }),
+      })
+      if (!res.ok) throw new Error("Failed to update")
+      setNotesSaveState("saved")
+    } catch {
+      setNotesSaveState("error")
+    } finally {
+      setTimeout(() => setNotesSaveState("idle"), 3000)
+    }
+  }
+
+  const tier = partner.tierOverride || autoTier(partner.rev)
 
   const now  = new Date("2026-04-01")
   const bday = partner.birthday ? new Date(partner.birthday) : null
@@ -533,7 +422,8 @@ export default function InfluencerProfileSidebar({
   const engRate     = partner.engagement_rate != null ? `${partner.engagement_rate}%`
                     : partner.eng != null ? `${partner.eng}%` : "—"
 
-  const TABS = ["Basic", "Order", "Attribution", "Post", "Stats", "History"]
+  // Order and Post tabs removed — never worked; the real version is in Post Tracker.
+  const TABS = ["Basic", "Attribution", "Stats", "History"]
 
   const collabColors = COLLAB_COLORS[collabType] ?? { bg: "#f9fafb", color: "#374151", border: "#e5e7eb" }
 
@@ -558,11 +448,11 @@ export default function InfluencerProfileSidebar({
     }
   }
 
-  const handleNIConfirm = (reason: string) => {
+  const handleNIConfirm = (reason: string, declineNotes?: string) => {
     setShowNIModal(false)
     setPipelineStatus("Not Interested")
     if (onPipelineStatusChange && partner.brandInfluencerId) {
-      onPipelineStatusChange(partner.brandInfluencerId, "Not Interested", reason)
+      onPipelineStatusChange(partner.brandInfluencerId, "Not Interested", reason, declineNotes)
     }
   }
 
@@ -581,10 +471,10 @@ export default function InfluencerProfileSidebar({
 
       {/* ── NI Modal ── */}
       {showNIModal && (
-        <NIModal
-          partnerName={`${partner.firstName} ${partner.lastName}`.trim() || partner.handle}
+        <DeclineModal
+          name={`${partner.firstName} ${partner.lastName}`.trim() || partner.handle}
           handle={partner.handle}
-          profileImageUrl={null}
+          profileImageUrl={partner.profileImageUrl ?? null}
           onConfirm={handleNIConfirm}
           onCancel={handleNICancel}
         />
@@ -609,7 +499,20 @@ export default function InfluencerProfileSidebar({
           <button onClick={onClose} title="Close" className="close-btn">✕</button>
           <div className="ppt">Influencer Profile</div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
-            <div className="pav">{partner.firstName ? partner.firstName[0] : partner.handle[1]?.toUpperCase()}</div>
+            <div className="pav">
+              {partner.profileImageUrl ? (
+                // Shared avatar component, so a broken or expired image falls
+                // back to initials exactly as it does in the Influencer List.
+                <ProfilePicture
+                  src={partner.profileImageUrl}
+                  name={`${partner.firstName} ${partner.lastName}`.trim()}
+                  handle={partner.handle}
+                  size={44}
+                />
+              ) : (
+                partner.firstName ? partner.firstName[0] : partner.handle[1]?.toUpperCase()
+              )}
+            </div>
             <div style={{ flex: 1 }}>
               <div className="pnm">{partner.firstName} {partner.lastName}</div>
               <div className="phd">{partner.handle}</div>
@@ -628,7 +531,22 @@ export default function InfluencerProfileSidebar({
                     color:       pipelineStatus === "Not Interested" ? "#dc2626" : undefined,
                   }}
                 >
-                  {PIPELINE_STAGES.map((s) => (
+                  {/* The current stage, plus only the stages it may actually
+                      move to (lib/pipeline-transitions.ts) — the same rule the
+                      card's quick-move buttons render and the PATCH route
+                      enforces.
+
+                      This listed all six stages unconditionally, which is how
+                      the panel could move a row from "For Outreach" straight to
+                      "For Order Creation" — a jump the card refuses. The
+                      current stage is always present so the select has a value
+                      to show; it is disabled because re-selecting it is a
+                      no-op. */}
+                  <option value={pipelineStatus} disabled
+                    style={pipelineStatus === "Not Interested" ? { color: "#dc2626", fontWeight: 600 } : undefined}>
+                    {pipelineStatus}
+                  </option>
+                  {allowedTransitions(pipelineStatus).map((s) => (
                     <option key={s} value={s}
                       style={s === "Not Interested" ? { color: "#dc2626", fontWeight: 600 } : undefined}>
                       {s}
@@ -668,7 +586,16 @@ export default function InfluencerProfileSidebar({
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
             <button className="atag plat">{partner.plat}</button>
             <button className="atag" onClick={() => setShowEmailModal(true)}>Send Email</button>
-            <button className="atag">Send DM</button>
+            <button
+              className="atag"
+              onClick={() => {
+                // getProfileUrl's map is keyed lowercase; partner.plat is capitalised here.
+                const url = getProfileUrl(partner.plat?.toLowerCase() ?? "", partner.handle)
+                if (url) window.open(url, "_blank", "noopener,noreferrer")
+              }}
+            >
+              Send DM
+            </button>
             <button className="atag">Follow up</button>
           </div>
         </div>
@@ -718,39 +645,29 @@ export default function InfluencerProfileSidebar({
               </div>
               <div>
                 <div style={{ fontSize: 10, color: "#888", marginBottom: 6 }}>Notes</div>
-                <textarea className="pfi" style={{ minHeight: 80, resize: "vertical" }} placeholder="Add notes..." />
-              </div>
-            </div>
-          )}
-
-          {/* ════ ORDER TAB ════ */}
-          {profileTab === 1 && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <div className="pfr">
-                <div className="pfg"><div className="pfl">First name</div><input className="pfi" value={orderData.firstName} onChange={e => setOrderData(d => ({ ...d, firstName: e.target.value }))} /></div>
-                <div className="pfg"><div className="pfl">Last name</div><input className="pfi" value={orderData.lastName} onChange={e => setOrderData(d => ({ ...d, lastName: e.target.value }))} /></div>
-              </div>
-              <div className="pfg"><div className="pfl">Contact Number</div><input className="pfi" value={orderData.contactNumber} onChange={e => setOrderData(d => ({ ...d, contactNumber: e.target.value }))} placeholder="Contact Number" /></div>
-              <div className="pfg"><div className="pfl">Product Name</div><input className="pfi" value={orderData.productName} onChange={e => setOrderData(d => ({ ...d, productName: e.target.value }))} placeholder="Product Name" /></div>
-              <div className="pfg"><div className="pfl">Order Number</div><input className="pfi" value={orderData.orderNumber} onChange={e => setOrderData(d => ({ ...d, orderNumber: e.target.value }))} placeholder="Order Number" /></div>
-              <div className="pfg"><div className="pfl">Product Cost</div><input className="pfi" value={orderData.productCost} onChange={e => setOrderData(d => ({ ...d, productCost: e.target.value }))} /></div>
-              <div className="pfg"><div className="pfl">Shipping Address</div><input className="pfi" value={orderData.shippingAddress} onChange={e => setOrderData(d => ({ ...d, shippingAddress: e.target.value }))} placeholder="Shipping Address" /></div>
-              <div className="pfg"><div className="pfl">Tracking Link</div><input className="pfi" value={orderData.trackingLink} onChange={e => setOrderData(d => ({ ...d, trackingLink: e.target.value }))} placeholder="Tracking Link" /></div>
-              <div
-                style={{
-                  display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8,
-                  position: "sticky", bottom: -18, margin: "8px -20px -18px",
-                  padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
-                }}
-              >
-                <button className="btn-secondary">Cancel</button>
-                <button className="btn-primary">Save</button>
+                <textarea
+                  className="pfi"
+                  style={{ minHeight: 80, resize: "vertical" }}
+                  placeholder="Add notes..."
+                  value={notesValue}
+                  onChange={(e) => setNotesValue(e.target.value)}
+                />
+                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+                  <button
+                    className="btn-primary"
+                    onClick={handleNotesSave}
+                    disabled={notesSaveState === "saving"}
+                    style={{ opacity: notesSaveState === "saving" ? 0.6 : 1 }}
+                  >
+                    {notesSaveState === "saving" ? "Updating…" : notesSaveState === "saved" ? "Updated" : "Update"}
+                  </button>
+                </div>
               </div>
             </div>
           )}
 
           {/* ════ ATTRIBUTION TAB ════ */}
-          {profileTab === 2 && (
+          {profileTab === 1 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <div className="pfr">
                 <div className="pfg"><div className="pfl">Discount Code</div><input className="pfi" value={orderData.discountCode} onChange={e => setOrderData(d => ({ ...d, discountCode: e.target.value }))} /></div>
@@ -769,54 +686,14 @@ export default function InfluencerProfileSidebar({
                   disabled={attributionSaveState === "saving"}
                   style={{ opacity: attributionSaveState === "saving" ? 0.6 : 1 }}
                 >
-                  {attributionSaveState === "saving" ? "Saving…" : attributionSaveState === "saved" ? "Saved" : "Save"}
+                  {attributionSaveState === "saving" ? "Updating…" : attributionSaveState === "saved" ? "Updated" : "Update"}
                 </button>
               </div>
             </div>
           )}
 
-          {/* ════ POST TAB ════ */}
-          {profileTab === 3 && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <div className="pfr">
-                <div className="pfg"><div className="pfl">Post Link</div><input className="pfi" value={postData.postLink} onChange={e => setPostData(d => ({ ...d, postLink: e.target.value }))} placeholder="Post Link" /></div>
-                <div className="pfg"><div className="pfl">Likes</div><input className="pfi" value={postData.likes} onChange={e => setPostData(d => ({ ...d, likes: e.target.value }))} /></div>
-              </div>
-              <div className="pfr">
-                <div className="pfg"><div className="pfl">Sales</div><input className="pfi" value={postData.sales} onChange={e => setPostData(d => ({ ...d, sales: e.target.value }))} /></div>
-                <div className="pfg"><div className="pfl">Drive Link</div><input className="pfi" value={postData.driveLink} onChange={e => setPostData(d => ({ ...d, driveLink: e.target.value }))} /></div>
-              </div>
-              <div className="pfr">
-                <div className="pfg"><div className="pfl">Comments</div><input className="pfi" value={postData.comments} onChange={e => setPostData(d => ({ ...d, comments: e.target.value }))} /></div>
-                <div className="pfg"><div className="pfl">Amount ($)</div><input className="pfi" value={postData.amount} onChange={e => setPostData(d => ({ ...d, amount: e.target.value }))} /></div>
-              </div>
-              <div className="pfr">
-                <div className="pfg"><div className="pfl">Usage Rights</div>
-                  <select className="pfi" value={postData.usageRights} onChange={e => setPostData(d => ({ ...d, usageRights: e.target.value }))}>
-                    <option value="">Select...</option><option>Granted</option><option>Not Granted</option><option>Pending</option>
-                  </select>
-                </div>
-                <div className="pfg"><div className="pfl">Views</div><input className="pfi" value={postData.views} onChange={e => setPostData(d => ({ ...d, views: e.target.value }))} /></div>
-              </div>
-              <div className="pfr">
-                <div className="pfg"><div className="pfl">Clicks</div><input className="pfi" value={postData.clicks} onChange={e => setPostData(d => ({ ...d, clicks: e.target.value }))} /></div>
-                <div className="pfg"><div className="pfl">CVR (auto)</div><input className="pfi" readOnly style={{ background: "#f0fdf4", color: "#1fae5b", fontWeight: 600 }} value={postCVR || "—"} /></div>
-              </div>
-              <div
-                style={{
-                  display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8,
-                  position: "sticky", bottom: -18, margin: "8px -20px -18px",
-                  padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
-                }}
-              >
-                <button className="btn-secondary">Cancel</button>
-                <button className="btn-primary">Save</button>
-              </div>
-            </div>
-          )}
-
           {/* ════ STATS TAB ════ */}
-          {profileTab === 4 && (
+          {profileTab === 2 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
               <div className="stit">Performance — all campaigns combined</div>
               <div className="skg">
@@ -861,7 +738,7 @@ export default function InfluencerProfileSidebar({
           )}
 
           {/* ════ HISTORY TAB ════ */}
-          {profileTab === 5 && (
+          {profileTab === 3 && (
             <HistoryTab brandId={partner.brandId} biId={partner.brandInfluencerId} />
           )}
 
@@ -883,7 +760,8 @@ export default function InfluencerProfileSidebar({
 
           .close-btn { position:absolute; top:16px; right:20px; width:30px; height:30px; border-radius:50%; border:1.5px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; flex-shrink:0; line-height:1; transition:background .15s,border-color .15s,color .15s; }
           .close-btn:hover { background:#fee2e2; color:#dc2626; border-color:#fca5a5; }
-          .atag { font-size:12px; font-weight:500; padding:6px 14px; border-radius:20px; cursor:pointer; border:1px solid #e5e7eb; background:#f9fafb; color:#555; }
+          .atag { font-size:12px; font-weight:500; padding:6px 14px; border-radius:20px; cursor:pointer; border:1px solid #e5e7eb; background:#f9fafb; color:#555; transition:background .15s,border-color .15s,color .15s; }
+          .atag:not(.plat):hover { background:#eafaf1; border-color:#1fae5b; color:#1fae5b; }
           .atag.plat { background:#1fae5b; color:#fff; border-color:#1fae5b; }
           .pit-bar { display:flex; gap:0; padding:0 20px; border-bottom:1px solid #f0f0f0; overflow-x:auto; }
           .pit { font-size:12px; font-weight:600; padding:11px 14px; cursor:pointer; color:#9ca3af; border-bottom:2px solid transparent; white-space:nowrap; transition:color .15s; flex-shrink:0; }

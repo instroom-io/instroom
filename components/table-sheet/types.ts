@@ -8,7 +8,11 @@ export type InfluencerRow = {
   gender?: string; location?: string; social_link?: string; first_name?: string;
   contact_info?: string; approval_status?: "Approved" | "Declined" | "Pending";
   transferred_date?: string; approval_notes?: string; decline_reason?: string;
+  /** Free-text explanation stored with an "Others" decline. */
+  decline_notes?: string;
   tier?: string; community_status?: string; bio?: string; profile_image_url?: string;
+  /** A persisted blank row the user added but has not filled in yet. */
+  is_draft?: boolean;
   avg_likes?: string | number; avg_comments?: string | number; avg_views?: string | number;
   created_at?: string;
   updated_at?: string;
@@ -78,4 +82,15 @@ export type ToastNotification = {
   id: string;
   type: "success" | "error" | "warning" | "info";
   message: string;
+}
+/** What POST /api/brand/[brandId]/influencers/bulk-approval persisted. */
+export type BulkApprovalResult = {
+  updated: {
+    id: string
+    influencer_id: string
+    approval_status: string | null
+    transferred_date: string | Date | null
+    contact_status: string | null
+  }[]
+  failed: string[]
 }

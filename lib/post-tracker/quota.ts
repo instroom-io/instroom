@@ -11,7 +11,7 @@ import "server-only"
 import { prisma } from "@/lib/prisma"
 
 export const DAILY_API_REQUEST_LIMIT = 20
-export const DAILY_POST_IMPORT_LIMIT = 10
+export const DAILY_POST_IMPORT_LIMIT = 20
 
 export type QuotaSnapshot = {
   apiRequests: number

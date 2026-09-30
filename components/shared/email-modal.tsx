@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import { UseTemplatePicker } from "@/components/shared/use-template-picker"
 
 // Sends from whichever email account the user is logged in / connected
 // with — no manual provider picker. Tries Gmail (tied to Google login)
@@ -54,7 +55,7 @@ export function EmailModal({
     if (!to.trim() || !body.trim()) return
     setSending(true)
     setError(null)
-    const payload = { to: to.trim(), subject: subject.trim() || "(No subject)", body: body.trim() }
+    const payload = { to: to.trim(), subject: subject.trim() || "(No subject)", body: body.trim(), brandId }
     try {
       const gmailRes = await fetch("/api/gmail/send", {
         method:  "POST",
@@ -147,7 +148,14 @@ export function EmailModal({
             />
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <label style={{ fontSize: 10, fontWeight: 600, color: "#6b7280" }}>Message</label>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <label style={{ fontSize: 10, fontWeight: 600, color: "#6b7280" }}>Message</label>
+              <UseTemplatePicker
+                brandId={brandId}
+                recipientEmail={to}
+                onApply={(newSubject, newBody) => { setSubject(newSubject); setBody(newBody) }}
+              />
+            </div>
             <textarea
               value={body}
               onChange={(e) => setBody(e.target.value)}

@@ -103,12 +103,29 @@ export async function POST(req: Request) {
         where: { user_id: userId },
       })
 
+      // Webhook delivery order isn't guaranteed — Lemon Squeezy retries failed
+      // deliveries, so a delayed event for an OLDER purchase can arrive after
+      // a newer one already updated this row. Use the event resource's own
+      // created_at as a proxy for "when this event happened" and refuse to
+      // apply anything older than the last event we already applied, so a
+      // late retry can never clobber correct, newer data.
+      const eventTimestamp = jsonBody.data.attributes.created_at
+        ? new Date(jsonBody.data.attributes.created_at)
+        : new Date()
+
+      if (
+        existingSubscription?.last_webhook_event_at &&
+        eventTimestamp < existingSubscription.last_webhook_event_at
+      ) {
+        return NextResponse.json({ success: true, skipped: "stale_event" })
+      }
+
       // Calculate period dates
       const now = new Date()
-      const periodStart = jsonBody.data.attributes.renews_at 
+      const periodStart = jsonBody.data.attributes.renews_at
         ? new Date(jsonBody.data.attributes.renews_at)
         : now
-      
+
       const periodEnd = jsonBody.data.attributes.expires_at
         ? new Date(jsonBody.data.attributes.expires_at)
         : new Date(now.getTime() + (cycle === "yearly" ? 365 * 24 * 60 * 60 * 1000 : 30 * 24 * 60 * 60 * 1000))
@@ -124,6 +141,7 @@ export async function POST(req: Request) {
             payment_subscription_id: jsonBody.data.attributes.subscription_id?.toString(),
             current_period_start: periodStart,
             current_period_end: periodEnd,
+            last_webhook_event_at: eventTimestamp,
           },
         })
       } else {
@@ -137,20 +155,36 @@ export async function POST(req: Request) {
             payment_subscription_id: jsonBody.data.attributes.subscription_id?.toString(),
             current_period_start: periodStart,
             current_period_end: periodEnd,
+            last_webhook_event_at: eventTimestamp,
           },
         })
       }
 
-      await prisma.paymentHistory.create({
-        data: {
-          user_id: userId,
-          subscription_id: subscription.id,
-          amount: (jsonBody.data.attributes.total as number) / 100 || 0,
-          status: "completed",
-          description: `${planKey} plan subscription (${cycle})`,
-          stripe_payment_id: jsonBody.data.id,
-        },
-      }).catch(() => void 0)
+      // A single purchase fires several of the four event names handled in
+      // this block (e.g. both an "order" event and "subscription_created")
+      // — only the order-type events carry a real `total`; recording the
+      // others too created a second, bogus $0 PaymentHistory row for every
+      // purchase. Also guard against the same event being redelivered
+      // (Lemon Squeezy retries failed deliveries) creating a real duplicate.
+      const total = jsonBody.data.attributes.total
+      if (typeof total === "number") {
+        const alreadyRecorded = await prisma.paymentHistory.findFirst({
+          where: { stripe_payment_id: jsonBody.data.id },
+          select: { id: true },
+        })
+        if (!alreadyRecorded) {
+          await prisma.paymentHistory.create({
+            data: {
+              user_id: userId,
+              subscription_id: subscription.id,
+              amount: total / 100,
+              status: "completed",
+              description: `${planKey} plan subscription (${cycle})`,
+              stripe_payment_id: jsonBody.data.id,
+            },
+          }).catch(() => void 0)
+        }
+      }
 
       // Sync brand activity with new subscription status
       await syncBrandActivityWithSubscription(userId)

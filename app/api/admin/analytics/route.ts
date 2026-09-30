@@ -46,10 +46,11 @@ export async function GET() {
 
   const [users, influencers, campaigns, usersBefore, influencersBefore, campaignsBefore] = await Promise.all([
     prisma.user.findMany({ where: { created_at: { gte: windowStart } }, select: { created_at: true } }),
-    prisma.influencer.findMany({ where: { created_at: { gte: windowStart } }, select: { created_at: true } }),
+    // Drafts excluded — a blank row is not a signup.
+    prisma.influencer.findMany({ where: { created_at: { gte: windowStart }, is_draft: false }, select: { created_at: true } }),
     prisma.campaign.findMany({ where: { created_at: { gte: windowStart } }, select: { created_at: true } }),
     prisma.user.count({ where: { created_at: { lt: windowStart } } }),
-    prisma.influencer.count({ where: { created_at: { lt: windowStart } } }),
+    prisma.influencer.count({ where: { created_at: { lt: windowStart }, is_draft: false } }),
     prisma.campaign.count({ where: { created_at: { lt: windowStart } } }),
   ])
 

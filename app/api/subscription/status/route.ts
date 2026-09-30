@@ -1,7 +1,8 @@
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
-import { prisma } from "@/lib/prisma"
+import { prisma, withDbRetry } from "@/lib/prisma"
 import { NextResponse } from "next/server"
+import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 
 export async function GET(request: Request) {
   try {
@@ -19,7 +20,9 @@ export async function GET(request: Request) {
     let targetUserId = session.user.id
 
     if (brandId) {
-      const brand = await prisma.brand.findUnique({ where: { id: brandId } })
+      // Retried like the other reads this page fires on mount — see the note
+      // in the pipeline route. Transient-only; a real exhaustion still 503s.
+      const brand = await withDbRetry(() => prisma.brand.findUnique({ where: { id: brandId } }))
 
       if (!brand) {
         return NextResponse.json({ error: "Brand not found" }, { status: 404 })
@@ -42,10 +45,10 @@ export async function GET(request: Request) {
       targetUserId = brand.owner_id
     }
 
-    const subscription = await prisma.userSubscription.findUnique({
+    const subscription = await withDbRetry(() => prisma.userSubscription.findUnique({
       where: { user_id: targetUserId },
       include: { plan: true },
-    })
+    }))
 
     if (!subscription) {
       // No subscription = free tier
@@ -83,6 +86,7 @@ export async function GET(request: Request) {
         plan: {
           name: subscription.plan.name,
           display_name: subscription.plan.display_name,
+          max_influencers: subscription.plan.max_influencers,
         },
         billing_cycle: subscription.billing_cycle,
         current_period_end: endDate?.toISOString() ?? null,
@@ -95,6 +99,7 @@ export async function GET(request: Request) {
     })
   } catch (error) {
     console.error("Error fetching subscription status:", error)
+    if (isDatabaseCapacityError(error)) return databaseCapacityResponse()
     return NextResponse.json(
       { error: "Failed to fetch subscription status" },
       { status: 500 }

@@ -5,161 +5,231 @@
 
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useCallback, useMemo } from "react"
 import type { InfluencerRow, CustomColumn } from "@/components/table-sheet"
+import { useCachedFetch, setCachedData, getCachedData, getConfirmedRow } from "@/lib/data-cache"
+
+type InfluencerPayload = { rows: InfluencerRow[]; customColumns: CustomColumn[] }
+
+// Stable empty references so consumers' memos don't rerun before data arrives.
+const EMPTY_ROWS: InfluencerRow[] = []
+const EMPTY_COLUMNS: CustomColumn[] = []
 
 type UseInfluencerDataReturn = {
   rows: InfluencerRow[]
   customColumns: CustomColumn[]
   isLoading: boolean
   error: string | null
+  /**
+   * True only once a read has failed AND no automatic retry is still coming.
+   * Gate visible failure UI on this, not on `error` — a transient blip is
+   * still being retried silently. Same contract as usePipelineData.
+   */
+  hasGivenUp: boolean
   refetch: () => Promise<void>
   setRows: React.Dispatch<React.SetStateAction<InfluencerRow[]>>
   setCustomColumns: React.Dispatch<React.SetStateAction<CustomColumn[]>>
 }
 
-export function useInfluencerData(brandId: string | null): UseInfluencerDataReturn {
-  const [rows, setRows] = useState<InfluencerRow[]>([])
-  const [customColumns, setCustomColumns] = useState<CustomColumn[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+/**
+ * Fetch and shape a brand's Influencer List payload — the exact value cached
+ * under `/api/brand/{brandId}/influencers`.
+ *
+ * Exported for lib/dashboard-prefetch. The cached value is `{ rows, customColumns }`,
+ * a mapping of the response rather than the response itself, so the prefetch has to
+ * run this same mapping — writing the raw payload would leave the sheet reading a
+ * shape it cannot render.
+ */
+export async function fetchInfluencerPayload(brandId: string): Promise<InfluencerPayload> {
+    // include_drafts: this sheet is the only place blank draft rows belong.
+    const res = await fetch(`/api/brand/${brandId}/influencers?include_drafts=true`)
 
-  const fetchData = useCallback(async () => {
-    if (!brandId) {
-      setIsLoading(false)
-      setError("No brand selected")
-      return
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}))
+      throw new Error(errBody.error || `Failed to fetch (${res.status})`)
     }
 
-    setIsLoading(true)
-    setError(null)
+    const data = await res.json()
 
-    try {
-      const res = await fetch(`/api/brand/${brandId}/influencers`)
+    // API returns { influencers: BrandInfluencer[] with nested influencer, customFields: [] }
+    // Sort by created_at ascending so oldest entries stay at the top
+    const sortedInfluencers = [...(data.influencers ?? [])].sort((a: any, b: any) => {
+      const dateA = a.created_at ? new Date(a.created_at).getTime() : 0
+      const dateB = b.created_at ? new Date(b.created_at).getTime() : 0
+      return dateA - dateB
+    })
 
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => ({}))
-        throw new Error(errBody.error || `Failed to fetch (${res.status})`)
-      }
+    const apiRows: InfluencerRow[] = sortedInfluencers
+      .filter((item: any) => item.influencer?.id)
+      .map((item: any) => {
+        const inf = item.influencer ?? {}
+        // Derive first_name from full_name stored in DB
+        const fullName: string = inf.full_name ?? ""
+        const firstName = fullName ? fullName.split(" ")[0] : ""
 
-      const data = await res.json()
+        return {
+          // Core identity — use BrandInfluencer.id as the row ID so updates
+          // hit the right record. The actual Influencer.id is inf.id.
+          id: inf.id,
+          brand_influencer_id: item.id,
+          handle: (inf.handle ?? "").replace(/^@/, ""), // strip @ — stored inconsistently in older records
+          platform: inf.platform ?? "instagram",
+          full_name: fullName,
+          email: inf.email ?? "",
+          follower_count: String(inf.follower_count ?? ""),
+          engagement_rate: String(inf.engagement_rate ?? ""),
+          niche: inf.niche ?? "",
+          gender: inf.gender ?? "",
+          location: inf.location ?? "",
+          social_link: inf.social_link ?? "",
+          bio: inf.bio ?? "",
+          profile_image_url: inf.profile_image_url ?? "",
+          // A blank row the user added and has not filled in yet.
+          is_draft: Boolean(inf.is_draft),
+          avg_likes: inf.avg_likes ?? "",
+          avg_comments: inf.avg_comments ?? "",
+          avg_views: inf.avg_views ?? "",
 
-      // API returns { influencers: BrandInfluencer[] with nested influencer, customFields: [] }
-      // Sort by created_at ascending so oldest entries stay at the top
-      const sortedInfluencers = [...(data.influencers ?? [])].sort((a: any, b: any) => {
-        const dateA = a.created_at ? new Date(a.created_at).getTime() : 0
-        const dateB = b.created_at ? new Date(b.created_at).getTime() : 0
-        return dateA - dateB
+          // Affiliate / performance fields for GoAffPro-connected creators
+          affiliate_id: item.affiliate_id ?? null,
+          ref_code: item.ref_code ?? null,
+          coupon: item.coupon ?? null,
+          spark_ads: item.spark_ads ?? null,
+          affiliate_link: item.affiliate_link ?? null,
+          clicks: item.clicks ?? 0,
+          sales_count: item.sales_count ?? 0,
+          gmv: item.gmv ? Number(item.gmv) : 0,
+
+          // BrandInfluencer relationship fields
+          contact_status: item.contact_status ?? "not_contacted",
+          stage: String(item.stage ?? "1"),
+          agreed_rate: item.agreed_rate ?? "",
+          notes: item.notes ?? "",
+          approval_status: (item.approval_status ?? "Pending") as
+            | "Approved"
+            | "Declined"
+            | "Pending",
+          approval_notes: item.approval_notes ?? "",
+          decline_notes: item.decline_notes ?? "",
+          transferred_date: item.transferred_date
+            ? new Date(item.transferred_date).toISOString().split("T")[0]
+            : "",
+
+          // Derived / UI-only fields
+          // Always derive first_name fresh from full_name so edits to first_name
+          // in the sidebar are reflected correctly after a refetch
+          first_name: firstName,
+          contact_info: inf.email ?? "",
+          decline_reason: "",
+          tier: "Bronze",
+          community_status: "Pending",
+
+          // Custom field values — keyed by field_key
+          custom: Object.fromEntries(
+            (item.customValues ?? []).map((cv: any) => [
+              cv.custom_field?.field_key ?? cv.custom_field_id,
+              cv.value ?? "",
+            ])
+          ),
+        }
       })
 
-      const apiRows: InfluencerRow[] = sortedInfluencers
-        .filter((item: any) => item.influencer?.id)
-        .map((item: any) => {
-          const inf = item.influencer ?? {}
-          // Derive first_name from full_name stored in DB
-          const fullName: string = inf.full_name ?? ""
-          const firstName = fullName ? fullName.split(" ")[0] : ""
+    const apiCustomCols: CustomColumn[] = (data.customFields ?? []).map(
+      (cf: any) => ({
+        id: cf.id,
+        field_key: cf.field_key,
+        field_name: cf.field_name,
+        field_type: cf.field_type ?? "text",
+        field_options: cf.field_options ?? [],
+        assignedGroup:
+          cf.assignedGroup ??
+          cf.assigned_group ??
+          "Influencer Details",
+        description: cf.description,
+      })
+    )
 
-          return {
-            // Core identity — use BrandInfluencer.id as the row ID so updates
-            // hit the right record. The actual Influencer.id is inf.id.
-            id: inf.id,
-            brand_influencer_id: item.id,
-            handle: (inf.handle ?? "").replace(/^@/, ""), // strip @ — stored inconsistently in older records
-            platform: inf.platform ?? "instagram",
-            full_name: fullName,
-            email: inf.email ?? "",
-            follower_count: String(inf.follower_count ?? ""),
-            engagement_rate: String(inf.engagement_rate ?? ""),
-            niche: inf.niche ?? "",
-            gender: inf.gender ?? "",
-            location: inf.location ?? "",
-            social_link: inf.social_link ?? "",
-            bio: inf.bio ?? "",
-            profile_image_url: inf.profile_image_url ?? "",
-            avg_likes: inf.avg_likes ?? "",
-            avg_comments: inf.avg_comments ?? "",
-            avg_views: inf.avg_views ?? "",
+    return { rows: apiRows, customColumns: apiCustomCols }
+}
 
-            // Affiliate / performance fields for GoAffPro-connected creators
-            affiliate_id: item.affiliate_id ?? null,
-            ref_code: item.ref_code ?? null,
-            coupon: item.coupon ?? null,
-            spark_ads: item.spark_ads ?? null,
-            affiliate_link: item.affiliate_link ?? null,
-            clicks: item.clicks ?? 0,
-            sales_count: item.sales_count ?? 0,
-            gmv: item.gmv ? Number(item.gmv) : 0,
+export function useInfluencerData(brandId: string | null): UseInfluencerDataReturn {
+  // Shared across pages: returning to the sheet renders the cached rows
+  // immediately and only refreshes in the background when they are stale.
+  const cacheKey = brandId ? `/api/brand/${brandId}/influencers` : null
 
-            // BrandInfluencer relationship fields
-            contact_status: item.contact_status ?? "not_contacted",
-            stage: String(item.stage ?? "1"),
-            agreed_rate: item.agreed_rate ?? "",
-            notes: item.notes ?? "",
-            approval_status: (item.approval_status ?? "Pending") as
-              | "Approved"
-              | "Declined"
-              | "Pending",
-            approval_notes: item.approval_notes ?? "",
-            transferred_date: item.transferred_date
-              ? new Date(item.transferred_date).toISOString().split("T")[0]
-              : "",
+  const fetchPayload = useCallback(() => fetchInfluencerPayload(brandId!), [brandId])
 
-            // Derived / UI-only fields
-            // Always derive first_name fresh from full_name so edits to first_name
-            // in the sidebar are reflected correctly after a refetch
-            first_name: firstName,
-            contact_info: inf.email ?? "",
-            decline_reason: "",
-            tier: "Bronze",
-            community_status: "Pending",
+  const { data, error, isLoading, hasGivenUp, refetch } = useCachedFetch<InfluencerPayload>(
+    cacheKey,
+    fetchPayload
+  )
 
-            // Custom field values — keyed by field_key
-            custom: Object.fromEntries(
-              (item.customValues ?? []).map((cv: any) => [
-                cv.custom_field?.field_key ?? cv.custom_field_id,
-                cv.value ?? "",
-              ])
-            ),
-          }
-        })
+  // The cache IS the state: reading it during render (rather than copying it
+  // into local state in an effect) is what keeps every consumer of this brand's
+  // rows in sync without extra renders or extra requests.
+  // A row a write confirmed outranks a read that has not caught up yet, for a
+  // short window (see markRowConfirmed). Without this, refreshing right after a
+  // save could paint the saved row from the mirror and then revert it when a
+  // briefly-stale read landed. Applied per row: everything the read agrees on,
+  // and every other row, is taken exactly as it arrived.
+  const rows = useMemo(() => {
+    const fetched = data?.rows ?? EMPTY_ROWS
+    if (!cacheKey || fetched.length === 0) return fetched
+    let changed = false
+    const reconciled = fetched.map((row) => {
+      const confirmed = getConfirmedRow<InfluencerRow>(cacheKey, row.id)
+      if (!confirmed) return row
+      changed = true
+      return confirmed
+    })
+    return changed ? reconciled : fetched
+  }, [data?.rows, cacheKey])
+  const customColumns = data?.customColumns ?? EMPTY_COLUMNS
 
-      const apiCustomCols: CustomColumn[] = (data.customFields ?? []).map(
-        (cf: any) => ({
-          id: cf.id,
-          field_key: cf.field_key,
-          field_name: cf.field_name,
-          field_type: cf.field_type ?? "text",
-          field_options: cf.field_options ?? [],
-          assignedGroup:
-            cf.assignedGroup ??
-            cf.assigned_group ??
-            "Influencer Details",
-          description: cf.description,
-        })
-      )
+  // Local edits (inline cell edits, optimistic updates) write straight into the
+  // cache, so they show up everywhere and survive navigating away and back.
+  const updateRows = useCallback<React.Dispatch<React.SetStateAction<InfluencerRow[]>>>(
+    (value) => {
+      if (!cacheKey) return
+      const cached = getCachedData<InfluencerPayload>(cacheKey) ?? { rows: [], customColumns: [] }
+      const next = typeof value === "function"
+        ? (value as (p: InfluencerRow[]) => InfluencerRow[])(cached.rows)
+        : value
+      setCachedData(cacheKey, { ...cached, rows: next })
+    },
+    [cacheKey]
+  )
 
-      setRows(apiRows)
-      setCustomColumns(apiCustomCols)
-    } catch (err: any) {
-      console.error("useInfluencerData fetch error:", err)
-      setError(err.message || "Failed to load influencers")
-    } finally {
-      setIsLoading(false)
-    }
-  }, [brandId])
-
-  useEffect(() => {
-    fetchData()
-  }, [fetchData])
+  const updateCustomColumns = useCallback<React.Dispatch<React.SetStateAction<CustomColumn[]>>>(
+    (value) => {
+      if (!cacheKey) return
+      const cached = getCachedData<InfluencerPayload>(cacheKey) ?? { rows: [], customColumns: [] }
+      const next = typeof value === "function"
+        ? (value as (p: CustomColumn[]) => CustomColumn[])(cached.customColumns)
+        : value
+      setCachedData(cacheKey, { ...cached, customColumns: next })
+    },
+    [cacheKey]
+  )
 
   return {
     rows,
     customColumns,
     isLoading,
-    error,
-    refetch: fetchData,
-    setRows,
-    setCustomColumns,
+    error: brandId ? error : "No brand selected",
+    /**
+     * True only once a read has failed AND no automatic retry is still coming.
+     *
+     * Gate any visible failure UI on this rather than on `error`: while the
+     * bounded retry is still running there is nothing for the user to do, and
+     * a transient blip would otherwise flash a message that clears itself.
+     * Same contract as usePipelineData/useClosedData.
+     */
+    hasGivenUp,
+    refetch: async () => {
+      await refetch()
+    },
+    setRows: updateRows,
+    setCustomColumns: updateCustomColumns,
   }
 }

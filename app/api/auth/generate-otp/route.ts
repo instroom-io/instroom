@@ -27,22 +27,6 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Only approved early-access signups can create a new account. Existing
-    // users (checked above) are never affected — this only gates new signups.
-    const earlyAccess = await prisma.earlyAccessSignup.findUnique({
-      where: { email },
-    })
-
-    if (!earlyAccess?.invited_at) {
-      return NextResponse.json(
-        {
-          error: "This email hasn't been approved for early access yet.",
-          requiresEarlyAccess: true,
-        },
-        { status: 403 }
-      )
-    }
-
     // Generate 6-digit OTP
     const otp = crypto.randomInt(100000, 999999).toString()
     const otpExpiry = new Date(Date.now() + 10 * 60 * 1000)

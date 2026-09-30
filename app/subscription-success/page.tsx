@@ -6,6 +6,13 @@ import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { CheckCircle2 } from "lucide-react";
 
+// How long to wait for the Lemon Squeezy webhook to actually land before
+// giving up and sending the user on anyway. Webhook delivery isn't
+// instant — a flat timer here would race it, so this polls the real
+// subscription state instead of guessing.
+const MAX_POLL_ATTEMPTS = 10;
+const POLL_INTERVAL_MS = 1500;
+
 export default function SubscriptionSuccessPage() {
   const router = useRouter();
   const { data: session } = useSession();
@@ -35,11 +42,42 @@ export default function SubscriptionSuccessPage() {
       /* storage unavailable — keep the default */
     }
 
-    const timeout = setTimeout(() => {
-      router.push(destination);
-    }, 3000);
+    let cancelled = false;
 
-    return () => clearTimeout(timeout);
+    const pollForActivation = async (attempt: number) => {
+      if (cancelled) return;
+
+      try {
+        const res = await fetch("/api/subscription/check", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: session.user.id }),
+        });
+        const data = await res.json();
+        if (data.active) {
+          if (!cancelled) router.push(destination);
+          return;
+        }
+      } catch {
+        /* transient fetch failure — just retry on the next attempt */
+      }
+
+      if (attempt >= MAX_POLL_ATTEMPTS) {
+        // Webhook is taking unusually long — don't trap the user here
+        // forever. Middleware will bounce them back to /pricing if the
+        // subscription still isn't active by the time they land.
+        if (!cancelled) router.push(destination);
+        return;
+      }
+
+      setTimeout(() => pollForActivation(attempt + 1), POLL_INTERVAL_MS);
+    };
+
+    pollForActivation(1);
+
+    return () => {
+      cancelled = true;
+    };
   }, [router, session]);
 
   return (

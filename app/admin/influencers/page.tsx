@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react"
 import { IconSearch } from "@tabler/icons-react"
+import { useCachedFetch } from "@/lib/data-cache"
 
 interface AdminInfluencer {
   id: string
@@ -24,28 +25,35 @@ function formatFollowers(n: number): string {
 }
 
 export default function AdminInfluencersPage() {
-  const [rows, setRows] = useState<AdminInfluencer[]>([])
   const [q, setQ] = useState("")
-  const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [viewInf, setViewInf] = useState<AdminInfluencer | null>(null)
 
-  const load = useCallback(async (query: string) => {
-    setLoading(true)
-    try {
-      const res = await fetch(`/api/admin/influencers${query ? `?q=${encodeURIComponent(query)}` : ""}`)
-      const json = await res.json()
-      setRows(json.influencers || [])
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => { load("") }, [load])
+  // Debounced query is part of the cache key: each search keeps its own entry,
+  // so re-running a search — or returning to this page — renders from cache.
+  const [query, setQuery] = useState("")
   useEffect(() => {
-    const t = setTimeout(() => load(q), 300)
+    const t = setTimeout(() => setQuery(q), 300)
     return () => clearTimeout(t)
-  }, [q, load])
+  }, [q])
+
+  const url = `/api/admin/influencers${query ? `?q=${encodeURIComponent(query)}` : ""}`
+
+  const fetchInfluencers = useCallback(async () => {
+    const res = await fetch(url)
+    if (!res.ok) throw new Error(`Failed to load influencers (${res.status})`)
+    return (await res.json()) as { influencers?: AdminInfluencer[] }
+  }, [url])
+
+  const { data, isLoading: loading, mutate } = useCachedFetch(url, fetchInfluencers)
+  const rows = data?.influencers ?? []
+
+  const setRows = useCallback(
+    (updater: (prev: AdminInfluencer[]) => AdminInfluencer[]) => {
+      mutate({ influencers: updater(rows) })
+    },
+    [mutate, rows]
+  )
 
   const act = async (id: string, action: "approve" | "reject" | "suspend" | "reactivate") => {
     setBusyId(id)

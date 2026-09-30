@@ -21,6 +21,13 @@ export type AddonStatus = {
   status: string
   activatedAt: Date | null
   expiresAt: Date | null
+  /**
+   * What detection matches on for this brand, configured once and used for
+   * every influencer handle it monitors. Travels with the status because the
+   * two are always read together: the gate and the thing it gates.
+   */
+  hashtags: string
+  mentions: string
 }
 
 /** Subscription states that count as paid. `basic` is the free tier. */
@@ -72,7 +79,7 @@ export async function getAddonStatus(brandId: string): Promise<AddonStatus> {
   const row = await prisma.postTrackerAddon.findUnique({ where: { brand_id: brandId } })
 
   if (!row) {
-    return { active: false, status: "inactive", activatedAt: null, expiresAt: null }
+    return { active: false, status: "inactive", activatedAt: null, expiresAt: null, hashtags: "", mentions: "" }
   }
 
   // An expired row is reported inactive without being mutated — the historical
@@ -91,6 +98,8 @@ export async function getAddonStatus(brandId: string): Promise<AddonStatus> {
         status: eligibility.reason === "no_subscription" ? "revoked" : "subscription_inactive",
         activatedAt: row.activated_at,
         expiresAt: row.expires_at,
+        hashtags: row.detection_hashtags ?? "",
+        mentions: row.detection_mentions ?? "",
       }
     }
   }
@@ -100,6 +109,8 @@ export async function getAddonStatus(brandId: string): Promise<AddonStatus> {
     status: expired ? "expired" : row.status,
     activatedAt: row.activated_at,
     expiresAt: row.expires_at,
+    hashtags: row.detection_hashtags ?? "",
+    mentions: row.detection_mentions ?? "",
   }
 }
 

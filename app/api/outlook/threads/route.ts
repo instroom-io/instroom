@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
+import {
+  forceRefreshOutlookAccessToken,
+  getOutlookAccessToken,
+  outlookTokenErrorMessage,
+} from "@/lib/microsoft-oauth"
+import { autoAdvanceRepliedToInConversation } from "@/lib/pipeline"
+import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 
 function stripHtml(html: string): string {
   return html
@@ -14,40 +21,12 @@ function stripHtml(html: string): string {
     .trim()
 }
 
-async function refreshMicrosoftToken(refresh_token: string, userId: string): Promise<string | null> {
-  try {
-    const res = await fetch("https://login.microsoftonline.com/common/oauth2/v2.0/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: process.env.MICROSOFT_CLIENT_ID!,
-        client_secret: process.env.MICROSOFT_CLIENT_SECRET!,
-        grant_type: "refresh_token",
-        refresh_token,
-      }),
-    })
-    const data = await res.json()
-    if (!res.ok || !data.access_token) return null
-
-    await prisma.account.updateMany({
-      where: { userId, provider: "microsoft" },
-      data: {
-        access_token: data.access_token,
-        expires_at: data.expires_in
-          ? Math.floor(Date.now() / 1000) + data.expires_in
-          : null,
-      },
-    })
-    return data.access_token
-  } catch {
-    return null
-  }
-}
-
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions) as any
   const { searchParams } = new URL(req.url)
   const brandId = searchParams.get("brandId")
+
+  const requestedAccountId = searchParams.get("accountId")
 
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
@@ -58,45 +37,77 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "No user session", reauth: true }, { status: 401 })
   }
 
-  const account = await prisma.account.findFirst({
-    where: { userId, provider: "microsoft" },
-    select: { access_token: true, refresh_token: true, expires_at: true },
-  })
+  const tokenResult = await getOutlookAccessToken(userId, "threads", requestedAccountId)
 
-  if (!account?.access_token) {
+  if (!tokenResult.ok) {
     return NextResponse.json(
-      { error: "No Outlook account linked. Please connect your Outlook account.", reauth: true },
-      { status: 403 }
+      { error: outlookTokenErrorMessage(tokenResult.reason), reauth: true },
+      // A misconfigured deployment is not the user's session being expired, so
+      // it must not present as one — reconnecting cannot fix it.
+      { status: tokenResult.reason === "not_configured" ? 503 : 403 }
     )
   }
 
-  let accessToken = account.access_token
-  const isExpired = account.expires_at ? Date.now() > account.expires_at * 1000 : false
-
-  if (isExpired && account.refresh_token) {
-    const refreshed = await refreshMicrosoftToken(account.refresh_token, userId)
-    if (!refreshed) {
-      return NextResponse.json(
-        { error: "Outlook session expired. Please reconnect your Outlook account.", reauth: true },
-        { status: 403 }
-      )
-    }
-    accessToken = refreshed
-  }
+  let accessToken = tokenResult.accessToken
+  const accountId = tokenResult.accountId
+  const connectedEmail = tokenResult.email
 
   try {
-    const msgRes = await fetch(
-      "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages" +
-        "?$top=200&$select=id,subject,from,toRecipients,body,bodyPreview,receivedDateTime,isRead,conversationId" +
-        "&$orderby=receivedDateTime+desc",
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    )
+    // ── Two changes here, both about the ~7s this request took ──────────────
+    const fetchInbox = (token: string) =>
+      fetch(
+        "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages" +
+          "?$top=200&$select=id,subject,from,toRecipients,body,bodyPreview,receivedDateTime,isRead,conversationId,flag" +
+          "&$orderby=receivedDateTime+desc",
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Prefer: 'outlook.body-content-type="text"',
+          },
+        }
+      )
+
+    const messagesPromise = fetchInbox(accessToken)
+
+    const brandPromise: Promise<string | null> = brandId
+      ? Promise.resolve(brandId)
+      : userId
+        ? prisma.brandMember
+            .findFirst({
+              where: { user_id: userId },
+              select: { brand_id: true },
+              orderBy: { created_at: "desc" },
+            })
+            .then((bm) => bm?.brand_id ?? null)
+        : Promise.resolve(null)
+
+    let [msgRes, resolvedBrandId] = await Promise.all([messagesPromise, brandPromise])
+
+    if (msgRes.status === 401) {
+      console.warn(
+        `[outlook] threads: Graph returned 401 for a token still marked valid (account ${accountId}) — forcing a refresh and retrying once.`
+      )
+      const retried = await forceRefreshOutlookAccessToken(userId, accountId, "threads")
+      if (retried) {
+        accessToken = retried
+        msgRes = await fetchInbox(retried)
+      }
+    }
 
     if (!msgRes.ok) {
-      const err = await msgRes.json()
+      const err = await msgRes.json().catch(() => ({}))
       const message: string = err?.error?.message || "Failed to fetch messages"
+      // Server-side so the Graph error code and request id are recoverable. The
+      // body is Graph's own error object — it carries no token and no secret.
+      console.error(
+        `[outlook] threads: Graph /mailFolders/inbox/messages failed (HTTP ${msgRes.status}) — ` +
+          `${err?.error?.code ?? "unknown_code"}: ${String(message).slice(0, 300)}`
+      )
       if (msgRes.status === 401 || msgRes.status === 403) {
-        return NextResponse.json({ error: message, reauth: true }, { status: 403 })
+        return NextResponse.json(
+          { error: "Outlook authentication failed. Please reconnect your Outlook account.", reauth: true },
+          { status: 403 }
+        )
       }
       throw new Error(message)
     }
@@ -125,6 +136,15 @@ export async function GET(req: NextRequest) {
             ? stripHtml(msg.body.content)
             : msg.body?.content || msg.bodyPreview || ""
 
+        const attachments = (msg.hasAttachments ? msg.attachments || [] : [])
+          .filter((a: any) => !a.isInline && (!a["@odata.type"] || a["@odata.type"] === "#microsoft.graph.fileAttachment"))
+          .map((a: any) => ({
+            id: a.id,
+            filename: a.name || "attachment",
+            mimeType: a.contentType || "application/octet-stream",
+            size: a.size ?? 0,
+          }))
+
         return {
           id: msg.id,
           from: fromName ? `${fromName} <${fromAddr}>` : fromAddr,
@@ -133,6 +153,7 @@ export async function GET(req: NextRequest) {
           snippet: msg.bodyPreview || "",
           body: bodyText,
           isUser: false,
+          attachments,
         }
       })
 
@@ -141,6 +162,7 @@ export async function GET(req: NextRequest) {
         subject: first.subject || "(No subject)",
         snippet: first.bodyPreview || "",
         unread: msgs.some((m: any) => !m.isRead),
+        starred: msgs.some((m: any) => m.flag?.flagStatus === "flagged"),
         messages: shapedMessages,
         senderEmail,
         senderName,
@@ -149,19 +171,13 @@ export async function GET(req: NextRequest) {
       }
     })
 
-    // Resolve brand context
-    let brand_id = brandId
-    if (!brand_id && userId) {
-      const brandMember = await prisma.brandMember.findFirst({
-        where: { user_id: userId },
-        select: { brand_id: true },
-        orderBy: { created_at: "desc" },
-      })
-      brand_id = brandMember?.brand_id || null
-    }
+    // Already resolved, concurrently with the Graph request above.
+    const brand_id = resolvedBrandId
 
     if (!brand_id) {
       return NextResponse.json({
+        accountId,
+        connectedEmail,
         threads: shapedThreads.map(({ senderEmail, senderName, ...t }) => ({
           ...t,
           brandInfluencer: null,
@@ -177,6 +193,7 @@ export async function GET(req: NextRequest) {
         influencer: { email: { in: senderEmails } },
       },
       select: {
+        id: true,
         contact_status: true,
         content_posted: true,
         stage: true,
@@ -195,8 +212,20 @@ export async function GET(req: NextRequest) {
       brandInfluencer: biByEmail.get(senderEmail) ?? null,
     }))
 
-    return NextResponse.json({ threads })
+    const replyBrandInfluencerIds = threads
+      .filter((t) => t.brandInfluencer)
+      .map((t) => t.brandInfluencer!.id)
+    autoAdvanceRepliedToInConversation(brand_id, replyBrandInfluencerIds).catch((err) =>
+      console.error("Auto-advance to In Conversation failed:", err)
+    )
+
+    return NextResponse.json({ accountId, connectedEmail, threads })
   } catch (err: any) {
-    return NextResponse.json({ error: err.message || "Failed to fetch Outlook messages" }, { status: 500 })
+    console.error("[outlook] threads: unhandled failure —", err?.message || err)
+    if (isDatabaseCapacityError(err)) return databaseCapacityResponse()
+    return NextResponse.json(
+      { error: err?.message || "Failed to fetch Outlook messages" },
+      { status: 500 }
+    )
   }
 }

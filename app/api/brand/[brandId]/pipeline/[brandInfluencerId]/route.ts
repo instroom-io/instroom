@@ -22,41 +22,21 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
-import { prisma } from "@/lib/prisma"
+import { prisma, timeStep } from "@/lib/prisma"
 import { logActivity } from "@/lib/activity-log"
 import { sendNotification } from "@/lib/notifications"
 import type { NotifType } from "@/emails/notification"
 import { provisionGoAffProAffiliate } from "@/lib/goaffpro-provision"
 import { hasBrandCapability } from "@/lib/permissions"
+import { parseDeliverableNames, applyDeliverableNames } from "@/lib/deliverables"
+import {
+  derivePipelineStage,
+  isTransitionAllowed,
+  pipelineStatusToFields,
+  transitionRefusalReason,
+} from "@/lib/pipeline-transitions"
+import { clearPostTrackerState } from "@/lib/post-tracker-status"
 
-// ─── Status → DB field mapping ────────────────────────────────────────────────
-function pipelineStatusToFields(pipelineStatus: string, collaborationType?: string): {
-  contact_status:  string
-  stage:           number
-  approval_status: string
-} {
-  switch (pipelineStatus) {
-    case "For Outreach":
-      return { contact_status: "pending",             stage: 1, approval_status: "Approved" }
-    case "Contacted":
-      return { contact_status: "contacted",           stage: 2, approval_status: "Approved" }
-    case "In Conversation":
-      return { contact_status: "negotiating",         stage: 3, approval_status: "Approved" }
-    case "Deal Agreed":
-      // Confirming a Collaboration Type is what marks the deal as fully agreed —
-      // once it's set, skip the separate "Move to Post Tracker" step entirely and
-      // land directly on Post Tracker's default initial status (stage 5).
-      return collaborationType
-        ? { contact_status: "for_order_creation", stage: 5, approval_status: "Approved" }
-        : { contact_status: "agreed",              stage: 4, approval_status: "Approved" }
-    case "For Order Creation":
-      return { contact_status: "for_order_creation",  stage: 5, approval_status: "Approved" }
-    case "Not Interested":
-      return { contact_status: "not_interested",      stage: 0, approval_status: "Declined" }
-    default:
-      return { contact_status: "pending",             stage: 1, approval_status: "Approved" }
-  }
-}
 
 // ─── PATCH handler ────────────────────────────────────────────────────────────
 export async function PATCH(
@@ -73,11 +53,57 @@ export async function PATCH(
     const { brandId, brandInfluencerId } = await params
 
     const body = await req.json()
-    const { pipelineStatus, niReason, collaborationType } = body as {
+    const { pipelineStatus, niReason, declineNotes, collaborationType, notes, campaignDeliverables } = body as {
       pipelineStatus?: string
       niReason?: string
+      /** Free-text explanation, sent only with an "Others" decline. */
+      declineNotes?: string
       collaborationType?: string
+      notes?: string
+      /** Deliverable names chosen on the hand-over — see lib/deliverables. */
+      campaignDeliverables?: unknown
     }
+
+    // Only meaningful alongside a Collaboration Type (the hand-over into Post
+    // Tracker). Validated up front so a bad payload never reaches the write.
+    const deliverableNames =
+      campaignDeliverables !== undefined && collaborationType !== undefined
+        ? parseDeliverableNames(campaignDeliverables)
+        : undefined
+    if (deliverableNames === null) {
+      return NextResponse.json({ error: "Invalid campaignDeliverables" }, { status: 400 })
+    }
+
+    // Notes aren't a stage transition, so they use manageInfluencers (not the
+    // stricter approveInfluencers gate below) and return early.
+    if (notes !== undefined && pipelineStatus === undefined) {
+      const [activeCount, canManage] = await Promise.all([
+        prisma.brand.count({ where: { id: brandId, is_active: true } }),
+        hasBrandCapability(brandId, session.user.id, "manageInfluencers"),
+      ])
+      if (activeCount === 0) {
+        return NextResponse.json({ error: "Not found" }, { status: 403 })
+      }
+      if (!canManage) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+      }
+
+      const notesResult = await prisma.brandInfluencer.updateMany({
+        where: { id: brandInfluencerId, brand_id: brandId },
+        data: { notes: typeof notes === "string" ? (notes || null) : null },
+      })
+      if (notesResult.count === 0) {
+        return NextResponse.json({ error: "Record not found" }, { status: 404 })
+      }
+      return NextResponse.json({ success: true })
+    }
+
+    // Trimmed here rather than trusted from the client, and an empty or
+    // whitespace-only note is stored as NULL — "the user typed nothing" and
+    // "the user typed three spaces" are the same fact, and only NULL lets a
+    // reader tell "no note" from "an empty note".
+    const cleanDeclineNotes =
+      typeof declineNotes === "string" && declineNotes.trim() ? declineNotes.trim() : null
 
     if (!pipelineStatus) {
       return NextResponse.json(
@@ -91,14 +117,14 @@ export async function PATCH(
     // "Declined" (see pipelineStatusToFields below), so this whole action is
     // an approval decision — gated to owners and managers only. The brand
     // must also be active (owner's subscription in good standing).
-    const [activeCount, canApprove, before] = await Promise.all([
+    const [activeCount, canApprove, before] = await timeStep("pipeline.preflight", () => Promise.all([
       prisma.brand.count({ where: { id: brandId, is_active: true } }),
       hasBrandCapability(brandId, session.user.id, "approveInfluencers"),
       prisma.brandInfluencer.findUnique({
         where: { id: brandInfluencerId, brand_id: brandId },
-        select: { contact_status: true, stage: true, product_details: true },
+        select: { contact_status: true, stage: true, product_details: true, approval_status: true },
       }),
-    ])
+    ]))
 
     if (activeCount === 0) {
       return NextResponse.json({ error: "Not found" }, { status: 403 })
@@ -106,6 +132,45 @@ export async function PATCH(
 
     if (!canApprove) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
+
+    // ── Transition check ───────────────────────────────────────────────────
+    // The SAME rule the card's quick-move buttons and the Details panel's
+    // stage dropdown use (lib/pipeline-transitions.ts), applied here so it
+    // cannot be bypassed by any client.
+    //
+    // This route previously validated WHO was asking but never WHAT they were
+    // asking for, so a request could set any stage from any stage. That is how
+    // the Details dropdown — which listed all six stages unconditionally —
+    // moved a row from "For Outreach" straight to "For Order Creation",
+    // skipping the intermediate stages and the Deal Agreed collaboration-type
+    // step that is supposed to cascade a row into Post Tracker.
+    //
+    // `before` is null only for a row that does not exist; that is left to the
+    // write below, which already answers it with a 404.
+    // Is this move undoing a decline? Read before the write, used below to
+    // clear the decline reason that would otherwise outlive it.
+    const wasDeclined =
+      before !== null &&
+      derivePipelineStage(before.contact_status, before.stage, before.approval_status) ===
+        "Not Interested" &&
+      pipelineStatus !== "Not Interested"
+
+    if (before) {
+      const currentStage = derivePipelineStage(
+        before.contact_status,
+        before.stage,
+        before.approval_status
+      )
+      if (!isTransitionAllowed(currentStage, pipelineStatus)) {
+        return NextResponse.json(
+          {
+            error: transitionRefusalReason(currentStage, pipelineStatus),
+            currentStage,
+          },
+          { status: 409 }
+        )
+      }
     }
 
     // ── Compute DB fields from pipeline status ───────────────────────────────
@@ -119,11 +184,42 @@ export async function PATCH(
       let details: Record<string, unknown> = {}
       try { details = before?.product_details ? JSON.parse(before.product_details) : {} } catch { details = {} }
       details.campaignType = collaborationType
+      // Campaign deliverables live in the same blob, in the array Post Tracker
+      // and the Paid Collaboration editor already read (paidCollab.deliverables).
+      if (deliverableNames) {
+        const paidCollab = (details.paidCollab ?? {}) as Record<string, unknown>
+        details.paidCollab = { ...paidCollab, deliverables: applyDeliverableNames(paidCollab.deliverables, deliverableNames) }
+      }
       productDetailsJson = JSON.stringify(details)
     }
 
-    // ── Update — select only what we send back ────────────────────────────────
-    const updated = await prisma.brandInfluencer.update({
+    // Pre-order stages (1–4) take the row out of Post Tracker.
+    const postTrackerReset =
+      fields.stage >= 1 && fields.stage <= 4
+        ? clearPostTrackerState(productDetailsJson ?? before?.product_details)
+        : null
+
+    // ── Write ────────────────────────────────────────────────────────────────
+    // updateMany, not update({ select }).
+    //
+    // MEASURED against this deployment's database (median of 5, ~317ms baseline
+    // round trip to the shared host):
+    //
+    //   raw SQL UPDATE .................  412ms   (1 round trip)
+    //   prisma.updateMany ..............  1430ms
+    //   prisma.update({ select }) ......  1839ms  (~5.8 round trips)
+    //
+    // `update` wraps itself in an implicit transaction and then reads the row
+    // back: BEGIN, UPDATE, SELECT, COMMIT. On a remote database that is four
+    // round trips instead of one — and on MyISAM (which every table here uses)
+    // the transaction does nothing whatsoever, because MyISAM is not
+    // transactional. So the read-back and the transaction were ~1.4s of pure
+    // protocol overhead on the critical path of every card move.
+    //
+    // Nothing is lost: `fields` below is what was just written, the row's
+    // existence was already established by the preflight above, and the client
+    // reads this body only on failure (hooks/usePipelineData.ts).
+    const writeResult = await timeStep("pipeline.write", () => prisma.brandInfluencer.updateMany({
       where: {
         id:       brandInfluencerId,
         brand_id: brandId, // scoped to brand — prevents cross-brand updates
@@ -133,20 +229,50 @@ export async function PATCH(
         stage:           fields.stage,
         approval_status: fields.approval_status,
         ...(productDetailsJson !== undefined ? { product_details: productDetailsJson } : {}),
-        // Only write approval_notes for NI moves — don't overwrite on others
+        ...(postTrackerReset ?? {}),
+        // Only write approval_notes for NI moves — don't overwrite on others.
+        //
+        // decline_notes is written on the SAME branch, and unconditionally
+        // within it, so moving a row to Not Interested a second time with a
+        // predefined reason clears a stale "Others" explanation rather than
+        // leaving prose attached to a reason that no longer mentions it.
+        //
+        // The reason itself stays alone in approval_notes: Analytics matches
+        // that column exactly against the reason list, so appending the note
+        // would drop the row out of the breakdown.
+        //
+        // Reopening a declined row CLEARS both. A row moved out of Not
+        // Interested is no longer declined — approval_status above is already
+        // rewritten to "Approved" — so leaving the reason behind would keep a
+        // stale "Fee too low / unpaid" pill on the card and keep counting the
+        // influencer in Analytics' decline breakdown after the decline was
+        // undone. Only that ONE direction clears them; every other move still
+        // leaves the columns untouched, as before.
         ...(pipelineStatus === "Not Interested"
-          ? { approval_notes: niReason || "Not interested" }
-          : {}),
+          ? {
+              approval_notes: niReason || "Not interested",
+              decline_notes:  cleanDeclineNotes,
+            }
+          : wasDeclined
+            ? { approval_notes: null, decline_notes: null }
+            : {}),
       },
-      // Return only the fields the client needs to confirm the update.
-      // Avoids loading the full row (Text fields, relations, etc.)
-      select: {
-        id:              true,
-        contact_status:  true,
-        stage:           true,
-        approval_status: true,
-      },
-    })
+    }))
+
+    // update() threw P2025 for a missing row and the catch below turned that
+    // into a 404. updateMany reports a count instead, so the same answer is
+    // produced here rather than by an exception.
+    if (writeResult.count === 0) {
+      return NextResponse.json({ error: "Record not found" }, { status: 404 })
+    }
+
+    // The same shape update({ select }) returned, built from what was written.
+    const updated = {
+      id:              brandInfluencerId,
+      contact_status:  fields.contact_status,
+      stage:           fields.stage,
+      approval_status: fields.approval_status,
+    }
 
     // ── Provision GoAffPro affiliate on first transition into Deal Agreed or
     //    beyond — guarded so it only fires once, whether the row lands on
@@ -171,6 +297,9 @@ export async function PATCH(
           from: before.contact_status,
           to: fields.contact_status,
           ...(pipelineStatus === "Not Interested" && niReason ? { ni_reason: niReason } : {}),
+          ...(pipelineStatus === "Not Interested" && cleanDeclineNotes
+            ? { decline_notes: cleanDeclineNotes }
+            : {}),
         },
       }).catch(console.error)
     }
