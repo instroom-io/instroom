@@ -4,6 +4,7 @@
 import { CustomColumn, InfluencerRow, SortOrder } from "./types"
 import { PLATFORM_URL_MAP, CSV_EXPORT_FIELDS, IMPORT_FIELDS, platforms, DEFAULT_GENDERS, DEFAULT_CONTACT_STATUSES } from "./constants"
 import { isDraftHandle } from "@/lib/influencer-draft"
+import { derivePipelineStage } from "@/lib/pipeline-transitions"
 
 // ── Handle helpers ────────────────────────────────────────────────────────────
 
@@ -464,44 +465,37 @@ export function normalizeUrl(str: string): string {
 
 // ── Approval state machine ────────────────────────────────────────────────────
 
-export function handleApprovalChange(
-  row: InfluencerRow,
-  newStatus: string,
-  declineReason?: string,
-  /** Free-text explanation, sent only with an "Others" decline. */
-  declineNotes?: string
-): InfluencerRow {
+/** Pipeline stage for the drawer's read-only Stage box; "—" when not in the Pipeline. */
+export function drawerStageLabel(row: Pick<InfluencerRow, "approval_status" | "contact_status" | "stage">): string {
+  if (row.approval_status !== "Approved" && row.contact_status !== "not_interested") return "—"
+  const stage = row.stage === "" || row.stage == null ? null : Number(row.stage)
+  const label = derivePipelineStage(row.contact_status ?? null, Number.isFinite(stage) ? stage : null, row.approval_status ?? null)
+  return label === "For Order Creation" ? "Post Tracker" : label
+}
+
+/** List decline: before approval, or while still at For Outreach. */
+export function canListDecline(row: Pick<InfluencerRow, "approval_status" | "contact_status" | "stage">): boolean {
+  if (row.approval_status !== "Approved") return true
+  const stage = row.stage === "" || row.stage == null ? null : Number(row.stage)
+  return derivePipelineStage(row.contact_status ?? null, Number.isFinite(stage) ? stage : null, row.approval_status) === "For Outreach"
+}
+
+export function handleApprovalChange(row: InfluencerRow, newStatus: string): InfluencerRow {
   const r = { ...row }
-  if (newStatus === "Approved" && row.approval_status !== "Approved") {
+  // Date Reviewed: set on a decision, kept on re-pick, cleared for Pending.
+  if ((newStatus === "Approved" || newStatus === "Declined") && row.approval_status !== newStatus) {
     const t = new Date()
     r.transferred_date = [
       t.getFullYear(),
       String(t.getMonth() + 1).padStart(2, "0"),
       String(t.getDate()).padStart(2, "0"),
     ].join("-")
-  } else if (newStatus !== "Approved") {
+  } else if (newStatus === "Pending") {
     r.transferred_date = ""
   }
-  // A decline must land the row in exactly the state a Pipeline "Mark as not
-  // interested" lands it in — contact_status "not_interested" and stage 0, the
-  // pair pipelineStatusToFields() writes for "Not Interested" (see
-  // app/api/brand/[brandId]/pipeline/[brandInfluencerId]/route.ts). It used to
-  // write "not_contacted"/stage 1 here, so a decline made from the Influencer
-  // List left the row sitting in For Outreach: the Pipeline board never showed
-  // it under Not Interested, and Analytics counted it as un-contacted rather
-  // than as a decline.
-  if (newStatus === "Declined" && row.approval_status !== "Declined") {
-    r.contact_status = "not_interested"; r.stage = "0"; r.agreed_rate = ""; r.notes = ""
-    if (declineReason) { r.approval_notes = declineReason; r.decline_reason = declineReason }
-    // Written on every decline, not only when present, so re-declining with a
-    // predefined reason clears a stale "Others" explanation. The reason itself
-    // stays alone in approval_notes — Analytics matches that column exactly.
-    r.decline_notes = declineNotes?.trim() || ""
-  }
-  // Un-declining puts the row back at the head of the pipeline — the same
-  // For Outreach (stage 1) landing a re-approval gets on the board. Without
-  // this the row kept stage 0 and stayed invisible on the Pipeline.
-  if (newStatus !== "Declined" && row.approval_status === "Declined") {
+  if (newStatus === "Declined" && !canListDecline(row)) return row
+  // Undoing a Pipeline Not Interested resets to For Outreach.
+  if (newStatus !== "Declined" && row.approval_status === "Declined" && row.contact_status === "not_interested") {
     r.contact_status = "not_contacted"; r.stage = "1"
     r.approval_notes = ""; r.decline_reason = ""; r.decline_notes = ""
   }

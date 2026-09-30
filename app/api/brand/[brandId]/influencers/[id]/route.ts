@@ -9,6 +9,7 @@ import { canAddInfluencer } from "@/lib/subscription-limits"
 import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 import { publicHandle } from "@/lib/influencer-draft"
 import { normalizeInfluencerIdentity } from "@/lib/influencer-draft"
+import { derivePipelineStage } from "@/lib/pipeline-transitions"
 import { NextRequest, NextResponse } from "next/server"
 
 // Must cover every contact_status the app writes anywhere, because an unknown
@@ -69,6 +70,18 @@ export async function PUT(
       where: { brand_id_influencer_id: { brand_id: brandId, influencer_id: id } },
       select: { id: true, contact_status: true, stage: true, approval_status: true },
     })
+
+    // Once outreach has started, declining is the Pipeline's Not Interested.
+    if (
+      data.approval_status === "Declined" &&
+      before?.approval_status === "Approved" &&
+      derivePipelineStage(before.contact_status, before.stage, before.approval_status) !== "For Outreach"
+    ) {
+      return NextResponse.json(
+        { error: "Outreach has already started for this influencer. Mark them Not Interested on the Pipeline instead." },
+        { status: 409 }
+      )
+    }
 
     const inf: any = {}
 

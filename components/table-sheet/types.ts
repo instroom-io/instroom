@@ -25,6 +25,8 @@ export type InfluencerRow = {
   clicks?: number | string;
   sales_count?: number | string;
   gmv?: number | string;
+  /** Saved product cost (COGS). */
+  product_cost?: number;
   post_url?: string | null;
   post_caption?: string | null;
   likes_count?: number | string;

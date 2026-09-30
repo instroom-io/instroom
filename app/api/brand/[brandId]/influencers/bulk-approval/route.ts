@@ -78,13 +78,21 @@ export async function POST(
     // only where one isn't already set, and start outreach only for rows that
     // hadn't been contacted yet.
     await prisma.$transaction([
+      // Before approving: new approvals get today, existing ones keep their date.
+      prisma.brandInfluencer.updateMany({
+        where: {
+          ...scope,
+          OR: [
+            { approval_status: { not: "Approved" } },
+            { approval_status: null },
+            { transferred_date: null },
+          ],
+        },
+        data: { transferred_date: reviewedAt },
+      }),
       prisma.brandInfluencer.updateMany({
         where: scope,
         data: { approval_status: "Approved" },
-      }),
-      prisma.brandInfluencer.updateMany({
-        where: { ...scope, transferred_date: null },
-        data: { transferred_date: reviewedAt },
       }),
       prisma.brandInfluencer.updateMany({
         where: { ...scope, contact_status: "not_contacted" },

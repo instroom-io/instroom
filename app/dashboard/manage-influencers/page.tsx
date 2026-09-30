@@ -242,7 +242,6 @@ function normalisedRow(normalised: Record<string, unknown>): Partial<InfluencerR
 /** Where an approval decision lands the influencer on the Pipeline board. */
 const APPROVAL_DESTINATION: Record<string, string> = {
   Approved: "For Outreach",
-  Declined: "Not Interested",
 }
 
 /**
@@ -925,15 +924,18 @@ function InfluencersContent() {
           const next = JSON.parse(payload)
           const changed = LIFECYCLE_FIELDS.filter((f) => prev[f] !== next[f])
           if (!changed.length) return { discrete: false, moveMessage: null as string | null }
-          // Destination is the pipeline column the row actually lands in, not
-          // the approval verdict: approving puts an influencer in For Outreach
-          // (stage 1), declining puts it in Not Interested. Anything else reads
-          // the funnel stage label.
+          // Declined/Pending keep them off the Pipeline, so no column is named.
+          const who = row.handle?.trim() || row.full_name?.trim() || "Influencer"
+          if (changed.includes("approval_status") && next.approval_status === "Declined") {
+            return { discrete: true, moveMessage: `${who} declined` }
+          }
+          if (changed.includes("approval_status") && next.approval_status === "Pending") {
+            return { discrete: true, moveMessage: `${who} set to Pending` }
+          }
           const approvalDestination = changed.includes("approval_status")
             ? APPROVAL_DESTINATION[String(next.approval_status)] ?? null
             : null
           const destination = approvalDestination ?? STATUS_LABEL[String(next.contact_status)] ?? null
-          const who = row.handle?.trim() || row.full_name?.trim() || "Influencer"
           return {
             discrete: true,
             moveMessage: destination ? `${who} moved to ${destination}` : null,

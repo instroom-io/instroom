@@ -4,11 +4,11 @@
 import React, { useState, useEffect, useRef } from "react"
 import type { InfluencerRow, CustomColumn } from "./types"
 import { platforms } from "./constants"
-import { STATUS_LABEL, JOURNEY_STATUSES, getJourneyStatus, journeyStatusToFields, type JourneyStatus } from "./constants"
-import { getProfileUrl, handleApprovalChange, formatFollowers } from "./utils"
+import { STATUS_LABEL } from "./constants"
+import { getProfileUrl, handleApprovalChange, canListDecline, drawerStageLabel, formatFollowers } from "./utils"
 import { ProfilePicture } from "./ui-atoms"
-import { DeclineModal } from "@/components/shared/decline-modal"
 import { EmailModal } from "@/components/shared/email-modal"
+import { invalidateInfluencerDerivedCaches } from "@/lib/cache-invalidation"
 import type { CampaignDeliverable } from "@/lib/deliverables"
 
 // Instagram's official "message me" shortlink opens a DM composer directly.
@@ -728,19 +728,20 @@ export default function ProfileSidebar({
 }) {
   const [profileTab, setProfileTab] = useState(0)
   const [editedRow, setEditedRow] = useState<InfluencerRow | null>(row ? { ...row } : null)
-  const [showDeclineModal, setShowDeclineModal] = useState(false)
   const [showEmailModal, setShowEmailModal] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const defaultDiscountCode = row ? "CODE" + (row.first_name || row.handle).toUpperCase().replace(/[^A-Z]/g, "") : ""
   const defaultAffiliateLink = row ? "https://instroom.io/ref/" + (row.first_name || row.handle).toLowerCase().replace(/[^a-z]/g, "") : ""
   const [orderData, setOrderData] = useState({
-    productName: "", orderNumber: "", productCost: "",
+    productName: "", orderNumber: "", productCost: row?.product_cost ? String(row.product_cost) : "",
     discountCode: row ? (row.coupon || row.ref_code || defaultDiscountCode) : "",
     affiliateLink: row ? (row.affiliate_link || defaultAffiliateLink) : "",
     sparkAds: row ? (row.spark_ads || "") : "",
     shippingAddress: "", trackingLink: "",
   })
   const [attributionSaveMessage, setAttributionSaveMessage] = useState<string | null>(null)
+  // Product cost is only sent once edited, so saving other fields can't clear it.
+  const [productCostEdited, setProductCostEdited] = useState(false)
   const [postData, setPostData] = useState({
     postLink: "", likes: "", sales: "", driveLink: "",
     comments: "", amount: "", usageRights: "", views: "", clicks: "",
@@ -815,36 +816,9 @@ export default function ProfileSidebar({
     affiliateRevenue
   )
 
-  const PIPELINE_STAGE_BY_CONTACT_STATUS: Record<string, string> = {
-    not_contacted: "1", contacted: "2", negotiating: "3", agreed: "4", for_order_creation: "5",
-  }
-
-  const handlePipelineChange = (value: string) => {
-    if (!editedRow) return
-    setEditedRow({
-      ...editedRow,
-      contact_status: value,
-      stage: PIPELINE_STAGE_BY_CONTACT_STATUS[value] ?? editedRow.stage,
-      approval_status: "Approved",
-    })
-  }
-
-  const handleJourneyStatusChange = (value: string) => {
-    if (!editedRow) return
-    if (value === "Declined") { setShowDeclineModal(true); return }
-    if (value === "Pending") {
-      const fields = journeyStatusToFields("Pending")
-      setEditedRow({ ...editedRow, ...fields })
-      return
-    }
-    const fields = journeyStatusToFields(value as JourneyStatus)
-    setEditedRow({ ...editedRow, ...fields })
-  }
-
   const handleFieldChange = (field: string, value: string) => {
     if (!editedRow) return
     if (field === "approval_status") {
-      if (value === "Declined") { setShowDeclineModal(true); return }
       setEditedRow(handleApprovalChange(editedRow, value))
     } else if (field.startsWith("custom.")) {
       setEditedRow({ ...editedRow, custom: { ...editedRow.custom, [field.slice(7)]: value } })
@@ -893,9 +867,12 @@ export default function ProfileSidebar({
               coupon: orderData.discountCode || null,
               affiliateLink: orderData.affiliateLink || null,
               sparkAds: orderData.sparkAds || null,
+              ...(productCostEdited ? { productCost: orderData.productCost } : {}),
             }),
           })
           if (attrRes.ok) {
+            if (productCostEdited) invalidateInfluencerDerivedCaches(brandId)
+            setProductCostEdited(false)
             const attrJson = await attrRes.json()
             if (attrJson.goAffPro?.synced === false && attrJson.goAffPro?.reason) {
               setAttributionSaveMessage(`GoAffPro sync skipped: ${attrJson.goAffPro.reason}`)
@@ -957,32 +934,6 @@ export default function ProfileSidebar({
 
   return (
     <>
-      {/* The SAME modal and reason list the Pipeline board uses — see
-          components/shared/decline-modal.tsx. */}
-      {showDeclineModal && (
-        <DeclineModal
-          name={editedRow.full_name || editedRow.handle || "this influencer"}
-          handle={editedRow.handle}
-          profileImageUrl={editedRow.profile_image_url}
-          /* Above S.panel's zIndex 500 — otherwise the sidebar stays painted
-             over the modal's right-hand reason column. */
-          zIndex={600}
-          onCancel={() => setShowDeclineModal(false)}
-          onConfirm={(r, declineNotes) => {
-            setShowDeclineModal(false)
-            if (!editedRow) return
-            // Confirm is the final action, exactly as it is on the Pipeline
-            // board — commit straight through the table's save pipeline and
-            // close the panel, rather than staging the change and leaving the
-            // sidebar open waiting for a Save Changes the user has no reason
-            // to expect. The row is declined and off the active list, so
-            // there is nothing left to edit in it.
-            onUpdate(handleApprovalChange(editedRow, "Declined", r, declineNotes))
-            onClose()
-          }}
-        />
-      )}
-
       {showEmailModal && (
         <EmailModal
           partnerName={editedRow.full_name || editedRow.first_name || editedRow.handle}
@@ -999,54 +950,53 @@ export default function ProfileSidebar({
       <div data-profile-panel style={S.panel}>
         {/* ── Header ── */}
         <div style={S.header}>
-          <div style={{ fontSize: 11, fontWeight: 600, color: "#9ca3af", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 12 }}>Influencer Profile</div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "#9ca3af", letterSpacing: "0.1em", textTransform: "uppercase" }}>Influencer Profile</div>
+            <button
+              onClick={onClose} title="Close"
+              style={{ width: 30, height: 30, borderRadius: "50%", border: "1.5px solid #e5e7eb", background: "#f9fafb", color: "#374151", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 700, flexShrink: 0, lineHeight: 1 }}
+              onMouseEnter={e => { e.currentTarget.style.background = "#fee2e2"; e.currentTarget.style.color = "#dc2626"; e.currentTarget.style.borderColor = "#fca5a5" }}
+              onMouseLeave={e => { e.currentTarget.style.background = "#f9fafb"; e.currentTarget.style.color = "#374151"; e.currentTarget.style.borderColor = "#e5e7eb" }}
+            >✕</button>
+          </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
             <div style={{ width: 46, height: 46, borderRadius: "50%", background: "#1fae5b", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "0 0 0 3px #dcfce7" }}>
               <ProfilePicture src={editedRow.profile_image_url} socialLink={editedRow.social_link || getProfileUrl(editedRow.platform, editedRow.handle)} name={editedRow.full_name || editedRow.handle} handle={editedRow.handle} size={52} />
             </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ flex: "0 1 auto", minWidth: 0 }}>
               <div style={{ fontSize: 15, fontWeight: 700, color: "#111827", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{editedRow.full_name || editedRow.first_name || ""}</div>
               <div style={{ fontSize: 12, color: "#6b7280", marginTop: 1 }}>@{editedRow.handle.replace(/^@/, "")}</div>
             </div>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", flexShrink: 0 }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0, marginLeft: 28 }}>
+              {/* Read-only: stages are changed on the Pipeline, inbox and Post Tracker. */}
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 <span style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em" }}>Stage</span>
-                <select style={S.pipeSel} value={editedRow.contact_status} onChange={e => handlePipelineChange(e.target.value)}>
-                  <option value="not_contacted">For Outreach</option>
-                  <option value="contacted">Contacted</option>
-                  <option value="negotiating">In Conversation</option>
-                  <option value="agreed">Deal Agreed</option>
-                  <option value="for_order_creation">Post Tracker</option>
+                <select disabled value="stage" title="Change the stage on the Pipeline"
+                  style={{ ...S.pipeSel, width: 118, borderColor: "#e5e7eb", background: "#f3f4f6", color: "#9ca3af", cursor: "not-allowed" }}>
+                  <option value="stage">{drawerStageLabel(editedRow)}</option>
                 </select>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 <span style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em" }}>Status</span>
-                {editedRow.approval_status === "Declined" ? (
-                  <select style={{ ...S.pipeSel, borderColor: "#dc2626", background: "#fef2f2", color: "#991b1b" }}
-                    value="Declined" onChange={e => handleJourneyStatusChange(e.target.value)}>
-                    <option value="Declined">Declined</option>
-                    {JOURNEY_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
-                  </select>
-                ) : (
-                  <select
-                    style={
-                      getJourneyStatus(editedRow.approval_status, editedRow.stage) === "Pending"
-                        ? { ...S.pipeSel, borderColor: "#f4b740", background: "#fffbeb", color: "#854f0b" }
-                        : { ...S.pipeSel, borderColor: "#16a34a", background: "#f0fdf4", color: "#166534" }
-                    }
-                    value={getJourneyStatus(editedRow.approval_status, editedRow.stage)}
-                    onChange={e => handleJourneyStatusChange(e.target.value)}>
-                    {JOURNEY_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
-                    <option value="Declined">Declined</option>
-                  </select>
-                )}
+                {(() => {
+                  const approval = editedRow.approval_status === "Approved" || editedRow.approval_status === "Declined"
+                    ? editedRow.approval_status
+                    : "Pending"
+                  const tone = approval === "Declined"
+                    ? { borderColor: "#dc2626", background: "#fef2f2", color: "#991b1b" }
+                    : approval === "Pending"
+                      ? { borderColor: "#f4b740", background: "#fffbeb", color: "#854f0b" }
+                      : { borderColor: "#16a34a", background: "#f0fdf4", color: "#166534" }
+                  return (
+                    <select style={{ ...S.pipeSel, width: 118, ...tone }} value={approval}
+                      onChange={e => handleFieldChange("approval_status", e.target.value)}>
+                      <option value="Pending">Pending</option>
+                      <option value="Approved">Approved</option>
+                      {canListDecline(editedRow) && <option value="Declined">Declined</option>}
+                    </select>
+                  )
+                })()}
               </div>
-              <button
-                onClick={onClose} title="Close"
-                style={{ width: 30, height: 30, borderRadius: "50%", border: "1.5px solid #e5e7eb", background: "#f9fafb", color: "#374151", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 700, flexShrink: 0, lineHeight: 1, marginTop: 14 }}
-                onMouseEnter={e => { e.currentTarget.style.background = "#fee2e2"; e.currentTarget.style.color = "#dc2626"; e.currentTarget.style.borderColor = "#fca5a5" }}
-                onMouseLeave={e => { e.currentTarget.style.background = "#f9fafb"; e.currentTarget.style.color = "#374151"; e.currentTarget.style.borderColor = "#e5e7eb" }}
-              >✕</button>
             </div>
           </div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -1176,7 +1126,7 @@ export default function ProfileSidebar({
               <div style={S.formGroup}><div style={S.formLabel}>Email</div><input style={S.formInput} value={editedRow.contact_info || editedRow.email || ""} onChange={e => handleFieldChange("contact_info", e.target.value)} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
               <div style={S.formGroup}><div style={S.formLabel}>Product Name</div><input style={S.formInput} value={orderData.productName} onChange={e => setOrderData(d => ({ ...d, productName: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
               <div style={S.formGroup}><div style={S.formLabel}>Order Number</div><input style={S.formInput} value={orderData.orderNumber} onChange={e => setOrderData(d => ({ ...d, orderNumber: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
-              <div style={S.formGroup}><div style={S.formLabel}>Product Cost</div><input style={S.formInput} value={orderData.productCost} onChange={e => setOrderData(d => ({ ...d, productCost: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
+              <div style={S.formGroup}><div style={S.formLabel}>Product Cost</div><input style={S.formInput} value={orderData.productCost} onChange={e => { setProductCostEdited(true); setOrderData(d => ({ ...d, productCost: e.target.value })) }} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
               <div style={S.formGroup}><div style={S.formLabel}>Shipping Address</div><input style={S.formInput} value={orderData.shippingAddress} onChange={e => setOrderData(d => ({ ...d, shippingAddress: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
               <div style={S.formGroup}><div style={S.formLabel}>Tracking Link</div><input style={S.formInput} value={orderData.trackingLink} onChange={e => setOrderData(d => ({ ...d, trackingLink: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
               <div style={S.actionBar}>
@@ -1251,12 +1201,15 @@ export default function ProfileSidebar({
                 <div style={S.metricBox}><div style={{ fontSize: 14, fontWeight: 700, color: editedRow.approval_status === "Approved" ? "#1fae5b" : editedRow.approval_status === "Declined" ? "#e24b4a" : "#854f0b" }}>{editedRow.approval_status || "Pending"}</div><div style={S.metricLabel}>Approval</div></div>
                 <div style={S.metricBox}><div style={{ fontSize: 13, fontWeight: 700, color: "#111827" }}>{STATUS_LABEL[editedRow.contact_status] || editedRow.contact_status}</div><div style={S.metricLabel}>Stage</div></div>
               </div>
-              {editedRow.transferred_date && (
-                <div style={{ background: "#f0fdf4", borderRadius: 10, padding: "10px 14px", fontSize: 12, color: "#166534", border: "1px solid #dcfce7", display: "flex", alignItems: "center", gap: 8 }}>
-                  <span>✅</span>
-                  <span><strong>Transferred:</strong> {new Date(editedRow.transferred_date).toLocaleDateString()}</span>
-                </div>
-              )}
+              {editedRow.transferred_date && (() => {
+                const declined = editedRow.approval_status === "Declined"
+                return (
+                  <div style={{ background: declined ? "#fef2f2" : "#f0fdf4", borderRadius: 10, padding: "10px 14px", fontSize: 12, color: declined ? "#991b1b" : "#166534", border: `1px solid ${declined ? "#fee2e2" : "#dcfce7"}`, display: "flex", alignItems: "center", gap: 8 }}>
+                    <span>{declined ? "✕" : "✅"}</span>
+                    <span><strong>Reviewed:</strong> {new Date(editedRow.transferred_date).toLocaleDateString()}</span>
+                  </div>
+                )
+              })()}
             </div>
           )}
 

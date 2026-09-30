@@ -4,6 +4,56 @@ import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import { assignGoAffProCoupon } from "@/lib/goaffpro-provision"
 
+// Read for drawers whose own data doesn't carry attribution (e.g. Post Tracker's).
+export async function GET(
+  _req: NextRequest,
+  { params }: { params: Promise<{ brandId: string; brandInfluencerId: string }> }
+) {
+  try {
+    const session = await getServerSession(authOptions)
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
+
+    const { brandId, brandInfluencerId } = await params
+    const accessCount = await prisma.brand.count({
+      where: {
+        id: brandId,
+        is_active: true,
+        OR: [
+          { owner_id: session.user.id },
+          { members: { some: { user_id: session.user.id } } },
+        ],
+      },
+    })
+    if (accessCount === 0) {
+      return NextResponse.json({ error: "Not found" }, { status: 403 })
+    }
+
+    const bi = await prisma.brandInfluencer.findFirst({
+      where: { id: brandInfluencerId, brand_id: brandId },
+      select: {
+        attribution: { select: { coupon: true, ref_code: true, affiliate_link: true, spark_ads: true } },
+      },
+    })
+    if (!bi) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 })
+    }
+
+    return NextResponse.json({
+      data: {
+        coupon: bi.attribution?.coupon ?? null,
+        refCode: bi.attribution?.ref_code ?? null,
+        affiliateLink: bi.attribution?.affiliate_link ?? null,
+        sparkAds: bi.attribution?.spark_ads ?? null,
+      },
+    })
+  } catch (error) {
+    console.error("GET /api/brand/[brandId]/attribution/[brandInfluencerId]:", error)
+    return NextResponse.json({ error: "Failed to load attribution data" }, { status: 500 })
+  }
+}
+
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ brandId: string; brandInfluencerId: string }> }
@@ -16,10 +66,21 @@ export async function PATCH(
 
     const { brandId, brandInfluencerId } = await params
     const body = await req.json()
-    const { coupon, affiliateLink, sparkAds } = body as {
+    const { coupon, affiliateLink, sparkAds, productCost } = body as {
       coupon?: string | null
       affiliateLink?: string | null
       sparkAds?: string | null
+      productCost?: string | number | null
+    }
+
+    // "$1,250.50" → 1250.5; blank clears it; non-numbers are rejected.
+    let parsedProductCost: number | null | undefined
+    if (productCost !== undefined) {
+      const raw = String(productCost ?? "").replace(/[$,\s]/g, "")
+      parsedProductCost = raw === "" ? null : Number(raw)
+      if (parsedProductCost !== null && (!Number.isFinite(parsedProductCost) || parsedProductCost < 0)) {
+        return NextResponse.json({ error: "Product cost must be a positive number" }, { status: 400 })
+      }
     }
 
     // ── Access check — only brand owner/members can edit attribution data ────
@@ -42,6 +103,8 @@ export async function PATCH(
       where: { id: brandInfluencerId, brand_id: brandId },
       select: {
         id: true,
+        product_details: true,
+        partner: { select: { id: true } },
         attribution: { select: { coupon: true, affiliate_id: true } },
       },
     })
@@ -71,6 +134,26 @@ export async function PATCH(
       },
     })
 
+    if (parsedProductCost !== undefined) {
+      if (brandInfluencer.partner) {
+        await prisma.brandPartner.update({
+          where: { id: brandInfluencer.partner.id },
+          data: { product_cost: parsedProductCost ?? 0 },
+        })
+      } else {
+        let details: Record<string, unknown> | null = null
+        try { details = brandInfluencer.product_details ? JSON.parse(brandInfluencer.product_details) : {} } catch { details = null }
+        if (details && typeof details === "object") {
+          if (parsedProductCost === null) delete details.productCost
+          else details.productCost = parsedProductCost
+          await prisma.brandInfluencer.update({
+            where: { id: brandInfluencerId },
+            data: { product_details: JSON.stringify(details) },
+          })
+        }
+      }
+    }
+
     // ── Conditional GoAffPro coupon sync ──────────────────────────────────────
     let goAffPro: { synced: boolean; reason?: string } = { synced: false }
 
@@ -95,6 +178,7 @@ export async function PATCH(
         coupon: updated.coupon,
         affiliateLink: updated.affiliate_link,
         sparkAds: updated.spark_ads,
+        ...(parsedProductCost !== undefined ? { productCost: parsedProductCost } : {}),
       },
       goAffPro,
     })

@@ -144,10 +144,12 @@ export function SidebarUserCard({
 }) {
   const initials =
     (name.trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("") || "A").toUpperCase()
+  // Falls back to initials when the image fails to load; reset if the URL changes.
+  const [failedSrc, setFailedSrc] = React.useState<string | null>(null)
 
   const identity = (
     <>
-      {image ? (
+      {image && failedSrc !== image ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={image} alt="" className="h-8 w-8 shrink-0 rounded-full object-cover @max-[190px]:hidden" />
       ) : (

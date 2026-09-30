@@ -263,7 +263,8 @@ const nextAuthConfig = {
               where: { email: profile.email },
               data: {
                 name: profile.name || dbUser.name,
-                image: avatarUrl || dbUser.image,
+                // Google photo only when there is none yet, so an uploaded one isn't replaced.
+                image: dbUser.image || avatarUrl,
               },
             })
           }
