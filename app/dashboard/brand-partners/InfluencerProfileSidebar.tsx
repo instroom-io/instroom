@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import { invalidateInfluencerDerivedCaches } from "@/lib/cache-invalidation"
 
 // ─── Types (mirrors what BrandPartnersPage passes) ────────────────────────────
 
@@ -260,12 +261,14 @@ export default function InfluencerProfileSidebar({ partner, campaigns, onClose }
 
   const [orderData, setOrderData] = useState({
     firstName: partner.firstName, lastName: partner.lastName, contactNumber: "",
-    productName: "", orderNumber: "", productCost: "",
+    productName: "", orderNumber: "", productCost: partner.prodCost ? String(partner.prodCost) : "",
     discountCode: partner.coupon || partner.ref_code || "CODE" + partner.firstName.toUpperCase(),
     affiliateLink: partner.affiliate_link || "https://instroom.io/ref/" + partner.firstName.toLowerCase(),
     sparkAds: partner.spark_ads || "",
     shippingAddress: "", trackingLink: "",
   })
+  // Product cost is only sent once edited, so saving other fields can't clear it.
+  const [productCostEdited, setProductCostEdited] = useState(false)
   const [attributionSaveState, setAttributionSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle")
   const [attributionSaveMessage, setAttributionSaveMessage] = useState<string | null>(null)
 
@@ -281,9 +284,12 @@ export default function InfluencerProfileSidebar({ partner, campaigns, onClose }
           coupon: orderData.discountCode || null,
           affiliateLink: orderData.affiliateLink || null,
           sparkAds: orderData.sparkAds || null,
+          ...(productCostEdited ? { productCost: orderData.productCost } : {}),
         }),
       })
       if (!res.ok) throw new Error("Failed to save")
+      if (productCostEdited) invalidateInfluencerDerivedCaches(partner.brandId)
+      setProductCostEdited(false)
       const json = await res.json()
       setAttributionSaveState("saved")
       if (json.goAffPro?.synced === false && json.goAffPro?.reason) {
@@ -454,7 +460,7 @@ export default function InfluencerProfileSidebar({ partner, campaigns, onClose }
               <div className="pfg"><div className="pfl">Contact Number</div><input className="pfi" value={orderData.contactNumber} onChange={e => setOrderData(d => ({ ...d, contactNumber: e.target.value }))} placeholder="Contact Number" /></div>
               <div className="pfg"><div className="pfl">Product Name</div><input className="pfi" value={orderData.productName} onChange={e => setOrderData(d => ({ ...d, productName: e.target.value }))} placeholder="Product Name" /></div>
               <div className="pfg"><div className="pfl">Order Number</div><input className="pfi" value={orderData.orderNumber} onChange={e => setOrderData(d => ({ ...d, orderNumber: e.target.value }))} placeholder="Order Number" /></div>
-              <div className="pfg"><div className="pfl">Product Cost</div><input className="pfi" value={orderData.productCost} onChange={e => setOrderData(d => ({ ...d, productCost: e.target.value }))} /></div>
+              <div className="pfg"><div className="pfl">Product Cost</div><input className="pfi" value={orderData.productCost} onChange={e => { setProductCostEdited(true); setOrderData(d => ({ ...d, productCost: e.target.value })) }} /></div>
               <div className="pfg"><div className="pfl">Shipping Address</div><input className="pfi" value={orderData.shippingAddress} onChange={e => setOrderData(d => ({ ...d, shippingAddress: e.target.value }))} placeholder="Shipping Address" /></div>
               <div className="pfg"><div className="pfl">Tracking Link</div><input className="pfi" value={orderData.trackingLink} onChange={e => setOrderData(d => ({ ...d, trackingLink: e.target.value }))} placeholder="Tracking Link" /></div>
               <div style={{ display: "flex", justifyContent: "flex-end" }}><button className="btn-primary">Save</button></div>

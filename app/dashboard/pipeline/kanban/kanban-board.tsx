@@ -369,6 +369,14 @@ function influencerToPartner(inf: PipelineInfluencer, brandId?: string): Partner
     brandInfluencerId:  inf.id,
     collabType:         inf.collabType,
     notes:              inf.notes,
+    agreedRate:         inf.agreedRate,
+    internalRating:     inf.internalRating,
+    likesCount:         inf.likesCount,
+    commentsCount:      inf.commentsCount,
+    viewsCount:         inf.viewsCount,
+    orderStatus:        inf.orderStatus,
+    campaignName:       inf.campaignName,
+    contactStatus:      inf.contactStatus,
   }
 }
 

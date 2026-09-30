@@ -148,6 +148,30 @@ export function transitionRefusalReason(from: string, to: string): string {
   return `Cannot move from ${from} to ${to}.`
 }
 
+/** Declined on the Influencers List (a Pipeline Not Interested sets contact_status "not_interested"). */
+export function isListDeclined(approvalStatus: string | null | undefined, contactStatus: string | null | undefined): boolean {
+  return approvalStatus === "Declined" && contactStatus !== "not_interested"
+}
+
+/** Product Cost saved from the profile order form (product_details.productCost). */
+export function productCostFromDetails(productDetails: string | null | undefined): number {
+  try {
+    const cost = Number(JSON.parse(productDetails || "{}")?.productCost)
+    return Number.isFinite(cost) ? cost : 0
+  } catch {
+    return 0
+  }
+}
+
+/** Post Tracker's product_details.completed flag. */
+export function isPostTrackerCompleted(productDetails: string | null | undefined): boolean {
+  try {
+    return JSON.parse(productDetails || "{}")?.completed === true
+  } catch {
+    return false
+  }
+}
+
 /** DB fields for a move to a Pipeline stage. Shared by the pipeline and inbox routes. */
 export function pipelineStatusToFields(pipelineStatus: string, collaborationType?: string): {
   contact_status:  string

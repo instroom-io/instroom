@@ -106,25 +106,12 @@ export async function getGoAffProAffiliate(accessToken: string, affiliateId: str
   return json.affiliates?.[0] ?? null
 }
 
-export async function listGoAffProAffiliates(accessToken: string) {
-  const json = await goAffProFetch<GoAffProCollection<GoAffProAffiliate>>(
-    accessToken,
-    "/admin/affiliates",
-    {
-      fields: "id,name,email,ref_code,coupon,referral_link,status",
-      limit: 1000,
-    }
-  )
-
-  return json.affiliates ?? json.data ?? []
-}
-
-export async function listGoAffProTraffic(accessToken: string, days = 7) {
+/** All visits after `afterId` (omit for the full history). */
+export async function listGoAffProTraffic(accessToken: string, afterId?: string) {
   const allTraffic: GoAffProTrafficEntry[] = []
-  const createdAtMin = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
   const limit = 1000
   const maxPages = 10
-  let sinceId: string | undefined
+  let sinceId: string | undefined = afterId
 
   for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
     const json = await goAffProFetch<GoAffProCollection<GoAffProTrafficEntry>>(
@@ -132,7 +119,6 @@ export async function listGoAffProTraffic(accessToken: string, days = 7) {
       "/admin/traffic",
       {
         fields: "id,affiliate_id,landing_page,referring_page,ip_address,user_agent,created_at",
-        created_at_min: createdAtMin,
         limit,
         ...(sinceId ? { since_id: sinceId } : {}),
       }

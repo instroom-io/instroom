@@ -21,7 +21,7 @@ import {
 } from "./constants"
 import {
   cleanHandle, getProfileUrl, sortRows, newEmptyRow, getStaticCols,
-  handleApprovalChange, isValidUrl, normalizeUrl, formatFollowers,
+  handleApprovalChange, canListDecline, isValidUrl, normalizeUrl, formatFollowers,
   exportToCSV, downloadTemplate, importFromCSV,
   normalizeApiUsername, isValidApiUsername, describeLookupFailure, lookupFailureMessage,
   isUsableEmail, normalizeEmail, normalizeContactInfo, isUniqueContact, contactMatchKey,
@@ -34,7 +34,6 @@ import {
   ManageOptionsModal, AddColumnModal, FilterPopover,
 } from "./modals"
 import { MobileRowCards } from "./mobile-row-cards"
-import { DeclineModal } from "@/components/shared/decline-modal"
 import { ToastContainer } from "./toast"
 import { DataSyncStatus } from "@/components/data-sync-status"
 import ProfileSidebar from "./profile-sidebar"
@@ -530,8 +529,6 @@ export default function TableSheet({
   })
 
   const [showAddRowsModal, setShowAddRowsModal]   = useState(false)
-  const [showDeclineModal, setShowDeclineModal]   = useState(false)
-  const [pendingDeclineRowIdx, setPendingDeclineRowIdx] = useState<number | null>(null)
   const [showImportExportMenu, setShowImportExportMenu]           = useState(false)
   const [showSettingsMenu, setShowSettingsMenu]       = useState(false)
   const [showManageNiches, setShowManageNiches]       = useState(false)
@@ -1722,18 +1719,6 @@ export default function TableSheet({
     return OUTREACH_FIELDS.has(colKey)
   }, [customCols])
 
-  const handleDeclineConfirm = (reason: string, declineNotes?: string) => {
-    if (pendingDeclineRowIdx === null) return
-    const ar = filteredRows[pendingDeclineRowIdx]; const ai = rows.findIndex(r => r.id === ar.id); if (ai === -1) return
-    setRows(prev => { const n = [...prev]; n[ai] = handleApprovalChange(prev[ai], "Declined", reason, declineNotes); onRowsChange?.(n); return n })
-    setShowDeclineModal(false); setPendingDeclineRowIdx(null)
-    // Close the profile panel if it is showing the row just declined — it is
-    // off the active list now, so leaving it open next to the grid invites
-    // edits to a record the user has finished with.
-    if (sidebarRowId === ar.id) setSidebarRowId(null)
-    containerRef.current?.focus()
-  }
-
   /**
    * Queue an auto-fetch for a row once its handle/platform edits settle.
    *
@@ -1819,7 +1804,6 @@ export default function TableSheet({
     const actualRow = filteredRows[rowIdx]; const actualRowIdx = rows.findIndex(r => r.id === actualRow.id); if (actualRowIdx === -1) return
     if (colKey === "approval_status" && !canApproveInfluencers) return
     if (actualRow.approval_status === "Declined" && isOutreachField(colKey)) return
-    if (colKey === "approval_status" && value === "Declined") { setPendingDeclineRowIdx(rowIdx); setShowDeclineModal(true); return }
     const currentRow = rows[actualRowIdx]
     let shouldFetch = false, fetchRowId = currentRow.id, fetchHandle = "", fetchPlatform = ""
     let cleanedValue = value
@@ -2293,7 +2277,7 @@ export default function TableSheet({
           giving onAddOption its own dbAdd call here double-fired the create request. */}
       if (col.key === "niche") return <td key={col.key} className={`border border-gray-200 px-1.5 py-1 text-xs relative ${ringCls}`} style={{ minWidth: col.minWidth }}>{value ? <span className="inline-block px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 text-xs font-medium truncate max-w-full">{value}</span> : <span className="text-gray-300">—</span>}<DropdownEditor value={value} options={nicheOptions} onChange={v => applyCellValue(rowIdx, col.key, v)} onClose={closeP} onAddOption={() => {}} /></td>
       if (col.key === "location") return <td key={col.key} className={`border border-gray-200 px-1.5 py-1 text-xs relative ${ringCls}`} style={{ minWidth: col.minWidth }}>{value ? <span className="truncate block text-sm">{value}</span> : <span className="text-gray-300">—</span>}<DropdownEditor value={value} options={locationOptions} onChange={v => applyCellValue(rowIdx, col.key, v)} onClose={closeP} onAddOption={() => {}} /></td>
-      if (col.key === "approval_status") return <td key={col.key} className={`border border-gray-200 px-1.5 py-1 text-xs relative ${ringCls}`} style={{ minWidth: col.minWidth }}><ApprovalBadge value={value} /><FloatingPopup onClose={closeP}><div className="w-52 max-h-60 overflow-auto py-1">{(["Approved", "Declined", "Pending"] as const).map(o => (<button key={o} onMouseDown={e => e.preventDefault()} onClick={() => { applyCellValue(rowIdx, col.key, o); closeP() }} className={`flex items-center gap-2 w-full text-left px-2.5 py-1.5 text-xs hover:bg-gray-50 transition ${value === o ? "font-medium bg-gray-50" : "text-gray-700"}`}>{value === o && <IconCheck size={12} className="text-indigo-600 flex-shrink-0" />}<span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${APPROVAL_STYLE[o] ?? ""}`}>{o}</span></button>))}</div></FloatingPopup></td>
+      if (col.key === "approval_status") return <td key={col.key} className={`border border-gray-200 px-1.5 py-1 text-xs relative ${ringCls}`} style={{ minWidth: col.minWidth }}><ApprovalBadge value={value} /><FloatingPopup onClose={closeP}><div className="w-52 max-h-60 overflow-auto py-1">{(["Approved", "Declined", "Pending"] as const).filter(o => o !== "Declined" || canListDecline(filteredRows[rowIdx])).map(o => (<button key={o} onMouseDown={e => e.preventDefault()} onClick={() => { applyCellValue(rowIdx, col.key, o); closeP() }} className={`flex items-center gap-2 w-full text-left px-2.5 py-1.5 text-xs hover:bg-gray-50 transition ${value === o ? "font-medium bg-gray-50" : "text-gray-700"}`}>{value === o && <IconCheck size={12} className="text-indigo-600 flex-shrink-0" />}<span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${APPROVAL_STYLE[o] ?? ""}`}>{o}</span></button>))}</div></FloatingPopup></td>
       if (col.key === "contact_status") return <td key={col.key} className={`border border-gray-200 px-1.5 py-1 text-xs relative ${ringCls}`} style={{ minWidth: col.minWidth }}><StatusBadge value={value} /><FloatingPopup onClose={closeP}><div className="w-52 max-h-60 overflow-auto py-1">{DEFAULT_CONTACT_STATUSES.map(o => (<button key={o.value} onMouseDown={e => e.preventDefault()} onClick={() => { applyCellValue(rowIdx, col.key, o.value); closeP() }} className={`flex items-center gap-2 w-full text-left px-2.5 py-1.5 text-xs hover:bg-gray-50 transition ${value === o.value ? "font-medium bg-gray-50" : "text-gray-700"}`}>{value === o.value && <IconCheck size={12} className="text-indigo-600 flex-shrink-0" />}<span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${STATUS_STYLE[o.value] ?? ""}`}>{o.label}</span></button>))}</div></FloatingPopup></td>
       if (col.key === "gender") return <td key={col.key} className={`border border-gray-200 px-1.5 py-1 text-xs relative ${ringCls}`} style={{ minWidth: col.minWidth }}><span className="block truncate">{value || <span className="text-gray-300">—</span>}</span><FloatingPopup onClose={closeP}><div className="w-52 max-h-60 overflow-auto py-1"><button onMouseDown={e => e.preventDefault()} onClick={() => { applyCellValue(rowIdx, col.key, ""); closeP() }} className={`w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50 transition ${!value ? "text-indigo-600 font-medium" : "text-gray-400"}`}>— Non —</button>{DEFAULT_GENDERS.map(g => (<button key={g} onMouseDown={e => e.preventDefault()} onClick={() => { applyCellValue(rowIdx, col.key, g); closeP() }} className={`flex items-center gap-2 w-full text-left px-2.5 py-1.5 text-xs hover:bg-gray-50 transition ${value === g ? "text-indigo-700 font-medium bg-indigo-50" : "text-gray-700"}`}>{value === g && <IconCheck size={12} className="text-indigo-600 flex-shrink-0" />}{g}</button>))}</div></FloatingPopup></td>
       if (col.type === "dropdown" && col.isCustom) return <td key={col.key} className={`border border-gray-200 px-1.5 py-1 text-xs relative ${ringCls}`} style={{ minWidth: col.minWidth }}>{value ? <span className="inline-block px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 text-xs font-medium truncate max-w-full">{value}</span> : <span className="text-gray-300">—</span>}<DropdownEditor value={value} options={col.options ?? []} onChange={v => applyCellValue(rowIdx, col.key, v)} onClose={closeP} onAddOption={o => addOptionToCol((col as CustomColDef).fieldKey, o)} /></td>
@@ -2602,23 +2586,6 @@ export default function TableSheet({
       )}
 
       <AddRowsModal isOpen={showAddRowsModal} onClose={() => setShowAddRowsModal(false)} onAdd={handleAddMultipleRows} selectedCount={selectedRowIds.size} />
-
-      {/* Decline — the SAME modal the Pipeline board opens for "Mark as not
-          interested", over the same reason list, so a decline made here is
-          recorded identically (components/shared/decline-modal.tsx). */}
-      {showDeclineModal && pendingDeclineRowIdx !== null && filteredRows[pendingDeclineRowIdx] && (
-        <DeclineModal
-          name={filteredRows[pendingDeclineRowIdx].full_name?.trim() || filteredRows[pendingDeclineRowIdx].handle || "Influencer"}
-          handle={filteredRows[pendingDeclineRowIdx].handle}
-          profileImageUrl={filteredRows[pendingDeclineRowIdx].profile_image_url}
-          /* Above the profile sidebar's zIndex 500 — the sidebar can be open
-             behind this (its Status dropdown is one way in), and at the default
-             z-50 it stayed painted over the modal. */
-          zIndex={600}
-          onConfirm={handleDeclineConfirm}
-          onCancel={() => { setShowDeclineModal(false); setPendingDeclineRowIdx(null); containerRef.current?.focus() }}
-        />
-      )}
 
       {sidebarRow && (
         <ProfileSidebar row={sidebarRow} customCols={customCols} onUpdate={handleUpdateRow} onClose={() => setSidebarRowId(null)}

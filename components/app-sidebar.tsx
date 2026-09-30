@@ -7,6 +7,7 @@ import { useSession } from "next-auth/react"
 
 import type { Sidebar } from "@/components/ui/sidebar"
 import { signOutEverywhere } from "@/lib/sign-out"
+import { useCachedFetch } from "@/lib/data-cache"
 import { DASHBOARD_NAV } from "@/components/sidebar/nav-config"
 import { PortalSidebar } from "@/components/sidebar/portal-sidebar"
 
@@ -23,7 +24,17 @@ function AppSidebarInner({
   // forever, and every sidebar link would keep losing brandId thereafter.
   const searchParams = useSearchParams()
   const brandId = searchParams.get("brandId")
-  const { data: session } = useSession()
+  const { data: session, status } = useSession()
+  // The session's image is copied at login and goes stale; read the current one
+  // from the same cached profile the Settings page uses (and refreshes on upload).
+  const { data: profile } = useCachedFetch<{ image?: string | null }>(
+    status === "authenticated" ? "/api/settings/profile" : null,
+    async () => {
+      const r = await fetch("/api/settings/profile")
+      if (!r.ok) throw new Error(`profile failed (${r.status})`)
+      return await r.json()
+    }
+  )
 
   // Preserved from the previous NavMain implementation: brandId is threaded
   // onto every destination so it survives navigation.
@@ -46,7 +57,7 @@ function AppSidebarInner({
       user={{
         name: session?.user?.name || "User",
         email: session?.user?.email || undefined,
-        image: session?.user?.image,
+        image: profile?.image ?? session?.user?.image,
         settingsHref: transformHref("/dashboard/settings"),
         onSignOut: () => signOutEverywhere(),
       }}

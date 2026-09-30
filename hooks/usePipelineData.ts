@@ -51,6 +51,8 @@ export interface PipelineInfluencer {
   stage: number | null
   orderStatus: string | null
   contentPosted: boolean
+  /** Post Tracker's completed flag. */
+  completed?: boolean
   approvalStatus: string | null
   approvalNotes: string | null
   niReason?: string
@@ -61,6 +63,9 @@ export interface PipelineInfluencer {
   currency: string | null
   deliverables: string | null
   deadline: string | null
+  likesCount?: number
+  commentsCount?: number
+  viewsCount?: number
   notes: string
   internalRating: number | null
   lastContact: string
@@ -147,6 +152,7 @@ function mapItem(item: any): PipelineInfluencer {
     stage:           item.stage          ?? null,
     orderStatus:     item.orderStatus    ?? null,
     contentPosted:   item.contentPosted  ?? false,
+    completed:       item.completed      === true,
     approvalStatus:  item.approvalStatus ?? null,
     approvalNotes:   item.approvalNotes  ?? null,
     niReason:        item.approvalNotes  || undefined,
@@ -156,6 +162,9 @@ function mapItem(item: any): PipelineInfluencer {
     currency:        item.currency       ?? null,
     deliverables:    item.deliverables   ?? null,
     deadline:        item.deadline       ?? null,
+    likesCount:      item.likesCount     ?? 0,
+    commentsCount:   item.commentsCount  ?? 0,
+    viewsCount:      item.viewsCount     ?? 0,
     notes:           item.notes          || "",
     internalRating:  item.internalRating ?? null,
     lastContact:     item.lastContact,
