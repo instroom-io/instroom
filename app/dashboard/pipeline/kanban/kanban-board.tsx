@@ -60,6 +60,7 @@ import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { BoardSkeleton } from "@/components/shared/skeletons"
 import { DeclineModal } from "@/components/shared/decline-modal"
 import { StageActionButton } from "@/components/shared/stage-action-button"
+import { InfoTooltip } from "@/components/shared/anchored-tooltip"
 import { DELIVERABLE_COLLAB_TYPES, MAX_DELIVERABLES } from "@/lib/deliverables"
 import {
   allowedTransitions,
@@ -215,28 +216,20 @@ function ColumnInfoTooltip({ status, variant }: { status: string; variant: "ligh
   const textColor   = variant === "dark" ? "text-white"      : "text-red-700"
 
   return (
-    <div className="relative group/info flex-shrink-0">
-      <span
-        className={`text-[10px] font-medium border ${borderColor} ${textColor} rounded-full w-4 h-4 flex items-center justify-center opacity-70 cursor-default select-none hover:opacity-100 transition-opacity`}
-      >
-        i
-      </span>
-      {/* Tooltip panel */}
-      <div className="absolute top-full right-0 mt-1.5 w-64 bg-white border border-gray-200 rounded-xl p-3 text-xs text-gray-700 leading-relaxed z-[60] hidden group-hover/info:block shadow-lg pointer-events-none">
-        <p className="font-semibold text-gray-900 mb-1 text-[11px]">{status}</p>
-        <p className="text-gray-600">{info.short}</p>
-        {info.move && (
-          <p className="mt-1.5 text-gray-400 border-t border-gray-100 pt-1.5">
-            <span className="font-medium text-gray-500">Next → </span>{info.move}
-          </p>
-        )}
-        {info.terminal && (
-          <p className="mt-1.5 text-[10px] font-medium text-red-500 border-t border-gray-100 pt-1.5 uppercase tracking-wide">
-            Terminal — cannot be moved
-          </p>
-        )}
-      </div>
-    </div>
+    <InfoTooltip iconClassName={`${borderColor} ${textColor}`}>
+      <p className="font-semibold text-gray-900 mb-1 text-[11px]">{status}</p>
+      <p className="text-gray-600">{info.short}</p>
+      {info.move && (
+        <p className="mt-1.5 text-gray-400 border-t border-gray-100 pt-1.5">
+          <span className="font-medium text-gray-500">Next → </span>{info.move}
+        </p>
+      )}
+      {info.terminal && (
+        <p className="mt-1.5 text-[10px] font-medium text-red-500 border-t border-gray-100 pt-1.5 uppercase tracking-wide">
+          Terminal — cannot be moved
+        </p>
+      )}
+    </InfoTooltip>
   )
 }
 

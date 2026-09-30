@@ -103,6 +103,7 @@ export async function GET(req: Request) {
         // Manual post metrics captured in the Post Tracker.
         likes_count: true,
         comments_count: true,
+        views_count: true,
         influencer: {
           // full_name backs name search in the toolbar; handle backs @handle
           // search. Same two fields the Post Tracker search matches on.
@@ -228,9 +229,9 @@ export async function GET(req: Request) {
         rejectionReason:  r.approval_notes ?? null,
         rejectionBucket:  resolveRejectionBucket(r.approval_notes),
 
-        // Views exist only as detected-post data — there is no manual views
-        // column anywhere in the schema.
-        views:    Number(posts?._sum.view_count ?? 0),
+        // Detected posts first, same as likes/comments; otherwise the views
+        // fetched from (or typed against) the Post Tracker's post link.
+        views:    Number(posts?._sum.view_count ?? r.views_count ?? 0),
         likes:    Number(detectedLikes    ?? r.likes_count    ?? 0),
         comments: Number(detectedComments ?? r.comments_count ?? 0),
 

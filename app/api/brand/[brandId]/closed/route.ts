@@ -160,6 +160,7 @@ export async function GET(
         likes_count: true,
         comments_count: true,
         engagement_count: true,
+        views_count: true,
         internal_rating: true,
         updated_at: true,
         created_at: true,
@@ -194,27 +195,32 @@ export async function GET(
     // rows already exist in DetectedPost — so surface a count per influencer
     // instead of making the client fetch the detection endpoint per card.
     //
-    // groupBy (not findMany) because only the count and the newest timestamp
-    // are needed, and this runs on every Post Tracker load. Scoped by brand_id
-    // as well as the id list so another workspace's rows can never be counted.
+    // Only posts published since tracking started count — the row's In-Transit
+    // date (shipped_at, else delivered_at), the same cutoff the detection pass
+    // uses (lib/post-tracker/monitor.ts). That cutoff differs per row, so the
+    // count is taken over a narrow select rather than a groupBy. Scoped by
+    // brand_id as well as the id list so another workspace's rows can never be
+    // counted.
     const detectionRows = rows.length
-      ? await prisma.detectedPost.groupBy({
-          by: ["brand_influencer_id"],
+      ? await prisma.detectedPost.findMany({
           where: {
             brand_id: brandId,
             brand_influencer_id: { in: rows.map((r) => r.id) },
           },
-          _count: { _all: true },
-          _max: { detected_at: true },
+          select: { brand_influencer_id: true, published_at: true, detected_at: true },
         })
       : []
 
-    const detectionByInfluencer = new Map(
-      detectionRows.map((d) => [
-        d.brand_influencer_id,
-        { count: d._count._all, latest: d._max.detected_at },
-      ])
-    )
+    const trackingSinceById = new Map(rows.map((r) => [r.id, r.shipped_at ?? r.delivered_at ?? null]))
+    const detectionByInfluencer = new Map<string, { count: number; latest: Date | null }>()
+    for (const d of detectionRows) {
+      const since = trackingSinceById.get(d.brand_influencer_id)
+      if (since && (!d.published_at || d.published_at < since)) continue
+      const entry = detectionByInfluencer.get(d.brand_influencer_id) ?? { count: 0, latest: null }
+      entry.count += 1
+      if (!entry.latest || d.detected_at > entry.latest) entry.latest = d.detected_at
+      detectionByInfluencer.set(d.brand_influencer_id, entry)
+    }
 
     const data = rows.map((row) => {
       const detection = detectionByInfluencer.get(row.id)
@@ -287,6 +293,7 @@ export async function GET(
         likesCount:      row.likes_count      || 0,
         commentsCount:   row.comments_count   || 0,
         engagementCount: row.engagement_count || 0,
+        viewsCount:      row.views_count      || 0,
 
         paidCollabData:  productDetails.paidCollab || null,
         completed:       productDetails.completed === true,

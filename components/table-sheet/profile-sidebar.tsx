@@ -237,7 +237,9 @@ function HistoryTab({ brandId, biId }: { brandId?: string; biId: string }) {
 }
 
 // ─── Paid Collab Details tab ────────────────────────────────────────────────────
-type StepStatus = "pending" | "submitted" | "revision_requested" | "resubmitted" | "approved"
+// "n_a": this deliverable has no script / content review step. Treated as
+// done — it never blocks the content step or the "all approved" rollups.
+type StepStatus = "n_a" | "pending" | "submitted" | "revision_requested" | "resubmitted" | "approved"
 type ContractStatus = "not_started" | "draft" | "sent" | "signed"
 type PostStatus = "pending" | "submitted" | "live"
 type PayStructure = "upfront" | "5050" | "after" | "custom"
@@ -269,12 +271,14 @@ const PC_STATUS_STYLE: Record<string, { bg: string; color: string; border: strin
   due: { bg: "#faeeda", color: "#854f0b", border: "#fac775" },
   unpaid: { bg: "#fcebeb", color: "#a32d2d", border: "#f7c1c1" },
   off: { bg: "#f1f0eb", color: "#aaaaaa", border: "#e8e7e0" },
+  n_a: { bg: "#f1f0eb", color: "#aaaaaa", border: "#e8e7e0" },
 }
 
 const PC_STATUS_LABEL: Record<string, string> = {
   not_started: "Not started", draft: "Draft", sent: "Sent — awaiting signature", signed: "Signed",
   pending: "Pending", submitted: "Submitted", revision_requested: "Revision requested",
   resubmitted: "Resubmitted", approved: "Approved", live: "All live", paid: "Paid", due: "Due", unpaid: "Pending",
+  n_a: "N/A",
 }
 
 function pcStatusSelectStyle(status: string, disabled?: boolean) {
@@ -347,8 +351,8 @@ export function PaidCollabTab({ influencerName, rateHint, initialDeliverables }:
   const anyPostUrl = deliverables.some(d => d.postUrl.trim().length > 0)
   const anyContractLink = contractLink.trim().length > 0
   const n = deliverables.length
-  const scriptAllApproved = n > 0 && deliverables.every(d => d.scriptStatus === "approved")
-  const contentAllApproved = n > 0 && deliverables.every(d => d.contentStatus === "approved")
+  const scriptAllApproved = n > 0 && deliverables.every(d => d.scriptStatus === "approved" || d.scriptStatus === "n_a")
+  const contentAllApproved = n > 0 && deliverables.every(d => d.contentStatus === "approved" || d.contentStatus === "n_a")
 
   const steps: boolean[] = []
   if (contractEnabled) steps.push(contractStatus === "signed")
@@ -490,7 +494,7 @@ export function PaidCollabTab({ influencerName, rateHint, initialDeliverables }:
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: "#fff", borderBottom: "1px solid #f0f0f0" }}>
                   <span style={{ fontSize: 12, fontWeight: 600, color: "#333" }}>{i + 1}. {d.name || `Deliverable ${i + 1}`}</span>
                   <select value={d.scriptStatus} disabled={!d.scriptLink} onChange={e => updateDeliverable(d.id, { scriptStatus: e.target.value as StepStatus })} style={pcStatusSelectStyle(d.scriptStatus, !d.scriptLink)}>
-                    <option value="pending">Pending</option><option value="submitted">Submitted</option>
+                    <option value="n_a">N/A</option><option value="pending">Pending</option><option value="submitted">Submitted</option>
                     <option value="revision_requested">Revision requested</option><option value="resubmitted">Resubmitted</option>
                     <option value="approved">Approved</option>
                   </select>
@@ -518,13 +522,13 @@ export function PaidCollabTab({ influencerName, rateHint, initialDeliverables }:
         <div style={{ borderTop: "1px solid #eee", padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
           {n === 0 && <div style={{ fontSize: 12, color: "#ccc" }}>Add deliverables above first.</div>}
           {deliverables.map((d, i) => {
-            const scriptDone = !scriptEnabled || d.scriptStatus === "approved"
+            const scriptDone = !scriptEnabled || d.scriptStatus === "approved" || d.scriptStatus === "n_a"
             return (
               <div key={d.id} style={{ border: "1px solid #eee", borderRadius: 8, background: "#f9f9f9" }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: "#fff", borderBottom: "1px solid #f0f0f0" }}>
                   <span style={{ fontSize: 12, fontWeight: 600, color: "#333" }}>{i + 1}. {d.name || `Deliverable ${i + 1}`}</span>
                   <select value={d.contentStatus} disabled={!scriptDone || !d.contentLink} onChange={e => updateDeliverable(d.id, { contentStatus: e.target.value as StepStatus })} style={pcStatusSelectStyle(d.contentStatus, !scriptDone || !d.contentLink)}>
-                    <option value="pending">Pending</option><option value="submitted">Submitted</option>
+                    <option value="n_a">N/A</option><option value="pending">Pending</option><option value="submitted">Submitted</option>
                     <option value="revision_requested">Revision requested</option><option value="resubmitted">Resubmitted</option>
                     <option value="approved">Approved</option>
                   </select>

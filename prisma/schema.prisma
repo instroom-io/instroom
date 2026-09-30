@@ -392,6 +392,9 @@ model BrandInfluencer {
   likes_count      Int       @default(0)
   comments_count   Int       @default(0)
   engagement_count Int       @default(0)
+  // Post views — fetched from the post link (EnsembleData) or typed on the
+  // Post Tracker Post tab. Counted in Analytics when no detected post has one.
+  views_count      Int       @default(0)
   agreed_rate      Decimal?
   currency         String?   @db.VarChar(10)
   deliverables     String?   @db.Text

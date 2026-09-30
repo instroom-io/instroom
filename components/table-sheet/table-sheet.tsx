@@ -2574,7 +2574,7 @@ export default function TableSheet({
               stamps the transferred date) — only the wording changed, so the
               button now says what it does. */}
           <button onClick={() => setShowBulkTransferConfirm(true)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-green-600 text-white rounded-lg hover:bg-green-700 transition">
-            <IconCheck size={13} /> Approved
+            <IconCheck size={13} /> Approve
           </button>
           <button onClick={deleteSelectedRows} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-600 bg-white border border-red-200 rounded-lg hover:bg-red-50 transition">
             <IconTrash size={13} /> Delete {selectedRowIds.size}

@@ -272,6 +272,42 @@ export function isLatestRowWrite(key: string, rowId: string, seq: number): boole
   return rowWriteSequences.get(rowSequenceKey(key, rowId)) === seq
 }
 
+/**
+ * Requests for one row, run strictly one after another.
+ *
+ * The optimistic update and the row sequence above keep the SCREEN right when a
+ * card is moved several times in quick succession, but the PATCHes themselves
+ * were sent concurrently, and the server does not see them in order: each one
+ * reads the row, maps the new stage over it and writes the whole thing back. A
+ * slower older request landing last left the database on an earlier stage than
+ * the board showed, and the card jumped back (or out of its column) on the next
+ * refresh.
+ *
+ * Queuing per row means the server applies moves in the order the user made
+ * them, so the last move is always the one that sticks. Keyed by row id alone —
+ * not per cache key — so a Pipeline write and a Post Tracker write to the same
+ * influencer are ordered too. Rows never wait on each other.
+ */
+const rowRequestQueues = new Map<string, Promise<unknown>>()
+
+export function enqueueRowRequest<T>(rowId: string, run: () => Promise<T>): Promise<T> {
+  const previous = rowRequestQueues.get(rowId) ?? Promise.resolve()
+  // A failed earlier request must not block the ones behind it.
+  const next = previous.catch(() => undefined).then(run)
+  rowRequestQueues.set(rowId, next)
+  void next
+    .catch(() => undefined)
+    .finally(() => {
+      if (rowRequestQueues.get(rowId) === next) rowRequestQueues.delete(rowId)
+    })
+  return next
+}
+
+/** `fetch`, queued behind any request already in flight for the same row. */
+export function rowFetch(rowId: string, input: string, init?: RequestInit): Promise<Response> {
+  return enqueueRowRequest(rowId, () => fetch(input, init))
+}
+
 export function markCacheWrite(key: string): void {
   writeGenerations.set(key, (writeGenerations.get(key) ?? 0) + 1)
 }

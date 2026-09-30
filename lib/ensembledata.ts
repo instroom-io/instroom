@@ -218,9 +218,23 @@ function normaliseInstagram(raw: unknown): EnsemblePost | null {
     publishedAt: toDate(node.taken_at_timestamp ?? node.taken_at ?? node.device_timestamp),
     hashtags: extractHashtags(caption),
     mentions: extractMentions(caption),
-    likeCount: num(node.like_count) ?? num(obj(node.edge_liked_by).count),
-    commentCount: num(node.comment_count) ?? num(obj(node.edge_media_to_comment).count),
-    viewCount: num(node.view_count) ?? num(node.play_count),
+    // The single-post endpoint returns the GraphQL media shape
+    // (edge_media_preview_like, edge_media_to_parent_comment, video_view_count),
+    // so those are read as fallbacks after the feed-shape fields.
+    likeCount:
+      num(node.like_count) ??
+      num(obj(node.edge_liked_by).count) ??
+      num(obj(node.edge_media_preview_like).count),
+    commentCount:
+      num(node.comment_count) ??
+      num(obj(node.edge_media_to_comment).count) ??
+      num(obj(node.edge_media_to_parent_comment).count),
+    viewCount:
+      num(node.view_count) ??
+      num(node.play_count) ??
+      num(node.video_play_count) ??
+      num(node.video_view_count) ??
+      num(node.ig_play_count),
     shareCount: num(node.share_count),
   }
 }
@@ -593,4 +607,69 @@ export async function fetchAccountPosts(
   }
 
   return selectNewest(res.data, platform, context, limit, apiCalls, options?.notBefore ?? null)
+}
+
+/* ── Single post by URL ───────────────────────────────────────────────────── */
+
+/** Which platform a post link belongs to, and the id the provider needs. */
+export function parsePostUrl(
+  url: string
+): { platform: "instagram"; code: string } | { platform: "tiktok"; url: string } | null {
+  let u: URL
+  try {
+    u = new URL(url.trim())
+  } catch {
+    return null
+  }
+  const host = u.hostname.replace(/^www\./, "").toLowerCase()
+  if (host === "instagram.com" || host.endsWith(".instagram.com")) {
+    // /p/<code>/, /reel/<code>/, /reels/<code>/, /tv/<code>/ — optionally
+    // prefixed by /<username>/.
+    const m = u.pathname.match(/\/(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/)
+    return m ? { platform: "instagram", code: m[1] } : null
+  }
+  if (host === "tiktok.com" || host.endsWith(".tiktok.com")) {
+    return { platform: "tiktok", url: u.toString() }
+  }
+  return null
+}
+
+/**
+ * Likes, comments and views for ONE post, looked up by its link.
+ *
+ * Used when a post link is saved on the Post Tracker (typed, pasted or dropped)
+ * so the metrics fill in automatically rather than being copied by hand.
+ * Returns a normalised EnsemblePost; any metric the provider omits is null,
+ * never 0, so the caller can leave a stored value untouched.
+ */
+export async function fetchPostByUrl(url: string): Promise<EnsembleResult<EnsemblePost>> {
+  const target = parsePostUrl(url)
+  if (!target) {
+    return { ok: false, error: "Not an Instagram or TikTok post link", retryable: false, apiCalls: 0 }
+  }
+
+  if (target.platform === "instagram") {
+    const res = await request<unknown>("/instagram/post/details", {
+      code: target.code,
+      n_comments_to_fetch: "0",
+    })
+    if (!res.ok) return res
+    const data = obj(res.data).data ?? res.data
+    const post = normaliseInstagram(data)
+    if (!post) {
+      return { ok: false, error: "Instagram post not found", retryable: false, apiCalls: res.apiCalls }
+    }
+    return { ok: true, data: post, apiCalls: res.apiCalls }
+  }
+
+  const res = await request<unknown>("/tt/post/info", { url: target.url })
+  if (!res.ok) return res
+  // Seen as data: [aweme], data: { aweme_detail }, or the aweme itself.
+  const data = obj(res.data).data ?? res.data
+  const raw = Array.isArray(data) ? data[0] : obj(data).aweme_detail ?? data
+  const post = normaliseTikTok(raw)
+  if (!post) {
+    return { ok: false, error: "TikTok post not found", retryable: false, apiCalls: res.apiCalls }
+  }
+  return { ok: true, data: post, apiCalls: res.apiCalls }
 }
