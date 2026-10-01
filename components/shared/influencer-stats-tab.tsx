@@ -25,10 +25,15 @@ const compact = (n: number | null) => {
  * Stats tab shared by the Pipeline and Post Tracker drawers. Loads its own
  * numbers; carries its own styles, since the drawers' styles are scoped.
  */
-export function InfluencerStatsTab({ brandId, brandInfluencerId }: { brandId?: string; brandInfluencerId?: string }) {
+export function InfluencerStatsTab({ brandId, brandInfluencerId, allowManualEntry = false }: { brandId?: string; brandInfluencerId?: string; allowManualEntry?: boolean }) {
   // Tagged with the influencer it belongs to, so a switch never shows the previous one's numbers.
   const key = `${brandId}/${brandInfluencerId}`
   const [loaded, setLoaded] = useState<{ key: string; stats: Stats | null; error: boolean } | null>(null)
+  const [reload, setReload] = useState(0)
+  // Manual entry, for brands not using GoAffPro or another tracking tool.
+  const [manual, setManual] = useState<{ clicks: string; sales: string; revenue: string; productCost: string } | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!brandId || !brandInfluencerId) return
@@ -38,7 +43,10 @@ export function InfluencerStatsTab({ brandId, brandInfluencerId }: { brandId?: s
       .then((json) => { if (!cancelled) setLoaded({ key, stats: json.data, error: false }) })
       .catch(() => { if (!cancelled) setLoaded({ key, stats: null, error: true }) })
     return () => { cancelled = true }
-  }, [brandId, brandInfluencerId, key])
+  }, [brandId, brandInfluencerId, key, reload])
+
+  // A different influencer never inherits an open form.
+  useEffect(() => { setManual(null); setSaveError(null) }, [key])
 
   const current = loaded?.key === key ? loaded : null
   if (current?.error) return <div style={{ fontSize: 12, color: "#B42318" }}>Couldn&apos;t load stats</div>
@@ -48,9 +56,53 @@ export function InfluencerStatsTab({ brandId, brandInfluencerId }: { brandId?: s
   const cvr = stats.clicks > 0 ? (stats.sales / stats.clicks) * 100 : 0
   const roas = stats.totalSpend > 0 ? stats.revenue / stats.totalSpend : null
 
+  const saveManual = async () => {
+    if (!manual) return
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const res = await fetch(`/api/brand/${brandId}/attribution/${brandInfluencerId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(manual),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) { setSaveError(json.error || "Failed to save"); return }
+      setManual(null)
+      setReload((n) => n + 1)
+    } catch {
+      setSaveError("Failed to save")
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-      <div className="stit">Performance — all campaigns combined</div>
+      <div className="stit" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span>Performance — all campaigns combined</span>
+        {allowManualEntry && !manual && (
+          <button type="button" className="manual-link"
+            onClick={() => setManual({ clicks: String(stats.clicks), sales: String(stats.sales), revenue: String(stats.revenue), productCost: String(stats.productCost) })}>
+            Enter manually
+          </button>
+        )}
+      </div>
+      {manual && (
+        <div className="breakdown-box">
+          <div className="manual-grid">
+            <label>Total clicks<input className="manual-input" inputMode="numeric" value={manual.clicks} onChange={(e) => setManual((m) => m && { ...m, clicks: e.target.value })} /></label>
+            <label>Total sales<input className="manual-input" inputMode="numeric" value={manual.sales} onChange={(e) => setManual((m) => m && { ...m, sales: e.target.value })} /></label>
+            <label>Total revenue<input className="manual-input" inputMode="decimal" value={manual.revenue} onChange={(e) => setManual((m) => m && { ...m, revenue: e.target.value })} /></label>
+            <label>Product cost<input className="manual-input" inputMode="decimal" value={manual.productCost} onChange={(e) => setManual((m) => m && { ...m, productCost: e.target.value })} /></label>
+          </div>
+          {saveError && <div style={{ color: "#B42318", marginTop: 6 }}>{saveError}</div>}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginTop: 8 }}>
+            <button type="button" className="manual-cancel" onClick={() => { setManual(null); setSaveError(null) }} disabled={saving}>Cancel</button>
+            <button type="button" className="manual-save" onClick={saveManual} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
+          </div>
+        </div>
+      )}
       <div className="skg">
         <div className="skc"><div className="skv-dark">{stats.clicks.toLocaleString()}</div><div className="skl">Total clicks</div></div>
         <div className="skc"><div className="skv-blue">{cvr.toFixed(1)}%</div><div className="skl">CVR</div></div>
@@ -101,6 +153,15 @@ export function InfluencerStatsTab({ brandId, brandInfluencerId }: { brandId?: s
         .skv-dark  { font-size:16px; font-weight:700; color:#111827; }
         .skv-blue  { font-size:16px; font-weight:700; color:#2c8ec4; }
         .skv-red   { font-size:16px; font-weight:700; color:#e24b4a; }
+        .manual-link { font-size:10px; font-weight:600; color:#0F6B3E; text-transform:none; letter-spacing:0; background:none; border:none; cursor:pointer; }
+        .manual-link:hover { color:#1FAE5B; text-decoration:underline; }
+        .manual-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+        .manual-grid label { display:flex; flex-direction:column; gap:4px; font-size:10px; font-weight:600; color:#6b7280; }
+        .manual-input { width:100%; font-size:12px; padding:6px 8px; border-radius:8px; border:1.5px solid #e5e7eb; background:#fff; color:#111827; box-sizing:border-box; outline:none; }
+        .manual-input:focus { border-color:#1fae5b; }
+        .manual-cancel { font-size:11px; padding:5px 12px; border-radius:7px; border:1px solid #e5e7eb; background:#fff; color:#6b7280; cursor:pointer; }
+        .manual-save { font-size:11px; padding:5px 12px; border-radius:7px; border:none; background:#1FAE5B; color:#fff; cursor:pointer; }
+        .manual-save:disabled, .manual-cancel:disabled { opacity:.5; cursor:default; }
         .breakdown-box { background:#f9fafb; border-radius:8px; padding:10px; margin-bottom:14px; font-size:11px; color:#888; border:1px solid #f3f4f6; }
       `}</style>
     </div>

@@ -1051,3 +1051,122 @@ model CommunityPollVote {
   @@index([brand_id])
   @@index([user_id])
 }
+
+// ─── Research SOPs ────────────────────────────────────────────────────────────
+// A brand-defined research procedure (ordered steps, each optionally mapped to
+// one whitelisted Influencer field — see lib/research-sop/fields.ts) and the
+// runs that execute it. Runs only ever PROPOSE values; nothing reaches the
+// Influencer record until a user approves and applies a result.
+//
+// brand_id / created_by / started_by / brand_influencer_id are app-level
+// references without a database FK: Brand, User and BrandInfluencer are
+// MyISAM on this database and InnoDB cannot reference them (see the
+// 20260905_add_community_poll_votes migration). Every route scopes by brand_id.
+model ResearchSop {
+  id          String   @id @default(cuid()) @db.VarChar(30)
+  brand_id    String   @db.VarChar(30)
+  name        String   @db.VarChar(150)
+  description String?  @db.Text
+  applies_to  String   @default("influencer") @db.VarChar(30)
+  // draft | active | archived
+  status      String   @default("draft") @db.VarChar(20)
+  // Bumped on every saved edit; each run records the version it executed.
+  version     Int      @default(1)
+  created_by  String?  @db.VarChar(30)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  steps ResearchSopStep[]
+  runs  ResearchSopRun[]
+
+  @@index([brand_id, status])
+  @@index([brand_id, updated_at])
+}
+
+model ResearchSopStep {
+  id                    String   @id @default(cuid()) @db.VarChar(30)
+  sop_id                String   @db.VarChar(30)
+  position              Int
+  title                 String   @db.VarChar(200)
+  instructions          String?  @db.Text
+  required              Boolean  @default(true)
+  // One of RESEARCH_FIELDS (lib/research-sop/fields.ts), or null for a step
+  // that guides research without writing a field.
+  target_field          String?  @db.VarChar(50)
+  verification_required Boolean  @default(false)
+  notes                 String?  @db.Text
+  created_at            DateTime @default(now())
+  updated_at            DateTime @updatedAt
+
+  sop ResearchSop @relation(fields: [sop_id], references: [id], onDelete: Cascade)
+
+  @@index([sop_id, position])
+}
+
+model ResearchSopRun {
+  id                 String    @id @default(cuid()) @db.VarChar(30)
+  brand_id           String    @db.VarChar(30)
+  sop_id             String    @db.VarChar(30)
+  // Snapshot of the SOP as it was when the run started, so later edits never
+  // change what a finished run says it did.
+  sop_name           String    @db.VarChar(150)
+  sop_version        Int
+  steps_snapshot     Json
+  // selected | missing | all
+  target_mode        String    @db.VarChar(20)
+  // BrandInfluencer ids, in processing order. processed_count is the cursor.
+  target_ids         Json
+  // queued | running | completed | needs_review | failed
+  status             String    @default("queued") @db.VarChar(20)
+  total_count        Int       @default(0)
+  processed_count    Int       @default(0)
+  completed_count    Int       @default(0)
+  needs_review_count Int       @default(0)
+  failed_count       Int       @default(0)
+  // Batch lease: one processing request at a time per run.
+  locked_until       DateTime?
+  error              String?   @db.VarChar(500)
+  started_by         String?   @db.VarChar(30)
+  started_at         DateTime?
+  finished_at        DateTime?
+  created_at         DateTime  @default(now())
+  updated_at         DateTime  @updatedAt
+
+  sop     ResearchSop            @relation(fields: [sop_id], references: [id], onDelete: Cascade)
+  results ResearchSopRunResult[]
+
+  @@index([brand_id, created_at])
+  @@index([sop_id])
+  @@index([status])
+}
+
+model ResearchSopRunResult {
+  id                  String    @id @default(cuid()) @db.VarChar(30)
+  run_id              String    @db.VarChar(30)
+  brand_id            String    @db.VarChar(30)
+  brand_influencer_id String    @db.VarChar(30)
+  // null on an influencer-level failure (e.g. unsupported platform).
+  field               String?   @db.VarChar(50)
+  // The Influencer value when research ran — the conflict check at apply time.
+  current_value       String?   @db.Text
+  proposed_value      String?   @db.Text
+  source              String?   @db.VarChar(100)
+  confidence          Decimal?  @db.Decimal(4, 3)
+  // explicit | extracted | inferred | uncertain
+  value_type          String?   @db.VarChar(20)
+  // proposed | needs_review | unchanged | not_found | approved | rejected |
+  // applied | conflict | failed
+  status              String    @db.VarChar(20)
+  evidence            String?   @db.Text
+  error               String?   @db.VarChar(500)
+  reviewed_by         String?   @db.VarChar(30)
+  reviewed_at         DateTime?
+  applied_at          DateTime?
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @updatedAt
+
+  run ResearchSopRun @relation(fields: [run_id], references: [id], onDelete: Cascade)
+
+  @@index([run_id, status])
+  @@index([brand_id, brand_influencer_id])
+}

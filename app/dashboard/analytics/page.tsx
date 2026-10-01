@@ -13,6 +13,7 @@ import { toXlsx, downloadBlob, exportStamp, type ExportLine } from "@/lib/analyt
 import { DataSyncStatus } from "@/components/data-sync-status"
 import { PlatformBadge } from "@/components/shared/platform-icon"
 import { HARD_PASS_REASONS, SOFT_PASS_REASONS, OTHER_PASS_REASONS, OTHER_REASON, declineBucket, type DeclineBucket } from "@/lib/decline-reasons"
+import { useBrandTaxonomy } from "@/hooks/useBrandTaxonomy"
 
 // ============================================================
 // Types
@@ -151,6 +152,9 @@ const FIELD_LABEL = "text-xs text-gray-500"
 /** Select control, matching the post-tracker filter panel exactly. */
 const SELECT =
   `${CONTROL} w-full cursor-pointer appearance-none border border-gray-200 bg-gray-50 px-3 pr-8 text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B]`
+/** Date input for the Custom range, same box as SELECT. */
+const DATE_INPUT =
+  `${CONTROL} w-full border border-gray-200 bg-gray-50 px-3 text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B]`
 
 // ============================================================
 // UI Components
@@ -529,6 +533,8 @@ const InlineFilterPanel = ({
   locationOptions,
   onReset,
   hasActiveFilters,
+  onCancel,
+  onApply,
 }: {
   isOpen: boolean;
   filters: any;
@@ -539,13 +545,15 @@ const InlineFilterPanel = ({
   locationOptions: any[];
   onReset: () => void;
   hasActiveFilters: boolean;
+  onCancel: () => void;
+  onApply: () => void;
 }) => {
   if (!isOpen) return null
 
   return (
     <div className="animate-slideIn">
-      {/* "FILTER BY" + Clear all — the same panel header the post-tracker
-          filter panel uses, down to the weights and the red hover. */}
+      {/* Same panel as the Pipeline / Post Tracker / Brand Partners filters:
+          chip groups first, dropdowns in one row, Cancel + Apply footer. */}
       <div className="mb-3 flex items-center justify-between gap-3">
         <span className="text-xs font-bold uppercase tracking-wide text-gray-800">Filter by</span>
         {hasActiveFilters && (
@@ -558,20 +566,78 @@ const InlineFilterPanel = ({
         )}
       </div>
 
-      {/* One row of four from lg, where the popover is button-anchored and has
-          room. Fixed 150px columns, not fractions: a viewport breakpoint like
-          `md:grid-cols-4` squeezed four selects into ~90px inside the panel and
-          truncated their labels. Two up below lg, where the panel is a
-          header-width sheet. */}
-      <div className="grid grid-cols-2 gap-x-3 gap-y-3 lg:grid-cols-[repeat(4,150px)]">
-        <FilterField label="Platform" value={filters.platform} options={platformOptions} onChange={(v) => onFilterChange('platform', v)} />
-        <FilterField label="Date range" value={filters.dateRange} options={dateOptions} onChange={(v) => onFilterChange('dateRange', v)} />
-        <FilterField label="Niche" value={filters.niche} options={nicheOptions} onChange={(v) => onFilterChange('niche', v)} />
-        <FilterField label="Location" value={filters.location} options={locationOptions} onChange={(v) => onFilterChange('location', v)} />
+      <div className="flex flex-col gap-3">
+        <FilterChips label="Platform" value={filters.platform} options={platformOptions}
+          onChange={(v) => onFilterChange('platform', v)} colorClass="bg-blue-50 text-blue-700 border-blue-200" />
+        <div className="border-t border-gray-100" />
+        <div className="flex flex-col gap-2">
+          <FilterChips label="Date range" value={filters.dateRange} options={dateOptions}
+            onChange={(v) => onFilterChange('dateRange', v)} colorClass="bg-purple-50 text-purple-700 border-purple-200" />
+          {filters.dateRange === 'custom' && (
+            <div className="grid grid-cols-2 gap-x-3">
+              <div className="flex min-w-0 flex-col gap-1">
+                <label className={FIELD_LABEL}>From</label>
+                <input type="date" value={filters.dateFrom} max={filters.dateTo || undefined}
+                  onChange={(e) => onFilterChange('dateFrom', e.target.value)} className={DATE_INPUT} aria-label="From date" />
+              </div>
+              <div className="flex min-w-0 flex-col gap-1">
+                <label className={FIELD_LABEL}>To</label>
+                <input type="date" value={filters.dateTo} min={filters.dateFrom || undefined}
+                  onChange={(e) => onFilterChange('dateTo', e.target.value)} className={DATE_INPUT} aria-label="To date" />
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="border-t border-gray-100" />
+        <div className="grid grid-cols-2 gap-x-3 gap-y-3">
+          <FilterField label="Niche" value={filters.niche} options={nicheOptions} onChange={(v) => onFilterChange('niche', v)} />
+          <FilterField label="Location" value={filters.location} options={locationOptions} onChange={(v) => onFilterChange('location', v)} />
+        </div>
+      </div>
+
+      <div className="mt-3 flex items-center justify-end gap-2 border-t border-gray-100 pt-3">
+        <button onClick={onCancel}
+          className="rounded-lg border border-gray-200 px-5 py-1.5 text-sm font-medium text-gray-600 transition hover:border-gray-300">
+          Cancel
+        </button>
+        <button onClick={onApply}
+          className="rounded-lg bg-[#1FAE5B] px-5 py-1.5 text-sm font-medium text-white transition hover:bg-[#178a48]">
+          Apply
+        </button>
       </div>
     </div>
   )
 }
+
+/** Single-select chip row — the chip styling the other filter panels use. */
+const FilterChips = ({
+  label, value, options, onChange, colorClass,
+}: {
+  label: string; value: string; options: { value: string; label: string }[]; onChange: (value: string) => void; colorClass: string
+}) => (
+  <div className="flex flex-col gap-2">
+    <label className="text-xs font-medium text-gray-600">{label}</label>
+    <div className="flex flex-wrap gap-1.5">
+      {options.map(opt => {
+        const isSelected = value === opt.value
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onChange(opt.value)}
+            aria-pressed={isSelected}
+            className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-all focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] focus:ring-offset-1 ${
+              isSelected ? `${colorClass} border-transparent` : 'border-gray-200 bg-gray-50 text-gray-500 hover:border-gray-300 hover:bg-gray-100'
+            }`}
+          >
+            {isSelected && <span className="mr-1 text-[9px]">✓</span>}
+            {opt.label}
+          </button>
+        )
+      })}
+    </div>
+  </div>
+)
 
 /**
  * One labelled select. `appearance-none` strips the OS dropdown arrow, so the
@@ -652,15 +718,29 @@ function AnalyticsPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const brandId = searchParams.get("brandId")
+  // The brand's own niches / locations — the lists added in the Influencers List.
+  const { niches: brandNiches, locations: brandLocations } = useBrandTaxonomy(brandId)
 
   const [activeTab, setActiveTab] = useState(0)
   const [filters, setFilters] = useState({
     platform: "all",
     niche: "all",
     location: "all",
-    dateRange: "all"
+    dateRange: "all",
+    dateFrom: "",
+    dateTo: "",
   })
   const [showFilters, setShowFilters] = useState(false)
+  // Filters apply live; Cancel restores what was set when the panel opened.
+  const filterSnapshot = useRef<typeof filters | null>(null)
+  const toggleFilters = () => {
+    if (!showFilters) filterSnapshot.current = filters
+    setShowFilters(!showFilters)
+  }
+  const cancelFilters = () => {
+    if (filterSnapshot.current) setFilters(filterSnapshot.current)
+    setShowFilters(false)
+  }
   const [search, setSearch] = useState("")
   const filterContainerRef = useRef<HTMLDivElement>(null)
 
@@ -693,8 +773,10 @@ function AnalyticsPageContent() {
         niche: filters.niche,
         location: filters.location,
         dateRange: filters.dateRange,
+        // Only sent for Custom, so every preset keeps its existing cache key.
+        ...(filters.dateRange === "custom" ? { dateFrom: filters.dateFrom, dateTo: filters.dateTo } : {}),
       }).toString(),
-    [brandId, filters.platform, filters.niche, filters.location, filters.dateRange]
+    [brandId, filters.platform, filters.niche, filters.location, filters.dateRange, filters.dateFrom, filters.dateTo]
   )
 
   const fetchAnalytics = useCallback(async () => {
@@ -728,9 +810,16 @@ function AnalyticsPageContent() {
       platform: "all",
       niche: "all",
       location: "all",
-      dateRange: "all"
+      dateRange: "all",
+      dateFrom: "",
+      dateTo: "",
     })
   }
+
+  // Custom reads as its actual dates in exports, not the bare word "custom".
+  const dateRangeLabel = filters.dateRange === "custom"
+    ? `${filters.dateFrom || "…"} to ${filters.dateTo || "…"}`
+    : filters.dateRange
 
   const hasActiveFilters = filters.platform !== "all" || filters.niche !== "all" || filters.location !== "all" || filters.dateRange !== "all"
   // Presentation only — how many of the four filters are narrowed, for the
@@ -813,11 +902,13 @@ function AnalyticsPageContent() {
     // the route) and the post-order stages (In Transit, Posted, …) only exist in
     // that extended vocabulary — but the range boundaries are
     // derivePipelineStatus's, not a separately invented list.
-    const RESPONDED_OR_BEYOND = ["In Conversation", "Onboarded", "In Transit", "Content Pending", "Posted", "Rejected"]
+    // "Delivery Problem" is the Post Tracker's Issues column — only reachable
+    // after a deal was agreed, so it sits inside both ranges.
+    const RESPONDED_OR_BEYOND = ["In Conversation", "Onboarded", "In Transit", "Content Pending", "Posted", "Delivery Problem", "Rejected"]
     // Closed stays a strict SUBSET of responded, and counts Deal Agreed only —
     // "Onboarded" is what Deal Agreed resolves to, together with the stages it
     // can only be reached through.
-    const CLOSED_OR_BEYOND    = ["Onboarded", "In Transit", "Content Pending", "Posted"]
+    const CLOSED_OR_BEYOND    = ["Onboarded", "In Transit", "Content Pending", "Posted", "Delivery Problem"]
 
     const totalOutreach = dataToUse.length
     // Responded = anyone whose resolved pipeline stage is In Conversation or
@@ -1072,7 +1163,7 @@ function AnalyticsPageContent() {
     row('Brand ID', brandId ?? '')
     row('Search', search.trim() || '(none)')
     row('Platform filter', filters.platform)
-    row('Date range filter', filters.dateRange)
+    row('Date range filter', dateRangeLabel)
     row('Niche filter', filters.niche)
     row('Location filter', filters.location)
     row('Influencers in scope', metrics.totalOutreach)
@@ -1220,7 +1311,7 @@ function AnalyticsPageContent() {
         platform: filters.platform,
         niche: filters.niche,
         location: filters.location,
-        dateRange: filters.dateRange,
+        dateRange: dateRangeLabel,
       },
       scopeCount: metrics.totalOutreach,
     }
@@ -1254,24 +1345,19 @@ function AnalyticsPageContent() {
     { value: "7", label: "Last 7 days" },
     { value: "30", label: "Last 30 days" },
     { value: "90", label: "Last 90 days" },
-    { value: "month", label: "This month" }
+    { value: "month", label: "This month" },
+    { value: "custom", label: "Custom" }
   ]
 
+  // Values are the stored names, which is what the API matches location/niche on.
   const nicheOptions = [
     { value: "all", label: "All niches" },
-    { value: "Beauty", label: "Beauty" },
-    { value: "Fitness", label: "Fitness" },
-    { value: "Lifestyle", label: "Lifestyle" },
-    { value: "Food", label: "Food" },
-    { value: "Tech", label: "Tech" }
+    ...brandNiches.map(n => ({ value: n.name, label: n.name })),
   ]
 
   const locationOptions = [
     { value: "all", label: "All locations" },
-    { value: "PH", label: "Philippines" },
-    { value: "SG", label: "Singapore" },
-    { value: "US", label: "United States" },
-    { value: "AU", label: "Australia" }
+    ...brandLocations.map(l => ({ value: l.name, label: l.name })),
   ]
 
   // The shared vocabulary, not a local copy: these were hardcoded lists that
@@ -1357,7 +1443,7 @@ function AnalyticsPageContent() {
               button-anchored from lg up where the single row fits. */}
           <div className="static lg:relative" ref={filterContainerRef}>
             <button
-              onClick={() => setShowFilters(!showFilters)}
+              onClick={toggleFilters}
               aria-expanded={showFilters}
               data-tour="analytics-filters"
               className={`${CONTROL} flex items-center gap-1.5 border px-3 font-medium transition-colors ${
@@ -1383,7 +1469,7 @@ function AnalyticsPageContent() {
                  exactly as wide as one clean row needs and no wider. On mobile
                  it spans the viewport minus the page gutter instead. p-4 keeps
                  it compact; left-0 hangs it directly under the button. */
-              <div className="absolute left-4 right-4 top-full z-30 mt-2 rounded-xl border border-gray-200 bg-white p-4 shadow-lg lg:left-0 lg:right-auto lg:w-max lg:max-w-[calc(100vw-3rem)]">
+              <div className="absolute left-4 right-4 top-full z-30 mt-2 rounded-xl border border-gray-200 bg-white p-4 shadow-lg lg:left-0 lg:right-auto lg:w-[420px] lg:max-w-[90vw] max-h-[calc(100vh-240px)] overflow-y-auto">
                 <InlineFilterPanel
                   isOpen={showFilters}
                   filters={filters}
@@ -1394,6 +1480,8 @@ function AnalyticsPageContent() {
                   locationOptions={locationOptions}
                   onReset={resetFilters}
                   hasActiveFilters={hasActiveFilters}
+                  onCancel={cancelFilters}
+                  onApply={() => setShowFilters(false)}
                 />
               </div>
             )}

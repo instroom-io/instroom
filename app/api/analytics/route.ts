@@ -50,6 +50,9 @@ export async function GET(req: Request) {
   const niche     = searchParams.get("niche")      || "all"
   const location  = searchParams.get("location")   || "all"
   const dateRange = searchParams.get("dateRange")  || "all"
+  // Only read for dateRange=custom; YYYY-MM-DD, either end may be blank.
+  const dateFrom  = searchParams.get("dateFrom")   || ""
+  const dateTo    = searchParams.get("dateTo")     || ""
 
   if (!brandId) {
     return NextResponse.json({ error: "brandId is required" }, { status: 400 })
@@ -63,7 +66,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
-    const dateFilter = buildDateFilter(dateRange)
+    const dateFilter = buildDateFilter(dateRange, dateFrom, dateTo)
 
     // Filters are pushed into the query, so changing one re-queries the
     // database rather than re-slicing an array in the browser.
@@ -262,7 +265,7 @@ export async function GET(req: Request) {
       // Declared so the client never has to guess whether a zero is real.
       meta: {
         brandId,
-        filters: { platform, niche, location, dateRange },
+        filters: { platform, niche, location, dateRange, dateFrom, dateTo },
         /** The column `dateRange` filters on. */
         dateField: "created_at",
         recordCount: rows.length,
@@ -311,9 +314,18 @@ function normalizePlatform(raw: string | null | undefined): string {
   }
 }
 
-function buildDateFilter(dateRange: string): Record<string, Date> | null {
+function buildDateFilter(dateRange: string, dateFrom = "", dateTo = ""): Record<string, Date> | null {
   const now = new Date()
   switch (dateRange) {
+    case "custom": {
+      // Inclusive whole days; an invalid or blank end simply leaves that side open.
+      const from = /^\d{4}-\d{2}-\d{2}$/.test(dateFrom) ? new Date(`${dateFrom}T00:00:00`) : null
+      const to   = /^\d{4}-\d{2}-\d{2}$/.test(dateTo)   ? new Date(`${dateTo}T23:59:59.999`) : null
+      const range: Record<string, Date> = {}
+      if (from && !isNaN(from.getTime())) range.gte = from
+      if (to && !isNaN(to.getTime()))     range.lte = to
+      return Object.keys(range).length ? range : null
+    }
     case "7":  { const d = new Date(now); d.setDate(now.getDate() - 7);  return { gte: d } }
     case "30": { const d = new Date(now); d.setDate(now.getDate() - 30); return { gte: d } }
     case "90": { const d = new Date(now); d.setDate(now.getDate() - 90); return { gte: d } }

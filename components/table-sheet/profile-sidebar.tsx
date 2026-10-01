@@ -78,6 +78,12 @@ function formatActivityDetails(action: string, details: Record<string, unknown>)
       const fields = details.fields as string[] | undefined
       return fields?.length ? `Updated ${fields.length} field${fields.length > 1 ? "s" : ""}` : ""
     }
+    case "research_sop.completed":
+    case "research_sop.applied": {
+      const fields = details.fields as string[] | undefined
+      const sop = `${details.sop_name ?? "SOP"} v${details.sop_version ?? "?"}`
+      return fields?.length ? `${sop} · ${fields.join(", ")}` : sop
+    }
     default:
       return ""
   }
@@ -889,7 +895,7 @@ export default function ProfileSidebar({
 
   const S = {
     overlay: { position: "fixed" as const, inset: 0, zIndex: 400, cursor: "pointer" },
-    panel: { position: "fixed" as const, top: 0, right: 0, width: 520, maxWidth: "100vw", height: "100%", background: "#fff", boxShadow: "-8px 0 40px rgba(0,0,0,0.14)", zIndex: 500, display: "flex", flexDirection: "column" as const, fontFamily: "'Inter',system-ui,sans-serif" },
+    panel: { position: "fixed" as const, top: 0, right: 0, width: 600, maxWidth: "100vw", height: "100%", background: "#fff", boxShadow: "-8px 0 40px rgba(0,0,0,0.14)", zIndex: 500, display: "flex", flexDirection: "column" as const, fontFamily: "'Inter',system-ui,sans-serif" },
     header: { padding: "16px 20px", borderBottom: "1px solid #f0f0f0" },
     pipeSel: { fontSize: 11, padding: "5px 10px", borderRadius: 8, border: "0.5px solid #f4b740", background: "#fffbeb", color: "#854f0b", cursor: "pointer", fontWeight: 500 },
     atag: { fontSize: 12, fontWeight: 500, padding: "6px 14px", borderRadius: 20, cursor: "pointer", border: "1px solid #e5e7eb", background: "#f9fafb", color: "#555", transition: "all 0.15s" },
@@ -931,6 +937,13 @@ export default function ProfileSidebar({
 
   // Tabs: 0=Basic, 1=Order, 2=Attribution, 3=Post, 4=Stats, 5=History
   const TABS = ["Basic", "Order", "Attribution", "Post", "Stats", "History"]
+  // Same rule as the Pipeline drawer: Order and Post belong to Post Tracker, so
+  // they stay grayed out until the influencer has reached it.
+  const inPostTracker = drawerStageLabel(editedRow) === "Post Tracker"
+  const tabDisabledReason = (idx: number): string | null =>
+    (idx === 1 || idx === 3) && !inPostTracker ? "Available once this influencer is in Post Tracker" : null
+  // Falls back to Basic if the open tab becomes unavailable.
+  const activeTab = tabDisabledReason(profileTab) ? 0 : profileTab
 
   return (
     <>
@@ -959,20 +972,22 @@ export default function ProfileSidebar({
               onMouseLeave={e => { e.currentTarget.style.background = "#f9fafb"; e.currentTarget.style.color = "#374151"; e.currentTarget.style.borderColor = "#e5e7eb" }}
             >✕</button>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+          {/* Same row layout as the Pipeline / Post Tracker / Brand Partners
+              drawers: name grows, Stage + Status sit on the right. */}
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, marginBottom: 14, paddingRight: 40 }}>
             <div style={{ width: 46, height: 46, borderRadius: "50%", background: "#1fae5b", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "0 0 0 3px #dcfce7" }}>
               <ProfilePicture src={editedRow.profile_image_url} socialLink={editedRow.social_link || getProfileUrl(editedRow.platform, editedRow.handle)} name={editedRow.full_name || editedRow.handle} handle={editedRow.handle} size={52} />
             </div>
-            <div style={{ flex: "0 1 auto", minWidth: 0 }}>
+            <div style={{ flex: "1 1 auto", minWidth: 0 }}>
               <div style={{ fontSize: 15, fontWeight: 700, color: "#111827", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{editedRow.full_name || editedRow.first_name || ""}</div>
               <div style={{ fontSize: 12, color: "#6b7280", marginTop: 1 }}>@{editedRow.handle.replace(/^@/, "")}</div>
             </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0, marginLeft: 28 }}>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "flex-start", flexShrink: 0 }}>
               {/* Read-only: stages are changed on the Pipeline, inbox and Post Tracker. */}
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 <span style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em" }}>Stage</span>
                 <select disabled value="stage" title="Change the stage on the Pipeline"
-                  style={{ ...S.pipeSel, width: 118, borderColor: "#e5e7eb", background: "#f3f4f6", color: "#9ca3af", cursor: "not-allowed" }}>
+                  style={{ ...S.pipeSel, width: 115, borderColor: "#e5e7eb", background: "#f3f4f6", color: "#9ca3af", cursor: "not-allowed" }}>
                   <option value="stage">{drawerStageLabel(editedRow)}</option>
                 </select>
               </div>
@@ -988,7 +1003,7 @@ export default function ProfileSidebar({
                       ? { borderColor: "#f4b740", background: "#fffbeb", color: "#854f0b" }
                       : { borderColor: "#16a34a", background: "#f0fdf4", color: "#166534" }
                   return (
-                    <select style={{ ...S.pipeSel, width: 118, ...tone }} value={approval}
+                    <select style={{ ...S.pipeSel, width: 115, ...tone }} value={approval}
                       onChange={e => handleFieldChange("approval_status", e.target.value)}>
                       <option value="Pending">Pending</option>
                       <option value="Approved">Approved</option>
@@ -1034,18 +1049,23 @@ export default function ProfileSidebar({
 
         {/* ── Tab bar — now 5 tabs ── */}
         <div style={S.tabBar}>
-          {TABS.map((tab, idx) => (
-            <div key={idx} style={S.tab(profileTab === idx)} onClick={() => setProfileTab(idx)}>
-              {tab === "History" ? "History" : tab}
-            </div>
-          ))}
+          {TABS.map((tab, idx) => {
+            const reason = tabDisabledReason(idx)
+            return (
+              <div key={idx} title={reason ?? undefined}
+                style={reason ? { ...S.tab(false), color: "#d1d5db", cursor: "not-allowed" } : S.tab(activeTab === idx)}
+                onClick={() => { if (!reason) setProfileTab(idx) }}>
+                {tab}
+              </div>
+            )
+          })}
         </div>
 
         {/* ── Body ── */}
         <div style={S.body}>
 
           {/* ════ BASIC TAB ════ */}
-          {profileTab === 0 && (
+          {activeTab === 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
               <div style={S.statRow}>
                 <div style={S.statBox}><div style={S.statLabel}>Followers</div><div style={S.statVal}>{displayMetric(editedRow.follower_count)}</div></div>
@@ -1117,7 +1137,7 @@ export default function ProfileSidebar({
           )}
 
           {/* ════ ORDER TAB ════ */}
-          {profileTab === 1 && (
+          {activeTab === 1 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
               <div style={S.formRow}>
                 <div style={S.formGroup}><div style={S.formLabel}>First name</div><input style={S.formInput} value={editedRow.first_name || ""} onChange={e => handleFieldChange("first_name", e.target.value)} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
@@ -1137,7 +1157,7 @@ export default function ProfileSidebar({
           )}
 
           {/* ════ ATTRIBUTION TAB ════ */}
-          {profileTab === 2 && (
+          {activeTab === 2 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
               <div style={S.formRow}>
                 <div style={S.formGroup}><div style={S.formLabel}>Discount Code</div><input style={S.formInput} value={orderData.discountCode} placeholder="—" onChange={e => setOrderData(d => ({ ...d, discountCode: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
@@ -1155,7 +1175,7 @@ export default function ProfileSidebar({
           )}
 
           {/* ════ POST TAB ════ */}
-          {profileTab === 3 && (
+          {activeTab === 3 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
               <div style={S.formRow}><div style={S.formGroup}><div style={S.formLabel}>Post Link</div><input style={S.formInput} value={postData.postLink} onChange={e => setPostData(d => ({ ...d, postLink: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div><div style={S.formGroup}><div style={S.formLabel}>Likes</div><input style={S.formInput} value={postData.likes} onChange={e => setPostData(d => ({ ...d, likes: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div></div>
               <div style={S.formRow}><div style={S.formGroup}><div style={S.formLabel}>Sales</div><input style={S.formInput} value={postData.sales} onChange={e => setPostData(d => ({ ...d, sales: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div><div style={S.formGroup}><div style={S.formLabel}>Drive Link</div><input style={S.formInput} value={postData.driveLink} onChange={e => setPostData(d => ({ ...d, driveLink: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div></div>
@@ -1170,7 +1190,7 @@ export default function ProfileSidebar({
           )}
 
           {/* ════ STATS TAB ════ */}
-          {profileTab === 4 && (
+          {activeTab === 4 && (
             <div style={{ display: "flex", flexDirection: "column" }}>
               <div style={S.sectionTitle}>Performance</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 16 }}>
@@ -1214,7 +1234,7 @@ export default function ProfileSidebar({
           )}
 
           {/* ════ HISTORY TAB ════ */}
-          {profileTab === 5 && (
+          {activeTab === 5 && (
             <HistoryTab
               brandId={brandId}
               biId={row.brand_influencer_id || row.id}
