@@ -151,9 +151,9 @@ export function SidebarUserCard({
     <>
       {image && failedSrc !== image ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={image} alt="" className="h-8 w-8 shrink-0 rounded-full object-cover @max-[190px]:hidden" />
+        <img src={image} alt="" className="h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-white/20 @max-[190px]:hidden" />
       ) : (
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--sb-accent)]/20 text-[11px] font-semibold text-[var(--sb-accent)] @max-[190px]:hidden">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/15 text-[11px] font-semibold text-white ring-1 ring-white/20 @max-[190px]:hidden">
           {initials}
         </span>
       )}
@@ -162,7 +162,7 @@ export function SidebarUserCard({
       <div className="min-w-0 flex-1">
         <p className="text-[13px] font-medium leading-snug text-white [overflow-wrap:break-word] @max-[260px]:text-[12px] @max-[260px]:tracking-[-0.01em]">{name}</p>
         {settingsHref ? (
-          <p className="mt-0.5 text-[11px] leading-tight text-[var(--sb-accent)]">Account settings</p>
+          <p className="mt-0.5 text-[11px] leading-tight text-white/60">Account settings</p>
         ) : (
           email && <p className="mt-0.5 text-[11px] leading-tight text-white/55 [overflow-wrap:anywhere]">{email}</p>
         )}
@@ -171,18 +171,21 @@ export function SidebarUserCard({
   )
 
   return (
-    <div className="@container flex min-h-14 items-center gap-1.5 rounded-[var(--sb-item-radius)] border border-white/10 bg-white/[0.05] p-1.5">
+    // Styled as a rail row (same radius, padding, type and hover as
+    // SidebarNavItem), set apart from the nav by a hairline instead of a box.
+    // Sign out sits beside the account; its icon is red so it reads as logout.
+    <div className="@container flex items-center gap-1 border-t border-white/10 pt-2">
       {settingsHref ? (
         <Link
           href={settingsHref}
           onClick={onNavigate}
           title={email}
-          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-md p-1.5 outline-none transition-colors duration-[var(--sb-transition)] hover:bg-white/[0.07] focus-visible:ring-2 focus-visible:ring-white/70"
+          className="flex min-w-0 flex-1 items-center gap-[var(--sb-icon-gap)] rounded-[var(--sb-item-radius)] px-[var(--sb-item-px)] py-2 outline-none transition-colors duration-[var(--sb-transition)] hover:bg-white/[0.07] focus-visible:ring-2 focus-visible:ring-white/70"
         >
           {identity}
         </Link>
       ) : (
-        identity
+        <div className="flex min-w-0 flex-1 items-center gap-[var(--sb-icon-gap)] px-[var(--sb-item-px)] py-2">{identity}</div>
       )}
 
       <button
@@ -190,9 +193,9 @@ export function SidebarUserCard({
         onClick={onSignOut}
         aria-label="Sign out"
         title="Sign out"
-        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-white/60 outline-none transition-colors duration-[var(--sb-transition)] hover:bg-red-500/20 hover:text-white focus-visible:ring-2 focus-visible:ring-white/70"
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--sb-item-radius)] text-red-300 outline-none transition-colors duration-[var(--sb-transition)] hover:bg-red-500/20 hover:text-red-200 focus-visible:ring-2 focus-visible:ring-white/70"
       >
-        <LogOut size={16} strokeWidth={1.8} />
+        <LogOut size={16} strokeWidth={1.9} />
       </button>
     </div>
   )

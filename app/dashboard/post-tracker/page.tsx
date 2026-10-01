@@ -32,6 +32,7 @@ import { invalidateInfluencerDerivedCaches, closedCacheKey } from "@/lib/cache-i
 import { DataSyncStatus } from "@/components/data-sync-status"
 import { ProfilePicture, PlatformIcon } from "@/components/table-sheet/ui-atoms"
 import { getPlatformLabel } from "@/components/table-sheet/utils"
+import { DEFAULT_PLATFORMS } from "@/components/table-sheet/constants"
 import { SaveStatusPill } from "@/components/save-status-pill"
 import { StaleDataNotice } from "@/components/stale-data-notice"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
@@ -49,10 +50,9 @@ import { readDroppedPostUrl, type DetectedPost } from "./DetectedPostsList"
 import { fetchCached } from "@/lib/data-cache"
 import { useSubscriptionGate } from "@/hooks/useSubscriptionGate"
 import { EmailModal } from "@/components/shared/email-modal"
+import { useBrandTaxonomy } from "@/hooks/useBrandTaxonomy"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const NICHES    = ["Beauty","Fitness","Lifestyle","Food","Tech","Fashion","Travel"]
-const LOCATIONS = ["Philippines","Singapore","United States","Australia","United Kingdom","Malaysia","Indonesia","Thailand","Vietnam"]
 
 const COLUMNS: { key: ClosedColumn; title: string; color: string; description: string; move?: string; terminal?: boolean }[] = [
   {
@@ -126,9 +126,10 @@ interface PostTrackerFilters {
   niche:    string
   stages:   ClosedColumn[]
   types:    string[]
+  platforms: string[]
 }
 
-const EMPTY_FILTERS: PostTrackerFilters = { location: "all", niche: "all", stages: [], types: [] }
+const EMPTY_FILTERS: PostTrackerFilters = { location: "all", niche: "all", stages: [], types: [], platforms: [] }
 
 const STAGE_FILTER_OPTIONS = COLUMNS.map((c) => ({ value: c.key, label: c.title }))
 
@@ -903,7 +904,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
   // "discard my edits" reverts to exactly what was last loaded, not some
   // separately-maintained copy of the same defaults.
   const buildOrderData = () => ({
-    productDetails: savedProductDetails.note || "",
+    productDetails: (savedProductDetails.note || "") as string,
     trackingNumber: inf.trackingNumber || "", shippedAt: inf.shippedAt ? inf.shippedAt.slice(0,10) : "",
     deliveredAt: inf.deliveredAt ? inf.deliveredAt.slice(0,10) : "", deadline: inf.deadline ? inf.deadline.slice(0,10) : "",
     deliverables: inf.deliverables || "", currency: inf.currency || "USD",
@@ -916,28 +917,37 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
   // Notes can change from outside the drawer — a move to Issues appends the
   // required issue note — so pick that up without a refresh or remount.
   const [syncedNotes, setSyncedNotes] = useState(inf.notes || "")
+  // Last saved text — what Cancel restores and what "changed" is measured against.
+  const [savedNotes, setSavedNotes] = useState(inf.notes || "")
   if ((inf.notes || "") !== syncedNotes) {
     setSyncedNotes(inf.notes || "")
     setNotesValue(inf.notes || "")
+    setSavedNotes(inf.notes || "")
   }
   const [savingNotes, setSavingNotes] = useState(false)
   const [fetchingMetrics, setFetchingMetrics] = useState(false)
-  const [postData, setPostData] = useState({
+  // Shared by the initial state and the Post tab's Cancel, like buildOrderData.
+  const buildPostData = () => ({
     postUrl: inf.postUrl || "", postedAt: inf.postedAt ? inf.postedAt.slice(0,10) : "",
     likes: inf.likesCount ? String(inf.likesCount) : "", comments: inf.commentsCount ? String(inf.commentsCount) : "",
     views: inf.viewsCount ? String(inf.viewsCount) : "",
     scriptStatus: inf.scriptStatus || "", contentStatus: inf.contentStatus || "",
     internalRating: inf.internalRating ? String(inf.internalRating) : "",
   })
+  const [postData, setPostData] = useState(buildPostData)
   postUrlValueRef.current = postData.postUrl
 
   // Campaign deliverables — the same paidCollab.deliverables array the Pipeline
   // hand-over writes (lib/deliverables). One post link per deliverable is
   // edited here and saved by the Post tab's Update; the row-level Post URL
   // (which predates deliverables) seeds the first one.
-  const [deliverableDrafts, setDeliverableDrafts] = useState<CampaignDeliverable[]>(() =>
+  const buildDeliverableDrafts = () =>
     getDeliverables(inf.paidCollabData).map((d, i) => ({ ...d, postUrl: deliverablePostUrl(d, i, inf.postUrl) }))
-  )
+  const [deliverableDrafts, setDeliverableDrafts] = useState<CampaignDeliverable[]>(buildDeliverableDrafts)
+  const resetPostForm = () => {
+    setPostData(buildPostData())
+    setDeliverableDrafts(buildDeliverableDrafts())
+  }
   const deliverableDraftsRef = useRef(deliverableDrafts)
   deliverableDraftsRef.current = deliverableDrafts
   const hasDeliverables = deliverableDrafts.length > 0
@@ -1161,7 +1171,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
   const handleSaveOrder = async () => {
     setSavingOrder(true)
     const ok = await onOrderDetailsChange(inf.id, {
-      note: orderData.productDetails,
+      note: orderData.productDetails.split("\n").map(x => x.trim()).filter(Boolean).join("\n"),
       trackingNumber: orderData.trackingNumber,
       shippedAt: orderData.shippedAt,
       deliveredAt: orderData.deliveredAt,
@@ -1175,6 +1185,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
   const handleSaveNotes = async () => {
     setSavingNotes(true)
     const ok = await onOrderDetailsChange(inf.id, { notes: notesValue })
+    if (ok) setSavedNotes(notesValue)
     setSavingNotes(false)
     showToast(ok ? "Notes updated" : "Failed to update notes")
   }
@@ -1399,6 +1410,17 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                   <div className="avg-card"><div className="avg-val">{Number.isFinite(inf.viewsCount) ? inf.viewsCount.toLocaleString() : "—"}</div><div className="avg-lbl">Views</div></div>
                 </div>
               </div>
+              {/* Notes sit right under the metrics so they don't need a scroll. */}
+              <div>
+                <div className="section-label">Notes</div>
+                <textarea
+                  className="pfi"
+                  style={{ minHeight: 72, resize: "vertical" }}
+                  placeholder="Add notes..."
+                  value={notesValue}
+                  onChange={(e) => setNotesValue(e.target.value)}
+                />
+              </div>
               <div className="fgrd">
                 <div className="frow"><div className="flbl">Location</div><div className="fval">{inf.location || "—"}</div></div>
                 <div className="frow"><div className="flbl">Niche</div><div className="fval">{inf.niche || "—"}</div></div>
@@ -1409,20 +1431,19 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                 <div className="frow"><div className="flbl">Campaign</div><div className="fval">{inf.campaignName || "—"}</div></div>
                 <div className="frow"><div className="flbl">Contact Status</div><div className="fval">{inf.contactStatus || "—"}</div></div>
               </div>
-              <div>
-                <div style={{ fontSize: 10, color: "#888", marginBottom: 6 }}>Notes</div>
-                <textarea
-                  className="pfi"
-                  style={{ minHeight: 80, resize: "vertical" }}
-                  placeholder="Add notes..."
-                  value={notesValue}
-                  onChange={(e) => setNotesValue(e.target.value)}
-                />
-                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
-                  <button className="btn-primary" onClick={handleSaveNotes} disabled={savingNotes} style={{ opacity: savingNotes ? 0.6 : 1 }}>
-                    {savingNotes ? "Updating…" : "Update"}
-                  </button>
-                </div>
+              {/* Same sticky action bar as the Influencer List profile — stays in
+                  view at the bottom of the drawer while the tab scrolls. */}
+              <div style={{
+                display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8,
+                position: "sticky", bottom: -18, margin: "8px -20px -18px",
+                padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
+              }}>
+                <button className="btn-secondary" onClick={() => setNotesValue(savedNotes)} disabled={savingNotes || notesValue === savedNotes}
+                  style={{ opacity: notesValue === savedNotes ? 0.5 : 1 }}>Cancel</button>
+                <button className="btn-primary" onClick={handleSaveNotes} disabled={savingNotes || notesValue === savedNotes}
+                  style={{ opacity: savingNotes || notesValue === savedNotes ? 0.6 : 1 }}>
+                  {savingNotes ? "Saving…" : "Save Changes"}
+                </button>
               </div>
             </div>
           )}
@@ -1443,7 +1464,26 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                   <option value="">Select...</option><option value="pending">Pending</option><option value="shipped">Shipped</option><option value="delivered">Delivered</option>
                 </select>
               </div>
-              <div className="pfg"><div className="pfl">Product Details</div><input className="pfi" value={orderData.productDetails} onChange={e => setOrderData(d => ({ ...d, productDetails: e.target.value }))} placeholder="Product Details" /></div>
+              {/* One product per line of the saved note — same field, same storage. */}
+              <div className="pfg">
+                <div className="pfl">Product Details</div>
+                {orderData.productDetails.split("\n").map((product, i, list) => (
+                  <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <input className="pfi" value={product} placeholder={`Product ${i + 1}`}
+                      onChange={e => setOrderData(d => ({ ...d, productDetails: d.productDetails.split("\n").map((x, j) => j === i ? e.target.value : x).join("\n") }))} />
+                    {list.length > 1 && (
+                      <button type="button" aria-label="Remove product" className="text-gray-400 hover:text-red-500 transition"
+                        onClick={() => setOrderData(d => ({ ...d, productDetails: d.productDetails.split("\n").filter((_, j) => j !== i).join("\n") }))}>
+                        <IconX size={14} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+                <button type="button" className="text-xs font-medium text-[#0F6B3E] hover:text-[#1FAE5B] transition self-start"
+                  onClick={() => setOrderData(d => ({ ...d, productDetails: d.productDetails + "\n" }))}>
+                  + Add product
+                </button>
+              </div>
               <div className="pfg"><div className="pfl">Tracking Number</div><input className="pfi" value={orderData.trackingNumber} onChange={e => setOrderData(d => ({ ...d, trackingNumber: e.target.value }))} placeholder="Tracking Number" /></div>
               <div className="pfr">
                 <div className="pfg"><div className="pfl">Shipped At</div><input type="date" className="pfi" value={orderData.shippedAt} onChange={e => setOrderData(d => ({ ...d, shippedAt: e.target.value }))} /></div>
@@ -1539,8 +1579,9 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                   padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
                 }}
               >
+                <button className="btn-secondary" onClick={() => setOrderData(buildOrderData())} disabled={savingOrder}>Cancel</button>
                 <button className="btn-primary" onClick={handleSaveOrder} disabled={savingOrder} style={{ opacity: savingOrder ? 0.6 : 1 }}>
-                  {savingOrder ? "Updating…" : "Update"}
+                  {savingOrder ? "Saving…" : "Save Changes"}
                 </button>
               </div>
             </div>
@@ -1709,7 +1750,8 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                   padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
                 }}
               >
-                <button className="btn-primary" onClick={handleSavePost} disabled={savingPost}>{savingPost ? "Updating…" : "Update"}</button>
+                <button className="btn-secondary" onClick={resetPostForm} disabled={savingPost}>Cancel</button>
+                <button className="btn-primary" onClick={handleSavePost} disabled={savingPost} style={{ opacity: savingPost ? 0.6 : 1 }}>{savingPost ? "Saving…" : "Save Changes"}</button>
               </div>
                 </>
               )}
@@ -1718,7 +1760,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
 
           {/* ════ STATS TAB ════ */}
           {profileTab === 3 && (
-            <InfluencerStatsTab brandId={brandId} brandInfluencerId={inf.id} />
+            <InfluencerStatsTab brandId={brandId} brandInfluencerId={inf.id} allowManualEntry />
           )}
 
           {/* ════ PAID COLLAB DETAILS TAB ════ */}
@@ -1743,7 +1785,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
         </div>
 
         <style jsx>{`
-          .pp { position:fixed; top:0; right:0; width:520px; max-width:100vw; height:100%; background:#fff; box-shadow:-8px 0 40px rgba(0,0,0,0.14); z-index:500; display:flex; flex-direction:column; font-family:"Inter",system-ui,sans-serif; }
+          .pp { position:fixed; top:0; right:0; width:600px; max-width:100vw; height:100%; background:#fff; box-shadow:-8px 0 40px rgba(0,0,0,0.14); z-index:500; display:flex; flex-direction:column; font-family:"Inter",system-ui,sans-serif; }
           .pph { padding:16px 20px; border-bottom:1px solid #f0f0f0; }
           .ppt { font-size:11px; font-weight:600; color:#9ca3af; letter-spacing:.1em; text-transform:uppercase; margin-bottom:12px; }
           .pav { width:44px; height:44px; border-radius:50%; background:#1fae5b; display:flex; align-items:center; justify-content:center; font-size:18px; font-weight:700; color:#fff; flex-shrink:0; box-shadow:0 0 0 3px #dcfce7; }
@@ -1778,10 +1820,10 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
           .avg-card { background:#fff; border:1.5px solid #e5e7eb; border-radius:10px; padding:12px 8px; text-align:center; box-shadow:0 1px 3px rgba(0,0,0,.05); }
           .avg-val { font-size:18px; font-weight:700; color:#111827; }
           .avg-lbl { font-size:9px; font-weight:600; color:#9ca3af; text-transform:uppercase; letter-spacing:.07em; margin-top:3px; }
-          .fgrd { display:grid; grid-template-columns:1fr 1fr; }
-          .frow { padding:8px 0; border-bottom:.5px solid rgba(0,0,0,.05); }
-          .flbl { font-size:9px; font-weight:600; color:#9ca3af; text-transform:uppercase; letter-spacing:.06em; margin-bottom:2px; }
-          .fval { font-size:13px; color:#111827; font-weight:500; }
+          .fgrd { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:4px 0 14px; }
+          .frow { min-width:0; padding:10px 12px; background:#fafaf9; border:1px solid #f0f0ee; border-radius:10px; }
+          .flbl { font-size:11px; font-weight:500; color:#9ca3af; margin-bottom:3px; }
+          .fval { font-size:13px; color:#111827; font-weight:600; overflow-wrap:anywhere; }
           .pfr { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
           .pfg { display:flex; flex-direction:column; gap:4px; margin-bottom:10px; }
           .pfl { font-size:10px; font-weight:600; color:#6b7280; }
@@ -1820,6 +1862,8 @@ function PostTrackerContent() {
   const searchParams = useSearchParams()
   const brandId = searchParams.get("brandId") ?? undefined
   const { canApproveInfluencers, loading: capabilitiesLoading } = useBrandCapabilities(brandId)
+  // The brand's own niches / locations — the lists added in the Influencers List.
+  const { niches: brandNiches, locations: brandLocations } = useBrandTaxonomy(brandId ?? null)
   const canApprove = !capabilitiesLoading && canApproveInfluencers
   // Shared, cached gate. `status` stays undefined until the check resolves —
   // AutoPostDetectionCard's usePlanAccess treats a defined prop as "already
@@ -1861,6 +1905,12 @@ function PostTrackerContent() {
   const [filters,              setFilters]              = useState<PostTrackerFilters>(EMPTY_FILTERS)
   const [selectedColumnStatus, setSelectedColumnStatus] = useState<ClosedColumn|null>(null)
   const [sortOrder,            setSortOrder]            = useState<"newest"|"oldest">("newest")
+  // Filters apply live; Cancel restores what was set when the panel opened.
+  const filterSnapshot = useRef<{ filters: PostTrackerFilters; sortOrder: "newest"|"oldest" } | null>(null)
+  const cancelFilters = () => {
+    if (filterSnapshot.current) { setFilters(filterSnapshot.current.filters); setSortOrder(filterSnapshot.current.sortOrder) }
+    setShowFilterPanel(false)
+  }
 
   // ── Bulk selection (list view) ─────────────────────────────────────────────
   // Keyed on brandInfluencer ids, so a selection survives scrolling, sorting,
@@ -1956,6 +2006,7 @@ function PostTrackerContent() {
     if (filters.stages.length)    result = result.filter(inf=>filters.stages.includes(inf.closedStatus))
     // Rows with no collab type set read as Gifting, matching CampaignBadge
     if (filters.types.length)     result = result.filter(inf=>filters.types.includes(inf.campaignType ?? "gifting"))
+    if (filters.platforms.length) result = result.filter(inf=>filters.platforms.includes(getPlatformLabel(inf.platform)))
     result = [...result].sort((a,b)=>{
       const da = new Date(a.createdAt ?? 0).getTime()
       const db = new Date(b.createdAt ?? 0).getTime()
@@ -2107,6 +2158,7 @@ function PostTrackerContent() {
     (filters.niche!=="all" ? 1 : 0) +
     filters.stages.length +
     filters.types.length +
+    filters.platforms.length +
     (search ? 1 : 0) +
     (selectedColumnStatus ? 1 : 0)
   const hasActiveFilters   = activeFilterCount > 0
@@ -2351,7 +2403,7 @@ function PostTrackerContent() {
 
         {/* Filters */}
         <div className="relative">
-          <button onClick={()=>setShowFilterPanel(!showFilterPanel)}
+          <button onClick={()=>{ if (!showFilterPanel) filterSnapshot.current = { filters, sortOrder }; setShowFilterPanel(!showFilterPanel) }}
             data-tour="post-tracker-filters"
             className={`h-9 px-3 rounded-lg text-sm flex items-center gap-1.5 border transition-colors ${hasActiveFilters?"bg-[#1FAE5B] text-white border-[#1FAE5B]":"border-[#0F6B3E]/20 hover:border-[#0F6B3E]/40"}`}>
             <IconFilter size={15}/> Filters
@@ -2362,12 +2414,12 @@ function PostTrackerContent() {
             )}
           </button>
           {showFilterPanel&&(
-            <div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-30 w-[420px] max-w-[90vw] p-5">
-              <div className="flex items-center justify-between mb-4">
+            <div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-30 w-[420px] max-w-[90vw] max-h-[calc(100vh-240px)] overflow-y-auto p-4">
+              <div className="flex items-center justify-between mb-3">
                 <span className="text-xs font-bold text-gray-800 uppercase tracking-wide">Filter by</span>
                 {hasActiveFilters&&<button className="text-xs text-gray-400 hover:text-red-500 transition flex items-center gap-1" onClick={()=>setFilters(EMPTY_FILTERS)}><IconX size={12}/> Clear all</button>}
               </div>
-              <div className="flex flex-col gap-5">
+              <div className="flex flex-col gap-3">
                 <TagSelect label="Post Stage" options={STAGE_FILTER_OPTIONS} selected={filters.stages}
                   onChange={v=>setFilters(p=>({...p,stages:v as ClosedColumn[]}))}
                   colorClass="bg-purple-50 text-purple-700 border-purple-200"/>
@@ -2376,13 +2428,17 @@ function PostTrackerContent() {
                   onChange={v=>setFilters(p=>({...p,types:v}))}
                   colorClass="bg-amber-50 text-amber-700 border-amber-200"/>
                 <div className="border-t border-gray-100"/>
-                <div className="grid grid-cols-2 gap-x-4 gap-y-4">
-                  <div className="flex flex-col gap-1"><label className="text-xs text-gray-500">Location</label><select value={filters.location} onChange={e=>setFilters(p=>({...p,location:e.target.value}))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] appearance-none cursor-pointer"><option value="all">All Locations</option>{LOCATIONS.map(l=><option key={l}>{l}</option>)}</select></div>
-                  <div className="flex flex-col gap-1"><label className="text-xs text-gray-500">Niche</label><select value={filters.niche} onChange={e=>setFilters(p=>({...p,niche:e.target.value}))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] appearance-none cursor-pointer"><option value="all">All Niches</option>{NICHES.map(n=><option key={n}>{n}</option>)}</select></div>
+                <TagSelect label="Platform" options={DEFAULT_PLATFORMS.map(pl=>({value:pl,label:pl}))} selected={filters.platforms}
+                  onChange={v=>setFilters(p=>({...p,platforms:v}))}
+                  colorClass="bg-blue-50 text-blue-700 border-blue-200"/>
+                <div className="border-t border-gray-100"/>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-3">
+                  <div className="flex flex-col gap-1"><label className="text-xs text-gray-500">Location</label><select value={filters.location} onChange={e=>setFilters(p=>({...p,location:e.target.value}))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] appearance-none cursor-pointer"><option value="all">All Locations</option>{brandLocations.map(l=><option key={l.id}>{l.name}</option>)}</select></div>
+                  <div className="flex flex-col gap-1"><label className="text-xs text-gray-500">Niche</label><select value={filters.niche} onChange={e=>setFilters(p=>({...p,niche:e.target.value}))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] appearance-none cursor-pointer"><option value="all">All Niches</option>{brandNiches.map(n=><option key={n.id}>{n.name}</option>)}</select></div>
                 </div>
               </div>
               {/* Sort inside filter panel */}
-              <div className="mt-4 pt-4 border-t border-gray-100">
+              <div className="mt-3 pt-3 border-t border-gray-100">
                 <label className="text-xs text-gray-500 block mb-2">Sort by date</label>
                 <div className="flex gap-2">
                   <button onClick={()=>setSortOrder("newest")}
@@ -2395,7 +2451,8 @@ function PostTrackerContent() {
                   </button>
                 </div>
               </div>
-              <div className="flex items-center justify-end mt-4">
+              <div className="flex items-center justify-end gap-2 mt-3 pt-3 border-t border-gray-100">
+                <button className="px-5 py-1.5 border border-gray-200 text-gray-600 rounded-lg text-sm font-medium hover:border-gray-300 transition" onClick={cancelFilters}>Cancel</button>
                 <button className="px-5 py-1.5 bg-[#1FAE5B] text-white rounded-lg text-sm font-medium hover:bg-[#178a48] transition" onClick={()=>setShowFilterPanel(false)}>Apply</button>
               </div>
             </div>

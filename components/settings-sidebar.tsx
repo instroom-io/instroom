@@ -92,6 +92,17 @@ const settingsSections: SettingsSection[] = [
         ),
       },
       {
+        key: "sops",
+        label: "SOPs",
+        href: "/dashboard/settings/sops",
+        icon: (
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" width={14} height={14}>
+            <rect x="3" y="1.5" width="10" height="13" rx="1.5" />
+            <path d="M5.5 5h5M5.5 8h5M5.5 11h3" />
+          </svg>
+        ),
+      },
+      {
         key: "integrations",
         label: "Integrations",
         href: "/dashboard/settings/integrations",

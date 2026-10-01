@@ -1976,6 +1976,10 @@ function InfluencersContent() {
           onLookupFailed={handleLookupFailed}
           readOnly={!canManageInfluencers}
           canApproveInfluencers={canApproveInfluencers}
+          // Research SOPs: same capability that gates editing influencer
+          // details; applied changes are re-read from the server.
+          canRunSop={canManageInfluencers}
+          onResearchApplied={() => { refetch() }}
         />
       )}
 

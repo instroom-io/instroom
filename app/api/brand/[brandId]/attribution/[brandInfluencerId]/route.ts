@@ -66,11 +66,33 @@ export async function PATCH(
 
     const { brandId, brandInfluencerId } = await params
     const body = await req.json()
-    const { coupon, affiliateLink, sparkAds, productCost } = body as {
+    const { coupon, affiliateLink, sparkAds, productCost, clicks, sales, revenue } = body as {
       coupon?: string | null
       affiliateLink?: string | null
       sparkAds?: string | null
       productCost?: string | number | null
+      clicks?: string | number | null
+      sales?: string | number | null
+      revenue?: string | number | null
+    }
+
+    // Manual performance numbers, for brands not using an affiliate tool.
+    // Blank reads as 0; negatives and non-numbers are rejected.
+    const parseStat = (value: string | number | null | undefined, integer: boolean) => {
+      if (value === undefined) return undefined
+      const raw = String(value ?? "").replace(/[$,\s]/g, "")
+      const n = raw === "" ? 0 : Number(raw)
+      if (!Number.isFinite(n) || n < 0 || (integer && !Number.isInteger(n))) return null
+      return n
+    }
+    const parsedClicks = parseStat(clicks, true)
+    const parsedSales = parseStat(sales, true)
+    const parsedRevenue = parseStat(revenue, false)
+    if (parsedClicks === null || parsedSales === null) {
+      return NextResponse.json({ error: "Clicks and sales must be whole positive numbers" }, { status: 400 })
+    }
+    if (parsedRevenue === null) {
+      return NextResponse.json({ error: "Revenue must be a positive number" }, { status: 400 })
     }
 
     // "$1,250.50" → 1250.5; blank clears it; non-numbers are rejected.
@@ -123,6 +145,9 @@ export async function PATCH(
     if (coupon !== undefined) fields.coupon = normalizedCoupon || null
     if (affiliateLink !== undefined) fields.affiliate_link = affiliateLink || null
     if (sparkAds !== undefined) fields.spark_ads = sparkAds || null
+    if (parsedClicks !== undefined) fields.clicks = parsedClicks
+    if (parsedSales !== undefined) fields.sales_count = parsedSales
+    if (parsedRevenue !== undefined) fields.gmv = parsedRevenue
 
     const updated = await prisma.attribution.upsert({
       where: { brand_influencer_id: brandInfluencerId },

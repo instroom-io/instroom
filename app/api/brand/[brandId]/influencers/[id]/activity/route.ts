@@ -12,6 +12,8 @@ const ACTION_LABELS: Record<string, string> = {
   "pipeline.stage_changed":      "Moved pipeline stage",
   "pipeline.status_changed":     "Updated contact status",
   "posttracker.stage_changed":   "Updated post tracker stage",
+  "research_sop.completed":      "Ran research SOP",
+  "research_sop.applied":        "Applied research SOP changes",
 }
 
 export async function GET(
