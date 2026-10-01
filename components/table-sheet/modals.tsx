@@ -397,58 +397,95 @@ export function FilterPopover({ isOpen, onClose, filters, onApplyFilters, onClea
     document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h)
   }, [isOpen, onClose, anchorRef])
   if (!isOpen) return null
-  const selCls = "w-full px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg outline-none bg-white focus:ring-2 focus:ring-blue-400"
-  const inputCls = "w-full px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-400"
+  // Same look as the Pipeline / Post Tracker / Brand Partners / Analytics panels.
+  const selCls = "w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] cursor-pointer"
+  const inputCls = "w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B]"
+  const hasActive = lf.platform !== "all" || lf.niche !== "all" || lf.location !== "all" || lf.gender !== "all" || lf.approval !== "all" || !!lf.dateFrom || !!lf.dateTo
+  const chipGroup = (label: string, key: "platform" | "gender" | "approval", options: string[], colorClass: string) => (
+    <div className="flex flex-col gap-2">
+      <label className="text-xs font-medium text-gray-600">{label}</label>
+      <div className="flex flex-wrap gap-1.5">
+        {options.map(o => {
+          const isSelected = lf[key] === o
+          return (
+            <button
+              key={o}
+              type="button"
+              onClick={() => setLf(p => ({ ...p, [key]: isSelected ? "all" : o }))}
+              aria-pressed={isSelected}
+              className={`px-2.5 py-1 rounded-full text-xs border transition-all font-medium focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] focus:ring-offset-1 ${
+                isSelected ? `${colorClass} border-transparent` : "bg-gray-50 text-gray-500 border-gray-200 hover:border-gray-300 hover:bg-gray-100"
+              }`}
+            >
+              {isSelected && <span className="mr-1 text-[9px]">✓</span>}
+              {o}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
   return (
-    <div ref={ref} className="absolute top-full right-0 mt-2 z-50 bg-white border border-gray-200 rounded-xl shadow-xl w-[400px] max-w-[90vw]" onClick={e => e.stopPropagation()}>
-      <div className="px-4 pt-4 pb-2 flex items-center justify-between">
-        <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider">Filters</h4>
-        <button onClick={() => { setLf({ platform:"all",niche:"all",location:"all",gender:"all",approval:"all",dateFrom:"",dateTo:"",sortOrder:"newest" }); onClearFilters() }} className="text-[10px] text-gray-400 hover:text-gray-600 transition">Clear all</button>
+    <div ref={ref} className="absolute top-full right-0 mt-2 z-50 bg-white border border-gray-200 rounded-xl shadow-lg w-[420px] max-w-[90vw] max-h-[calc(100vh-240px)] overflow-y-auto p-4" onClick={e => e.stopPropagation()}>
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-xs font-bold text-gray-800 uppercase tracking-wide">Filter by</span>
+        {hasActive && (
+          <button onClick={() => { setLf({ platform:"all",niche:"all",location:"all",gender:"all",approval:"all",dateFrom:"",dateTo:"",sortOrder:"newest" }); onClearFilters() }}
+            className="text-xs text-gray-400 hover:text-red-500 transition flex items-center gap-1">
+            <IconX size={12} /> Clear all
+          </button>
+        )}
       </div>
-      <div className="px-4 pb-3 space-y-3">
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className="block text-[10px] font-semibold text-gray-500 mb-1 uppercase tracking-wide">Platform</label><select value={lf.platform} onChange={e => setLf(p => ({ ...p, platform: e.target.value }))} className={selCls}><option value="all">All</option>{DEFAULT_PLATFORMS.map(p => <option key={p} value={p}>{p}</option>)}</select></div>
-          <div><label className="block text-[10px] font-semibold text-gray-500 mb-1 uppercase tracking-wide">Niche</label><select value={lf.niche} onChange={e => setLf(p => ({ ...p, niche: e.target.value }))} className={selCls}><option value="all">All</option>{niches.map(n => <option key={n} value={n}>{n}</option>)}</select></div>
+      <div className="flex flex-col gap-3">
+        {chipGroup("Platform", "platform", DEFAULT_PLATFORMS, "bg-blue-50 text-blue-700 border-blue-200")}
+        <div className="border-t border-gray-100" />
+        {chipGroup("Approval Status", "approval", ["Approved", "Pending", "Declined"], "bg-amber-50 text-amber-700 border-amber-200")}
+        <div className="border-t border-gray-100" />
+        {chipGroup("Gender", "gender", DEFAULT_GENDERS, "bg-purple-50 text-purple-700 border-purple-200")}
+        <div className="border-t border-gray-100" />
+        <div className="grid grid-cols-2 gap-x-3 gap-y-3">
+          <div className="flex flex-col gap-1"><label className="text-xs text-gray-500">Niche</label><select value={lf.niche} onChange={e => setLf(p => ({ ...p, niche: e.target.value }))} className={selCls}><option value="all">All Niches</option>{niches.map(n => <option key={n} value={n}>{n}</option>)}</select></div>
+          <div className="flex flex-col gap-1"><label className="text-xs text-gray-500">Location</label><select value={lf.location} onChange={e => setLf(p => ({ ...p, location: e.target.value }))} className={selCls}><option value="all">All Locations</option>{locations.map(l => <option key={l} value={l}>{l}</option>)}</select></div>
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className="block text-[10px] font-semibold text-gray-500 mb-1 uppercase tracking-wide">Location</label><select value={lf.location} onChange={e => setLf(p => ({ ...p, location: e.target.value }))} className={selCls}><option value="all">All</option>{locations.map(l => <option key={l} value={l}>{l}</option>)}</select></div>
-          <div><label className="block text-[10px] font-semibold text-gray-500 mb-1 uppercase tracking-wide">Gender</label><select value={lf.gender} onChange={e => setLf(p => ({ ...p, gender: e.target.value }))} className={selCls}><option value="all">All</option>{DEFAULT_GENDERS.map(g => <option key={g} value={g}>{g}</option>)}</select></div>
-        </div>
-        <div><label className="block text-[10px] font-semibold text-gray-500 mb-1 uppercase tracking-wide">Approval Status</label><select value={lf.approval} onChange={e => setLf(p => ({ ...p, approval: e.target.value }))} className={selCls}><option value="all">All</option><option value="Approved">Approved</option><option value="Declined">Declined</option><option value="Pending">Pending</option></select></div>
-        <div>
-          <label className="block text-[10px] font-semibold text-gray-500 mb-1 uppercase tracking-wide">Date Added</label>
-          <div className="grid grid-cols-2 gap-2">
-            <div><label className="block text-[10px] text-gray-400 mb-0.5">From</label><input type="date" value={lf.dateFrom} onChange={e => setLf(p => ({ ...p, dateFrom: e.target.value }))} className={inputCls} /></div>
-            <div><label className="block text-[10px] text-gray-400 mb-0.5">To</label><input type="date" value={lf.dateTo} onChange={e => setLf(p => ({ ...p, dateTo: e.target.value }))} className={inputCls} /></div>
-          </div>
-        </div>
-        <div>
-          <label className="block text-[10px] font-semibold text-gray-500 mb-1 uppercase tracking-wide">Sort By</label>
-          <div className="grid grid-cols-2 gap-1 rounded-lg border border-[#0F6B3E]/20 bg-white p-1">
-            {([
-              { value: "newest", label: "Newest First", Icon: IconArrowDown },
-              { value: "oldest", label: "Oldest First", Icon: IconArrowUp   },
-            ] as { value: SortOrder; label: string; Icon: typeof IconArrowDown }[]).map(({ value, label, Icon }) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setLf(p => ({ ...p, sortOrder: value }))}
-                aria-pressed={lf.sortOrder === value}
-                className={`h-7 px-2 rounded-md text-xs font-medium flex items-center justify-center gap-1.5 transition-all ${
-                  lf.sortOrder === value
-                    ? "bg-[#1FAE5B] text-white shadow-sm"
-                    : "text-gray-600 hover:bg-gray-50 hover:text-[#0F6B3E]"
-                }`}
-              >
-                <Icon size={14} />
-                {label}
-              </button>
-            ))}
+        <div className="border-t border-gray-100" />
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-gray-500">Date added</label>
+          <div className="grid grid-cols-2 gap-x-3">
+            <input type="date" aria-label="From date" value={lf.dateFrom} max={lf.dateTo || undefined} onChange={e => setLf(p => ({ ...p, dateFrom: e.target.value }))} className={inputCls} />
+            <input type="date" aria-label="To date" value={lf.dateTo} min={lf.dateFrom || undefined} onChange={e => setLf(p => ({ ...p, dateTo: e.target.value }))} className={inputCls} />
           </div>
         </div>
       </div>
-      <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-gray-100">
-        <button onClick={() => { onApplyFilters(lf); onClose() }} className="px-4 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-medium">Apply</button>
+      <div className="mt-3 pt-3 border-t border-gray-100">
+        <label className="text-xs text-gray-500 block mb-2">Sort by date</label>
+        <div className="flex gap-2">
+          {([
+            { value: "newest", label: "Newest", Icon: IconArrowDown },
+            { value: "oldest", label: "Oldest", Icon: IconArrowUp   },
+          ] as { value: SortOrder; label: string; Icon: typeof IconArrowDown }[]).map(({ value, label, Icon }) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setLf(p => ({ ...p, sortOrder: value }))}
+              aria-pressed={lf.sortOrder === value}
+              className={`flex-1 h-9 rounded-lg text-sm flex items-center justify-center gap-1.5 border font-medium transition-colors ${
+                lf.sortOrder === value ? "bg-[#1FAE5B] text-white border-[#1FAE5B]" : "border-gray-200 text-gray-600 hover:border-gray-300"
+              }`}
+            >
+              <Icon size={14} /> {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="flex items-center justify-end gap-2 mt-3 pt-3 border-t border-gray-100">
+        <button onClick={onClose}
+          className="px-5 py-1.5 border border-gray-200 text-gray-600 rounded-lg text-sm font-medium hover:border-gray-300 transition">
+          Cancel
+        </button>
+        <button onClick={() => { onApplyFilters(lf); onClose() }}
+          className="px-5 py-1.5 bg-[#1FAE5B] text-white rounded-lg text-sm font-medium hover:bg-[#178a48] transition">
+          Apply
+        </button>
       </div>
     </div>
   )

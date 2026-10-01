@@ -5,7 +5,9 @@ import TierSettingsModal from "./TierSettingsModal"
 import AddPartnerModal from "./AddPartnerModal"
 import NewCampaignModal from "./NewCampaignModal"
 import InfluencerProfileSidebar from "./InfluencerProfileSidebar"
-import { IconSearch, IconFilter, IconBuildingStore } from "@tabler/icons-react"
+import { IconSearch, IconFilter, IconBuildingStore, IconX } from "@tabler/icons-react"
+import { getPlatformLabel } from "@/components/table-sheet/utils"
+import { DEFAULT_PLATFORMS } from "@/components/table-sheet/constants"
 import { ReactNode } from "react"
 import { useBrandTaxonomy } from "@/hooks/useBrandTaxonomy"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
@@ -114,6 +116,8 @@ interface FilterState {
   contact_status: string
 }
 
+const EMPTY_FILTERS: FilterState = { tier: "all", platform: "all", niche: "all", location: "all", contact_status: "all" }
+
 interface TierSettings {
   bronzeMin: number
   bronzeMax: number
@@ -184,14 +188,15 @@ export default function BrandPartnersPage({ brandId }: Props) {
 
   const [activeTab, setActiveTab] = useState(0)
   const [searchQuery, setSearchQuery] = useState("")
-  const [filters, setFilters] = useState<FilterState>({
-    tier: "all",
-    platform: "all",
-    niche: "all",
-    location: "all",
-    contact_status: "all",
-  })
+  const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS)
+  const activeFilterCount = Object.values(filters).filter((v) => v !== "all").length
   const [showFilterPanel, setShowFilterPanel] = useState(false)
+  // Filters apply live; Cancel restores what was set when the panel opened.
+  const filterSnapshot = useRef<FilterState | null>(null)
+  const cancelFilters = () => {
+    if (filterSnapshot.current) setFilters(filterSnapshot.current)
+    setShowFilterPanel(false)
+  }
   const [sortCol, setSortCol] = useState("added")
   const [sortAsc, setSortAsc] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
@@ -769,7 +774,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
     }
     if (filters.tier !== "all") filtered = filtered.filter((p) => getDisplayTier(p) === filters.tier)
     if (filters.platform !== "all")
-      filtered = filtered.filter((p) => p.plat.toLowerCase() === filters.platform.toLowerCase())
+      filtered = filtered.filter((p) => getPlatformLabel(p.plat) === filters.platform)
     if (filters.niche !== "all") filtered = filtered.filter((p) => p.niche === filters.niche)
     if (filters.location !== "all") filtered = filtered.filter((p) => p.loc === filters.location)
     if (filters.contact_status !== "all")
@@ -883,37 +888,73 @@ export default function BrandPartnersPage({ brandId }: Props) {
               />
             </div>
             <div className="relative">
-              <button onClick={() => setShowFilterPanel(!showFilterPanel)} data-tour="brand-partners-filters" className="h-9 px-3 rounded-lg text-sm flex items-center gap-1.5 border border-[#0F6B3E]/20 hover:border-[#0F6B3E]/40 transition-colors">
+              <button onClick={() => { if (!showFilterPanel) filterSnapshot.current = filters; setShowFilterPanel(!showFilterPanel) }} data-tour="brand-partners-filters"
+                className={`h-9 px-3 rounded-lg text-sm flex items-center gap-1.5 border transition-colors ${activeFilterCount > 0 ? "bg-[#1FAE5B] text-white border-[#1FAE5B]" : "border-[#0F6B3E]/20 hover:border-[#0F6B3E]/40"}`}>
                 <IconFilter size={15} /> Filters
+                {activeFilterCount > 0 && (
+                  <span className="text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center bg-white/20 text-white">
+                    {activeFilterCount}
+                  </span>
+                )}
               </button>
               {showFilterPanel && (
-                <div className="fp open">
-                  <div className="fp-title">Filter by</div>
-                  <div className="fg">
-                    {[
-                      { label: "Tier",     key: "tier",           options: ["Gold", "Silver", "Bronze"] },
-                      { label: "Platform", key: "platform",       options: ["instagram", "tiktok", "youtube"] },
-                      { label: "Niche",    key: "niche",          options: niches.map(n => n.name) },
-                      { label: "Location", key: "location",       options: locations.map(l => l.name) },
-                      { label: "Status",   key: "contact_status", options: ["not_contacted", "contacted", "interested", "agreed"] },
-                    ].map(({ label, key, options }) => (
-                      <div key={key}>
-                        <label>{label}</label>
-                        <select
-                          value={(filters as any)[key]}
-                          onChange={(e) => setFilters((p) => ({ ...p, [key]: e.target.value }))}
-                        >
-                          <option value="all">All</option>
-                          {options.map((o) => <option key={o} value={o}>{o}</option>)}
-                        </select>
+                <div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-30 w-[420px] max-w-[90vw] max-h-[calc(100vh-240px)] overflow-y-auto p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-xs font-bold text-gray-800 uppercase tracking-wide">Filter by</span>
+                    {activeFilterCount > 0 && (
+                      <button onClick={() => setFilters(EMPTY_FILTERS)}
+                        className="text-xs text-gray-400 hover:text-red-500 transition flex items-center gap-1">
+                        <IconX size={12} /> Clear all
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex flex-col gap-3">
+                    {([
+                      { label: "Tier",     key: "tier",           options: ["Gold", "Silver", "Bronze"].map((v) => ({ value: v, label: v })), colorClass: "bg-purple-50 text-purple-700 border-purple-200" },
+                      { label: "Platform", key: "platform",       options: DEFAULT_PLATFORMS.map((v) => ({ value: v, label: v })), colorClass: "bg-blue-50 text-blue-700 border-blue-200" },
+                      { label: "Status",   key: "contact_status", options: [
+                          { value: "not_contacted", label: "Not Contacted" },
+                          { value: "contacted",     label: "Contacted" },
+                          { value: "interested",    label: "Interested" },
+                          { value: "agreed",        label: "Agreed" },
+                        ], colorClass: "bg-amber-50 text-amber-700 border-amber-200" },
+                    ] as const).map(({ label, key, options, colorClass }) => (
+                      <div key={key} className="flex flex-col gap-2 pb-3 border-b border-gray-100">
+                        <label className="text-xs font-medium text-gray-600">{label}</label>
+                        <div className="flex flex-wrap gap-1.5">
+                          {options.map((o) => {
+                            const isSelected = filters[key] === o.value
+                            return (
+                              <button
+                                key={o.value}
+                                onClick={() => setFilters((p) => ({ ...p, [key]: isSelected ? "all" : o.value }))}
+                                aria-pressed={isSelected}
+                                className={`px-2.5 py-1 rounded-full text-xs border transition-all font-medium focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] focus:ring-offset-1 ${
+                                  isSelected ? `${colorClass} border-transparent` : "bg-gray-50 text-gray-500 border-gray-200 hover:border-gray-300 hover:bg-gray-100"
+                                }`}
+                              >
+                                {isSelected && <span className="mr-1 text-[9px]">✓</span>}
+                                {o.label}
+                              </button>
+                            )
+                          })}
+                        </div>
                       </div>
                     ))}
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-3">
+                      <div className="flex flex-col gap-1"><label className="text-xs text-gray-500">Location</label><select value={filters.location} onChange={(e) => setFilters((p) => ({ ...p, location: e.target.value }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] appearance-none cursor-pointer"><option value="all">All Locations</option>{locations.map((l) => <option key={l.name}>{l.name}</option>)}</select></div>
+                      <div className="flex flex-col gap-1"><label className="text-xs text-gray-500">Niche</label><select value={filters.niche} onChange={(e) => setFilters((p) => ({ ...p, niche: e.target.value }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] appearance-none cursor-pointer"><option value="all">All Niches</option>{niches.map((n) => <option key={n.name}>{n.name}</option>)}</select></div>
+                    </div>
                   </div>
-                  <div className="fa">
-                    <button className="fc-btn" onClick={() => setFilters({ tier: "all", platform: "all", niche: "all", location: "all", contact_status: "all" })}>
-                      Clear all
+                  <div className="flex items-center justify-end gap-2 mt-3 pt-3 border-t border-gray-100">
+                    <button onClick={cancelFilters}
+                      className="px-5 py-1.5 border border-gray-200 text-gray-600 rounded-lg text-sm font-medium hover:border-gray-300 transition">
+                      Cancel
                     </button>
-                    <button className="fa-btn" onClick={() => setShowFilterPanel(false)}>Apply</button>
+                    <button onClick={() => setShowFilterPanel(false)}
+                      className="px-5 py-1.5 bg-[#1FAE5B] text-white rounded-lg text-sm font-medium hover:bg-[#178a48] transition">
+                      Apply
+                    </button>
                   </div>
                 </div>
               )}

@@ -140,6 +140,12 @@ function formatActivityDetails(action: string, details: Record<string, unknown>)
       const fields = details.fields as string[] | undefined
       return fields?.length ? `Updated ${fields.length} field${fields.length > 1 ? "s" : ""}` : ""
     }
+    case "research_sop.completed":
+    case "research_sop.applied": {
+      const fields = details.fields as string[] | undefined
+      const sop = `${details.sop_name ?? "SOP"} v${details.sop_version ?? "?"}`
+      return fields?.length ? `${sop} · ${fields.join(", ")}` : sop
+    }
     default:
       return ""
   }
@@ -343,6 +349,8 @@ export default function InfluencerProfileSidebar({
 
   // Notes uses the same pipeline route the Stage/Collaboration Type dropdowns use.
   const [notesValue, setNotesValue] = useState(partner.notes ?? "")
+  // Last saved text — what Cancel restores and what "changed" is measured against.
+  const [savedNotes, setSavedNotes] = useState(partner.notes ?? "")
   const [notesSaveState, setNotesSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle")
 
   const handleNotesSave = async () => {
@@ -355,6 +363,7 @@ export default function InfluencerProfileSidebar({
         body: JSON.stringify({ notes: notesValue }),
       })
       if (!res.ok) throw new Error("Failed to update")
+      setSavedNotes(notesValue)
       setNotesSaveState("saved")
     } catch {
       setNotesSaveState("error")
@@ -570,6 +579,8 @@ export default function InfluencerProfileSidebar({
         <div className="pit-bar">
           {TABS.map((tab, idx) => {
             const reason = tabDisabledReason(idx)
+            // Hidden, not grayed, for non-paid collaborations — as Post Tracker does.
+            if (idx === 5 && !PAID_COLLAB_TYPES.has(LABEL_TO_KANBAN_ID[collabType] ?? collabType)) return null
             return (
               <div key={idx} title={reason ?? undefined}
                 className={`pit ${activeTab === idx ? "active" : ""} ${reason ? "pit-disabled" : ""}`}
@@ -601,6 +612,17 @@ export default function InfluencerProfileSidebar({
                   <div className="avg-card"><div className="avg-val">{(partner.viewsCount ?? 0).toLocaleString()}</div><div className="avg-lbl">Views</div></div>
                 </div>
               </div>
+              {/* Notes sit right under the metrics so they don't need a scroll. */}
+              <div>
+                <div className="section-label">Notes</div>
+                <textarea
+                  className="pfi"
+                  style={{ minHeight: 72, resize: "vertical" }}
+                  placeholder="Add notes..."
+                  value={notesValue}
+                  onChange={(e) => setNotesValue(e.target.value)}
+                />
+              </div>
               <div className="fgrd">
                 <div className="frow"><div className="flbl">Location</div><div className="fval">{partner.loc || "—"}</div></div>
                 <div className="frow"><div className="flbl">Niche</div><div className="fval">{partner.niche || "—"}</div></div>
@@ -619,25 +641,21 @@ export default function InfluencerProfileSidebar({
                 <div className="frow"><div className="flbl">Tier</div><div className="fval">{tier}</div></div>
                 <div className="frow"><div className="flbl">Community</div><div className="fval">{partner.commSt}</div></div>
               </div>
-              <div>
-                <div style={{ fontSize: 10, color: "#888", marginBottom: 6 }}>Notes</div>
-                <textarea
-                  className="pfi"
-                  style={{ minHeight: 80, resize: "vertical" }}
-                  placeholder="Add notes..."
-                  value={notesValue}
-                  onChange={(e) => setNotesValue(e.target.value)}
-                />
-                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
-                  <button
-                    className="btn-primary"
-                    onClick={handleNotesSave}
-                    disabled={notesSaveState === "saving"}
-                    style={{ opacity: notesSaveState === "saving" ? 0.6 : 1 }}
-                  >
-                    {notesSaveState === "saving" ? "Updating…" : notesSaveState === "saved" ? "Updated" : "Update"}
-                  </button>
-                </div>
+              {/* Same sticky action bar as the Influencer List profile — stays in
+                  view at the bottom of the drawer while the tab scrolls. */}
+              <div style={{
+                display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8,
+                position: "sticky", bottom: -18, margin: "8px -20px -18px",
+                padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
+              }}>
+                {notesSaveState === "saved" && notesValue === savedNotes && <span style={{ marginRight: "auto", fontSize: 12, color: "#1fae5b", fontWeight: 600 }}>Saved</span>}
+                {notesSaveState === "error" && <span style={{ marginRight: "auto", fontSize: 12, color: "#dc2626" }}>Couldn&apos;t save — try again</span>}
+                <button className="btn-secondary" onClick={() => setNotesValue(savedNotes)} disabled={notesSaveState === "saving" || notesValue === savedNotes}
+                  style={{ opacity: notesValue === savedNotes ? 0.5 : 1 }}>Cancel</button>
+                <button className="btn-primary" onClick={handleNotesSave} disabled={notesSaveState === "saving" || notesValue === savedNotes}
+                  style={{ opacity: notesSaveState === "saving" || notesValue === savedNotes ? 0.6 : 1 }}>
+                  {notesSaveState === "saving" ? "Saving…" : "Save Changes"}
+                </button>
               </div>
             </div>
           )}
@@ -673,7 +691,7 @@ export default function InfluencerProfileSidebar({
         </div>
 
         <style jsx>{`
-          .pp { position:fixed; top:0; right:0; width:520px; max-width:100vw; height:100%; background:#fff; box-shadow:-8px 0 40px rgba(0,0,0,0.14); z-index:500; display:flex; flex-direction:column; font-family:"Inter",system-ui,sans-serif; }
+          .pp { position:fixed; top:0; right:0; width:600px; max-width:100vw; height:100%; background:#fff; box-shadow:-8px 0 40px rgba(0,0,0,0.14); z-index:500; display:flex; flex-direction:column; font-family:"Inter",system-ui,sans-serif; }
           .pph { padding:16px 20px; border-bottom:1px solid #f0f0f0; }
           .ppt { font-size:11px; font-weight:600; color:#9ca3af; letter-spacing:.1em; text-transform:uppercase; margin-bottom:12px; }
           .pav { width:44px; height:44px; border-radius:50%; background:#1fae5b; display:flex; align-items:center; justify-content:center; font-size:18px; font-weight:700; color:#fff; flex-shrink:0; box-shadow:0 0 0 3px #dcfce7; }
@@ -707,10 +725,10 @@ export default function InfluencerProfileSidebar({
           .avg-card { background:#fff; border:1.5px solid #e5e7eb; border-radius:10px; padding:12px 8px; text-align:center; box-shadow:0 1px 3px rgba(0,0,0,.05); }
           .avg-val { font-size:18px; font-weight:700; color:#111827; }
           .avg-lbl { font-size:9px; font-weight:600; color:#9ca3af; text-transform:uppercase; letter-spacing:.07em; margin-top:3px; }
-          .fgrd { display:grid; grid-template-columns:1fr 1fr; }
-          .frow { padding:8px 0; border-bottom:.5px solid rgba(0,0,0,.05); }
-          .flbl { font-size:9px; font-weight:600; color:#9ca3af; text-transform:uppercase; letter-spacing:.06em; margin-bottom:2px; }
-          .fval { font-size:13px; color:#111827; font-weight:500; }
+          .fgrd { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:4px 0 14px; }
+          .frow { min-width:0; padding:10px 12px; background:#fafaf9; border:1px solid #f0f0ee; border-radius:10px; }
+          .flbl { font-size:11px; font-weight:500; color:#9ca3af; margin-bottom:3px; }
+          .fval { font-size:13px; color:#111827; font-weight:600; overflow-wrap:anywhere; }
           .bp { display:inline-block; font-size:10px; padding:1px 7px; border-radius:6px; background:#fce4ec; color:#880e4f; margin-left:6px; }
           .pfr { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
           .pfg { display:flex; flex-direction:column; gap:4px; margin-bottom:10px; }

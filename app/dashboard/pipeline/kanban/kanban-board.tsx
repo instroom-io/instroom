@@ -56,12 +56,14 @@ import { SaveStatusPill } from "@/components/save-status-pill"
 import { StaleDataNotice } from "@/components/stale-data-notice"
 import { ProfilePicture, PlatformIcon } from "@/components/table-sheet/ui-atoms"
 import { getPlatformLabel } from "@/components/table-sheet/utils"
+import { DEFAULT_PLATFORMS } from "@/components/table-sheet/constants"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { BoardSkeleton } from "@/components/shared/skeletons"
 import { DeclineModal } from "@/components/shared/decline-modal"
 import { StageActionButton } from "@/components/shared/stage-action-button"
 import { InfoTooltip } from "@/components/shared/anchored-tooltip"
 import { DELIVERABLE_COLLAB_TYPES, MAX_DELIVERABLES } from "@/lib/deliverables"
+import { useBrandTaxonomy } from "@/hooks/useBrandTaxonomy"
 import {
   allowedTransitions,
   isTerminalStage,
@@ -71,8 +73,6 @@ import {
 } from "@/lib/pipeline-transitions"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const NICHES    = ["Beauty", "Fitness", "Lifestyle", "Food", "Tech", "Fashion", "Travel"]
-const LOCATIONS = ["Philippines", "Singapore", "United States", "Australia", "United Kingdom", "Malaysia", "Indonesia", "Thailand", "Vietnam"]
 
 // ─── Collaboration Types ──────────────────────────────────────────────────────
 /**
@@ -439,104 +439,6 @@ function TagSelect({ label, options, selected, onChange, colorClass = "bg-[#1FAE
             </button>
           )
         })}
-      </div>
-    </div>
-  )
-}
-
-// ─── Searchable Multi-Select ──────────────────────────────────────────────────
-// Renders as a single dropdown box (same shape as the Post Tracker's Location /
-// Niche selects) but keeps the pipeline's existing multi-select semantics, and
-// adds a type-ahead so long option lists stay usable.
-function SearchableMultiSelect({ label, options, selected, onChange, allLabel }: {
-  label: string
-  options: string[]
-  selected: string[]
-  onChange: (values: string[]) => void
-  allLabel: string
-}) {
-  const [open, setOpen]   = useState(false)
-  const [query, setQuery] = useState("")
-  const wrapRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false) }
-    document.addEventListener("mousedown", onDown)
-    document.addEventListener("keydown", onKey)
-    return () => {
-      document.removeEventListener("mousedown", onDown)
-      document.removeEventListener("keydown", onKey)
-    }
-  }, [open])
-
-  const matches = options.filter((o) => o.toLowerCase().includes(query.trim().toLowerCase()))
-  const summary = selected.length === 0 ? allLabel : selected.length === 1 ? selected[0] : `${selected.length} selected`
-  const toggle  = (option: string) =>
-    onChange(selected.includes(option) ? selected.filter((s) => s !== option) : [...selected, option])
-
-  return (
-    <div className="flex flex-col gap-1" ref={wrapRef}>
-      <div className="flex items-center justify-between">
-        <label className="text-xs text-gray-500">{label}</label>
-        {selected.length > 0 && (
-          <button onClick={() => onChange([])} className="text-[10px] text-gray-400 hover:text-gray-600 transition underline underline-offset-2">Clear</button>
-        )}
-      </div>
-      <div className="relative">
-        <button
-          type="button"
-          onClick={() => { setOpen((v) => !v); setQuery("") }}
-          aria-haspopup="listbox"
-          aria-expanded={open}
-          className={`w-full px-3 py-2 border rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] cursor-pointer flex items-center justify-between gap-1 text-left ${
-            selected.length > 0 ? "border-[#1FAE5B]/40 text-gray-800" : "border-gray-200 text-gray-500"
-          }`}
-        >
-          <span className="truncate">{summary}</span>
-          <IconChevronDown size={14} className={`flex-shrink-0 text-gray-400 transition-transform ${open ? "rotate-180" : ""}`} />
-        </button>
-
-        {open && (
-          <div role="listbox" aria-label={label} className="absolute left-0 right-0 top-full mt-1 z-40 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
-            <div className="p-2 border-b border-gray-100">
-              <input
-                autoFocus
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder={`Search ${label.toLowerCase()}...`}
-                className="w-full px-2 py-1.5 text-xs border border-gray-200 rounded-md outline-none focus:ring-2 focus:ring-[#1FAE5B]"
-              />
-            </div>
-            <div className="max-h-44 overflow-y-auto py-1">
-              {matches.length === 0 ? (
-                <p className="px-3 py-2 text-xs text-gray-400">No matches</p>
-              ) : matches.map((option) => {
-                const isSelected = selected.includes(option)
-                return (
-                  <button
-                    key={option}
-                    type="button"
-                    role="option"
-                    aria-selected={isSelected}
-                    onClick={() => toggle(option)}
-                    className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-gray-50 focus:bg-gray-50 focus:outline-none transition"
-                  >
-                    <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center flex-shrink-0 text-[9px] ${
-                      isSelected ? "bg-[#1FAE5B] border-[#1FAE5B] text-white" : "border-gray-300"
-                    }`}>
-                      {isSelected && "✓"}
-                    </span>
-                    <span className="truncate text-gray-700">{option}</span>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-        )}
       </div>
     </div>
   )
@@ -1026,20 +928,19 @@ interface FilterState {
   locations: string[]
   niches:    string[]
   stages:    string[]
-  approvals: string[]
+  platforms: string[]
 }
 
 const EMPTY_FILTERS: FilterState = {
   locations: [],
   niches:    [],
   stages:    [],
-  approvals: [],
+  platforms: [],
 }
 
 // Every stage a row can hold, including the hidden "For Order Creation" column
 // so list-view rows in that stage are still filterable.
 const STAGE_OPTIONS   = columns.map((c) => c.status)
-const APPROVAL_OPTIONS = ["Approved", "Pending", "Declined"]
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 interface PipelinePageProps { brandId?: string }
@@ -1059,9 +960,17 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   const [selectedColumnStatus, setSelectedColumnStatus] = useState<string | null>(null)
   const [showFilterPanel,      setShowFilterPanel]      = useState(false)
   const [filters,              setFilters]              = useState<FilterState>(EMPTY_FILTERS)
+  // The brand's own niches / locations — the lists added in the Influencers List.
+  const { niches: brandNiches, locations: brandLocations } = useBrandTaxonomy(brandId ?? null)
   const [niModalInfluencer,    setNiModalInfluencer]    = useState<PipelineInfluencer | null>(null)
   const [pendingNiId,          setPendingNiId]          = useState<string | null>(null)
   const [sortOrder,            setSortOrder]            = useState<"newest"|"oldest">("newest")
+  // Filters apply live; Cancel restores what was set when the panel opened.
+  const filterSnapshot = useRef<{ filters: FilterState; sortOrder: "newest"|"oldest" } | null>(null)
+  const cancelFilters = () => {
+    if (filterSnapshot.current) { setFilters(filterSnapshot.current.filters); setSortOrder(filterSnapshot.current.sortOrder) }
+    setShowFilterPanel(false)
+  }
 
   // ── Collab type modal — fires when moving TO "Deal Agreed" ──
   const [collabModalInfluencer, setCollabModalInfluencer] = useState<PipelineInfluencer | null>(null)
@@ -1528,8 +1437,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     // Same widening as the column/list filter above: ticking "Deal Agreed" in
     // the filter panel has to find the same rows the Deal Agreed column shows.
     if (filters.stages.length > 0)    result = result.filter((p) => filters.stages.some((s) => matchesColumnStatus(p.pipelineStatus, s)))
-    // A row with no approval decision yet reads as Pending
-    if (filters.approvals.length > 0) result = result.filter((p) => filters.approvals.includes(p.approvalStatus ?? "Pending"))
+    if (filters.platforms.length > 0) result = result.filter((p) => filters.platforms.includes(getPlatformLabel(p.platform)))
     result = [...result].sort((a, b) => {
       const da = new Date(a.createdAt ?? 0).getTime()
       const db = new Date(b.createdAt ?? 0).getTime()
@@ -1585,7 +1493,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     filters.locations.length +
     filters.niches.length +
     filters.stages.length +
-    filters.approvals.length +
+    filters.platforms.length +
     (search ? 1 : 0) +
     (selectedColumnStatus ? 1 : 0)
 
@@ -1716,7 +1624,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
         {/* Filters */}
         <div className="relative">
           <button
-            onClick={() => setShowFilterPanel(!showFilterPanel)}
+            onClick={() => { if (!showFilterPanel) filterSnapshot.current = { filters, sortOrder }; setShowFilterPanel(!showFilterPanel) }}
             data-tour="pipeline-filters"
             className={`h-9 px-3 rounded-lg text-sm flex items-center gap-1.5 border transition-colors ${
               hasActiveFilters ? "bg-[#1FAE5B] text-white border-[#1FAE5B]" : "border-[#0F6B3E]/20 hover:border-[#0F6B3E]/40"
@@ -1734,8 +1642,8 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
           </button>
 
           {showFilterPanel && (
-            <div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-30 w-[420px] max-w-[90vw] p-5">
-              <div className="flex items-center justify-between mb-4">
+            <div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-30 w-[420px] max-w-[90vw] max-h-[calc(100vh-240px)] overflow-y-auto p-4">
+              <div className="flex items-center justify-between mb-3">
                 <span className="text-xs font-bold text-gray-800 uppercase tracking-wide">Filter by</span>
                 {hasActiveFilters && (
                   <button onClick={() => setFilters(EMPTY_FILTERS)}
@@ -1746,27 +1654,24 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
               </div>
               {/* Section order, spacing and dividers mirror the Post Tracker
                   panel: chip groups first, then the two dropdowns in one row. */}
-              <div className="flex flex-col gap-5">
+              <div className="flex flex-col gap-3">
                 <TagSelect label="Pipeline Stage" options={STAGE_OPTIONS} selected={filters.stages}
                   onChange={(v) => setFilters((p) => ({ ...p, stages: v }))}
                   colorClass="bg-purple-50 text-purple-700 border-purple-200"
                   layout="grid" />
                 <div className="border-t border-gray-100" />
-                <TagSelect label="Approval Status" options={APPROVAL_OPTIONS} selected={filters.approvals}
-                  onChange={(v) => setFilters((p) => ({ ...p, approvals: v }))}
+                <TagSelect label="Platform" options={DEFAULT_PLATFORMS} selected={filters.platforms}
+                  onChange={(v) => setFilters((p) => ({ ...p, platforms: v }))}
                   colorClass="bg-amber-50 text-amber-700 border-amber-200" />
                 <div className="border-t border-gray-100" />
-                <div className="grid grid-cols-2 gap-x-4 gap-y-4">
-                  <SearchableMultiSelect label="Location" options={LOCATIONS} selected={filters.locations}
-                    onChange={(v) => setFilters((p) => ({ ...p, locations: v }))}
-                    allLabel="All Locations" />
-                  <SearchableMultiSelect label="Niche" options={NICHES} selected={filters.niches}
-                    onChange={(v) => setFilters((p) => ({ ...p, niches: v }))}
-                    allLabel="All Niches" />
+                <div className="grid grid-cols-2 gap-x-3 gap-y-3">
+                  {/* Native selects, same as the Post Tracker panel. */}
+                  <div className="flex flex-col gap-1"><label className="text-xs text-gray-500">Location</label><select value={filters.locations[0] ?? "all"} onChange={(e) => setFilters((p) => ({ ...p, locations: e.target.value === "all" ? [] : [e.target.value] }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] appearance-none cursor-pointer"><option value="all">All Locations</option>{brandLocations.map((l) => <option key={l.id}>{l.name}</option>)}</select></div>
+                  <div className="flex flex-col gap-1"><label className="text-xs text-gray-500">Niche</label><select value={filters.niches[0] ?? "all"} onChange={(e) => setFilters((p) => ({ ...p, niches: e.target.value === "all" ? [] : [e.target.value] }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] appearance-none cursor-pointer"><option value="all">All Niches</option>{brandNiches.map((n) => <option key={n.id}>{n.name}</option>)}</select></div>
                 </div>
               </div>
               {/* Sort inside filter panel */}
-              <div className="mt-4 pt-4 border-t border-gray-100">
+              <div className="mt-3 pt-3 border-t border-gray-100">
                 <label className="text-xs text-gray-500 block mb-2">Sort by date</label>
                 <div className="flex gap-2">
                   <button onClick={() => setSortOrder("newest")}
@@ -1779,18 +1684,18 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                   </button>
                 </div>
               </div>
-              {(filters.locations.length > 0 || filters.niches.length > 0 || filters.stages.length > 0 || filters.approvals.length > 0) && (
-                <div className="mt-4 pt-4 border-t border-gray-100 flex flex-wrap gap-1.5">
+              {(filters.locations.length > 0 || filters.niches.length > 0 || filters.stages.length > 0 || filters.platforms.length > 0) && (
+                <div className="mt-3 pt-3 border-t border-gray-100 flex flex-wrap gap-1.5">
                   {filters.stages.map((s) => (
                     <span key={s} className="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-50 text-purple-700 rounded-full text-[11px] font-medium">
                       {s}
                       <button onClick={() => setFilters((p) => ({ ...p, stages: p.stages.filter((x) => x !== s) }))} className="hover:text-purple-900 transition"><IconX size={10} /></button>
                     </span>
                   ))}
-                  {filters.approvals.map((a) => (
+                  {filters.platforms.map((a) => (
                     <span key={a} className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-50 text-amber-700 rounded-full text-[11px] font-medium">
                       {a}
-                      <button onClick={() => setFilters((p) => ({ ...p, approvals: p.approvals.filter((x) => x !== a) }))} className="hover:text-amber-900 transition"><IconX size={10} /></button>
+                      <button onClick={() => setFilters((p) => ({ ...p, platforms: p.platforms.filter((x) => x !== a) }))} className="hover:text-amber-900 transition"><IconX size={10} /></button>
                     </span>
                   ))}
                   {filters.locations.map((l) => (
@@ -1807,7 +1712,11 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                   ))}
                 </div>
               )}
-              <div className="flex items-center justify-end mt-4">
+              <div className="flex items-center justify-end gap-2 mt-3 pt-3 border-t border-gray-100">
+                <button onClick={cancelFilters}
+                  className="px-5 py-1.5 border border-gray-200 text-gray-600 rounded-lg text-sm font-medium hover:border-gray-300 transition">
+                  Cancel
+                </button>
                 <button onClick={() => setShowFilterPanel(false)}
                   className="px-5 py-1.5 bg-[#1FAE5B] text-white rounded-lg text-sm font-medium hover:bg-[#178a48] transition">
                   Apply
