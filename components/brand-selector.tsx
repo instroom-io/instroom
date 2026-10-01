@@ -377,7 +377,7 @@ export function BrandSelector() {
                 )}
                 {brand.logo_url ? (
                   <img src={brand.logo_url} alt={brand.name}
-                    className={`h-7 w-7 rounded-md flex-shrink-0 object-cover ${!brand.subscriptionActive && !brand.isOwner ? "grayscale" : ""}`}
+                    className={`h-7 w-auto min-w-7 max-w-16 rounded-md flex-shrink-0 object-contain bg-white border border-zinc-200 px-1 py-0.5 ${!brand.subscriptionActive && !brand.isOwner ? "grayscale" : ""}`}
                   />
                 ) : (
                   <Avatar className="h-7 w-7 rounded-md flex-shrink-0">
@@ -467,7 +467,7 @@ export function BrandSelector() {
                   )}
                   {brand.logo_url ? (
                     <img src={brand.logo_url} alt={brand.name}
-                      className={`h-7 w-7 rounded-md flex-shrink-0 object-cover ${!brand.subscriptionActive ? "grayscale" : ""}`}
+                      className={`h-7 w-auto min-w-7 max-w-16 rounded-md flex-shrink-0 object-contain bg-white border border-zinc-200 px-1 py-0.5 ${!brand.subscriptionActive ? "grayscale" : ""}`}
                     />
                   ) : (
                     <Avatar className="h-7 w-7 rounded-md flex-shrink-0">
@@ -537,7 +537,7 @@ export function BrandSelector() {
               <img
                 src={currentBrand.logo_url}
                 alt={currentBrand.name}
-                className="h-6 w-6 rounded-md flex-shrink-0 object-cover"
+                className="h-7 w-auto min-w-7 max-w-[96px] rounded-md flex-shrink-0 object-contain bg-white border border-zinc-200 px-1 py-0.5"
               />
             ) : (
               <Avatar className="h-6 w-6 rounded-md flex-shrink-0">

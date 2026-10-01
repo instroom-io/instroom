@@ -54,8 +54,17 @@
 }
 
 /* ── Alternating section backgrounds ── */
-.secOdd { background: #ffffff; }
+.secOdd {
+  background: linear-gradient(
+    to bottom,
+    #F4F7F5 0,
+    #ffffff 96px,
+    #ffffff calc(100% - 96px),
+    #F4F7F5 100%
+  );
+}
 .secEven { background: #F4F7F5; }
+.faq.secOdd { background: linear-gradient(to bottom, #F4F7F5 0, #ffffff 96px); }
 
 .sectionHeader {
   text-align: center;
