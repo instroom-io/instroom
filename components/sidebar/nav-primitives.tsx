@@ -158,13 +158,9 @@ export function SidebarUserCard({
         </span>
       )}
 
-      {/* min-w-0 + wrapping (not truncate): the full name stays readable in
-          the narrow rail by growing the card's height instead of its width.
-          Below 190px of card width (the rail dragged toward its 200px minimum)
-          the avatar hides and the name drops to 12px, so a typical first +
-          last name still fits on one line instead of breaking mid-word. */}
+      {/* Wraps rather than truncates. Narrow cards shrink the name (<260px) and hide the avatar (<190px). */}
       <div className="min-w-0 flex-1">
-        <p className="text-[length:var(--sb-font-size)] font-medium leading-snug text-white/90 [overflow-wrap:break-word] @max-[190px]:text-[12px]">{name}</p>
+        <p className="text-[13px] font-medium leading-snug text-white [overflow-wrap:break-word] @max-[260px]:text-[12px] @max-[260px]:tracking-[-0.01em]">{name}</p>
         {settingsHref ? (
           <p className="mt-0.5 text-[11px] leading-tight text-white/60">Account settings</p>
         ) : (

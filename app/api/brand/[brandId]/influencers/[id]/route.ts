@@ -94,7 +94,7 @@ export async function PUT(
     // through this route, exactly as before.
     const current = await prisma.influencer.findUnique({
       where: { id },
-      select: { is_draft: true },
+      select: { is_draft: true, handle: true, platform: true },
     })
 
     // A genuinely unknown influencer is still a 404. Checked explicitly because
@@ -115,6 +115,18 @@ export async function PUT(
       typeof data.handle === "string" ? data.handle : "",
       typeof data.platform === "string" ? data.platform : ""
     )
+    // Refused, not ignored, so another profile's details never land on this record.
+    const stored = normalizeInfluencerIdentity(current.handle, current.platform ?? "")
+    if (
+      !current.is_draft &&
+      ((promoting.handle && promoting.handle !== stored.handle) ||
+        (promoting.platform && promoting.platform !== stored.platform))
+    ) {
+      return NextResponse.json(
+        { error: "A saved influencer's handle and platform can't be changed. Add a new row instead.", code: "IDENTITY_LOCKED" },
+        { status: 422 }
+      )
+    }
     const promotingHandle = current?.is_draft ? promoting.handle : ""
     const promotingPlatform = current?.is_draft ? promoting.platform : ""
 

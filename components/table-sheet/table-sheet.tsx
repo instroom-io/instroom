@@ -333,10 +333,7 @@ export default function TableSheet({
   //   pendingFetchRef   — one debounce timer per row, so the handle edit and the
   //                       platform edit that follows it coalesce into one fetch
   //                       for the final pair.
-  //   requestedPairsRef — every platform|handle already requested. A repeat
-  //                       commit of the same pair is not a new question, so it
-  //                       is not asked again. The Retry button clears its own
-  //                       key, since that IS a deliberate re-ask.
+  //   requestedPairsRef — pairs the provider said don't exist; not asked again.
   const pendingFetchRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
   const requestedPairsRef = useRef<Set<string>>(new Set())
 
@@ -487,7 +484,10 @@ export default function TableSheet({
       const seen = new Set<string>()
       const merged = prev.map(local => {
         seen.add(local.id)
-        return serverById.get(local.id) ?? local
+        const server = serverById.get(local.id)
+        // Server drafts are blank; keep what's typed until it saves.
+        if (!server || server.is_draft) return local
+        return server
       })
       const added = initialRows.filter(r =>
         !seen.has(r.id) &&
@@ -653,8 +653,11 @@ export default function TableSheet({
    * nothing downstream treats a failure as a success.
    */
   const notifiedLookupFailures = useRef<Set<string>>(new Set())
+  /** Handles whose last lookup errored, so they can be retried. */
+  const erroredLookups = useRef<Set<string>>(new Set())
   const notifyLookupFailed = useCallback((cleanHandleValue: string) => {
     const key = cleanHandleValue.toLowerCase()
+    erroredLookups.current.add(key)
     if (notifiedLookupFailures.current.has(key)) return
     notifiedLookupFailures.current.add(key)
     addToast("warning", lookupFailureMessage(cleanHandleValue))
@@ -1408,7 +1411,8 @@ export default function TableSheet({
         { signal: AbortSignal.timeout(PROFILE_LOOKUP_TIMEOUT_MS) }
       ).then(r => (r.ok ? r.json() : null)).catch(() => null)
 
-      if (known?.id) {
+      // 0 followers = empty record from a failed lookup; ask the API instead.
+      if (known?.id && Number(known.follower_count) > 0) {
         // Mapped onto the row shape the merge below expects. `engagement_rate`
         // is a Prisma Decimal, so it arrives as a string; the numeric fields
         // are sent through String() because the merge skips a literal "0" and
@@ -1433,7 +1437,12 @@ export default function TableSheet({
         // nothing for is not asked again either — that was a credit per commit.
         // Only set on the path that actually spends one.
         requestedPairsRef.current.add(pairKey)
+        // Each attempt can toast again.
+        notifiedLookupFailures.current.delete(clean)
+        erroredLookups.current.delete(clean)
         data = await fetchInfluencerFromAPI(handle, platform)
+        // Remember only genuine not-founds.
+        if (data || erroredLookups.current.has(clean)) requestedPairsRef.current.delete(pairKey)
       }
       // ── Stale response guard ─────────────────────────────────────────────
       // The row is re-read AFTER the await. A lookup can take seconds, and the
@@ -1450,15 +1459,7 @@ export default function TableSheet({
       if (!rowNow) return
       if (cleanHandle(rowNow.handle).trim().toLowerCase() !== clean || rowNow.platform !== platform) return
 
-      // Nothing came back: not found, an API error, or no API host configured.
-      // A genuine not-found is announced here; every other cause has already
-      // raised its own non-blocking toast inside fetchInfluencerFromAPI, so
-      // this one stays quiet rather than also calling it "not found" — which
-      // was never true of a private profile or an unreachable API.
-      //
-      // Either way the row is handed to the page as manually-completable (see
-      // onLookupFailed) and left fully editable. Nothing is saved by this; the
-      // row is written only once the user actually edits it.
+      // Not found or failed (errors toast in fetchInfluencerFromAPI); the user fills the row in.
       if (!data) {
         if (!notifiedLookupFailures.current.has(clean)) {
           addToast("error", `${clean} not found on ${platform}`)
@@ -1775,7 +1776,10 @@ export default function TableSheet({
     const clean = cleanHandle(handle).trim().toLowerCase()
     if (!clean || clean.length < 2) return
     if (platform !== "instagram" && platform !== "tiktok") return
-    if (requestedPairsRef.current.has(fetchPairKey(handle, platform))) return
+    if (requestedPairsRef.current.has(fetchPairKey(handle, platform))) {
+      addToast("error", `${clean} was already checked — not found on ${platform}`)
+      return
+    }
 
     const existing = pendingFetchRef.current.get(rowId)
     if (existing) clearTimeout(existing)
@@ -1808,7 +1812,7 @@ export default function TableSheet({
       })
       runQueuedFetch()
     }, AUTO_FETCH_DEBOUNCE_MS))
-  }, [autoFetchInfluencer, runQueuedFetch, releaseFetchSlot])
+  }, [autoFetchInfluencer, runQueuedFetch, releaseFetchSlot, addToast])
 
   const applyCellValue = useCallback((rowIdx: number, colKey: string, value: string) => {
     const actualRow = filteredRows[rowIdx]; const actualRowIdx = rows.findIndex(r => r.id === actualRow.id); if (actualRowIdx === -1) return
@@ -1818,12 +1822,17 @@ export default function TableSheet({
     let shouldFetch = false, fetchRowId = currentRow.id, fetchHandle = "", fetchPlatform = ""
     let cleanedValue = value
     if (colKey === "handle") cleanedValue = cleanHandle(value)
-    // Only a real change re-fetches: opening the handle/platform cell and
-    // leaving it as it was must not spend another lookup on the same profile.
-    const handleChanged = colKey === "handle" && cleanedValue.toLowerCase() !== cleanHandle(currentRow.handle).toLowerCase()
-    const platformChanged = colKey === "platform" && value !== currentRow.platform
-    if (handleChanged && cleanedValue && cleanedValue.length >= 2) { shouldFetch = true; fetchHandle = cleanedValue; fetchPlatform = currentRow.platform }
-    if (platformChanged && currentRow.handle && cleanHandle(currentRow.handle).length >= 2) { shouldFetch = true; fetchHandle = currentRow.handle; fetchPlatform = value }
+    // A saved influencer's handle/platform is fixed.
+    const identitySaved = !currentRow.is_draft && !currentRow.id.startsWith("temp-") && !!cleanHandle(currentRow.handle)
+    if (identitySaved && (
+      (colKey === "handle" && cleanedValue.toLowerCase() !== cleanHandle(currentRow.handle).toLowerCase()) ||
+      (colKey === "platform" && value !== currentRow.platform)
+    )) {
+      addToast("error", "A saved influencer's handle and platform can't be changed. Add a new row instead.")
+      return
+    }
+    if (colKey === "handle" && cleanedValue && cleanedValue.length >= 2) { shouldFetch = true; fetchHandle = cleanedValue; fetchPlatform = currentRow.platform }
+    if (colKey === "platform" && currentRow.handle && cleanHandle(currentRow.handle).length >= 2) { shouldFetch = true; fetchHandle = currentRow.handle; fetchPlatform = value }
     // Auto-add a newly typed niche/location — kept OUTSIDE the setRows updater below,
     // since React can invoke a state updater more than once (e.g. Strict Mode in dev),
     // which was firing this POST twice for the same value and tripping the DB unique constraint.
@@ -1863,7 +1872,7 @@ export default function TableSheet({
       const typed = cleanedValue
       if (typed) setTimeout(() => checkContactDuplicate(currentRow.id, typed), 0)
     }
-  }, [onRowsChange, customCols, filteredRows, rows, isOutreachField, nicheOptions, locationOptions, scheduleAutoFetch, canApproveInfluencers, checkContactDuplicate])
+  }, [onRowsChange, customCols, filteredRows, rows, isOutreachField, nicheOptions, locationOptions, scheduleAutoFetch, canApproveInfluencers, checkContactDuplicate, addToast])
 
   const addOptionToCol = useCallback((fk: string, no: string) => {
     setCustomCols(prev => { const n = prev.map(c => c.field_key !== fk ? c : { ...c, field_options: [...(c.field_options ?? []), no] }); onCustomColumnsChange?.(n); return n })
