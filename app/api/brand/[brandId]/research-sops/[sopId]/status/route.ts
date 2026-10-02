@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { requireSopAccess, serverError, SOP_MANAGE_CAPABILITY } from "@/lib/research-sop/auth"
-import { SOP_STATUSES, isResearchField, type SopStatus } from "@/lib/research-sop/fields"
+import { SOP_STATUSES, type SopStatus } from "@/lib/research-sop/fields"
 
-// PATCH — activate ("active"), deactivate ("draft") or archive ("archived")
-// an SOP (Owner / Manager). Only active SOPs can be run. Archiving keeps the
-// SOP and its run history; nothing is deleted.
+// PATCH — publish ("active"), unpublish ("draft") or archive ("archived") an
+// SOP (Owner / Manager). Active SOPs are the ones researchers see as their
+// research guide. Archiving keeps the SOP; nothing is deleted.
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ brandId: string; sopId: string }> }
@@ -23,17 +23,9 @@ export async function PATCH(
 
     const sop = await prisma.researchSop.findFirst({
       where: { id: sopId, brand_id: brandId },
-      select: { id: true, steps: { select: { target_field: true } } },
+      select: { id: true },
     })
     if (!sop) return NextResponse.json({ error: "Not found" }, { status: 404 })
-
-    // An SOP that maps no field would run and research nothing.
-    if (status === "active" && !sop.steps.some((s) => isResearchField(s.target_field))) {
-      return NextResponse.json(
-        { error: "Map at least one step to an influencer field before activating this SOP." },
-        { status: 400 }
-      )
-    }
 
     const updated = await prisma.researchSop.update({
       where: { id: sop.id },

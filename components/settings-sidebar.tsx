@@ -7,6 +7,8 @@ type SettingsItem = {
   label: string
   href: string
   icon: React.ReactNode
+  /** Small pill after the label, e.g. "Beta" for an unreleased section. */
+  badge?: string
 }
 
 type SettingsSection = {
@@ -230,6 +232,17 @@ export function SettingsSidebar() {
                   {item.icon}
                 </span>
                 {item.label}
+                {item.badge && (
+                  <span
+                    style={{
+                      fontSize: 9, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
+                      color: "#b45309", background: "#fef3c7", border: "1px solid #fde68a",
+                      borderRadius: 999, padding: "1px 6px", lineHeight: 1.4,
+                    }}
+                  >
+                    {item.badge}
+                  </span>
+                )}
               </div>
             )
           })}

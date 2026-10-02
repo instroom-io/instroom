@@ -2,6 +2,10 @@
 // table-sheet/profile-sidebar.tsx
 
 import React, { useState, useEffect, useRef } from "react"
+import { FileSearch } from "lucide-react"
+import { ResearchGuideModal } from "@/components/research-sop/research-guide"
+import { Skeleton } from "@/components/ui/skeleton"
+import { getCachedHistory, loadHistory, prefetchHistory } from "@/lib/activity-history"
 import type { InfluencerRow, CustomColumn } from "./types"
 import { platforms } from "./constants"
 import { STATUS_LABEL } from "./constants"
@@ -20,14 +24,6 @@ function getDmUrl(platform: string, handle: string): string {
   return getProfileUrl(platform, handle)
 }
 
-/**
- * How long the History tab waits for its activity log before giving up.
- *
- * Shorter than the profile lookup's 15s: this is a same-origin read of our own
- * database behind an already-open panel, so a slow answer is a problem, and the
- * tab has a perfectly good error state to fall back to.
- */
-const HISTORY_FETCH_TIMEOUT_MS = 10_000
 
 // ─── Activity log types ───────────────────────────────────────────────────────
 interface ActivityLog {
@@ -78,12 +74,6 @@ function formatActivityDetails(action: string, details: Record<string, unknown>)
       const fields = details.fields as string[] | undefined
       return fields?.length ? `Updated ${fields.length} field${fields.length > 1 ? "s" : ""}` : ""
     }
-    case "research_sop.completed":
-    case "research_sop.applied": {
-      const fields = details.fields as string[] | undefined
-      const sop = `${details.sop_name ?? "SOP"} v${details.sop_version ?? "?"}`
-      return fields?.length ? `${sop} · ${fields.join(", ")}` : sop
-    }
     default:
       return ""
   }
@@ -91,46 +81,29 @@ function formatActivityDetails(action: string, details: Record<string, unknown>)
 
 // ─── History Tab Component ────────────────────────────────────────────────────
 function HistoryTab({ brandId, biId }: { brandId?: string; biId: string }) {
-  const [logs, setLogs] = useState<ActivityLog[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  // Cached copy first (an earlier open, or the drawer's prefetch), refreshed
+  // in the background — see lib/activity-history.
+  const key = `${brandId}/${biId}`
+  const cachedLogs = getCachedHistory<ActivityLog>(brandId, biId)
+  const [result, setResult] = useState<{ key: string; logs: ActivityLog[] | null; error: boolean } | null>(null)
 
   useEffect(() => {
-    if (!brandId || !biId) {
-      setLoading(false)
-      return
-    }
-    setLoading(true)
-    setError(null)
-    // Aborted on cleanup, so switching influencer (or closing the panel) drops
-    // the previous request instead of letting it land on the new one's tab —
-    // and the timeout stops an unreachable backend leaving this stuck on
-    // "loading" forever. Both failures are contained in this tab: an inline
-    // line of text, never a dialog over the sheet.
-    const controller = new AbortController()
-    // `cancelled` separates the two reasons this request can abort. Both raise
-    // an AbortError, but only one of them should stay silent: a cleanup abort
-    // means the component moved on and setting state would flash an error onto
-    // the influencer the user just switched to, while a TIMEOUT abort is a real
-    // failure the tab has to report — swallowing it would leave the panel
-    // spinning forever.
+    if (!brandId || !biId) return
     let cancelled = false
-    const timeout = setTimeout(() => controller.abort(), HISTORY_FETCH_TIMEOUT_MS)
-    fetch(`/api/brand/${brandId}/influencers/${biId}/activity`, { signal: controller.signal })
-      .then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        return r.json()
-      })
-      .then(d => { if (!cancelled) { setLogs(d.logs ?? []); setLoading(false) } })
+    loadHistory<ActivityLog>(brandId, biId)
+      .then(l => { if (!cancelled) setResult({ key, logs: l, error: false }) })
       .catch(err => {
         if (cancelled) return
         console.error("[HistoryTab]", err)
-        setError("Failed to load history")
-        setLoading(false)
+        setResult({ key, logs: null, error: true })
       })
-      .finally(() => clearTimeout(timeout))
-    return () => { cancelled = true; clearTimeout(timeout); controller.abort() }
-  }, [brandId, biId])
+    return () => { cancelled = true }
+  }, [brandId, biId, key])
+
+  const fresh = result?.key === key ? result : null
+  const logs: ActivityLog[] = fresh?.logs ?? cachedLogs ?? []
+  const loading = !fresh && !cachedLogs
+  const error = fresh?.error && !cachedLogs ? "Failed to load history" : null
 
   if (!brandId) {
     return (
@@ -140,13 +113,19 @@ function HistoryTab({ brandId, biId }: { brandId?: string; biId: string }) {
     )
   }
 
-  if (loading) {
-    return (
-      <div style={{ textAlign: "center", padding: "48px 20px", color: "#9ca3af", fontSize: 13 }}>
-        Loading history…
-      </div>
-    )
-  }
+  if (loading) return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14, padding: "4px 0" }} aria-busy="true" aria-label="Loading history">
+      {[0, 1, 2].map(i => (
+        <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+          <Skeleton className="h-7 w-7 shrink-0 rounded-full bg-gray-100" />
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
+            <Skeleton className="h-3 w-2/3 bg-gray-100" />
+            <Skeleton className="h-2.5 w-1/3 bg-gray-100" />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
 
   if (error) {
     return (
@@ -733,8 +712,15 @@ export default function ProfileSidebar({
   brandId?: string
 }) {
   const [profileTab, setProfileTab] = useState(0)
+  // Load History in the background as the drawer opens, so it is ready when clicked.
+  const historyBiId = row ? row.brand_influencer_id || row.id : ""
+  useEffect(() => {
+    if (historyBiId && !historyBiId.startsWith("temp-")) prefetchHistory(brandId, historyBiId)
+  }, [brandId, historyBiId])
   const [editedRow, setEditedRow] = useState<InfluencerRow | null>(row ? { ...row } : null)
   const [showEmailModal, setShowEmailModal] = useState(false)
+  // Read-only research playbook (published SOPs) for the researcher to follow.
+  const [showResearchGuide, setShowResearchGuide] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const defaultDiscountCode = row ? "CODE" + (row.first_name || row.handle).toUpperCase().replace(/[^A-Z]/g, "") : ""
   const defaultAffiliateLink = row ? "https://instroom.io/ref/" + (row.first_name || row.handle).toLowerCase().replace(/[^a-z]/g, "") : ""
@@ -980,7 +966,21 @@ export default function ProfileSidebar({
             </div>
             <div style={{ flex: "1 1 auto", minWidth: 0 }}>
               <div style={{ fontSize: 15, fontWeight: 700, color: "#111827", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{editedRow.full_name || editedRow.first_name || ""}</div>
-              <div style={{ fontSize: 12, color: "#6b7280", marginTop: 1 }}>@{editedRow.handle.replace(/^@/, "")}</div>
+              <div style={{ fontSize: 12, color: "#6b7280", marginTop: 1, display: "flex", alignItems: "center", gap: 6 }}>
+                @{editedRow.handle.replace(/^@/, "")}
+                {brandId && (
+                  // Small and out of the way: the team's research SOP, read-only.
+                  <button
+                    type="button"
+                    onClick={() => setShowResearchGuide(true)}
+                    title="Research guide"
+                    aria-label="Open research guide"
+                    style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, borderRadius: 6, border: "1px solid #e5e7eb", background: "#f9fafb", color: "#0f6b3e", cursor: "pointer", padding: 0 }}
+                  >
+                    <FileSearch size={12} />
+                  </button>
+                )}
+              </div>
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "flex-start", flexShrink: 0 }}>
               {/* Read-only: stages are changed on the Pipeline, inbox and Post Tracker. */}
@@ -1046,6 +1046,13 @@ export default function ProfileSidebar({
             >Copy Link</button>
           </div>
         </div>
+        {showResearchGuide && brandId && (
+          <ResearchGuideModal
+            brandId={brandId}
+            influencerLabel={`@${editedRow.handle.replace(/^@/, "")}`}
+            onClose={() => setShowResearchGuide(false)}
+          />
+        )}
 
         {/* ── Tab bar — now 5 tabs ── */}
         <div style={S.tabBar}>

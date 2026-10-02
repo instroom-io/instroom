@@ -1,12 +1,31 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import { Skeleton } from "@/components/ui/skeleton"
+import { fetchCached, getCachedData, setCachedData } from "@/lib/data-cache"
 
 type Attribution = {
   coupon?: string | null
   refCode?: string | null
   affiliateLink?: string | null
   sparkAds?: string | null
+}
+
+const attributionKey = (brandId: string, biId: string) => `/api/brand/${brandId}/attribution/${biId}`
+
+const loadAttribution = (brandId: string, biId: string) =>
+  fetchCached<Attribution>(attributionKey(brandId, biId), async () => {
+    const r = await fetch(attributionKey(brandId, biId))
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    return ((await r.json()).data ?? {}) as Attribution
+  })
+
+/**
+ * Start loading an influencer's attribution as soon as their drawer opens, so
+ * the tab is ready by the time it is clicked. Shared cache: no double request.
+ */
+export function prefetchAttribution(brandId?: string, biId?: string) {
+  if (brandId && biId) loadAttribution(brandId, biId).catch(() => {})
 }
 
 /**
@@ -31,17 +50,18 @@ export function AttributionTab({
     sparkAds: a.sparkAds || "",
   })
 
-  const [form, setForm] = useState(() => defaults(initial ?? {}))
-  const [loading, setLoading] = useState(!initial)
+  // A cached copy (from an earlier open, or the drawer's prefetch) renders at once.
+  const cached = brandId && brandInfluencerId ? getCachedData<Attribution>(attributionKey(brandId, brandInfluencerId)) : undefined
+  const [form, setForm] = useState(() => defaults(initial ?? cached ?? {}))
+  const [loading, setLoading] = useState(!initial && !cached)
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle")
   const [message, setMessage] = useState<string | null>(null)
 
   useEffect(() => {
     if (initial || !brandId || !brandInfluencerId) { setLoading(false); return }
     let cancelled = false
-    fetch(`/api/brand/${brandId}/attribution/${brandInfluencerId}`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
-      .then((json) => { if (!cancelled) setForm(defaults(json.data ?? {})) })
+    loadAttribution(brandId, brandInfluencerId)
+      .then((data) => { if (!cancelled) setForm(defaults(data)) })
       .catch(() => { if (!cancelled) setMessage("Couldn't load the saved values") })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
@@ -64,6 +84,12 @@ export function AttributionTab({
       })
       if (!res.ok) throw new Error("Failed to update")
       const json = await res.json()
+      // Keep the cache in step, so reopening shows what was just saved.
+      setCachedData(attributionKey(brandId, brandInfluencerId), {
+        coupon: json.data?.coupon ?? (form.discountCode || null),
+        affiliateLink: json.data?.affiliateLink ?? (form.affiliateLink || null),
+        sparkAds: json.data?.sparkAds ?? (form.sparkAds || null),
+      })
       setSaveState("saved")
       if (json.goAffPro?.synced === false && json.goAffPro?.reason) {
         setMessage(`Updated — GoAffPro sync skipped: ${json.goAffPro.reason}`)
@@ -78,7 +104,23 @@ export function AttributionTab({
     }
   }
 
-  if (loading) return <div style={{ fontSize: 12, color: "#9ca3af" }}>Loading…</div>
+  // Same shape as the form below, so nothing jumps when the values arrive.
+  if (loading) return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }} aria-busy="true" aria-label="Loading attribution">
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        {[0, 1].map((i) => (
+          <div key={i} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <Skeleton className="h-2.5 w-24 bg-gray-100" />
+            <Skeleton className="h-9 w-full bg-gray-100" />
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <Skeleton className="h-2.5 w-20 bg-gray-100" />
+        <Skeleton className="h-9 w-full bg-gray-100" />
+      </div>
+    </div>
+  )
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>

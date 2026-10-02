@@ -1,6 +1,8 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import { Skeleton } from "@/components/ui/skeleton"
+import { getCachedHistory, loadHistory, prefetchHistory } from "@/lib/activity-history"
 import { invalidateInfluencerDerivedCaches } from "@/lib/cache-invalidation"
 
 // ─── Types (mirrors what BrandPartnersPage passes) ────────────────────────────
@@ -141,23 +143,29 @@ function formatActivityDetails(action: string, details: Record<string, unknown>)
 }
 
 function HistoryTab({ brandId, biId }: { brandId?: string; biId?: string }) {
-  const [logs, setLogs]       = useState<ActivityLog[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError]     = useState<string | null>(null)
+  // Cached copy first (an earlier open, or the drawer's prefetch), refreshed
+  // in the background — see lib/activity-history.
+  const key = `${brandId}/${biId}`
+  const cachedLogs = getCachedHistory<ActivityLog>(brandId, biId)
+  const [result, setResult] = useState<{ key: string; logs: ActivityLog[] | null; error: boolean } | null>(null)
 
   useEffect(() => {
-    if (!brandId || !biId) { setLoading(false); return }
-    setLoading(true); setError(null)
-    const controller = new AbortController()
-    fetch(`/api/brand/${brandId}/influencers/${biId}/activity`, { signal: controller.signal })
-      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
-      .then(d => { setLogs(d.logs ?? []); setLoading(false) })
+    if (!brandId || !biId) return
+    let cancelled = false
+    loadHistory<ActivityLog>(brandId, biId)
+      .then(l => { if (!cancelled) setResult({ key, logs: l, error: false }) })
       .catch(err => {
-        if (err?.name === "AbortError") return
-        console.error("[HistoryTab]", err); setError("Failed to load history"); setLoading(false)
+        if (cancelled) return
+        console.error("[HistoryTab]", err)
+        setResult({ key, logs: null, error: true })
       })
-    return () => controller.abort()
-  }, [brandId, biId])
+    return () => { cancelled = true }
+  }, [brandId, biId, key])
+
+  const fresh = result?.key === key ? result : null
+  const logs: ActivityLog[] = fresh?.logs ?? cachedLogs ?? []
+  const loading = !fresh && !cachedLogs
+  const error = fresh?.error && !cachedLogs ? "Failed to load history" : null
 
   if (!brandId || !biId) return (
     <div style={{ textAlign: "center", padding: "40px 20px", color: "#9ca3af", fontSize: 12 }}>
@@ -165,8 +173,16 @@ function HistoryTab({ brandId, biId }: { brandId?: string; biId?: string }) {
     </div>
   )
   if (loading) return (
-    <div style={{ textAlign: "center", padding: "48px 20px", color: "#9ca3af", fontSize: 13 }}>
-      Loading history…
+    <div style={{ display: "flex", flexDirection: "column", gap: 14, padding: "4px 0" }} aria-busy="true" aria-label="Loading history">
+      {[0, 1, 2].map(i => (
+        <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+          <Skeleton className="h-7 w-7 shrink-0 rounded-full bg-gray-100" />
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
+            <Skeleton className="h-3 w-2/3 bg-gray-100" />
+            <Skeleton className="h-2.5 w-1/3 bg-gray-100" />
+          </div>
+        </div>
+      ))}
     </div>
   )
   if (error) return (
@@ -258,6 +274,8 @@ const STATUS_COLORS: Record<string, { bg: string; color: string }> = {
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function InfluencerProfileSidebar({ partner, campaigns, onClose }: Props) {
   const [profileTab, setProfileTab] = useState(0)
+  // Load History in the background as the drawer opens, so it is ready when clicked.
+  useEffect(() => { prefetchHistory(partner.brandId, partner.brandInfluencerId) }, [partner.brandId, partner.brandInfluencerId])
 
   // Notes — BrandInfluencer.notes, saved through the same pipeline route the
   // Pipeline drawer uses. savedNotes is what Cancel restores.

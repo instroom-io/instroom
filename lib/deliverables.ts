@@ -20,6 +20,10 @@ export interface CampaignDeliverable {
   contentRevs: { num: number; date: string; notes: string }[]
   postUrl?: string
   postDate?: string
+  /** This post's own metrics. The row-level likes/comments/views are their sum. */
+  likes?: number | null
+  comments?: number | null
+  views?: number | null
 }
 
 /** Same upper bound as the Paid Collaboration editor's "How many?" select. */
