@@ -10,7 +10,6 @@ import {
   IconGripVertical, IconSearch, IconFilter, IconTags, IconMapPin,
   IconCopy, IconAlertTriangle, IconDownload, IconUpload,
   IconSettings, IconLoader2, IconDots, IconDotsVertical,
-  // IconClipboardList — for the hidden Run SOP buttons below.
 } from "@tabler/icons-react"
 
 import type { InfluencerRow, CustomColumn, AnyColDef, CustomColDef, CellAddress, FilterState, ToastNotification, BulkApprovalResult } from "./types"
@@ -35,7 +34,6 @@ import {
   ManageOptionsModal, AddColumnModal, FilterPopover,
 } from "./modals"
 import { MobileRowCards } from "./mobile-row-cards"
-import { RunSopModal } from "./run-sop-modal"
 import { ToastContainer } from "./toast"
 import { DataSyncStatus } from "@/components/data-sync-status"
 import ProfileSidebar from "./profile-sidebar"
@@ -225,8 +223,6 @@ export default function TableSheet({
   onCustomColumnsChange, onImportRows, onBulkApprove, readOnly = false, brandId,
   subscriptionStatus, onShowTrialModal, canApproveInfluencers = true, onNotify, onLookupFailed,
   onCreateDraft, onSaveState, onEnrichmentStart, onEnrichmentFailed, onContactHoldChange,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- used by the hidden Run SOP buttons
-  canRunSop = false, onResearchApplied,
 }: {
   initialRows?: InfluencerRow[]
   initialCustomColumns?: CustomColumn[]
@@ -306,10 +302,6 @@ export default function TableSheet({
    * become the user's to complete, without polling or a timer.
    */
   onLookupFailed?: (rowId: string) => void
-  /** Show "Run SOP" (research SOPs). Gated by the host on manageInfluencers. */
-  canRunSop?: boolean
-  /** An SOP run applied approved changes — the host re-reads the list. */
-  onResearchApplied?: () => void
 }) {
   // Import/Export are a Solo & Team feature — Basic (the free plan) doesn't
   // include them, regardless of subscription status.
@@ -609,8 +601,6 @@ export default function TableSheet({
 
   const [openRowMenuId, setOpenRowMenuId]                 = useState<string | null>(null)
   const [showBulkTransferConfirm, setShowBulkTransferConfirm] = useState(false)
-  // Run SOP modal: null = closed, otherwise the target it opens preselected on.
-  const [sopModalTarget, setSopModalTarget] = useState<"selected" | "missing" | "all" | null>(null)
   // Guards against a second submit while the bulk write is in flight.
   const [bulkApproving, setBulkApproving] = useState(false)
 
@@ -2514,11 +2504,6 @@ export default function TableSheet({
             {!readOnly && (
               <button onClick={addRow} data-tour="table-add-influencer" className="h-9 px-3 flex items-center gap-1.5 text-sm font-medium border border-[#0F6B3E]/20 rounded-lg text-gray-700 hover:bg-green-50 hover:text-green-700 hover:border-[#0F6B3E]/40 transition-colors" title="Add a new influencer"><IconPlus size={15} /> Add Influencer</button>
             )}
-            {/* Run SOP — hidden until the feature is official.
-            {!readOnly && canRunSop && brandId && (
-              <button onClick={() => setSopModalTarget(selectedRowIds.size ? "selected" : "missing")} className="h-9 px-3 flex items-center gap-1.5 text-sm font-medium border border-[#0F6B3E]/20 rounded-lg text-gray-700 hover:bg-green-50 hover:text-green-700 hover:border-[#0F6B3E]/40 transition-colors" title="Research influencers with an SOP"><IconClipboardList size={15} /> Run SOP</button>
-            )}
-            */}
 
             <div className="relative">
               <button
@@ -2579,40 +2564,10 @@ export default function TableSheet({
           <button onClick={() => setShowBulkTransferConfirm(true)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-green-600 text-white rounded-lg hover:bg-green-700 transition">
             <IconCheck size={13} /> Approve
           </button>
-          {/* Run SOP — hidden until the feature is official.
-          {canRunSop && brandId && (
-            <button onClick={() => setSopModalTarget("selected")} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#0F6B3E] bg-white border border-[#0F6B3E]/30 rounded-lg hover:bg-green-50 transition">
-              <IconClipboardList size={13} /> Run SOP
-            </button>
-          )}
-          */}
           <button onClick={deleteSelectedRows} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-600 bg-white border border-red-200 rounded-lg hover:bg-red-50 transition">
             <IconTrash size={13} /> Delete {selectedRowIds.size}
           </button>
         </div>
-      )}
-
-      {sopModalTarget && brandId && (
-        <RunSopModal
-          brandId={brandId}
-          // Row ids are Influencer ids; unsaved rows (temp-…) are never sent.
-          selectedInfluencerIds={Array.from(selectedRowIds).filter((id) => !id.startsWith("temp-"))}
-          initialTarget={sopModalTarget}
-          onClose={() => setSopModalTarget(null)}
-          onNotify={addToast}
-          onApplied={(changes) => {
-            // The sheet's sync from initialRows only reacts to added/removed
-            // rows, so applied values are written into local state directly;
-            // the host still re-reads so the shared cache catches up.
-            const byBi = new Map<string, Record<string, string>>()
-            for (const c of changes) byBi.set(c.brand_influencer_id, { ...byBi.get(c.brand_influencer_id), [c.field]: c.value })
-            setRows(prev => prev.map(r => {
-              const patch = r.brand_influencer_id ? byBi.get(r.brand_influencer_id) : undefined
-              return patch ? { ...r, ...patch } : r
-            }))
-            onResearchApplied?.()
-          }}
-        />
       )}
 
       {/* Bulk transfer confirm */}

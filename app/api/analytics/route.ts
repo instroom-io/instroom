@@ -478,7 +478,13 @@ function resolveAnalyticsStatus(
       case "In-Transit":         return "In Transit"
       case "Delivered":          return "Content Pending"
       case "Posted":             return "Posted"
-      case "No post":            return "Rejected"
+      // deriveClosedStatus also returns "No post" for a decline / Not
+      // Interested — those stay "Rejected". Only a card the Post Tracker
+      // itself holds in No post is a closed deal that did not publish.
+      case "No post":
+        return r.approval_status === "Declined" || r.contact_status === "not_interested"
+          ? "Rejected"
+          : "No Content"
       // Post Tracker's Issues column — a stalled delivery, a returned package,
       // a wrong address. Analytics already had a "Delivery Problem" bucket
       // that nothing ever wrote to; this is what it was for.

@@ -152,6 +152,8 @@ export interface PostMetricsResult {
   likes: number | null
   comments: number | null
   views: number | null
+  /** Each fetched deliverable's own metrics, by its position in the list. */
+  deliverables?: { index: number; likes: number | null; comments: number | null; views: number | null }[]
   /** Set when nothing was fetched: add-on off, no link, provider error… */
   error?: string
 }
@@ -323,6 +325,20 @@ function applyColumnChange(
         postedAt:       null,
         approvalStatus: "Declined",
         approvalNotes:  "No content published - exited",
+      }
+
+    // Mirrors mapClosedToPipelineFields' Issues case (lib/post-tracker-status):
+    // stage 9, dates kept. Without this the optimistic update was a no-op and
+    // the card only reached Issues after the next refetch.
+    case "Issues":
+      return {
+        ...item,
+        closedStatus:   "Issues",
+        contactStatus:  "for_order_creation",
+        stage:          9,
+        contentPosted:  false,
+        postedAt:       null,
+        approvalStatus: "Approved",
       }
 
     default:
@@ -1042,18 +1058,38 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
           likes: body.likes ?? null,
           comments: body.comments ?? null,
           views: body.views ?? null,
+          deliverables: Array.isArray(body.deliverables) ? body.deliverables : [],
         }
+        const perDeliverable = new Map((result.deliverables ?? []).map((m) => [m.index, m]))
         setDataCached((prev) =>
-          prev.map((item) =>
-            item.id === id
+          prev.map((item) => {
+            if (item.id !== id) return item
+            // Mirror the server's per-deliverable write into the cached row.
+            const deliverables = item.paidCollabData?.deliverables
+            const nextPaid = perDeliverable.size && item.paidCollabData && Array.isArray(deliverables)
               ? {
-                  ...item,
-                  ...(result.likes != null && { likesCount: result.likes }),
-                  ...(result.comments != null && { commentsCount: result.comments }),
-                  ...(result.views != null && { viewsCount: result.views }),
+                  ...item.paidCollabData,
+                  deliverables: deliverables.map((d, i) => {
+                    const m = perDeliverable.get(i)
+                    return m
+                      ? {
+                          ...d,
+                          ...(m.likes != null && { likes: m.likes }),
+                          ...(m.comments != null && { comments: m.comments }),
+                          ...(m.views != null && { views: m.views }),
+                        }
+                      : d
+                  }),
                 }
-              : item
-          )
+              : item.paidCollabData
+            return {
+              ...item,
+              ...(result.likes != null && { likesCount: result.likes }),
+              ...(result.comments != null && { commentsCount: result.comments }),
+              ...(result.views != null && { viewsCount: result.views }),
+              paidCollabData: nextPaid,
+            }
+          })
         )
         // Analytics reads these metrics — mark it (and the other views) stale.
         invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId)])

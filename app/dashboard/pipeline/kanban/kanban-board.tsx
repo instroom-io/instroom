@@ -644,7 +644,7 @@ function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApprov
   const terminal   = isTerminal(influencer.pipelineStatus)
 
   return (
-    <div style={OFFSCREEN_SKIP} className={`bg-white border rounded-lg p-3 hover:shadow-md transition-shadow ${
+    <div style={OFFSCREEN_SKIP} className={`bg-white border rounded-lg p-2.5 hover:shadow-md transition-shadow ${
       influencer.pipelineStatus === "Not Interested"      ? "border-red-100 bg-red-50/30"     :
       influencer.pipelineStatus === "For Order Creation"  ? "border-emerald-100 bg-emerald-50/30" :
       "border-gray-200"
@@ -654,48 +654,39 @@ function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApprov
             Influencer List persisted on the Influencer record, already carried
             in this row by the pipeline payload — nothing extra is fetched or
             uploaded here. ProfilePicture supplies the initials fallback. */}
-        <div className="flex items-center gap-2 mb-2">
+        <div className="flex items-center gap-2 mb-1.5">
           <ProfilePicture
             src={influencer.profileImageUrl ?? undefined}
             name={influencer.influencer}
             handle={influencer.handle}
-            size={36}
+            size={28}
           />
-          <div className="flex flex-col text-sm min-w-0">
-            <span className="font-medium text-gray-900">{influencer.influencer}</span>
-            <span className="text-xs text-gray-500">@{influencer.handle}</span>
+          <div className="flex flex-col text-[13px] leading-tight min-w-0">
+            <span className="truncate font-medium text-gray-900">{influencer.influencer}</span>
+            <span className="truncate text-[11px] text-gray-500">@{influencer.handle}</span>
           </div>
         </div>
-        <div className="flex items-center gap-2 text-xs text-gray-500 mb-2">
-          {/* Icon then name, in the one treatment every board uses: the mark at
-              14px, centred against the label, gap-1.5. Narrow columns take
-              their space out of the TEXT — min-w-0 on the pair with truncate on
-              the label — while shrink-0 keeps the mark at full size, so it can
-              never squash or disappear. Both halves come from the shared
-              platform list the Influencer List reads; the board's own icon
-              table used to be keyed by the CAPITALISED display name while the
-              stored value is lowercase, so every lookup missed and a TikTok
-              creator showed as Instagram. */}
-          <span className="inline-flex min-w-0 items-center gap-1.5 leading-none">
-            <PlatformIcon platform={influencer.platform} size={14} className="shrink-0" />
-            <span className="truncate">{getPlatformLabel(influencer.platform) || "—"}</span>
+        {/* Compact info line — platform icon (name on hover), followers,
+            engagement and location share one row instead of two. */}
+        <div className="flex items-center gap-1.5 text-[11px] text-gray-500 min-w-0">
+          <span title={getPlatformLabel(influencer.platform) || undefined} className="inline-flex shrink-0 items-center">
+            <PlatformIcon platform={influencer.platform} size={13} className="shrink-0" />
           </span>
-          <span>•</span>
-          <span className="flex items-center gap-0.5">
-            <IconLocation size={11} />{influencer.location || "—"}
+          <span className="shrink-0">{influencer.followers || "—"}</span>
+          <span className="shrink-0 text-gray-300">·</span>
+          <span className="shrink-0">{influencer.engagementRate || "—"} eng</span>
+          <span className="shrink-0 text-gray-300">·</span>
+          <span className="flex min-w-0 items-center gap-0.5">
+            <IconLocation size={10} className="shrink-0" /><span className="truncate">{influencer.location || "—"}</span>
           </span>
-        </div>
-        <div className="flex items-center gap-3 text-xs text-gray-500">
-          <span>{influencer.followers || "—"} followers</span>
-          <span>{influencer.engagementRate || "—"} eng</span>
         </div>
 
         {/* NI reason pill, plus the free-text note when there is one.
             The note only ever accompanies an "Others" decline, so nothing is
             rendered for the predefined reasons that explain themselves. */}
         {influencer.pipelineStatus === "Not Interested" && influencer.niReason && (
-          <div className="mt-2">
-            <div className="text-[10px] text-red-500 bg-red-50 rounded-full px-2.5 py-1 inline-block font-medium">
+          <div className="mt-1.5">
+            <div className="text-[10px] text-red-500 bg-red-50 rounded-full px-2 py-0.5 inline-block font-medium">
               {influencer.niReason}
             </div>
             {influencer.declineNotes && (
@@ -727,9 +718,9 @@ function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApprov
           if (!inPostTracker && !collab) return null
 
           return (
-            <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+            <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
               {inPostTracker && (
-                <span className="text-[10px] text-green-600 bg-green-50 rounded-full px-2.5 py-1 inline-flex items-center gap-1 font-medium">
+                <span className="text-[10px] text-green-600 bg-green-50 rounded-full px-2 py-0.5 inline-flex items-center gap-1 font-medium">
                   <IconPackage size={10} />
                   In Post Tracker
                 </span>
@@ -750,7 +741,7 @@ function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApprov
           destination comes from getNextStages, so the tooltip always names the
           stage this card would actually land in rather than a fixed string. */}
       {nextStages.length > 0 && !terminal && (
-        <div className="flex gap-1.5 mt-2.5 pt-2 border-t border-gray-100 flex-nowrap">
+        <div className="flex gap-1.5 mt-2 pt-1.5 border-t border-gray-100 flex-nowrap">
           {/* The hand-over to Post Tracker, on the one stage it starts from.
               Dropping a card on the Deal Agreed column used to trigger this
               cascade implicitly, which left the row at the terminal
@@ -901,7 +892,7 @@ function DroppableColumn({ id, children, height }: { id: string; children: React
   return (
     <div ref={setNodeRef}
       style={{ scrollSnapAlign: "start", height: height ?? undefined }}
-      className={`flex flex-col gap-2.5 w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0 transition-all rounded-lg ${
+      className={`flex flex-col gap-2.5 w-[min(78vw,200px)] sm:w-auto sm:min-w-[200px] sm:max-w-[340px] sm:grow sm:basis-[200px] flex-shrink-0 transition-all rounded-lg ${
         isOver ? (isExit ? "bg-red-50" : "bg-gray-50") : ""
       }`}>
       {children}
@@ -1025,7 +1016,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
       const top = panel.getBoundingClientRect().top
       // Tuned empirically against the real page — adjust if columns end up
       // clipped or leave dead space above the horizontal scrollbar.
-      const RESERVED_BELOW_TOP = 76
+      const RESERVED_BELOW_TOP = 48
       const available = window.innerHeight - top - RESERVED_BELOW_TOP
       setColumnHeight(Math.max(220, Math.round(available)))
     }
@@ -1539,7 +1530,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   )
 
   return (
-    <div className="flex flex-col gap-4 p-6">
+    <div className="flex flex-col gap-3 p-3 sm:p-4">
       {/* A refresh failed but the board still has its last good cards — say so
           inline instead of replacing the board (see the error gate above).
           hasGivenUp, not error: while the bounded retry is still running there
@@ -1767,15 +1758,15 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
       {/* ── KANBAN VIEW ── */}
       {view === "Board" && (
         <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-          <div ref={boardPanelRef} className="rounded-xl border border-[#0F6B3E]/10 bg-white px-5 pt-5 pb-6 overflow-x-auto" style={{ scrollSnapType: "x proximity" }}>
-            <div className="flex gap-4 min-w-max">
+          <div ref={boardPanelRef} className="rounded-xl border border-[#0F6B3E]/10 bg-white px-3 pt-3 pb-3 overflow-x-auto" style={{ scrollSnapType: "x proximity" }}>
+            <div className="flex gap-3">
 
               {visibleColumns.filter((c) => c.key !== "not-interested").map((col, colIndex) => {
                 const items = getItemsByColumn(col.key)
                 return (
                   <DroppableColumn key={col.key} id={col.key} height={columnHeight}>
                     <div
-                      className={`${col.color} text-white rounded-lg px-3 py-2 text-sm font-semibold flex items-center justify-between`}
+                      className={`${col.color} text-white rounded-lg px-3 py-1.5 text-[13px] font-semibold flex items-center justify-between`}
                       data-tour={colIndex === 0 ? "pipeline-board" : undefined}
                     >
                       <span
@@ -1790,14 +1781,14 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                       </div>
                     </div>
 
-                    <div className="flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto mt-2 pr-1">
+                    <div className="flex flex-col gap-2 flex-1 min-h-0 overflow-y-auto mt-2 pr-1">
                       {items.map((inf) => (
                         <DraggableCard key={inf.id} id={inf.id} disabled={!canApprove}>
                           {renderCard(inf)}
                         </DraggableCard>
                       ))}
                       {items.length === 0 && (
-                        <div className="border-2 border-dashed border-gray-200 rounded-lg p-4 text-center text-xs text-gray-400">Drop here</div>
+                        <div className="border-2 border-dashed border-gray-200 rounded-lg p-3 text-center text-xs text-gray-400">Drop here</div>
                       )}
                     </div>
                   </DroppableColumn>
@@ -1817,7 +1808,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                 const items = getItemsByColumn(col.key)
                 return (
                   <DroppableColumn id={col.key} height={columnHeight}>
-                    <div className="bg-red-100 text-red-700 border border-red-200 rounded-lg px-3 py-2 text-sm font-semibold flex items-center justify-between">
+                    <div className="bg-red-100 text-red-700 border border-red-200 rounded-lg px-3 py-1.5 text-[13px] font-semibold flex items-center justify-between">
                       <span
                         onClick={() => handleColumnClick(col)}
                         className="flex-1 cursor-pointer hover:opacity-90 transition-opacity truncate mr-2"
@@ -1830,14 +1821,14 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                       </div>
                     </div>
 
-                    <div className="flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto mt-2 pr-1">
+                    <div className="flex flex-col gap-2 flex-1 min-h-0 overflow-y-auto mt-2 pr-1">
                       {items.map((inf) => (
                         <DraggableCard key={inf.id} id={inf.id} disabled={!canApprove}>
                           {renderCard(inf)}
                         </DraggableCard>
                       ))}
                       {items.length === 0 && (
-                        <div className="border-2 border-dashed border-red-200 rounded-lg p-4 text-center text-xs text-gray-400">Drop here</div>
+                        <div className="border-2 border-dashed border-red-200 rounded-lg p-3 text-center text-xs text-gray-400">Drop here</div>
                       )}
                     </div>
                   </DroppableColumn>
@@ -1848,7 +1839,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
 
           <DragOverlay>
             {activeInfluencer ? (
-              <div className="bg-white border border-gray-200 rounded-lg p-3 shadow-lg rotate-2 w-[min(78vw,240px)] sm:w-[240px]">
+              <div className="bg-white border border-gray-200 rounded-lg p-3 shadow-lg rotate-2 w-[min(78vw,200px)] sm:w-[200px]">
                 {renderCard(activeInfluencer)}
               </div>
             ) : null}
@@ -1946,7 +1937,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
             <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
               <thead className="bg-gray-50 border-b">
                 <tr>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600 w-10">
+                  <th className="px-3 py-2 text-left font-medium text-gray-600 w-10">
                     <input
                       ref={selectAllRef}
                       type="checkbox"
@@ -1957,14 +1948,14 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                       className="w-4 h-4 rounded accent-[#1FAE5B] cursor-pointer disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] focus:ring-offset-1"
                     />
                   </th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Influencer</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Platform</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Handle</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Location</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Followers</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Engagement</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Niche</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Status</th>
+                  <th className="px-3 py-2 text-left font-medium text-gray-600">Influencer</th>
+                  <th className="px-3 py-2 text-left font-medium text-gray-600">Platform</th>
+                  <th className="px-3 py-2 text-left font-medium text-gray-600">Handle</th>
+                  <th className="px-3 py-2 text-left font-medium text-gray-600">Location</th>
+                  <th className="px-3 py-2 text-left font-medium text-gray-600">Followers</th>
+                  <th className="px-3 py-2 text-left font-medium text-gray-600">Engagement</th>
+                  <th className="px-3 py-2 text-left font-medium text-gray-600">Niche</th>
+                  <th className="px-3 py-2 text-left font-medium text-gray-600">Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -1977,7 +1968,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                       className={`border-t hover:bg-gray-50 cursor-pointer transition ${selectedIds.has(inf.id) ? "bg-blue-50/60" : ""}`}
                       onClick={() => openSidebar(inf)}
                     >
-                      <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                         <input
                           type="checkbox"
                           checked={selectedIds.has(inf.id)}
@@ -1986,7 +1977,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                           className="w-4 h-4 rounded accent-[#1FAE5B] cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] focus:ring-offset-1"
                         />
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-3 py-2">
                         <div className="flex items-center gap-3">
                           {inf.profileImageUrl ? (
                             <img src={inf.profileImageUrl} alt="" className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
@@ -2025,19 +2016,19 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                           </div>
                         </div>
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-3 py-2">
                         <div className="inline-flex min-w-0 items-center gap-1.5 leading-none">
                           <PlatformIcon platform={inf.platform} size={14} className="shrink-0" />
                           <span className="truncate">{getPlatformLabel(inf.platform) || "—"}</span>
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-[#0F6B3E] font-medium">{inf.instagramHandle}</td>
-                      <td className="px-4 py-3">
+                      <td className="px-3 py-2 text-[#0F6B3E] font-medium">{inf.instagramHandle}</td>
+                      <td className="px-3 py-2">
                         <div className="flex items-center gap-1"><IconLocation size={14} className="text-gray-400" />{inf.location || "—"}</div>
                       </td>
-                      <td className="px-4 py-3">{inf.followerCount?.toLocaleString() || inf.followers}</td>
-                      <td className="px-4 py-3">{inf.engagementRate}</td>
-                      <td className="px-4 py-3">
+                      <td className="px-3 py-2">{inf.followerCount?.toLocaleString() || inf.followers}</td>
+                      <td className="px-3 py-2">{inf.engagementRate}</td>
+                      <td className="px-3 py-2">
                         {inf.niche ? (
                           <button
                             onClick={(e) => {
@@ -2061,7 +2052,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                           <span className="text-gray-400">—</span>
                         )}
                       </td>
-                      <td className="px-4 py-3 align-middle">
+                      <td className="px-3 py-2 align-middle">
                         <div className="flex items-center" onClick={(e) => e.stopPropagation()}>
                           <StatusDropdown currentStatus={inf.pipelineStatus} onStatusChange={(s) => handleStatusUpdate(inf.id, s)} canApproveInfluencers={canApprove} />
                         </div>

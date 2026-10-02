@@ -4,10 +4,8 @@
 // pieces: the next-auth session, brand membership (lib/brand-access) and role
 // capabilities (lib/permissions). No new permission concept is introduced:
 //
-//   read (list SOPs, view runs)   any member of the brand
+//   read SOPs (the playbook)      any member of the brand
 //   manage SOPs (create/edit/…)   "manageCampaigns"   — Owner + Manager
-//   run / review / apply          "manageInfluencers" — the capability that
-//                                 already governs editing influencer details
 
 import { NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
@@ -20,7 +18,6 @@ export type SopGate =
   | { ok: false; response: NextResponse }
 
 export const SOP_MANAGE_CAPABILITY: BrandCapability = "manageCampaigns"
-export const SOP_RUN_CAPABILITY: BrandCapability = "manageInfluencers"
 
 export async function requireSopAccess(
   brandId: string,
@@ -52,8 +49,25 @@ export async function requireSopAccess(
   return { ok: true, userId }
 }
 
+/**
+ * The research-SOP tables don't exist yet — the 20261001_add_research_sops
+ * migration hasn't been applied to this database. Prisma reports a missing
+ * table as P2021 and a missing column as P2022.
+ */
+export function isSopSchemaMissing(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code
+  return code === "P2021" || code === "P2022"
+}
+
 /** A generic 500 that never leaks internals to the browser. */
 export function serverError(context: string, error: unknown) {
+  if (isSopSchemaMissing(error)) {
+    // Not a failure the user can retry — the beta feature isn't set up here yet.
+    return NextResponse.json(
+      { error: "SOPs aren't enabled on this workspace yet.", notReady: true },
+      { status: 503 }
+    )
+  }
   console.error(`${context}:`, error)
   return NextResponse.json({ error: "Something went wrong. Please try again." }, { status: 500 })
 }

@@ -87,10 +87,10 @@ export function StageActionButton({
       // that the portalled tooltip made unnecessary. Buttons split the row
       // evenly, and a long stage name truncates rather than widening the card.
       //
-      // `basis-24` is what makes a wrapping row behave: with a 0 basis, three
-      // buttons in a 240px column each shrink to an unreadable sliver rather
-      // than wrapping. At ~6rem the third one drops to its own line instead.
-      className={`flex-1 basis-24 min-w-0 text-[11px] font-semibold px-2.5 py-1.5 rounded-lg border
+      // `basis-20` is what makes a wrapping row behave: with a 0 basis, three
+      // buttons in a 200px column each shrink to an unreadable sliver rather
+      // than wrapping. At 5rem two still share a line and a third drops below.
+      className={`flex-1 basis-20 min-w-0 text-[11px] font-semibold px-2 py-1 rounded-lg border
         transition-colors flex items-center gap-1 justify-center cursor-pointer
         shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1
         disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none

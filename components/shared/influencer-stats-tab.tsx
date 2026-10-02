@@ -1,6 +1,8 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import { Skeleton } from "@/components/ui/skeleton"
+import { fetchCached, getCachedData } from "@/lib/data-cache"
 
 type Stats = {
   clicks: number; sales: number; revenue: number
@@ -21,6 +23,39 @@ const compact = (n: number | null) => {
   return String(v)
 }
 
+const statsKey = (brandId: string, biId: string) => `/api/brand/${brandId}/stats/${biId}`
+
+const loadStats = (brandId: string, biId: string, force = false) =>
+  fetchCached<Stats>(statsKey(brandId, biId), async () => {
+    const r = await fetch(statsKey(brandId, biId))
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    return (await r.json()).data as Stats
+  }, { force })
+
+/**
+ * Start loading an influencer's stats as soon as their drawer opens, so the
+ * tab is ready by the time it is clicked. Shared cache: no double request.
+ */
+export function prefetchStats(brandId?: string, biId?: string) {
+  if (brandId && biId) loadStats(brandId, biId).catch(() => {})
+}
+
+/** Placeholder in the tab's own shape — three rows of stat boxes. */
+function StatsSkeleton() {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }} aria-busy="true" aria-label="Loading stats">
+      {[6, 6, 3].map((boxes, section) => (
+        <div key={section} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <Skeleton className="h-2.5 w-36 bg-gray-100" />
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
+            {Array.from({ length: boxes }, (_, i) => <Skeleton key={i} className="h-[58px] w-full rounded-[10px] bg-gray-100" />)}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 /**
  * Stats tab shared by the Pipeline and Post Tracker drawers. Loads its own
  * numbers; carries its own styles, since the drawers' styles are scoped.
@@ -29,6 +64,8 @@ export function InfluencerStatsTab({ brandId, brandInfluencerId, allowManualEntr
   // Tagged with the influencer it belongs to, so a switch never shows the previous one's numbers.
   const key = `${brandId}/${brandInfluencerId}`
   const [loaded, setLoaded] = useState<{ key: string; stats: Stats | null; error: boolean } | null>(null)
+  // A cached copy (an earlier open, or the drawer's prefetch) shows at once.
+  const cached = brandId && brandInfluencerId ? getCachedData<Stats>(statsKey(brandId, brandInfluencerId)) : undefined
   const [reload, setReload] = useState(0)
   // Manual entry, for brands not using GoAffPro or another tracking tool.
   const [manual, setManual] = useState<{ clicks: string; sales: string; revenue: string; productCost: string } | null>(null)
@@ -38,9 +75,9 @@ export function InfluencerStatsTab({ brandId, brandInfluencerId, allowManualEntr
   useEffect(() => {
     if (!brandId || !brandInfluencerId) return
     let cancelled = false
-    fetch(`/api/brand/${brandId}/stats/${brandInfluencerId}`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
-      .then((json) => { if (!cancelled) setLoaded({ key, stats: json.data, error: false }) })
+    // After a manual save (reload > 0) the cached numbers are out of date.
+    loadStats(brandId, brandInfluencerId, reload > 0)
+      .then((data) => { if (!cancelled) setLoaded({ key, stats: data, error: false }) })
       .catch(() => { if (!cancelled) setLoaded({ key, stats: null, error: true }) })
     return () => { cancelled = true }
   }, [brandId, brandInfluencerId, key, reload])
@@ -49,9 +86,9 @@ export function InfluencerStatsTab({ brandId, brandInfluencerId, allowManualEntr
   useEffect(() => { setManual(null); setSaveError(null) }, [key])
 
   const current = loaded?.key === key ? loaded : null
-  if (current?.error) return <div style={{ fontSize: 12, color: "#B42318" }}>Couldn&apos;t load stats</div>
-  const stats = current?.stats
-  if (!stats) return <div style={{ fontSize: 12, color: "#9ca3af" }}>Loading…</div>
+  const stats = current?.stats ?? cached
+  if (!stats && current?.error) return <div style={{ fontSize: 12, color: "#B42318" }}>Couldn&apos;t load stats</div>
+  if (!stats) return <StatsSkeleton />
 
   const cvr = stats.clicks > 0 ? (stats.sales / stats.clicks) * 100 : 0
   const roas = stats.totalSpend > 0 ? stats.revenue / stats.totalSpend : null

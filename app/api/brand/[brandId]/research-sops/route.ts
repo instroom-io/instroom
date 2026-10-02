@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
-import { requireSopAccess, serverError, SOP_MANAGE_CAPABILITY } from "@/lib/research-sop/auth"
+import { isSopSchemaMissing, requireSopAccess, serverError, SOP_MANAGE_CAPABILITY } from "@/lib/research-sop/auth"
 import { writeMaybeUtf8mb4 } from "@/lib/research-sop/db"
 import { SOP_SELECT, firstIssue, sopInputSchema, stepRows, withCreatorNames } from "@/lib/research-sop/sops"
 
@@ -22,6 +22,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ bran
     })
     return NextResponse.json({ data: await withCreatorNames(sops, findUsers) })
   } catch (error) {
+    // Before the migration is applied, the list is simply empty — not an error.
+    if (isSopSchemaMissing(error)) return NextResponse.json({ data: [], notReady: true })
     return serverError("GET research-sops", error)
   }
 }

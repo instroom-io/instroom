@@ -1,12 +1,14 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import { Skeleton } from "@/components/ui/skeleton"
+import { getCachedHistory, loadHistory, prefetchHistory } from "@/lib/activity-history"
 import { EmailModal } from "@/components/shared/email-modal"
 import { ProfilePicture, PlatformIcon } from "@/components/table-sheet/ui-atoms"
 import { getProfileUrl, getPlatformLabel } from "@/components/table-sheet/utils"
 import { DeclineModal } from "@/components/shared/decline-modal"
 import { AttributionTab } from "@/components/shared/attribution-tab"
-import { InfluencerStatsTab } from "@/components/shared/influencer-stats-tab"
+import { InfluencerStatsTab, prefetchStats } from "@/components/shared/influencer-stats-tab"
 import { useClosedData } from "@/hooks/useClosedData"
 import {
   PAID_COLLAB_TYPES, ReadOnlyOrderTab, ReadOnlyPostTab, ReadOnlyPaidCollabTab,
@@ -140,12 +142,6 @@ function formatActivityDetails(action: string, details: Record<string, unknown>)
       const fields = details.fields as string[] | undefined
       return fields?.length ? `Updated ${fields.length} field${fields.length > 1 ? "s" : ""}` : ""
     }
-    case "research_sop.completed":
-    case "research_sop.applied": {
-      const fields = details.fields as string[] | undefined
-      const sop = `${details.sop_name ?? "SOP"} v${details.sop_version ?? "?"}`
-      return fields?.length ? `${sop} · ${fields.join(", ")}` : sop
-    }
     default:
       return ""
   }
@@ -153,18 +149,29 @@ function formatActivityDetails(action: string, details: Record<string, unknown>)
 
 // ─── HistoryTab ───────────────────────────────────────────────────────────────
 export function HistoryTab({ brandId, biId }: { brandId?: string; biId?: string }) {
-  const [logs, setLogs]       = useState<ActivityLog[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError]     = useState<string | null>(null)
+  // Cached copy first (an earlier open, or the drawer's prefetch), refreshed
+  // in the background — see lib/activity-history.
+  const key = `${brandId}/${biId}`
+  const cachedLogs = getCachedHistory<ActivityLog>(brandId, biId)
+  const [result, setResult] = useState<{ key: string; logs: ActivityLog[] | null; error: boolean } | null>(null)
 
   useEffect(() => {
-    if (!brandId || !biId) { setLoading(false); return }
-    setLoading(true); setError(null)
-    fetch(`/api/brand/${brandId}/influencers/${biId}/activity`)
-      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
-      .then(d => { setLogs(d.logs ?? []); setLoading(false) })
-      .catch(err => { console.error("[HistoryTab]", err); setError("Failed to load history"); setLoading(false) })
-  }, [brandId, biId])
+    if (!brandId || !biId) return
+    let cancelled = false
+    loadHistory<ActivityLog>(brandId, biId)
+      .then(l => { if (!cancelled) setResult({ key, logs: l, error: false }) })
+      .catch(err => {
+        if (cancelled) return
+        console.error("[HistoryTab]", err)
+        setResult({ key, logs: null, error: true })
+      })
+    return () => { cancelled = true }
+  }, [brandId, biId, key])
+
+  const fresh = result?.key === key ? result : null
+  const logs: ActivityLog[] = fresh?.logs ?? cachedLogs ?? []
+  const loading = !fresh && !cachedLogs
+  const error = fresh?.error && !cachedLogs ? "Failed to load history" : null
 
   if (!brandId || !biId) return (
     <div style={{ textAlign: "center", padding: "40px 20px", color: "#9ca3af", fontSize: 12 }}>
@@ -172,8 +179,16 @@ export function HistoryTab({ brandId, biId }: { brandId?: string; biId?: string 
     </div>
   )
   if (loading) return (
-    <div style={{ textAlign: "center", padding: "48px 20px", color: "#9ca3af", fontSize: 13 }}>
-      Loading history…
+    <div style={{ display: "flex", flexDirection: "column", gap: 14, padding: "4px 0" }} aria-busy="true" aria-label="Loading history">
+      {[0, 1, 2].map(i => (
+        <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+          <Skeleton className="h-7 w-7 shrink-0 rounded-full bg-gray-100" />
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
+            <Skeleton className="h-3 w-2/3 bg-gray-100" />
+            <Skeleton className="h-2.5 w-1/3 bg-gray-100" />
+          </div>
+        </div>
+      ))}
     </div>
   )
   if (error) return (
@@ -320,6 +335,9 @@ export default function InfluencerProfileSidebar({
   onCollabTypeChange?:      (biId: string, newType: string) => void
 }) {
   const [profileTab,     setProfileTab]     = useState(0)
+  // Load the Stats tab in the background as the drawer opens, so it is ready
+  // when clicked. (Attribution here is filled from the partner payload.)
+  useEffect(() => { prefetchStats(partner.brandId, partner.brandInfluencerId); prefetchHistory(partner.brandId, partner.brandInfluencerId) }, [partner.brandId, partner.brandInfluencerId])
   const [pipelineStatus, setPipelineStatus] = useState(partner.commSt || "For Outreach")
   // Collaboration type — initialized from the real persisted value (shared
   // with Pipeline + Post Tracker via product_details.campaignType) instead of

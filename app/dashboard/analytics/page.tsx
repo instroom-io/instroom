@@ -902,13 +902,15 @@ function AnalyticsPageContent() {
     // the route) and the post-order stages (In Transit, Posted, …) only exist in
     // that extended vocabulary — but the range boundaries are
     // derivePipelineStatus's, not a separately invented list.
-    // "Delivery Problem" is the Post Tracker's Issues column — only reachable
-    // after a deal was agreed, so it sits inside both ranges.
-    const RESPONDED_OR_BEYOND = ["In Conversation", "Onboarded", "In Transit", "Content Pending", "Posted", "Delivery Problem", "Rejected"]
-    // Closed stays a strict SUBSET of responded, and counts Deal Agreed only —
-    // "Onboarded" is what Deal Agreed resolves to, together with the stages it
-    // can only be reached through.
-    const CLOSED_OR_BEYOND    = ["Onboarded", "In Transit", "Content Pending", "Posted", "Delivery Problem"]
+    // Closed = Deal Agreed plus EVERY Post Tracker column, so the Closed
+    // collaborations count equals the number of influencers in the Post
+    // Tracker. "Delivery Problem" is its Issues column and "No Content" its
+    // No post column — both only reachable after a deal was agreed, so both
+    // sit inside Responded too.
+    const RESPONDED_OR_BEYOND = ["In Conversation", "Onboarded", "In Transit", "Content Pending", "Posted", "Delivery Problem", "No Content", "Rejected"]
+    // Closed stays a strict SUBSET of responded. "Onboarded" is what Deal
+    // Agreed / For Order Creation resolve to.
+    const CLOSED_OR_BEYOND    = ["Onboarded", "In Transit", "Content Pending", "Posted", "Delivery Problem", "No Content"]
 
     const totalOutreach = dataToUse.length
     // Responded = anyone whose resolved pipeline stage is In Conversation or
