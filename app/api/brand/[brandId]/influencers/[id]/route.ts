@@ -115,17 +115,79 @@ export async function PUT(
       typeof data.handle === "string" ? data.handle : "",
       typeof data.platform === "string" ? data.platform : ""
     )
-    // Refused, not ignored, so another profile's details never land on this record.
+    // ── Handle/platform edited on a saved influencer ─────────────────────────
+    // The shared record is never renamed (other brands use it). Only this
+    // brand's row is pointed at the record for the new identity, reused or
+    // created, and the old record is removed once no brand uses it.
     const stored = normalizeInfluencerIdentity(current.handle, current.platform ?? "")
-    if (
-      !current.is_draft &&
-      ((promoting.handle && promoting.handle !== stored.handle) ||
-        (promoting.platform && promoting.platform !== stored.platform))
-    ) {
-      return NextResponse.json(
-        { error: "A saved influencer's handle and platform can't be changed. Add a new row instead.", code: "IDENTITY_LOCKED" },
-        { status: 422 }
-      )
+    const target = {
+      handle: promoting.handle || stored.handle,
+      platform: promoting.platform || stored.platform,
+    }
+    if (!current.is_draft && (target.handle !== stored.handle || target.platform !== stored.platform)) {
+      const profileSelect = {
+        id: true, handle: true, platform: true, full_name: true, email: true, gender: true,
+        social_link: true, bio: true, profile_image_url: true, follower_count: true,
+        engagement_rate: true, avg_likes: true, avg_comments: true, avg_views: true,
+        niche: true, location: true,
+      } as const
+      const existing = await prisma.influencer.findUnique({
+        where: { handle_platform: target },
+        select: profileSelect,
+      })
+      const onBrand = (influencerId: string) =>
+        prisma.brandInfluencer.findUnique({
+          where: { brand_id_influencer_id: { brand_id: brandId, influencer_id: influencerId } },
+          select: { id: true },
+        })
+      const row = await onBrand(id)
+
+      if (!row) {
+        // A late save for a row that has already switched: nothing to do.
+        if (existing && (await onBrand(existing.id))) {
+          return NextResponse.json({ success: true, code: "IDENTITY_SWITCHED", id: existing.id, influencer: existing })
+        }
+        return NextResponse.json({ error: "Not found" }, { status: 404 })
+      }
+      if (existing && (await onBrand(existing.id))) {
+        return NextResponse.json(
+          { error: `@${target.handle} is already in your list`, code: "DUPLICATE_IN_BRAND", id: existing.id },
+          { status: 409 }
+        )
+      }
+
+      const next = existing ?? await prisma.influencer.create({
+        data: {
+          handle: target.handle,
+          platform: target.platform,
+          social_link: typeof data.social_link === "string" && data.social_link ? data.social_link : null,
+        },
+        select: profileSelect,
+      })
+      await prisma.$transaction([
+        prisma.brandInfluencer.update({ where: { id: row.id }, data: { influencer_id: next.id } }),
+        prisma.brandPartner.updateMany({ where: { brand_influencer_id: row.id }, data: { influencer_id: next.id } }),
+      ])
+      if ((await prisma.brandInfluencer.count({ where: { influencer_id: id } })) === 0) {
+        await prisma.influencer.deleteMany({ where: { id, brandPartners: { none: {} } } })
+      }
+
+      await logActivity({
+        brandId,
+        userId: session.user.id,
+        action: "influencer.identity_changed",
+        entityType: "brand_influencer",
+        entityId: row.id,
+        details: { from: `${stored.handle}@${stored.platform}`, to: `${target.handle}@${target.platform}`, reused: !!existing },
+      })
+
+      return NextResponse.json({
+        success: true,
+        code: "IDENTITY_SWITCHED",
+        id: next.id,
+        reused: !!existing,
+        influencer: { ...next, engagement_rate: Number(next.engagement_rate) },
+      })
     }
     const promotingHandle = current?.is_draft ? promoting.handle : ""
     const promotingPlatform = current?.is_draft ? promoting.platform : ""
