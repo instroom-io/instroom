@@ -1525,6 +1525,46 @@ function InfluencersContent() {
     manualRows.current.set(rowId, row?.handle?.trim().replace(/^@/, "") ?? "")
   }, [])
 
+  // Handle/platform edited on a saved row: the server points this brand's row at
+  // the record for the new identity. Queued saves for the old record are dropped
+  // first so they can't re-add it.
+  const handleIdentityChange = useCallback(
+    async (rowId: string, handle: string, platform: string, socialLink: string) => {
+      if (!brandId) return { ok: false as const, error: "No brand selected" }
+      const pending = updateTimers.current.get(rowId)
+      if (pending) { clearTimeout(pending); updateTimers.current.delete(rowId) }
+      pendingFlush.current.delete(rowId)
+      try {
+        const res = await fetch(`/api/brand/${brandId}/influencers/${rowId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ handle, platform, social_link: socialLink }),
+        })
+        const body = await res.json().catch(() => ({}))
+        if (!res.ok || !body.id) {
+          return { ok: false as const, error: body.error || `Couldn't change the handle to @${handle}. Please try again.` }
+        }
+        dbIds.current.delete(rowId)
+        dbIds.current.add(body.id)
+        lastSentPayloads.current.delete(rowId)
+        manualRows.current.delete(rowId)
+        invalidateInfluencerDerivedCaches(brandId, [influencersCacheKey(brandId)])
+        return {
+          ok: true as const,
+          id: body.id as string,
+          influencer: body.influencer as Record<string, unknown> | undefined,
+          // Called by the sheet once its own row has the new id, so the cached
+          // list never holds the old row (it would reappear on the next sync).
+          commit: (switched: InfluencerRow) =>
+            setRows((prev) => prev.map((r) => (r.id === rowId ? switched : r))),
+        }
+      } catch {
+        return { ok: false as const, error: `Couldn't change the handle to @${handle} — you appear to be offline.` }
+      }
+    },
+    [brandId, setRows]
+  )
+
   // ── handleRowsChange ──────────────────────────────────────────────────────
   // Called on every table edit (keystroke, dropdown change, etc.)
   //
@@ -1974,6 +2014,7 @@ function InfluencersContent() {
           // Every message the table raises lands in this page's single toast.
           onNotify={notify}
           onLookupFailed={handleLookupFailed}
+          onIdentityChange={handleIdentityChange}
           readOnly={!canManageInfluencers}
           canApproveInfluencers={canApproveInfluencers}
         />

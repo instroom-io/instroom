@@ -21,7 +21,7 @@ import {
 } from "./constants"
 import {
   cleanHandle, getProfileUrl, sortRows, newEmptyRow, getStaticCols,
-  handleApprovalChange, canListDecline, isValidUrl, normalizeUrl, formatFollowers,
+  handleApprovalChange, canListDecline, drawerStageLabel, getPlatformLabel, isValidUrl, normalizeUrl, formatFollowers,
   exportToCSV, downloadTemplate, importFromCSV,
   normalizeApiUsername, isValidApiUsername, describeLookupFailure, lookupFailureMessage,
   isUsableEmail, normalizeEmail, normalizeContactInfo, isUniqueContact, contactMatchKey,
@@ -221,7 +221,7 @@ export default function TableSheet({
   initialRows = [], initialCustomColumns = [],
   onRowsChange, onDeleteRow, onFetchComplete, onRegisterIdSwap,
   onCustomColumnsChange, onImportRows, onBulkApprove, readOnly = false, brandId,
-  subscriptionStatus, onShowTrialModal, canApproveInfluencers = true, onNotify, onLookupFailed,
+  subscriptionStatus, onShowTrialModal, canApproveInfluencers = true, onNotify, onLookupFailed, onIdentityChange,
   onCreateDraft, onSaveState, onEnrichmentStart, onEnrichmentFailed, onContactHoldChange,
 }: {
   initialRows?: InfluencerRow[]
@@ -302,6 +302,10 @@ export default function TableSheet({
    * become the user's to complete, without polling or a timer.
    */
   onLookupFailed?: (rowId: string) => void
+  /** Points a saved row at the record for its edited handle/platform; returns the new id. */
+  onIdentityChange?: (rowId: string, handle: string, platform: string, socialLink: string) => Promise<
+    { ok: true; id: string; influencer?: Record<string, unknown>; commit?: (row: InfluencerRow) => void } | { ok: false; error: string }
+  >
 }) {
   // Import/Export are a Solo & Team feature — Basic (the free plan) doesn't
   // include them, regardless of subscription status.
@@ -601,6 +605,8 @@ export default function TableSheet({
 
   const [openRowMenuId, setOpenRowMenuId]                 = useState<string | null>(null)
   const [showBulkTransferConfirm, setShowBulkTransferConfirm] = useState(false)
+  /** Handle/platform change awaiting confirmation (influencer already past outreach). */
+  const [identityConfirm, setIdentityConfirm] = useState<{ row: InfluencerRow; handle: string; platform: string; stage: string } | null>(null)
   // Guards against a second submit while the bulk write is in flight.
   const [bulkApproving, setBulkApproving] = useState(false)
 
@@ -990,6 +996,13 @@ export default function TableSheet({
   }
 
   const handleUpdateRow = (r: InfluencerRow) => {
+    // A drawer platform/handle change on a saved row goes through the switch; other fields save as usual.
+    const current = rowsRef.current.find(x => x.id === r.id)
+    if (current && !current.is_draft && !current.id.startsWith("temp-") && cleanHandle(current.handle) &&
+        (r.platform !== current.platform || cleanHandle(r.handle).toLowerCase() !== cleanHandle(current.handle).toLowerCase())) {
+      requestIdentityChange(current, cleanHandle(r.handle), r.platform)
+      r = { ...r, handle: current.handle, platform: current.platform, social_link: current.social_link }
+    }
     setRows(prev => { const n = prev.map(x => x.id === r.id ? r : x); onRowsChange?.(n); return n })
   }
 
@@ -1804,6 +1817,69 @@ export default function TableSheet({
     }, AUTO_FETCH_DEBOUNCE_MS))
   }, [autoFetchInfluencer, runQueuedFetch, releaseFetchSlot, addToast])
 
+  // Saved row, new handle/platform: switch the row to that influencer's record
+  // first, then look the new profile up. The old person's details are cleared
+  // meanwhile so they can't be saved onto the new record.
+  const switchIdentity = useCallback(async (row: InfluencerRow, handle: string, platform: string) => {
+    if (!onIdentityChange) return
+    const socialLink = getProfileUrl(platform, handle)
+    const cleared: InfluencerRow = {
+      ...row, handle, platform, social_link: socialLink,
+      full_name: "", first_name: "", email: "", contact_info: "", location: "", niche: "", gender: "",
+      bio: "", profile_image_url: "", follower_count: "", engagement_rate: "",
+      avg_likes: "", avg_comments: "", avg_views: "",
+    }
+    setRows(prev => prev.map(r => (r.id === row.id ? cleared : r)))
+    setFetchingRows(prev => new Set(prev).add(row.id))
+
+    const result = await onIdentityChange(row.id, handle, platform, socialLink)
+    clearFetching(row.id)
+    if (!result.ok) {
+      addToast("error", result.error)
+      setRows(prev => prev.map(r => (r.id === row.id ? row : r)))
+      return
+    }
+
+    const inf = result.influencer ?? {}
+    const text = (k: string) => (typeof inf[k] === "string" ? (inf[k] as string) : "")
+    const num = (k: string) => (Number(inf[k]) > 0 ? String(inf[k]) : "")
+    const fullName = text("full_name")
+    const switched: InfluencerRow = {
+      ...cleared,
+      id: result.id,
+      full_name: fullName, first_name: fullName.split(" ")[0] || "",
+      email: text("email"), contact_info: text("email"), location: text("location"), niche: text("niche"),
+      gender: text("gender"), bio: text("bio"), profile_image_url: text("profile_image_url"),
+      social_link: text("social_link") || socialLink,
+      follower_count: num("follower_count"), engagement_rate: num("engagement_rate"),
+      avg_likes: num("avg_likes"), avg_comments: num("avg_comments"), avg_views: num("avg_views"),
+    }
+    setRows(prev => prev.map(r => (r.id === row.id ? switched : r)))
+    result.commit?.(switched)
+    setSidebarRowId(id => (id === row.id ? result.id : id))
+    const handleChanged = handle.toLowerCase() !== cleanHandle(row.handle).toLowerCase()
+    const platformChanged = platform !== row.platform
+    addToast("success",
+      !platformChanged ? `Changed to @${handle}`
+        : !handleChanged ? `@${handle} changed to ${getPlatformLabel(platform)}`
+        : `Changed to @${handle} on ${getPlatformLabel(platform)}`)
+    // Known profiles come back filled; anything else is looked up.
+    if (!(Number(inf.follower_count) > 0)) scheduleAutoFetch(result.id, handle, platform)
+  }, [onIdentityChange, addToast, clearFetching, scheduleAutoFetch])
+
+  const requestIdentityChange = useCallback((row: InfluencerRow, handle: string, platform: string) => {
+    if (handle.length < 2 || !platform) {
+      addToast("error", "A saved influencer needs a handle and a platform.")
+      return
+    }
+    // Once outreach has started the row carries real history, so confirm first.
+    if (!canListDecline(row) || row.contact_status === "not_interested") {
+      setIdentityConfirm({ row, handle, platform, stage: drawerStageLabel(row) })
+      return
+    }
+    void switchIdentity(row, handle, platform)
+  }, [addToast, switchIdentity])
+
   const applyCellValue = useCallback((rowIdx: number, colKey: string, value: string) => {
     const actualRow = filteredRows[rowIdx]; const actualRowIdx = rows.findIndex(r => r.id === actualRow.id); if (actualRowIdx === -1) return
     if (colKey === "approval_status" && !canApproveInfluencers) return
@@ -1812,13 +1888,17 @@ export default function TableSheet({
     let shouldFetch = false, fetchRowId = currentRow.id, fetchHandle = "", fetchPlatform = ""
     let cleanedValue = value
     if (colKey === "handle") cleanedValue = cleanHandle(value)
-    // A saved influencer's handle/platform is fixed.
+    // Editing a saved influencer's handle/platform switches the row to that influencer.
     const identitySaved = !currentRow.is_draft && !currentRow.id.startsWith("temp-") && !!cleanHandle(currentRow.handle)
     if (identitySaved && (
       (colKey === "handle" && cleanedValue.toLowerCase() !== cleanHandle(currentRow.handle).toLowerCase()) ||
       (colKey === "platform" && value !== currentRow.platform)
     )) {
-      addToast("error", "A saved influencer's handle and platform can't be changed. Add a new row instead.")
+      requestIdentityChange(
+        currentRow,
+        colKey === "handle" ? cleanedValue : cleanHandle(currentRow.handle),
+        colKey === "platform" ? value : currentRow.platform
+      )
       return
     }
     if (colKey === "handle" && cleanedValue && cleanedValue.length >= 2) { shouldFetch = true; fetchHandle = cleanedValue; fetchPlatform = currentRow.platform }
@@ -1862,7 +1942,7 @@ export default function TableSheet({
       const typed = cleanedValue
       if (typed) setTimeout(() => checkContactDuplicate(currentRow.id, typed), 0)
     }
-  }, [onRowsChange, customCols, filteredRows, rows, isOutreachField, nicheOptions, locationOptions, scheduleAutoFetch, canApproveInfluencers, checkContactDuplicate, addToast])
+  }, [onRowsChange, customCols, filteredRows, rows, isOutreachField, nicheOptions, locationOptions, scheduleAutoFetch, canApproveInfluencers, checkContactDuplicate, addToast, requestIdentityChange])
 
   const addOptionToCol = useCallback((fk: string, no: string) => {
     setCustomCols(prev => { const n = prev.map(c => c.field_key !== fk ? c : { ...c, field_options: [...(c.field_options ?? []), no] }); onCustomColumnsChange?.(n); return n })
@@ -2597,6 +2677,49 @@ export default function TableSheet({
           </div>
         </div>
       )}
+
+      {identityConfirm && (() => {
+        const { row, handle, platform, stage } = identityConfirm
+        const oldHandle = cleanHandle(row.handle)
+        const from = getPlatformLabel(row.platform)
+        const to = getPlatformLabel(platform)
+        const platformChanged = platform !== row.platform
+        const handleChanged = handle.toLowerCase() !== oldHandle.toLowerCase()
+        const change = !platformChanged
+          ? `@${oldHandle} to @${handle}`
+          : handleChanged
+            ? `@${oldHandle} (${from}) to @${handle} (${to})`
+            : `@${oldHandle} from ${from} to ${to}`
+        const where = stage === "Post Tracker"
+          ? "is already in Post Tracker"
+          : stage === "Not Interested"
+            ? "was marked Not Interested in the Pipeline"
+            : `is already at ${stage} in the Pipeline`
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={e => { if (e.target === e.currentTarget) setIdentityConfirm(null) }}>
+            <div className="bg-white rounded-xl shadow-xl w-[420px] max-w-[90vw] p-5">
+              <div className="flex items-start gap-2.5 mb-3">
+                <div className="p-1.5 bg-amber-100 rounded-full flex-shrink-0"><IconAlertTriangle size={18} className="text-amber-600" /></div>
+                <div className="flex-1">
+                  <h3 className="text-sm font-semibold text-gray-900">Change {change}?</h3>
+                  <p className="text-xs text-gray-500 mt-1 leading-relaxed">
+                    @{oldHandle} {where}. Everything on this row stays with it and will now belong to <strong>@{handle} on {to}</strong>: approval, stage, notes, emails, order and post details, coupon and affiliate link.
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => setIdentityConfirm(null)} className="flex-1 px-3 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition">Cancel</button>
+                <button
+                  onClick={() => { setIdentityConfirm(null); void switchIdentity(row, handle, platform) }}
+                  className="flex-1 px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs hover:bg-amber-700 transition font-medium"
+                >
+                  {platformChanged && !handleChanged ? "Change platform" : "Change handle"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       <AddRowsModal isOpen={showAddRowsModal} onClose={() => setShowAddRowsModal(false)} onAdd={handleAddMultipleRows} selectedCount={selectedRowIds.size} />
 

@@ -967,6 +967,16 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
   deliverableDraftsRef.current = deliverableDrafts
   const hasDeliverables = deliverableDrafts.length > 0
   const postedDeliverables = deliverableDrafts.filter(d => (d.postUrl ?? "").trim()).length
+  // Collapsible cards: on open, only the first unposted one is expanded; ones added later start open.
+  const [deliverableView] = useState(() => ({
+    initialIds: new Set(deliverableDrafts.map(d => d.id)),
+    openId: deliverableDrafts.find(d => !(d.postUrl ?? "").trim())?.id,
+  }))
+  const [deliverableToggles, setDeliverableToggles] = useState<Record<number, boolean>>({})
+  const isDeliverableOpen = (id: number) =>
+    deliverableToggles[id] ?? (id === deliverableView.openId || !deliverableView.initialIds.has(id))
+  const setDeliverableOpen = (id: number, open: boolean) =>
+    setDeliverableToggles(t => ({ ...t, [id]: open }))
   const setDeliverableCount = (n: number) => setDeliverableDrafts(ds => {
     const maxId = ds.reduce((m, d) => Math.max(m, Number(d.id) || 0), 0)
     // A first deliverable added to a row that already has a Post URL inherits
@@ -1692,6 +1702,13 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                 {deliverableDrafts.map((d, i) => {
                   const link = (d.postUrl ?? "").trim()
                   const isWebLink = /^https?:\/\//i.test(link)
+                  const open = isDeliverableOpen(d.id)
+                  const summary = link
+                    ? ["✓ Posted",
+                        d.postDate ? new Date(d.postDate.slice(0, 10)).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : null,
+                        d.views != null ? `${d.views.toLocaleString()} views` : null,
+                      ].filter(Boolean).join(" · ")
+                    : "Not posted yet"
                   return (
                     <div
                       key={d.id}
@@ -1703,12 +1720,23 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                         if (!url) { showToast("That drop contained no post link"); return }
                         updateDeliverableLink(i, url)
                         setPostUrlOrigin("dropped")
+                        setDeliverableOpen(d.id, true)
                       }}
                     >
-                      <div style={{ fontSize: 11, fontWeight: 600, color: "#374151", marginBottom: 6 }}>{i + 1}. {d.name || `Deliverable ${i + 1}`}</div>
+                      <button
+                        type="button"
+                        onClick={() => setDeliverableOpen(d.id, !open)}
+                        aria-expanded={open}
+                        style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", background: "none", border: 0, padding: 0, cursor: "pointer", textAlign: "left", marginBottom: open ? 6 : 0 }}
+                      >
+                        <IconChevronDown size={14} style={{ color: "#6b7280", flexShrink: 0, transform: open ? "none" : "rotate(-90deg)", transition: "transform .15s" }} />
+                        <span style={{ fontSize: 11, fontWeight: 600, color: "#374151", whiteSpace: "nowrap" }}>{i + 1}. {d.name || `Deliverable ${i + 1}`}</span>
+                        <span style={{ fontSize: 10, color: link ? "#0F6B3E" : "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{summary}</span>
+                      </button>
+                      {open && (<>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <input
-                          ref={i === 0 ? postUrlRef : undefined}
+                          ref={i === deliverableDrafts.findIndex(x => isDeliverableOpen(x.id)) ? postUrlRef : undefined}
                           className="pfi"
                           value={d.postUrl ?? ""}
                           onChange={e => { updateDeliverableLink(i, e.target.value); setPostUrlOrigin("stored") }}
@@ -1737,6 +1765,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                           <input className="pfi" inputMode="numeric" value={d.comments ?? ""} onChange={e => updateDeliverable(i, { comments: metricFromInput(e.target.value) })} />
                         </div>
                       </div>
+                      </>)}
                     </div>
                   )
                 })}
