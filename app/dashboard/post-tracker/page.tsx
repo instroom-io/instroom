@@ -31,7 +31,11 @@ import {
 import { invalidateInfluencerDerivedCaches, closedCacheKey } from "@/lib/cache-invalidation"
 import { DataSyncStatus } from "@/components/data-sync-status"
 import { ProfilePicture, PlatformIcon } from "@/components/table-sheet/ui-atoms"
-import { getPlatformLabel } from "@/components/table-sheet/utils"
+import { getPlatformLabel, contactStatusLabel } from "@/components/table-sheet/utils"
+import { formatDealRate } from "@/lib/pipeline-transitions"
+import {
+  DrawerShell, DrawerHeader, DrawerControl, DrawerTabs, DrawerBody, DrawerActionBar,
+} from "@/components/shared/influencer-drawer"
 import { DEFAULT_PLATFORMS } from "@/components/table-sheet/constants"
 import { SaveStatusPill } from "@/components/save-status-pill"
 import { StaleDataNotice } from "@/components/stale-data-notice"
@@ -528,6 +532,14 @@ function CampaignBadge({ type }: { type: string | null }) {
   if (!found) return <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">Gifting</span>
   return <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${found.color}`}>{found.label}</span>
 }
+function compactNum(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(Number(n))) return "—"
+  const v = Number(n)
+  if (v >= 1_000_000) return (v / 1_000_000).toFixed(1) + "M"
+  if (v >= 1_000) return (v / 1_000).toFixed(1) + "K"
+  return String(v)
+}
+
 function fmtMoney(v: number | null | undefined) {
   return v ? "$" + Math.round(v).toLocaleString() : "—"
 }
@@ -1313,7 +1325,6 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
 
   return (
     <>
-      <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.3)", zIndex: 400, cursor: "pointer" }} />
 
       {showEmailModal && (
         <EmailModal
@@ -1326,130 +1337,70 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
         />
       )}
 
-      <div className="pp">
-        {/* Pinned to the panel's top-right corner, independent of the header's
-            own content — it used to sit inside the Stage/Collaboration Type
-            row and wrap onto its own line whenever that row ran out of width,
-            landing disconnected from the header at narrower drawer widths. */}
-        <button onClick={onClose} title="Close" className="close-btn">✕</button>
-        {/* ── Header ── */}
-        <div className="pph">
-          {/* paddingRight reserves room for the close button, which is pinned
-              absolutely to the panel's top-right corner and no longer part of
-              this row's own flex layout — without it, the Stage/Collaboration
-              Type selects could grow into the same corner. */}
-          <div className="ppt" style={{ paddingRight: 40 }}>Influencer Profile</div>
-          {/* flexWrap here, not just on the selects group below: without it, a
-              long username refuses to shrink past its own text width (a flex
-              item's default min-width), so the Stage/Collaboration Type
-              selects were the only thing left to give — squeezed into
-              whatever sliver of the row remained and stacking on top of each
-              other there, rather than the pair simply dropping to their own
-              full-width line under the avatar/name. */}
-          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, marginBottom: 12, paddingRight: 40 }}>
-            {/* The persisted avatar — the permanent Cloudinary URL the Influencer
-                List stores on the Influencer record, carried here by the closed
-                route's own `profileImageUrl`. Rendered through the shared
-                ProfilePicture so a missing or broken image falls back to
-                initials the way it does on every other screen, instead of a
-                bare <img> that renders as a broken icon. */}
-            <div className="pav">
-              {inf.profileImageUrl ? (
-                <ProfilePicture src={inf.profileImageUrl} name={inf.influencer} handle={inf.handle} size={44} />
-              ) : (
-                inf.influencer.charAt(0).toUpperCase()
-              )}
-            </div>
-            {/* flexShrink:0 — the name must never be the thing that gives.
-                When the row doesn't have room for everyone, flexWrap on the
-                row above is what should move Stage/Collaboration Type to
-                their own line below; the ellipsis rules on .pnm/.phd stay
-                only as a last-resort safety net for a screen too narrow to
-                fit even the avatar and name alone. */}
-            <div style={{ flexGrow: 1, flexShrink: 0, flexBasis: "auto" }}>
-              <div className="pnm">{inf.influencer}</div>
-              <div className="phd">@{inf.handle}</div>
-            </div>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "flex-start" }}>
-              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                <span style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em" }}>Stage</span>
-                <select
-                  className="ssel"
-                  value={inf.closedStatus}
-                  onChange={(e) => handleStageChange(e.target.value as ClosedColumn)}
-                  disabled={!canApproveInfluencers}
-                  title={!canApproveInfluencers ? "Only Owners and Managers can update post status" : undefined}
-                  style={{
-                    borderColor: inf.closedStatus === "No post" ? "#fca5a5" : inf.closedStatus === "Issues" ? "#d8b4fe" : undefined,
-                    background:  inf.closedStatus === "No post" ? "#fef2f2" : inf.closedStatus === "Issues" ? "#faf5ff" : undefined,
-                    color:       inf.closedStatus === "No post" ? "#dc2626" : inf.closedStatus === "Issues" ? "#7e22ce" : undefined,
-                    opacity:     canApproveInfluencers ? undefined : 0.5,
-                    cursor:      canApproveInfluencers ? undefined : "not-allowed",
-                  }}
-                >
-                  {STAGE_OPTIONS.map((s) => (
-                    <option key={s} value={s} style={
-                      s === "No post" ? { color: "#dc2626", fontWeight: 600 }
-                      : s === "Issues" ? { color: "#7e22ce", fontWeight: 600 }
-                      : undefined
-                    }>
-                      {s}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                <span style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em" }}>Collaboration Type</span>
-                <select
-                  className="csel"
-                  value={campaignType}
-                  onChange={(e) => handleCollabTypeChange(e.target.value)}
-                  disabled={!canApproveInfluencers}
-                  title={!canApproveInfluencers ? "Only Owners and Managers can update collaboration type" : "Inherited from Pipeline — change here if the collaboration changes"}
-                  style={{ opacity: canApproveInfluencers ? undefined : 0.5, cursor: canApproveInfluencers ? undefined : "not-allowed" }}
-                >
-                  {CAMPAIGN_TYPES.map((ct) => (
-                    <option key={ct.value} value={ct.value}>{ct.label}</option>
-                  ))}
-                </select>
-              </div>
-
-            </div>
-          </div>
-
-
-          {inf.closedStatus === "No post" && (
+      <DrawerShell onClose={onClose}>
+        <DrawerHeader
+          name={inf.influencer}
+          handle={inf.handle}
+          platform={inf.platform}
+          avatarUrl={inf.profileImageUrl}
+          onSendEmail={() => setShowEmailModal(true)}
+          onNotify={(msg, type) => showToast(msg, type)}
+          controls={<>
+            <DrawerControl label="Stage">
+              <select
+                className="ssel"
+                value={inf.closedStatus}
+                onChange={(e) => handleStageChange(e.target.value as ClosedColumn)}
+                disabled={!canApproveInfluencers}
+                title={!canApproveInfluencers ? "Only Owners and Managers can update post status" : undefined}
+                style={{
+                  borderColor: inf.closedStatus === "No post" ? "#fca5a5" : inf.closedStatus === "Issues" ? "#d8b4fe" : undefined,
+                  background:  inf.closedStatus === "No post" ? "#fef2f2" : inf.closedStatus === "Issues" ? "#faf5ff" : undefined,
+                  color:       inf.closedStatus === "No post" ? "#dc2626" : inf.closedStatus === "Issues" ? "#7e22ce" : undefined,
+                  opacity:     canApproveInfluencers ? undefined : 0.5,
+                  cursor:      canApproveInfluencers ? undefined : "not-allowed",
+                }}
+              >
+                {STAGE_OPTIONS.map((s) => (
+                  <option key={s} value={s} style={
+                    s === "No post" ? { color: "#dc2626", fontWeight: 600 }
+                    : s === "Issues" ? { color: "#7e22ce", fontWeight: 600 }
+                    : undefined
+                  }>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </DrawerControl>
+            <DrawerControl label="Collaboration Type">
+              <select
+                className="csel"
+                value={campaignType}
+                onChange={(e) => handleCollabTypeChange(e.target.value)}
+                disabled={!canApproveInfluencers}
+                title={!canApproveInfluencers ? "Only Owners and Managers can update collaboration type" : "Inherited from Pipeline — change here if the collaboration changes"}
+                style={{ opacity: canApproveInfluencers ? undefined : 0.5, cursor: canApproveInfluencers ? undefined : "not-allowed" }}
+              >
+                {CAMPAIGN_TYPES.map((ct) => (
+                  <option key={ct.value} value={ct.value}>{ct.label}</option>
+                ))}
+              </select>
+            </DrawerControl>
+          </>}
+          notice={inf.closedStatus === "No post" && (
             <div style={{ marginTop: 8, padding: "6px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, fontSize: 11, color: "#dc2626", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
               <span>✕</span> No content published
             </div>
           )}
+        />
 
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-            {/* The chip keeps its own pill styling; only the mark's size and
-                spacing are brought in line with the cards and the table. */}
-            <button className="atag plat" style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0, lineHeight: 1 }}>
-              <PlatformIcon platform={inf.platform} size={14} className="shrink-0" />
-              <span className="truncate">{getPlatformLabel(inf.platform) || "—"}</span>
-            </button>
-            <button className="atag" onClick={() => setShowEmailModal(true)}>Send Email</button>
-            <button className="atag">Send DM</button>
-            <button className="atag">Follow up</button>
-          </div>
-        </div>
+        <DrawerTabs
+          tabs={PROFILE_TAB_ORDER.map((id) => ({ id, label: PROFILE_TABS[id], hidden: id === 4 && !showPaidCollabTab }))}
+          active={profileTab}
+          onSelect={setProfileTab}
+        />
 
-        {/* ── Tabs ── */}
-        <div className="pit-bar">
-          {PROFILE_TAB_ORDER.map((idx) => (
-            idx === 4 && !showPaidCollabTab ? null :
-            <div key={idx} className={`pit ${profileTab === idx ? "active" : ""}`} onClick={() => setProfileTab(idx)}>
-              {PROFILE_TABS[idx]}
-            </div>
-          ))}
-        </div>
-
-        {/* ── Body ── */}
-        <div className="ppb">
+        <DrawerBody>
 
           {/* ════ BASIC TAB ════ */}
           {profileTab === 0 && (
@@ -1458,15 +1409,15 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
               <div className="sr4">
                 <div className="sbox"><div className="slb">Followers</div><div className="svl">{inf.followers}</div></div>
                 <div className="sbox"><div className="slb">Eng Rate</div><div className="svl" style={{ color: "#2c8ec4" }}>{inf.engagementRate || "—"}</div></div>
-                <div className="sbox"><div className="slb">Rate</div><div className="svl" style={{ color: "#1fae5b" }}>{fmtMoney(inf.agreedRate)}</div></div>
+                <div className="sbox" title="Flat fee + commission per sale"><div className="slb">Rate</div><div className="svl" style={{ color: "#1fae5b" }}>{formatDealRate(inf.agreedRate, inf.commissionRate)}</div></div>
                 <div className="sbox"><div className="slb">Rating</div><div className="svl">{inf.internalRating ? `${inf.internalRating}/5` : "—"}</div></div>
               </div>
               <div>
                 <div className="section-label">Avg Metrics</div>
                 <div className="avg-row">
-                  <div className="avg-card"><div className="avg-val">{Number.isFinite(inf.likesCount) ? inf.likesCount.toLocaleString() : "—"}</div><div className="avg-lbl">Likes</div></div>
-                  <div className="avg-card"><div className="avg-val">{Number.isFinite(inf.commentsCount) ? inf.commentsCount.toLocaleString() : "—"}</div><div className="avg-lbl">Comments</div></div>
-                  <div className="avg-card"><div className="avg-val">{Number.isFinite(inf.viewsCount) ? inf.viewsCount.toLocaleString() : "—"}</div><div className="avg-lbl">Views</div></div>
+                  <div className="avg-card"><div className="avg-val">{compactNum(inf.avgLikes)}</div><div className="avg-lbl">Avg Likes</div></div>
+                  <div className="avg-card"><div className="avg-val">{compactNum(inf.avgComments)}</div><div className="avg-lbl">Avg Comments</div></div>
+                  <div className="avg-card"><div className="avg-val">{compactNum(inf.avgViews)}</div><div className="avg-lbl">Avg Views</div></div>
                 </div>
               </div>
               {/* Notes sit right under the metrics so they don't need a scroll. */}
@@ -1488,22 +1439,18 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                 <div className="frow"><div className="flbl">Order Status</div><div className="fval">{inf.orderStatus || "—"}</div></div>
                 <div className="frow"><div className="flbl">Stage</div><div className="fval">{inf.closedStatus}</div></div>
                 <div className="frow"><div className="flbl">Campaign</div><div className="fval">{inf.campaignName || "—"}</div></div>
-                <div className="frow"><div className="flbl">Contact Status</div><div className="fval">{inf.contactStatus || "—"}</div></div>
+                <div className="frow"><div className="flbl">Contact Status</div><div className="fval">{contactStatusLabel(inf.contactStatus)}</div></div>
               </div>
               {/* Same sticky action bar as the Influencer List profile — stays in
                   view at the bottom of the drawer while the tab scrolls. */}
-              <div style={{
-                display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8,
-                position: "sticky", bottom: -18, margin: "8px -20px -18px",
-                padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
-              }}>
+              <DrawerActionBar>
                 <button className="btn-secondary" onClick={() => setNotesValue(savedNotes)} disabled={savingNotes || notesValue === savedNotes}
                   style={{ opacity: notesValue === savedNotes ? 0.5 : 1 }}>Cancel</button>
                 <button className="btn-primary" onClick={handleSaveNotes} disabled={savingNotes || notesValue === savedNotes}
                   style={{ opacity: savingNotes || notesValue === savedNotes ? 0.6 : 1 }}>
                   {savingNotes ? "Saving…" : "Save Changes"}
                 </button>
-              </div>
+              </DrawerActionBar>
             </div>
           )}
 
@@ -1631,18 +1578,12 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                 )}
               </div>
 
-              <div
-                style={{
-                  display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8,
-                  position: "sticky", bottom: -18, margin: "8px -20px -18px",
-                  padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
-                }}
-              >
+              <DrawerActionBar>
                 <button className="btn-secondary" onClick={() => setOrderData(buildOrderData())} disabled={savingOrder}>Cancel</button>
                 <button className="btn-primary" onClick={handleSaveOrder} disabled={savingOrder} style={{ opacity: savingOrder ? 0.6 : 1 }}>
                   {savingOrder ? "Saving…" : "Save Changes"}
                 </button>
-              </div>
+              </DrawerActionBar>
             </div>
           )}
 
@@ -1858,16 +1799,10 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                   </select>
                 </div>
               </div>
-              <div
-                style={{
-                  display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8,
-                  position: "sticky", bottom: -18, margin: "8px -20px -18px",
-                  padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
-                }}
-              >
+              <DrawerActionBar>
                 <button className="btn-secondary" onClick={resetPostForm} disabled={savingPost}>Cancel</button>
                 <button className="btn-primary" onClick={handleSavePost} disabled={savingPost} style={{ opacity: savingPost ? 0.6 : 1 }}>{savingPost ? "Saving…" : "Save Changes"}</button>
-              </div>
+              </DrawerActionBar>
                 </>
               )}
             </div>
@@ -1897,15 +1832,9 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
             <AttributionTab brandId={brandId} brandInfluencerId={inf.id} firstName={(inf.influencer || inf.handle || "").split(" ")[0]} />
           )}
 
-        </div>
+        </DrawerBody>
 
         <style jsx>{`
-          .pp { position:fixed; top:0; right:0; width:600px; max-width:100vw; height:100%; background:#fff; box-shadow:-8px 0 40px rgba(0,0,0,0.14); z-index:500; display:flex; flex-direction:column; font-family:"Inter",system-ui,sans-serif; }
-          .pph { padding:16px 20px; border-bottom:1px solid #f0f0f0; }
-          .ppt { font-size:11px; font-weight:600; color:#9ca3af; letter-spacing:.1em; text-transform:uppercase; margin-bottom:12px; }
-          .pav { width:44px; height:44px; border-radius:50%; background:#1fae5b; display:flex; align-items:center; justify-content:center; font-size:18px; font-weight:700; color:#fff; flex-shrink:0; box-shadow:0 0 0 3px #dcfce7; }
-          .pnm { font-size:15px; font-weight:700; color:#111827; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-          .phd { font-size:12px; color:#6b7280; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
           /* Fixed width, not min-width: a native select otherwise resizes to fit
              whichever option is currently selected — "Posted" is short but "For
              Order Creation" / "TikTok Shop + Paid" are not, so the row's total
@@ -1915,17 +1844,6 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
              it wider. */
           .ssel { font-size:11px; padding:5px 10px; border-radius:8px; border:.5px solid #f4b740; background:#fffbeb; color:#854f0b; cursor:pointer; font-family:inherit; font-weight:500; transition:all .15s; width:115px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
           .csel { font-size:11px; padding:5px 10px; border-radius:8px; border:1px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; font-family:inherit; font-weight:600; transition:all .15s; width:115px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-          .close-btn { position:absolute; top:16px; right:20px; z-index:1; width:30px; height:30px; border-radius:50%; border:1.5px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; line-height:1; transition:background .15s,border-color .15s,color .15s; }
-          .close-btn:hover { background:#fee2e2; color:#dc2626; border-color:#fca5a5; }
-          .atag { font-size:12px; font-weight:500; padding:6px 14px; border-radius:20px; cursor:pointer; border:1px solid #e5e7eb; background:#f9fafb; color:#555; transition:background .15s,border-color .15s,color .15s; }
-          .atag:not(.plat):hover { background:#eafaf1; border-color:#1fae5b; color:#1fae5b; }
-          .atag.plat { background:#1fae5b; color:#fff; border-color:#1fae5b; }
-          .pit-bar { display:flex; gap:0; padding:0 20px; border-bottom:1px solid #f0f0f0; overflow-x:auto; scrollbar-width:thin; scrollbar-color:#d1d5db transparent; }
-          .pit-bar::-webkit-scrollbar { height:4px; }
-          .pit-bar::-webkit-scrollbar-thumb { background:#d1d5db; border-radius:4px; }
-          .pit { font-size:12px; font-weight:600; padding:11px 14px; cursor:pointer; color:#9ca3af; border-bottom:2px solid transparent; white-space:nowrap; transition:color .15s; flex-shrink:0; }
-          .pit.active { color:#1fae5b; border-bottom-color:#1fae5b; }
-          .ppb { flex:1; overflow-y:auto; padding:18px 20px; }
           .sr4 { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; background:linear-gradient(135deg,#f0fdf4 0%,#f9fafb 100%); border-radius:12px; padding:14px; margin-bottom:4px; border:1px solid #dcfce7; }
           .sbox { text-align:center; }
           .slb { font-size:9px; font-weight:600; color:#6b7280; text-transform:uppercase; letter-spacing:.07em; }
@@ -1958,7 +1876,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
           .btn-secondary:hover { background:#f9fafb; border-color:#d1d5db; }
           .btn-primary:hover { background:#0f6b3e; }
         `}</style>
-      </div>
+      </DrawerShell>
     </>
   )
 }
@@ -2634,7 +2552,7 @@ function PostTrackerContent() {
                   ? getItemsByColumn(col.key).filter(inf=>!isCompleted(inf))
                   : getItemsByColumn(col.key)
                 return (
-                  <div key={col.key} className="w-[min(78vw,200px)] sm:w-auto sm:min-w-[200px] sm:max-w-[360px] sm:basis-[calc((100%_-_3rem)/5)] flex-shrink-0" style={{ scrollSnapAlign: "start", height: columnHeight ?? undefined }}>
+                  <div key={col.key} className="w-[min(78vw,200px)] sm:w-auto sm:min-w-[200px] sm:max-w-[340px] sm:grow sm:basis-[200px] flex-shrink-0" style={{ scrollSnapAlign: "start", height: columnHeight ?? undefined }}>
                     <DroppableColumn id={col.key}>
                       {/* ── Column header — identical structure to pipeline ── */}
                       <div
@@ -2673,7 +2591,7 @@ function PostTrackerContent() {
               {(()=>{
                 const items = getItemsByColumn("Posted").filter(isCompleted)
                 return (
-                  <div className="w-[min(78vw,200px)] sm:w-auto sm:min-w-[200px] sm:max-w-[360px] sm:basis-[calc((100%_-_3rem)/5)] flex-shrink-0" style={{ scrollSnapAlign: "start", height: columnHeight ?? undefined }}>
+                  <div className="w-[min(78vw,200px)] sm:w-auto sm:min-w-[200px] sm:max-w-[340px] sm:grow sm:basis-[200px] flex-shrink-0" style={{ scrollSnapAlign: "start", height: columnHeight ?? undefined }}>
                     <div className="flex flex-col gap-2 h-full rounded-lg">
                       <div className="bg-[#1FAE5B] text-white rounded-lg px-3 py-1.5 text-[13px] font-semibold flex items-center justify-between">
                         <span className="flex-1 truncate mr-2">Completed</span>

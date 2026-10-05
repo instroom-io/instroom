@@ -3,12 +3,14 @@
 import { useEffect, useState } from "react"
 import { Skeleton } from "@/components/ui/skeleton"
 import { fetchCached, getCachedData } from "@/lib/data-cache"
+import { invalidateInfluencerDerivedCaches } from "@/lib/cache-invalidation"
+import { formatDealRate } from "@/lib/pipeline-transitions"
 
 type Stats = {
   clicks: number; sales: number; revenue: number
-  productCost: number; feesPaid: number; commissionPaid: number; totalSpend: number
+  productCost: number; feesPaid: number; feesSource?: "paid" | "agreed" | "none"; commissionPaid: number; commissionSource?: "paid" | "goaffpro" | "estimated" | "none"; commissionRate?: number | null; totalSpend: number
   followers: number | null; engagementRate: number | null
-  likes: number; comments: number; views: number; agreedRate: number | null
+  likes: number; comments: number; views: number; postedPosts?: number; agreedRate: number | null
   avgLikes: number | null; avgComments: number | null; avgViews: number | null
   shippedAt: string | null; deliveredAt: string | null; postedAt: string | null
 }
@@ -60,7 +62,7 @@ function StatsSkeleton() {
  * Stats tab shared by the Pipeline and Post Tracker drawers. Loads its own
  * numbers; carries its own styles, since the drawers' styles are scoped.
  */
-export function InfluencerStatsTab({ brandId, brandInfluencerId, allowManualEntry = false }: { brandId?: string; brandInfluencerId?: string; allowManualEntry?: boolean }) {
+export function InfluencerStatsTab({ brandId, brandInfluencerId, allowManualEntry = false, onSaved }: { brandId?: string; brandInfluencerId?: string; allowManualEntry?: boolean; onSaved?: () => void }) {
   // Tagged with the influencer it belongs to, so a switch never shows the previous one's numbers.
   const key = `${brandId}/${brandInfluencerId}`
   const [loaded, setLoaded] = useState<{ key: string; stats: Stats | null; error: boolean } | null>(null)
@@ -68,7 +70,7 @@ export function InfluencerStatsTab({ brandId, brandInfluencerId, allowManualEntr
   const cached = brandId && brandInfluencerId ? getCachedData<Stats>(statsKey(brandId, brandInfluencerId)) : undefined
   const [reload, setReload] = useState(0)
   // Manual entry, for brands not using GoAffPro or another tracking tool.
-  const [manual, setManual] = useState<{ clicks: string; sales: string; revenue: string; productCost: string } | null>(null)
+  const [manual, setManual] = useState<{ clicks: string; sales: string; revenue: string; productCost: string; agreedRate: string; feesPaid: string; commissionRate: string; commissionPaid: string } | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
 
@@ -92,6 +94,10 @@ export function InfluencerStatsTab({ brandId, brandInfluencerId, allowManualEntr
 
   const cvr = stats.clicks > 0 ? (stats.sales / stats.clicks) * 100 : 0
   const roas = stats.totalSpend > 0 ? stats.revenue / stats.totalSpend : null
+  const posts = stats.postedPosts ?? 0
+  const postEngRate = stats.followers && posts > 0
+    ? ((stats.likes + stats.comments) / stats.followers / posts) * 100
+    : null
 
   const saveManual = async () => {
     if (!manual) return
@@ -107,6 +113,8 @@ export function InfluencerStatsTab({ brandId, brandInfluencerId, allowManualEntr
       if (!res.ok) { setSaveError(json.error || "Failed to save"); return }
       setManual(null)
       setReload((n) => n + 1)
+      if (brandId) invalidateInfluencerDerivedCaches(brandId)
+      onSaved?.()
     } catch {
       setSaveError("Failed to save")
     } finally {
@@ -120,7 +128,7 @@ export function InfluencerStatsTab({ brandId, brandInfluencerId, allowManualEntr
         <span>Performance — all campaigns combined</span>
         {allowManualEntry && !manual && (
           <button type="button" className="manual-link"
-            onClick={() => setManual({ clicks: String(stats.clicks), sales: String(stats.sales), revenue: String(stats.revenue), productCost: String(stats.productCost) })}>
+            onClick={() => setManual({ clicks: String(stats.clicks), sales: String(stats.sales), revenue: String(stats.revenue), productCost: String(stats.productCost), agreedRate: stats.agreedRate ? String(stats.agreedRate) : "", feesPaid: stats.feesSource === "paid" ? String(stats.feesPaid) : "", commissionRate: stats.commissionRate != null ? String(stats.commissionRate) : "", commissionPaid: stats.commissionSource === "paid" ? String(stats.commissionPaid) : "" })}>
             Enter manually
           </button>
         )}
@@ -132,6 +140,10 @@ export function InfluencerStatsTab({ brandId, brandInfluencerId, allowManualEntr
             <label>Total sales<input className="manual-input" inputMode="numeric" value={manual.sales} onChange={(e) => setManual((m) => m && { ...m, sales: e.target.value })} /></label>
             <label>Total revenue<input className="manual-input" inputMode="decimal" value={manual.revenue} onChange={(e) => setManual((m) => m && { ...m, revenue: e.target.value })} /></label>
             <label>Product cost<input className="manual-input" inputMode="decimal" value={manual.productCost} onChange={(e) => setManual((m) => m && { ...m, productCost: e.target.value })} /></label>
+            <label>Agreed rate<input className="manual-input" inputMode="decimal" placeholder="Flat fee" value={manual.agreedRate} onChange={(e) => setManual((m) => m && { ...m, agreedRate: e.target.value })} /></label>
+            <label>Fees paid<input className="manual-input" inputMode="decimal" placeholder="Blank = agreed rate" value={manual.feesPaid} onChange={(e) => setManual((m) => m && { ...m, feesPaid: e.target.value })} /></label>
+            <label>Commission rate (%)<input className="manual-input" inputMode="decimal" placeholder="e.g. 10" value={manual.commissionRate} onChange={(e) => setManual((m) => m && { ...m, commissionRate: e.target.value })} /></label>
+            <label>Commission paid<input className="manual-input" inputMode="decimal" placeholder="Blank = calculated" value={manual.commissionPaid} onChange={(e) => setManual((m) => m && { ...m, commissionPaid: e.target.value })} /></label>
           </div>
           {saveError && <div style={{ color: "#B42318", marginTop: 6 }}>{saveError}</div>}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginTop: 8 }}>
@@ -150,17 +162,28 @@ export function InfluencerStatsTab({ brandId, brandInfluencerId, allowManualEntr
       </div>
       <div className="breakdown-box">
         <strong>Spend breakdown:</strong>{" "}
-        {money(stats.productCost)} product COGS + {money(stats.feesPaid)} fees + {money(stats.commissionPaid)} commission
+        {money(stats.productCost)} product COGS + {money(stats.feesPaid)} fees{stats.feesSource === "paid" ? " (paid)" : stats.feesSource === "agreed" ? " (agreed rate)" : ""} + {money(stats.commissionPaid)} commission{stats.commissionSource === "paid" ? " (paid)" : stats.commissionSource === "goaffpro" ? " (GoAffPro)" : stats.commissionSource === "estimated" ? " (estimated)" : ""}
       </div>
 
-      <div className="stit">Engagement</div>
+      <div className="stit">Profile <span className="ssub">from the influencer&apos;s account</span></div>
       <div className="skg">
         <div className="skc"><div className="skv-dark">{compact(stats.followers)}</div><div className="skl">Followers</div></div>
         <div className="skc"><div className="skv-blue">{stats.engagementRate != null ? `${stats.engagementRate.toFixed(1)}%` : "—"}</div><div className="skl">Eng. rate</div></div>
+        <div className="skc" title="Flat fee + commission per sale"><div className="skv-green">{formatDealRate(stats.agreedRate, stats.commissionRate)}</div><div className="skl">Rate</div></div>
+      </div>
+
+      <div className="stit">
+        {posts === 1 ? "Post" : "Posts"} for your brand{" "}
+        <span className="ssub">{posts > 0 ? `${posts} posted · from the Post tab` : "none posted yet"}</span>
+      </div>
+      <div className="skg skg4">
         <div className="skc"><div className="skv-dark">{stats.likes.toLocaleString()}</div><div className="skl">Likes</div></div>
         <div className="skc"><div className="skv-dark">{stats.comments.toLocaleString()}</div><div className="skl">Comments</div></div>
         <div className="skc"><div className="skv-dark">{stats.views.toLocaleString()}</div><div className="skl">Views</div></div>
-        <div className="skc"><div className="skv-green">{stats.agreedRate ? money(stats.agreedRate) : "—"}</div><div className="skl">Rate</div></div>
+        <div className="skc" title="(likes + comments) ÷ followers ÷ posts">
+          <div className="skv-blue">{postEngRate != null ? `${postEngRate.toLocaleString(undefined, { maximumFractionDigits: postEngRate < 100 ? 1 : 0 })}%` : "—"}</div>
+          <div className="skl">Post eng. rate</div>
+        </div>
       </div>
 
       <div className="stit">Avg Metrics</div>
@@ -184,6 +207,8 @@ export function InfluencerStatsTab({ brandId, brandInfluencerId, allowManualEntr
       <style jsx>{`
         .stit { font-size:10px; font-weight:700; color:#9ca3af; text-transform:uppercase; letter-spacing:.08em; padding:12px 0 8px; border-bottom:1px solid #f3f4f6; margin-bottom:10px; }
         .skg { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:14px; }
+        .skg4 { grid-template-columns:repeat(4,1fr); }
+        .ssub { font-weight:500; text-transform:none; letter-spacing:0; color:#b0b5bd; margin-left:4px; }
         .skc { background:#f9fafb; border-radius:10px; padding:10px 12px; text-align:center; border:1px solid #f3f4f6; }
         .skl { font-size:9px; font-weight:600; color:#9ca3af; text-transform:uppercase; letter-spacing:.06em; margin-top:3px; }
         .skv-green { font-size:16px; font-weight:700; color:#1fae5b; }

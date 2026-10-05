@@ -70,6 +70,14 @@ export interface BrandInfluencerRecord {
   clicks: number
   sales_count: number
   gmv: number
+  /** Fees paid, else agreed rate. */
+  fees_resolved?: number
+  fees_source?: "paid" | "agreed" | "none"
+  /** Commission rate (%). */
+  commission_resolved?: number | null
+  /** Commission paid, else GoAffPro, else revenue × rate. */
+  commission_paid_resolved?: number
+  commission_source?: "paid" | "goaffpro" | "estimated" | "none"
   created_at: string
   updated_at: string
   influencer: InfluencerRecord

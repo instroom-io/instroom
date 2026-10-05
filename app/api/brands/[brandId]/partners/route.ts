@@ -4,6 +4,8 @@ import { prisma } from "@/lib/prisma"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { checkBrandAccess } from "@/lib/brand-access"
+import { resolveFees, resolveCommissionRate, resolveCommission } from "@/lib/pipeline-transitions"
+import { goaffproCommissionByInfluencer } from "@/lib/goaffpro-commission"
 
 // Re-flattens the Attribution relation back onto the response object so
 // consumers (BrandPartnersPage.tsx etc.) keep reading these as top-level
@@ -24,6 +26,8 @@ const PARTNER_SELECT = {
   post_url: true,
   notes: true,
   agreed_rate: true,
+  // Used for fees/commission; stripped from the response.
+  product_details: true,
   internal_rating: true,
   likes_count: true,
   comments_count: true,
@@ -101,6 +105,36 @@ function flattenAttribution<T extends { attribution?: { affiliate_id: string | n
   }
 }
 
+/** Fees and commission, resolved with the same rules as Stats and Analytics. */
+function withResolvedFees<T extends {
+  id: string; product_details: string | null; agreed_rate: unknown; gmv: number
+  partner: { fees_paid: unknown; default_commission: unknown; commission_paid: unknown } | null
+}>(bi: T, goaffpro: Map<string, number>) {
+  const { product_details, ...rest } = bi
+  const fees = resolveFees({
+    partnerFeesPaid: bi.partner?.fees_paid as number | null | undefined,
+    productDetails: product_details,
+    agreedRate: bi.agreed_rate as number | null | undefined,
+  })
+  const commission = resolveCommissionRate({
+    partnerDefault: bi.partner?.default_commission as number | null | undefined,
+    productDetails: product_details,
+  })
+  const commissionPaid = resolveCommission({
+    partnerCommissionPaid: bi.partner?.commission_paid as number | null | undefined,
+    productDetails: product_details,
+    goaffproCommission: goaffpro.get(bi.id) ?? null,
+    revenue: bi.gmv,
+    commissionRate: commission,
+  })
+  return {
+    ...rest,
+    fees_resolved: fees.amount, fees_source: fees.source,
+    commission_resolved: commission,
+    commission_paid_resolved: commissionPaid.amount, commission_source: commissionPaid.source,
+  }
+}
+
 export async function GET(
   req: NextRequest,
   context: { params: Promise<{ brandId: string }> }
@@ -151,7 +185,8 @@ export async function GET(
       orderBy: { created_at: "desc" },
     })
 
-    return NextResponse.json({ data: brandInfluencers.map(flattenAttribution) })
+    const goaffpro = await goaffproCommissionByInfluencer(brandId, brandInfluencers.map(bi => bi.id))
+    return NextResponse.json({ data: brandInfluencers.map(bi => withResolvedFees(flattenAttribution(bi), goaffpro)) })
   } catch (error) {
     console.error("[GET /partners]", error)
     return NextResponse.json({ error: "Failed to fetch partners" }, { status: 500 })
@@ -242,7 +277,8 @@ export async function POST(
       select: PARTNER_SELECT,
     })
 
-    return NextResponse.json({ data: flattenAttribution(brandInfluencer) }, { status: 201 })
+    const goaffpro = await goaffproCommissionByInfluencer(brandId, [brandInfluencer.id])
+    return NextResponse.json({ data: withResolvedFees(flattenAttribution(brandInfluencer), goaffpro) }, { status: 201 })
   } catch (error) {
     console.error("[POST /partners]", error)
     return NextResponse.json({ error: "Failed to add partner" }, { status: 500 })

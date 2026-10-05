@@ -46,6 +46,10 @@ export interface ClosedInfluencer {
   platform: string
   followers: string
   followerCount: number
+  /** Profile averages from the lookup. */
+  avgLikes?: number | null
+  avgComments?: number | null
+  avgViews?: number | null
   engagementRate: string
   niche: string
   location: string
@@ -66,6 +70,8 @@ export interface ClosedInfluencer {
   contentStatus: string | null
 
   agreedRate: number | null
+  /** Commission rate (%), if set. */
+  commissionRate?: number | null
   currency: string | null
   deliverables: string | null
   deadline: string | null

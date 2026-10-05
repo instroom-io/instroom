@@ -63,6 +63,10 @@ import { DeclineModal } from "@/components/shared/decline-modal"
 import { StageActionButton } from "@/components/shared/stage-action-button"
 import { InfoTooltip } from "@/components/shared/anchored-tooltip"
 import { DELIVERABLE_COLLAB_TYPES, MAX_DELIVERABLES } from "@/lib/deliverables"
+import { PAID_COLLAB_TYPES } from "@/components/pipeline/post-tracker-readonly-tabs"
+
+/** Commission-based types; the hand-over asks for the rate. */
+const COMMISSION_COLLAB_TYPES = new Set(["affiliate", "paid-affiliate", "tiktok-shop", "tiktok-shop-paid"])
 import { useBrandTaxonomy } from "@/hooks/useBrandTaxonomy"
 import {
   allowedTransitions,
@@ -70,6 +74,7 @@ import {
   isTransitionAllowed,
   suggestedTransitions,
   transitionRefusalReason,
+  formatDealRate,
 } from "@/lib/pipeline-transitions"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -321,13 +326,13 @@ function influencerToPartner(inf: PipelineInfluencer, brandId?: string): Partner
     // filter).
     plat:         inf.platform || "",
     niche:        inf.niche || "",
-    gend:         "",
+    gend:         inf.gender || "",
     loc:          inf.location || "",
     tier:         "",
     tierOverride: null,
     onRet:        false,
     retFee:       0,
-    defComm:      0,
+    defComm:      inf.commissionRate ?? 0,
     commSt:       inf.pipelineStatus || "Pending",
     clicks:       inf.clicks || 0,
     cvr:          inf.clicks > 0 ? (inf.salesCount / inf.clicks) * 100 : 0,
@@ -448,15 +453,22 @@ function TagSelect({ label, options, selected, onChange, colorClass = "bg-[#1FAE
 // Now fires when moving TO "Deal Agreed" — user picks collab type first, THEN it moves
 interface CollabTypeModalProps {
   influencer: PipelineInfluencer
-  /** `deliverables` is set for Gifting / Paid types — one name per expected post. */
-  onConfirm: (collabType: CollabType, deliverables?: string[]) => void
+  /** agreedRate for paid types; commissionRate (%) for commission types. */
+  onConfirm: (collabType: CollabType, deliverables?: string[], agreedRate?: number, commissionRate?: number) => void
   onCancel: () => void
   /** Set when the modal drives a bulk move — one collab type applies to all. */
   bulkCount?: number
 }
 
 function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabTypeModalProps) {
-  const [selectedType, setSelectedType] = useState<CollabType | null>(null)
+  const [selectedType, setSelectedType] = useState<CollabType | null>(() =>
+    !bulkCount && COLLAB_TYPES.some((c) => c.id === influencer.collabType) ? (influencer.collabType as CollabType) : null
+  )
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onCancel() }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [onCancel])
   // Campaign deliverables for Post Tracker — one entry per expected post.
   const [deliverableNames, setDeliverableNames] = useState<string[]>([""])
   const initials = influencer.influencer.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()
@@ -465,6 +477,19 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
   const needsDeliverables = selectedType !== null && DELIVERABLE_COLLAB_TYPES.has(selectedType)
   const setDeliverableCount = (n: number) =>
     setDeliverableNames((prev) => Array.from({ length: n }, (_, i) => prev[i] ?? ""))
+
+  // Flat fee: required for paid types; not asked on bulk moves.
+  const [flatFee, setFlatFee] = useState(influencer.agreedRate ? String(influencer.agreedRate) : "")
+  const [feeTouched, setFeeTouched] = useState(false)
+  const needsFee = !bulkCount && selectedType !== null && PAID_COLLAB_TYPES.has(selectedType)
+  const parsedFee = Number(flatFee.replace(/[$,\s]/g, ""))
+  const feeValid = flatFee.trim() !== "" && Number.isFinite(parsedFee) && parsedFee > 0
+
+  const [commission, setCommission] = useState(influencer.commissionRate != null ? String(influencer.commissionRate) : "")
+  const needsCommission = !bulkCount && selectedType !== null && COMMISSION_COLLAB_TYPES.has(selectedType)
+  const parsedCommission = Number(commission.replace(/[%\s]/g, ""))
+  const commissionBlank = commission.trim() === ""
+  const commissionValid = commissionBlank || (Number.isFinite(parsedCommission) && parsedCommission >= 0 && parsedCommission <= 100)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4" onClick={onCancel}>
@@ -498,7 +523,7 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
             ) : (
               <>
                 {influencer.profileImageUrl ? (
-                  <img src={influencer.profileImageUrl} alt={influencer.influencer} className="w-10 h-10 rounded-full object-cover" />
+                  <ProfilePicture src={influencer.profileImageUrl} name={influencer.influencer} handle={influencer.handle} size={40} />
                 ) : (
                   <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center text-green-600 font-semibold text-sm">{initials}</div>
                 )}
@@ -559,15 +584,18 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Campaign Deliverables</p>
               <label className="flex items-center gap-2 text-[11px] text-gray-500">
                 How many?
-                <select
-                  value={deliverableNames.length}
-                  onChange={(e) => setDeliverableCount(parseInt(e.target.value, 10))}
-                  className="text-xs px-2 py-1 rounded-lg border border-gray-200 bg-white text-gray-700 focus:outline-none focus:border-green-500"
-                >
-                  {Array.from({ length: MAX_DELIVERABLES }, (_, i) => i + 1).map((v) => (
-                    <option key={v} value={v}>{v}</option>
-                  ))}
-                </select>
+                <span className="relative inline-flex items-center">
+                  <select
+                    value={deliverableNames.length}
+                    onChange={(e) => setDeliverableCount(parseInt(e.target.value, 10))}
+                    className="appearance-none h-8 w-16 pl-3 pr-7 text-xs font-medium text-gray-700 bg-white border border-gray-200 rounded-lg cursor-pointer hover:border-gray-300 focus:outline-none focus:border-green-500"
+                  >
+                    {Array.from({ length: MAX_DELIVERABLES }, (_, i) => i + 1).map((v) => (
+                      <option key={v} value={v}>{v}</option>
+                    ))}
+                  </select>
+                  <IconChevronDown size={14} className="pointer-events-none absolute right-2 text-gray-400" />
+                </span>
               </label>
             </div>
             <div className="flex flex-col gap-2">
@@ -589,8 +617,53 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
           </div>
         )}
 
+        {(needsFee || needsCommission) && (
+          <div className="px-4 sm:px-6 pt-2 pb-4">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Payment</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {needsFee && (
+                <div>
+                  <p className="text-[11px] font-semibold text-gray-600 mb-1.5">Flat fee (agreed rate)</p>
+                  <div className={`flex items-center gap-2 h-9 px-3 bg-white border rounded-lg ${feeTouched && !feeValid ? "border-red-300" : "border-gray-200 focus-within:border-green-500"}`}>
+                    <span className="text-xs font-semibold text-gray-400">$</span>
+                    <input
+                      value={flatFee}
+                      inputMode="decimal"
+                      placeholder="e.g. 500"
+                      onChange={(e) => setFlatFee(e.target.value)}
+                      onBlur={() => setFeeTouched(true)}
+                      className="flex-1 min-w-0 text-xs text-gray-700 bg-transparent focus:outline-none"
+                    />
+                  </div>
+                  <p className={`text-[11px] mt-1.5 ${feeTouched && !feeValid ? "text-red-500" : "text-gray-400"}`}>
+                    {feeTouched && !feeValid ? "Enter the flat fee agreed with the influencer." : "Required. Used for spend and ROAS."}
+                  </p>
+                </div>
+              )}
+              {needsCommission && (
+                <div>
+                  <p className="text-[11px] font-semibold text-gray-600 mb-1.5">Commission rate</p>
+                  <div className={`flex items-center gap-2 h-9 px-3 bg-white border rounded-lg ${commissionValid ? "border-gray-200 focus-within:border-green-500" : "border-red-300"}`}>
+                    <input
+                      value={commission}
+                      inputMode="decimal"
+                      placeholder="e.g. 10"
+                      onChange={(e) => setCommission(e.target.value)}
+                      className="flex-1 min-w-0 text-xs text-gray-700 bg-transparent focus:outline-none"
+                    />
+                    <span className="text-xs font-semibold text-gray-400">%</span>
+                  </div>
+                  <p className={`text-[11px] mt-1.5 ${commissionValid ? "text-gray-400" : "text-red-500"}`}>
+                    {commissionValid ? "Optional. Commission per sale." : "Enter a percentage between 0 and 100."}
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Footer */}
-        <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 px-4 sm:px-6 py-3 sm:py-4 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl">
+        <div className="sticky bottom-0 z-10 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 px-4 sm:px-6 py-3 sm:py-4 border-t border-gray-100 bg-gray-50 rounded-b-2xl">
           <p className="text-[11px] text-gray-400">
             This marks the deal agreed and moves the influencer to Post Tracker
           </p>
@@ -602,8 +675,14 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
               Cancel
             </button>
             <button
-              onClick={() => selectedType && onConfirm(selectedType, needsDeliverables ? deliverableNames : undefined)}
-              disabled={!selectedType}
+              onClick={() => selectedType && onConfirm(
+                selectedType,
+                needsDeliverables ? deliverableNames : undefined,
+                needsFee ? parsedFee : undefined,
+                needsCommission && !commissionBlank ? parsedCommission : undefined,
+              )}
+              disabled={!selectedType || (needsFee && !feeValid) || (needsCommission && !commissionValid)}
+              title={needsFee && !feeValid ? "Enter the flat fee first" : undefined}
               className="px-4 sm:px-6 py-2 text-sm font-medium text-white bg-green-500 rounded-lg hover:bg-green-600 transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 whitespace-nowrap"
             >
               <IconArrowRight size={14} />
@@ -715,20 +794,27 @@ function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApprov
               ? COLLAB_TYPES.find((c) => c.id === influencer.collabType)
               : undefined
 
+          const deal = collab ? formatDealRate(influencer.agreedRate, influencer.commissionRate) : "—"
           if (!inPostTracker && !collab) return null
 
+          const chip = "inline-flex items-center gap-1 h-5 px-2 text-[10px] font-medium rounded-full border [&_svg]:w-2.5 [&_svg]:h-2.5 [&_svg]:flex-shrink-0"
           return (
             <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
               {inPostTracker && (
-                <span className="text-[10px] text-green-600 bg-green-50 rounded-full px-2 py-0.5 inline-flex items-center gap-1 font-medium">
+                <span className={`${chip} text-green-700 bg-green-50 border-green-200`}>
                   <IconPackage size={10} />
                   In Post Tracker
                 </span>
               )}
               {collab && (
-                <span className={`inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full border ${collab.color.split(" ")[0]} ${collab.color.split(" ")[1]}`}>
+                <span className={`${chip} ${collab.color.split(" ")[0]} ${collab.color.split(" ")[1]}`}>
                   {collab.icon}
                   {collab.title}
+                </span>
+              )}
+              {deal !== "—" && (
+                <span className={`${chip} text-gray-700 bg-gray-50 border-gray-200`} title="Flat fee + commission per sale">
+                  {deal}
                 </span>
               )}
             </div>
@@ -741,7 +827,7 @@ function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApprov
           destination comes from getNextStages, so the tooltip always names the
           stage this card would actually land in rather than a fixed string. */}
       {nextStages.length > 0 && !terminal && (
-        <div className="flex gap-1.5 mt-2 pt-1.5 border-t border-gray-100 flex-nowrap">
+        <div className="flex gap-1.5 mt-2 pt-1.5 border-t border-gray-100 flex-wrap">
           {/* The hand-over to Post Tracker, on the one stage it starts from.
               Dropping a card on the Deal Agreed column used to trigger this
               cascade implicitly, which left the row at the terminal
@@ -769,7 +855,7 @@ function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApprov
               key={stage}
               destination={stage}
               label={`Move influencer to ${stage}`}
-              tone={stage === "Not Interested" ? "danger" : "forward"}
+              tone={stage === "Not Interested" ? (influencer.pipelineStatus === "For Order Creation" ? "dangerSubtle" : "danger") : "forward"}
               disabled={!canApproveInfluencers}
               disabledReason="Only Owners and Managers can approve influencers"
               icon={stage === "Not Interested"
@@ -1035,9 +1121,9 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   // Confirming a Collaboration Type is the single action that both marks the
   // deal agreed and moves the influencer into Post Tracker with its default
   // initial status — no separate "Move to Post Tracker" click needed anymore.
-  const handleCollabTypeConfirm = async (collabType: CollabType, deliverables?: string[]) => {
+  const handleCollabTypeConfirm = async (collabType: CollabType, deliverables?: string[], agreedRate?: number, commissionRate?: number) => {
     if (!pendingCollabId || !collabModalInfluencer) return
-    const success = await updateStatus(pendingCollabId, "Deal Agreed", { collaborationType: collabType, campaignDeliverables: deliverables })
+    const success = await updateStatus(pendingCollabId, "Deal Agreed", { collaborationType: collabType, campaignDeliverables: deliverables, agreedRate, commissionRate })
     const collabName = COLLAB_TYPES.find((c) => c.id === collabType)?.title ?? collabType
     toast(
       success

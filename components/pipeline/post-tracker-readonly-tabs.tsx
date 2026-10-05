@@ -47,6 +47,19 @@ const Field = ({ label, value }: { label: string; value: string | number | null 
   <div className="pfg"><div className="pfl">{label}</div><input className="pfi" value={value == null || value === "" ? "—" : String(value)} readOnly /></div>
 )
 
+/** Loading, or a not-found note linking to Post Tracker. */
+export function ReadOnlyTabPlaceholder({ loading, brandId }: { loading: boolean; brandId?: string }) {
+  if (loading) return <div style={{ fontSize: 12, color: "#9ca3af" }}>Loading…</div>
+  return (
+    <div style={{ fontSize: 12, color: "#6b7280", background: "#f9fafb", border: "1px solid #f3f4f6", borderRadius: 8, padding: "10px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+      <span>Couldn&apos;t find this influencer&apos;s Post Tracker details.</span>
+      <Link href={brandId ? `/dashboard/post-tracker?brandId=${brandId}` : "/dashboard/post-tracker"} style={{ color: "#0f6b3e", fontWeight: 600, whiteSpace: "nowrap" }}>
+        Open Post Tracker →
+      </Link>
+    </div>
+  )
+}
+
 export function ReadOnlyOrderTab({ inf, brandId }: { inf: ClosedInfluencer; brandId?: string }) {
   let productDetails = ""
   try { productDetails = (JSON.parse(inf.productDetails || "{}") as { note?: string }).note || "" } catch { productDetails = inf.productDetails || "" }

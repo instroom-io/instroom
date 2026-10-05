@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
-import { productCostFromDetails } from "@/lib/pipeline-transitions"
+import { productCostFromDetails, resolveFees, resolveCommission, resolveCommissionRate } from "@/lib/pipeline-transitions"
+import { goaffproCommissionByInfluencer } from "@/lib/goaffpro-commission"
+import { getDeliverableProgress } from "@/lib/deliverables"
 
 // GET — one influencer's numbers for the shared Stats tab (Pipeline and Post Tracker drawers).
 export async function GET(
@@ -40,12 +42,13 @@ export async function GET(
         shipped_at: true,
         delivered_at: true,
         posted_at: true,
+        post_url: true,
         product_details: true,
         influencer: {
           select: { follower_count: true, engagement_rate: true, avg_likes: true, avg_comments: true, avg_views: true },
         },
         attribution: { select: { clicks: true, sales_count: true, gmv: true } },
-        partner: { select: { product_cost: true, commission_paid: true } },
+        partner: { select: { product_cost: true, fees_paid: true, commission_paid: true, default_commission: true } },
       },
     })
     if (!bi) {
@@ -53,25 +56,46 @@ export async function GET(
     }
 
     const agreedRate = bi.agreed_rate ? Number(bi.agreed_rate) : null
-    // Same product cost and commission as Analytics; fees = the agreed rate, as the Pipeline showed.
+    // Same product cost, fees and commission rules as Analytics.
     const productCost = bi.partner ? Number(bi.partner.product_cost) : productCostFromDetails(bi.product_details)
-    const commissionPaid = bi.partner ? Number(bi.partner.commission_paid) : 0
-    const feesPaid = agreedRate ?? 0
+    const fees = resolveFees({ partnerFeesPaid: bi.partner?.fees_paid, productDetails: bi.product_details, agreedRate })
+    const feesPaid = fees.amount
+    const revenue = bi.attribution?.gmv ? Number(bi.attribution.gmv) : 0
+    const commissionRate = resolveCommissionRate({ partnerDefault: bi.partner?.default_commission, productDetails: bi.product_details })
+    const goaffpro = (await goaffproCommissionByInfluencer(brandId, [brandInfluencerId])).get(brandInfluencerId) ?? null
+    const commission = resolveCommission({
+      partnerCommissionPaid: bi.partner?.commission_paid,
+      productDetails: bi.product_details,
+      goaffproCommission: goaffpro,
+      revenue,
+      commissionRate,
+    })
+    const commissionPaid = commission.amount
+
+    // Posted deliverables, or 1 for a single post URL.
+    let paidCollab: unknown = null
+    try { paidCollab = JSON.parse(bi.product_details || "{}")?.paidCollab ?? null } catch { /* unreadable details */ }
+    const progress = getDeliverableProgress(paidCollab, bi.post_url)
+    const postedPosts = progress.total > 0 ? progress.posted : bi.post_url?.trim() ? 1 : 0
 
     return NextResponse.json({
       data: {
         clicks: bi.attribution?.clicks ?? 0,
         sales: bi.attribution?.sales_count ?? 0,
-        revenue: bi.attribution?.gmv ? Number(bi.attribution.gmv) : 0,
+        revenue,
         productCost,
         feesPaid,
+        feesSource: fees.source,
         commissionPaid,
+        commissionSource: commission.source,
+        commissionRate,
         totalSpend: productCost + feesPaid + commissionPaid,
         followers: bi.influencer.follower_count ?? null,
         engagementRate: bi.influencer.engagement_rate != null ? Number(bi.influencer.engagement_rate) : null,
         likes: bi.likes_count ?? 0,
         comments: bi.comments_count ?? 0,
         views: bi.views_count ?? 0,
+        postedPosts,
         agreedRate,
         avgLikes: bi.influencer.avg_likes ?? null,
         avgComments: bi.influencer.avg_comments ?? null,

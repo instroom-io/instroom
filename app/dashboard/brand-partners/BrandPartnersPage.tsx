@@ -7,6 +7,7 @@ import NewCampaignModal from "./NewCampaignModal"
 import InfluencerProfileSidebar from "./InfluencerProfileSidebar"
 import { IconSearch, IconFilter, IconBuildingStore, IconX } from "@tabler/icons-react"
 import { getPlatformLabel } from "@/components/table-sheet/utils"
+import { resolveFees } from "@/lib/pipeline-transitions"
 import { DEFAULT_PLATFORMS } from "@/components/table-sheet/constants"
 import { ReactNode } from "react"
 import { useBrandTaxonomy } from "@/hooks/useBrandTaxonomy"
@@ -301,11 +302,10 @@ export default function BrandPartnersPage({ brandId }: Props) {
       // so it's folded into totalSpend below instead of treated as rev.
       const gmv        = bi.gmv != null ? Number(bi.gmv) : 0
       const prodCost   = bp ? Number(bp.product_cost) : 0
-      const feesPaid   = bp ? Number(bp.fees_paid) : 0
-      const commPaid   = bp ? Number(bp.commission_paid) : 0
-      const agreedRate = bi.agreed_rate ? Number(bi.agreed_rate) : 0
+      const feesPaid   = bi.fees_resolved ?? resolveFees({ partnerFeesPaid: bp?.fees_paid, productDetails: bi.product_details, agreedRate: bi.agreed_rate }).amount
+      const commPaid   = bi.commission_paid_resolved ?? (bp ? Number(bp.commission_paid) : 0)
 
-      const totalSpend = prodCost + feesPaid + commPaid + agreedRate
+      const totalSpend = prodCost + feesPaid + commPaid
 
       const clicks = bi.clicks ?? 0
       const sales  = bi.sales_count ?? 0
@@ -337,7 +337,7 @@ export default function BrandPartnersPage({ brandId }: Props) {
         tierOverride: bp?.tier_override ?? null,
         onRet: bp?.on_retainer ?? false,
         retFee: bp ? Number(bp.retainer_fee) : 0,
-        defComm: bp ? Number(bp.default_commission) : 0,
+        defComm: bi.commission_resolved ?? (bp ? Number(bp.default_commission) : 0),
         commSt: bi.contact_status || "not_contacted",
         clicks,
         cvr,
@@ -1117,7 +1117,6 @@ export default function BrandPartnersPage({ brandId }: Props) {
                               <div style={{ fontWeight: 600 }}>{formatMoney(p.totalSpend)}</div>
                               <div style={{ fontSize: 10, color: "#888" }}>
                                 {formatMoney(p.prodCost)} COGS + {formatMoney(p.feesPaid)} fees
-                                {p.agreed_rate ? ` + ${formatMoney(p.agreed_rate)} fee` : ""}
                               </div>
                             </>
                           ) : (
@@ -1417,7 +1416,6 @@ export default function BrandPartnersPage({ brandId }: Props) {
                   {campSpend > 0 && (
                     <div style={{ fontSize: 10, color: "#888", marginTop: 3 }}>
                       {formatMoney(campCOGS)} COGS · {formatMoney(campFees)} fees · {formatMoney(campComm)} comm
-                      {campFeesAgreed ? ` · ${formatMoney(campFeesAgreed)} agreed fees` : ""}
                     </div>
                   )}
                 </div>

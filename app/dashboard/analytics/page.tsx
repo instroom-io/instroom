@@ -229,9 +229,6 @@ const SectionCard = ({
   className?: string
   children: React.ReactNode
 }) => (
-  /* No h-full: the analytics grids are items-start, and a height:100% here
-     resolved against the grid row and re-stretched every short card — the
-     "excessive empty space" in the shorter of any two paired cards. */
   <div className={`${CARD} ${CARD_PAD} flex min-w-0 flex-col ${className}`}>
     <h3 className={`${CARD_TITLE} mb-3.5 flex flex-wrap items-baseline gap-x-2`}>
       {title}
@@ -1045,7 +1042,7 @@ function AnalyticsPageContent() {
     const contentSaved = dataToUse.filter(i => i.contentSaved === true).length
     const adCodesGiven = dataToUse.filter(i => i.pipelineStatus === "Posted" && i.adCode === true).length
 
-    // Aging data for No Post
+    // Aging data for Awaiting post
     const noPostItems = dataToUse.filter(i => i.pipelineStatus === 'Content Pending' && i.deliveredDaysAgo)
     // Every bucket previously reported percentage: 25 and percent: "—", i.e. four
     // identical bars regardless of the data. Both are now derived from the counts.
@@ -1214,7 +1211,7 @@ function AnalyticsPageContent() {
     section('POST SUMMARY')
     header('Metric', 'Value', 'Basis')
     row('Closed collaborations', metrics.closedCollaborations, 'agreed to work')
-    row('Received product', metrics.receivedProduct, `posted (${metrics.posted}) + no post (${metrics.noPost})`)
+    row('Received product', metrics.receivedProduct, `posted (${metrics.posted}) + awaiting post (${metrics.noPost})`)
     row('Posted', metrics.posted, `of ${metrics.receivedProduct} who received`)
     row('Post rate', `${Math.round(metrics.postRate)}%`, 'posted ÷ received product')
 
@@ -1223,7 +1220,7 @@ function AnalyticsPageContent() {
     row('No Order Yet', metrics.noOrderYet, pctOf(metrics.noOrderYet, metrics.totalOutreach))
     row('In Transit', metrics.inTransit, pctOf(metrics.inTransit, metrics.totalOutreach))
     row('Delivery Problem', metrics.deliveryProblem, pctOf(metrics.deliveryProblem, metrics.totalOutreach))
-    row('No Post', metrics.noPost, pctOf(metrics.noPost, metrics.totalOutreach))
+    row('Awaiting post', metrics.noPost, pctOf(metrics.noPost, metrics.totalOutreach))
     row('Posted', metrics.posted, pctOf(metrics.posted, metrics.totalOutreach))
 
     section('NO-POST AGEING (since delivery)')
@@ -1588,7 +1585,7 @@ function AnalyticsPageContent() {
               />
             </div>
 
-            <div className="grid items-start gap-4 md:grid-cols-2">
+            <div className="grid items-stretch gap-4 md:grid-cols-2">
               {/* Campaign Funnel */}
               <SectionCard title="Campaign funnel">
                 <FunnelStep index={1} name="Reached out" value={metrics.totalOutreach} total={metrics.totalOutreach} color="#1FAE5B" />
@@ -1675,7 +1672,7 @@ function AnalyticsPageContent() {
             </div>
 
             {/* Hard vs Soft Pass Donut */}
-            <div className="grid items-start gap-4 md:grid-cols-2">
+            <div className="grid items-stretch gap-4 md:grid-cols-2">
               <SectionCard title="Hard pass vs Soft pass">
                 <DonutChart
                   segments={[
@@ -1723,8 +1720,8 @@ function AnalyticsPageContent() {
                 info="The same closed collaborations as the Campaign Summary: influencers who agreed and entered the post-collaboration flow. This is where the funnel continues — from a closed deal to a published post."
               />
               <MetricCard
-                label="Received product" value={metrics.receivedProduct} subLabel={`posted (${metrics.posted}) + no post (${metrics.noPost})`}
-                info="Influencers whose product has arrived, so a post is now expected: Posted plus No Post (delivered but still waiting on content). Influencers with no order yet, in transit, or with a delivery problem are excluded, and it is the denominator of Post rate."
+                label="Received product" value={metrics.receivedProduct} subLabel={`posted (${metrics.posted}) + awaiting post (${metrics.noPost})`}
+                info="Influencers whose product has arrived, so a post is now expected: Posted plus Awaiting post (delivered but not posted yet). Influencers with no order yet, in transit, or with a delivery problem are excluded, and it is the denominator of Post rate."
               />
               <MetricCard
                 label="Posted" value={metrics.posted} subLabel={`of ${metrics.receivedProduct} who received`} isGreen
@@ -1736,40 +1733,42 @@ function AnalyticsPageContent() {
               />
             </div>
 
-            <div className="grid items-start gap-4 md:grid-cols-2">
+            <div className="grid items-stretch gap-4 md:grid-cols-2">
               <SectionCard
                 title="Pipeline status breakdown"
-                footnote="% is each state's share of all influencers in view — these stages are mutually exclusive. Post rate uses received (Posted + No Post) as its base."
+                footnote="% is each state's share of all influencers in view — these stages are mutually exclusive. Post rate uses received (Posted + Awaiting post) as its base."
               >
                 <PipelineItem status="No Order Yet" count={metrics.noOrderYet} total={metrics.totalOutreach} color="#B4B2A9" />
                 <PipelineItem status="In Transit" count={metrics.inTransit} total={metrics.totalOutreach} color="#2C8EC4" />
                 <PipelineItem status="Delivery Problem" count={metrics.deliveryProblem} total={metrics.totalOutreach} color="#E24B4A" />
-                <PipelineItem status="No Post" count={metrics.noPost} total={metrics.totalOutreach} color="#F4B740" agingData={metrics.agingData} />
+                <PipelineItem status="Awaiting post" count={metrics.noPost} total={metrics.totalOutreach} color="#F4B740" agingData={metrics.agingData} />
                 <PipelineItem status="Posted" count={metrics.posted} total={metrics.totalOutreach} color="#1FAE5B" />
               </SectionCard>
 
-              <SectionCard title="Post rate by platform" hint="Posted ÷ Received">
-                {Object.entries(metrics.platformStats).map(([platform, stats]) => (
-                  <PlatformRow key={platform} platform={platform} posted={stats.posted} received={stats.received}
-                    color={platformConfig[platform as keyof typeof platformConfig].color}
-                    iconBg={platformConfig[platform as keyof typeof platformConfig].bg} />
-                ))}
-              </SectionCard>
-            </div>
+              <div className="flex flex-col gap-4">
+                <SectionCard title="Post rate by platform" hint="Posted ÷ Received">
+                  {Object.entries(metrics.platformStats).map(([platform, stats]) => (
+                    <PlatformRow key={platform} platform={platform} posted={stats.posted} received={stats.received}
+                      color={platformConfig[platform as keyof typeof platformConfig].color}
+                      iconBg={platformConfig[platform as keyof typeof platformConfig].bg} />
+                  ))}
+                </SectionCard>
 
-            <SectionCard title="Posted vs Not Posted">
-              <DonutChart
-                segments={[
-                  { label: 'Posted', value: metrics.posted, color: '#1FAE5B' },
-                  { label: 'No Post', value: metrics.noPost, color: '#F4B740' },
-                  { label: 'No Order Yet', value: metrics.noOrderYet, color: '#B4B2A9' },
-                  { label: 'In Transit', value: metrics.inTransit, color: '#2C8EC4' },
-                  { label: 'Delivery Problem', value: metrics.deliveryProblem, color: '#E24B4A' }
-                ]}
-                centerLabel={Math.round(metrics.postRate)}
-                centerSub="post rate"
-              />
-            </SectionCard>
+                <SectionCard title="Posted vs Not Posted" className="flex-1">
+                  <DonutChart
+                    segments={[
+                      { label: 'Posted', value: metrics.posted, color: '#1FAE5B' },
+                      { label: 'Awaiting post', value: metrics.noPost, color: '#F4B740' },
+                      { label: 'No Order Yet', value: metrics.noOrderYet, color: '#B4B2A9' },
+                      { label: 'In Transit', value: metrics.inTransit, color: '#2C8EC4' },
+                      { label: 'Delivery Problem', value: metrics.deliveryProblem, color: '#E24B4A' }
+                    ]}
+                    centerLabel={`${Math.round(metrics.postRate)}%`}
+                    centerSub="post rate"
+                  />
+                </SectionCard>
+              </div>
+            </div>
           </div>
         )}
 
@@ -1783,7 +1782,7 @@ function AnalyticsPageContent() {
               <StatTile value={formatMoney(Math.round(metrics.totalEMV))} label="Total EMV" />
             </div>
 
-            <div className="grid items-start gap-4 md:grid-cols-2">
+            <div className="grid items-stretch gap-4 md:grid-cols-2">
               <SectionCard
                 title="EMV by platform"
                 hint="(Estimated Media Value)"
@@ -1806,7 +1805,7 @@ function AnalyticsPageContent() {
               </SectionCard>
             </div>
 
-            <div className="grid items-start gap-4 md:grid-cols-2">
+            <div className="grid items-stretch gap-4 md:grid-cols-2">
               <SectionCard title="Views share by platform">
                 <DonutChart
                   segments={Object.entries(metrics.platformStats).map(([platform, stats]) => ({ label: platform, value: stats.views, color: platformConfig[platform as keyof typeof platformConfig].color }))}
@@ -1816,7 +1815,7 @@ function AnalyticsPageContent() {
               <SectionCard title="EMV share by platform">
                 <DonutChart
                   segments={Object.entries(metrics.platformEMV).map(([platform, emv]) => ({ label: platform, value: Math.round(emv), color: platformConfig[platform as keyof typeof platformConfig].color }))}
-                  centerLabel={`$${Math.round(metrics.totalEMV / 1000)}K`} centerSub="total EMV"
+                  centerLabel={`$${formatNumber(Math.round(metrics.totalEMV))}`} centerSub="total EMV"
                 />
               </SectionCard>
             </div>
