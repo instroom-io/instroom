@@ -66,11 +66,15 @@ export async function PATCH(
 
     const { brandId, brandInfluencerId } = await params
     const body = await req.json()
-    const { coupon, affiliateLink, sparkAds, productCost, clicks, sales, revenue } = body as {
+    const { coupon, affiliateLink, sparkAds, productCost, feesPaid, agreedRate, commissionRate, commissionPaid, clicks, sales, revenue } = body as {
       coupon?: string | null
       affiliateLink?: string | null
       sparkAds?: string | null
       productCost?: string | number | null
+      feesPaid?: string | number | null
+      agreedRate?: string | number | null
+      commissionRate?: string | number | null
+      commissionPaid?: string | number | null
       clicks?: string | number | null
       sales?: string | number | null
       revenue?: string | number | null
@@ -95,14 +99,34 @@ export async function PATCH(
       return NextResponse.json({ error: "Revenue must be a positive number" }, { status: 400 })
     }
 
-    // "$1,250.50" → 1250.5; blank clears it; non-numbers are rejected.
-    let parsedProductCost: number | null | undefined
-    if (productCost !== undefined) {
-      const raw = String(productCost ?? "").replace(/[$,\s]/g, "")
-      parsedProductCost = raw === "" ? null : Number(raw)
-      if (parsedProductCost !== null && (!Number.isFinite(parsedProductCost) || parsedProductCost < 0)) {
-        return NextResponse.json({ error: "Product cost must be a positive number" }, { status: 400 })
-      }
+    // "$1,250.50" → 1250.5; blank clears it.
+    const parseMoney = (value: string | number | null | undefined): number | null | undefined | "invalid" => {
+      if (value === undefined) return undefined
+      const raw = String(value ?? "").replace(/[$,\s]/g, "")
+      if (raw === "") return null
+      const n = Number(raw)
+      return Number.isFinite(n) && n >= 0 ? n : "invalid"
+    }
+    const parsedProductCost = parseMoney(productCost)
+    const parsedFeesPaid = parseMoney(feesPaid)
+    if (parsedProductCost === "invalid") {
+      return NextResponse.json({ error: "Product cost must be a positive number" }, { status: 400 })
+    }
+    if (parsedFeesPaid === "invalid") {
+      return NextResponse.json({ error: "Fees paid must be a positive number" }, { status: 400 })
+    }
+    const parsedAgreedRate = parseMoney(agreedRate)
+    const parsedCommissionPaid = parseMoney(commissionPaid)
+    const rateMoney = parseMoney(typeof commissionRate === "string" ? commissionRate.replace(/%/g, "") : commissionRate)
+    const parsedCommissionRate = typeof rateMoney === "number" && rateMoney > 100 ? "invalid" : rateMoney
+    if (parsedCommissionPaid === "invalid") {
+      return NextResponse.json({ error: "Commission paid must be a positive number" }, { status: 400 })
+    }
+    if (parsedCommissionRate === "invalid") {
+      return NextResponse.json({ error: "Commission rate must be between 0 and 100" }, { status: 400 })
+    }
+    if (parsedAgreedRate === "invalid") {
+      return NextResponse.json({ error: "Agreed rate must be a positive number" }, { status: 400 })
     }
 
     // ── Access check — only brand owner/members can edit attribution data ────
@@ -159,18 +183,39 @@ export async function PATCH(
       },
     })
 
-    if (parsedProductCost !== undefined) {
+    if (parsedAgreedRate !== undefined) {
+      await prisma.brandInfluencer.update({
+        where: { id: brandInfluencerId },
+        data: { agreed_rate: parsedAgreedRate },
+      })
+    }
+
+    // Brand Partners keep these on the partner record; others in product_details.
+    if (parsedProductCost !== undefined || parsedFeesPaid !== undefined || parsedCommissionPaid !== undefined || parsedCommissionRate !== undefined) {
       if (brandInfluencer.partner) {
         await prisma.brandPartner.update({
           where: { id: brandInfluencer.partner.id },
-          data: { product_cost: parsedProductCost ?? 0 },
+          data: {
+            ...(parsedProductCost !== undefined ? { product_cost: parsedProductCost ?? 0 } : {}),
+            ...(parsedFeesPaid !== undefined ? { fees_paid: parsedFeesPaid ?? 0 } : {}),
+            ...(parsedCommissionPaid !== undefined ? { commission_paid: parsedCommissionPaid ?? 0 } : {}),
+            ...(parsedCommissionRate !== undefined ? { default_commission: parsedCommissionRate ?? 0 } : {}),
+          },
         })
       } else {
         let details: Record<string, unknown> | null = null
         try { details = brandInfluencer.product_details ? JSON.parse(brandInfluencer.product_details) : {} } catch { details = null }
         if (details && typeof details === "object") {
-          if (parsedProductCost === null) delete details.productCost
-          else details.productCost = parsedProductCost
+          const d = details
+          const setOrClear = (key: string, v: number | null | undefined) => {
+            if (v === undefined) return
+            if (v === null) delete d[key]
+            else d[key] = v
+          }
+          setOrClear("productCost", parsedProductCost)
+          setOrClear("feesPaid", parsedFeesPaid)
+          setOrClear("commissionPaid", parsedCommissionPaid)
+          setOrClear("commissionRate", parsedCommissionRate)
           await prisma.brandInfluencer.update({
             where: { id: brandInfluencerId },
             data: { product_details: JSON.stringify(details) },
@@ -204,6 +249,7 @@ export async function PATCH(
         affiliateLink: updated.affiliate_link,
         sparkAds: updated.spark_ads,
         ...(parsedProductCost !== undefined ? { productCost: parsedProductCost } : {}),
+        ...(parsedFeesPaid !== undefined ? { feesPaid: parsedFeesPaid } : {}),
       },
       goAffPro,
     })

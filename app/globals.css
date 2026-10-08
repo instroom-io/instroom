@@ -223,7 +223,7 @@ body:has(.sidebar-shell) {
    The transient "Saving" pill sits bottom-right on the Influencer List,
    Pipeline, Post Tracker and Brand Partners. The success/error outcome used to
    sit here too and now renders in `.notice-dock-top` below. Each of those pages
-   can also open a 600px influencer profile panel on that same edge, and that
+   can also open a 560px influencer profile panel on that same edge, and that
    panel is z-index 500 — so the dock (z-50) was painting underneath it. A save
    made from inside the panel produced feedback nobody could see.
 
@@ -249,7 +249,7 @@ body:has(.sidebar-shell) {
 
 body:has(.pp) .notice-dock,
 body:has([data-profile-panel]) .notice-dock {
-  right: calc(600px + 1rem);
+  right: calc(560px + 1rem);
 }
 
 /* On a narrow viewport the panel is full width (max-width: 100vw), so there is
@@ -304,7 +304,7 @@ body:has([data-profile-panel]) .notice-dock {
 
 body:has(.pp) .notice-dock-top,
 body:has([data-profile-panel]) .notice-dock-top {
-  right: calc(600px + 1rem);
+  right: calc(560px + 1rem);
 }
 
 @media (max-width: 640px) {
@@ -313,3 +313,11 @@ body:has([data-profile-panel]) .notice-dock-top {
     right: 1rem;
   }
 }
+
+/* Slim scrollbar for drawers. */
+.thin-scroll { scrollbar-width: thin; scrollbar-color: #d1d5db transparent; }
+.thin-scroll:hover { scrollbar-color: #9ca3af transparent; }
+.thin-scroll::-webkit-scrollbar { width: 6px; height: 4px; }
+.thin-scroll::-webkit-scrollbar-track { background: transparent; }
+.thin-scroll::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 6px; }
+.thin-scroll:hover::-webkit-scrollbar-thumb { background: #9ca3af; }

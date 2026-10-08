@@ -2,7 +2,7 @@
 // Pure utility functions — no React, no side effects
 
 import { CustomColumn, InfluencerRow, SortOrder } from "./types"
-import { PLATFORM_URL_MAP, CSV_EXPORT_FIELDS, IMPORT_FIELDS, platforms, DEFAULT_GENDERS, DEFAULT_CONTACT_STATUSES } from "./constants"
+import { PLATFORM_URL_MAP, CSV_EXPORT_FIELDS, IMPORT_FIELDS, platforms, DEFAULT_GENDERS, DEFAULT_CONTACT_STATUSES, STATUS_LABEL } from "./constants"
 import { isDraftHandle } from "@/lib/influencer-draft"
 import { derivePipelineStage } from "@/lib/pipeline-transitions"
 
@@ -466,6 +466,14 @@ export function normalizeUrl(str: string): string {
 // ── Approval state machine ────────────────────────────────────────────────────
 
 /** Pipeline stage for the drawer's read-only Stage box; "—" when not in the Pipeline. */
+/** Readable contact status; unknown values are tidied. */
+export function contactStatusLabel(status: string | null | undefined): string {
+  if (!status) return "—"
+  if (STATUS_LABEL[status]) return STATUS_LABEL[status]
+  const words = status.replace(/_/g, " ").trim()
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
 export function drawerStageLabel(row: Pick<InfluencerRow, "approval_status" | "contact_status" | "stage">): string {
   if (row.approval_status !== "Approved" && row.contact_status !== "not_interested") return "—"
   const stage = row.stage === "" || row.stage == null ? null : Number(row.stage)

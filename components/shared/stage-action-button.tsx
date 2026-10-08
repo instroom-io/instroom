@@ -34,7 +34,7 @@ export interface StageActionButtonProps {
    * (influencer vs post) and can describe a move the label abbreviates.
    */
   label: string
-  tone: "forward" | "danger" | "warning"
+  tone: "forward" | "danger" | "dangerSubtle" | "warning"
   onClick: (e: React.MouseEvent<HTMLButtonElement>) => void
   disabled?: boolean
   /** Shown instead of `label` when the control is disabled — the reason why. */
@@ -51,6 +51,10 @@ const TONE: Record<StageActionButtonProps["tone"], string> = {
   danger:
     "bg-red-600 text-white border-red-600 hover:bg-red-700 hover:border-red-700 " +
     "active:bg-red-800 focus-visible:ring-red-500",
+  // Outlined red for a secondary exit (active deals).
+  dangerSubtle:
+    "bg-white text-red-600 border-red-300 shadow-none hover:bg-red-50 hover:border-red-400 " +
+    "active:bg-red-100 focus-visible:ring-red-500",
   // Solid purple for flagging a problem — the row is stalled, not finished, so
   // it must not read as the same act as a terminal exit.
   warning:
@@ -87,10 +91,8 @@ export function StageActionButton({
       // that the portalled tooltip made unnecessary. Buttons split the row
       // evenly, and a long stage name truncates rather than widening the card.
       //
-      // `basis-20` is what makes a wrapping row behave: with a 0 basis, three
-      // buttons in a 200px column each shrink to an unreadable sliver rather
-      // than wrapping. At 5rem two still share a line and a third drops below.
-      className={`flex-1 basis-20 min-w-0 text-[11px] font-semibold px-2 py-1 rounded-lg border
+      // Content-width basis: wraps instead of truncating.
+      className={`flex-[1_1_auto] min-w-0 text-[11px] font-semibold px-2 py-1 rounded-lg border
         transition-colors flex items-center gap-1 justify-center cursor-pointer
         shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1
         disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none

@@ -23,7 +23,7 @@
 //                     back to BrandInfluencer.likes_count/comments_count which
 //                     is where the Post Tracker writes manual entries
 //   clicks / sales    Attribution.clicks / sales_count / gmv
-//   spend             BrandPartner.product_cost / fees_paid / commission_paid
+//   spend             product cost, fees (paid, else agreed rate), commission_paid
 //
 // Fields with NO storage anywhere in the schema — usage rights, content saved,
 // ad code — are reported as null rather than false, so the UI can say "not
@@ -36,7 +36,8 @@ import { prisma } from "@/lib/prisma"
 import { checkBrandAccess } from "@/lib/brand-access"
 import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 import { declineBucket, type DeclineBucket } from "@/lib/decline-reasons"
-import { isListDeclined, productCostFromDetails } from "@/lib/pipeline-transitions"
+import { isListDeclined, productCostFromDetails, resolveFees, resolveCommission, resolveCommissionRate } from "@/lib/pipeline-transitions"
+import { goaffproCommissionByInfluencer } from "@/lib/goaffpro-commission"
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions)
@@ -102,6 +103,7 @@ export async function GET(req: Request) {
         approval_status: true,
         approval_notes: true,
         product_details: true,
+        agreed_rate: true,
         delivered_at: true,
         posted_at: true,
         // Manual post metrics captured in the Post Tracker.
@@ -119,7 +121,7 @@ export async function GET(req: Request) {
         },
         // Campaign spend, entered per partner.
         partner: {
-          select: { product_cost: true, fees_paid: true, commission_paid: true },
+          select: { product_cost: true, fees_paid: true, commission_paid: true, default_commission: true },
         },
       },
     })
@@ -130,6 +132,7 @@ export async function GET(req: Request) {
     // them per influencer in a single grouped query keeps this O(1) queries
     // rather than one lookup per influencer (the N+1 the previous shape invited).
     const brandInfluencerIds = records.map(r => r.id)
+    const goaffproCommission = await goaffproCommissionByInfluencer(brandId, brandInfluencerIds)
     const postMetrics = brandInfluencerIds.length
       ? await prisma.detectedPost.groupBy({
           by: ["brand_influencer_id"],
@@ -248,8 +251,14 @@ export async function GET(req: Request) {
         prodCost:      r.partner
           ? Number(r.partner.product_cost ?? 0)
           : productCostFromDetails(r.product_details),
-        feesPaid:      r.partner?.fees_paid       ? Number(r.partner.fees_paid)       : 0,
-        commissionPaid: r.partner?.commission_paid ? Number(r.partner.commission_paid) : 0,
+        feesPaid:      resolveFees({ partnerFeesPaid: r.partner?.fees_paid, productDetails: r.product_details, agreedRate: r.agreed_rate }).amount,
+        commissionPaid: resolveCommission({
+          partnerCommissionPaid: r.partner?.commission_paid,
+          productDetails: r.product_details,
+          goaffproCommission: goaffproCommission.get(r.id) ?? null,
+          revenue: r.attribution?.gmv ? Number(r.attribution.gmv) : 0,
+          commissionRate: resolveCommissionRate({ partnerDefault: r.partner?.default_commission, productDetails: r.product_details }),
+        }).amount,
 
         // No column for these two; null means "not tracked".
         usageRights:  null,

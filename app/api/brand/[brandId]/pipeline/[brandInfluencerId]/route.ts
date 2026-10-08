@@ -53,7 +53,7 @@ export async function PATCH(
     const { brandId, brandInfluencerId } = await params
 
     const body = await req.json()
-    const { pipelineStatus, niReason, declineNotes, collaborationType, notes, campaignDeliverables } = body as {
+    const { pipelineStatus, niReason, declineNotes, collaborationType, notes, campaignDeliverables, agreedRate, commissionRate } = body as {
       pipelineStatus?: string
       niReason?: string
       /** Free-text explanation, sent only with an "Others" decline. */
@@ -62,6 +62,22 @@ export async function PATCH(
       notes?: string
       /** Deliverable names chosen on the hand-over — see lib/deliverables. */
       campaignDeliverables?: unknown
+      /** Flat fee (agreed rate), paid types. */
+      agreedRate?: unknown
+      /** Commission rate (%), commission types. */
+      commissionRate?: unknown
+    }
+
+    // Hand-over only.
+    const handoffAgreedRate =
+      agreedRate !== undefined && collaborationType !== undefined ? Number(agreedRate) : undefined
+    if (handoffAgreedRate !== undefined && (!Number.isFinite(handoffAgreedRate) || handoffAgreedRate <= 0)) {
+      return NextResponse.json({ error: "Flat fee must be a positive amount" }, { status: 400 })
+    }
+    const handoffCommission =
+      commissionRate !== undefined && collaborationType !== undefined ? Number(commissionRate) : undefined
+    if (handoffCommission !== undefined && (!Number.isFinite(handoffCommission) || handoffCommission < 0 || handoffCommission > 100)) {
+      return NextResponse.json({ error: "Commission rate must be between 0 and 100" }, { status: 400 })
     }
 
     // Only meaningful alongside a Collaboration Type (the hand-over into Post
@@ -122,7 +138,7 @@ export async function PATCH(
       hasBrandCapability(brandId, session.user.id, "approveInfluencers"),
       prisma.brandInfluencer.findUnique({
         where: { id: brandInfluencerId, brand_id: brandId },
-        select: { contact_status: true, stage: true, product_details: true, approval_status: true },
+        select: { contact_status: true, stage: true, product_details: true, approval_status: true, partner: { select: { id: true } } },
       }),
     ]))
 
@@ -190,6 +206,8 @@ export async function PATCH(
         const paidCollab = (details.paidCollab ?? {}) as Record<string, unknown>
         details.paidCollab = { ...paidCollab, deliverables: applyDeliverableNames(paidCollab.deliverables, deliverableNames) }
       }
+      // Partners: saved on the partner record below.
+      if (handoffCommission !== undefined && !before?.partner) details.commissionRate = handoffCommission
       productDetailsJson = JSON.stringify(details)
     }
 
@@ -229,6 +247,7 @@ export async function PATCH(
         stage:           fields.stage,
         approval_status: fields.approval_status,
         ...(productDetailsJson !== undefined ? { product_details: productDetailsJson } : {}),
+        ...(handoffAgreedRate !== undefined ? { agreed_rate: handoffAgreedRate } : {}),
         ...(postTrackerReset ?? {}),
         // Only write approval_notes for NI moves — don't overwrite on others.
         //
@@ -264,6 +283,10 @@ export async function PATCH(
     // produced here rather than by an exception.
     if (writeResult.count === 0) {
       return NextResponse.json({ error: "Record not found" }, { status: 404 })
+    }
+
+    if (handoffCommission !== undefined && before?.partner) {
+      await prisma.brandPartner.update({ where: { id: before.partner.id }, data: { default_commission: handoffCommission } })
     }
 
     // The same shape update({ select }) returned, built from what was written.

@@ -4,16 +4,19 @@ import { useState, useEffect } from "react"
 import { Skeleton } from "@/components/ui/skeleton"
 import { getCachedHistory, loadHistory, prefetchHistory } from "@/lib/activity-history"
 import { EmailModal } from "@/components/shared/email-modal"
-import { ProfilePicture, PlatformIcon } from "@/components/table-sheet/ui-atoms"
-import { getProfileUrl, getPlatformLabel } from "@/components/table-sheet/utils"
+import { contactStatusLabel } from "@/components/table-sheet/utils"
+import { STAGE_LABEL } from "@/components/table-sheet/constants"
+import {
+  DrawerShell, DrawerHeader, DrawerControl, DrawerTabs, DrawerBody, DrawerActionBar, resolveActiveTab, type DrawerTab,
+} from "@/components/shared/influencer-drawer"
 import { DeclineModal } from "@/components/shared/decline-modal"
 import { AttributionTab } from "@/components/shared/attribution-tab"
 import { InfluencerStatsTab, prefetchStats } from "@/components/shared/influencer-stats-tab"
 import { useClosedData } from "@/hooks/useClosedData"
 import {
-  PAID_COLLAB_TYPES, ReadOnlyOrderTab, ReadOnlyPostTab, ReadOnlyPaidCollabTab,
+  PAID_COLLAB_TYPES, ReadOnlyTabPlaceholder, ReadOnlyOrderTab, ReadOnlyPostTab, ReadOnlyPaidCollabTab,
 } from "@/components/pipeline/post-tracker-readonly-tabs"
-import { allowedTransitions } from "@/lib/pipeline-transitions"
+import { allowedTransitions, formatDealRate } from "@/lib/pipeline-transitions"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface MonthlyData {
@@ -116,6 +119,7 @@ const ACTION_COLORS: Record<string, { bg: string; color: string }> = {
   "posttracker.stage_changed":   { bg: "#ccfbf1", color: "#0f766e" },
   "influencer.submitted":        { bg: "#ffedd5", color: "#9a3412" },
   "influencer.updated":          { bg: "#e0f2fe", color: "#0369a1" },
+  "influencer.identity_changed": { bg: "#fef3c7", color: "#92400e" },
 }
 
 function formatActivityDate(iso: string) {
@@ -125,18 +129,30 @@ function formatActivityDate(iso: string) {
   })
 }
 
+// History shows the boards' column names, not stored values.
+const BOARD_STAGE_NAME: Record<string, string> = {
+  not_contacted: "For Outreach", pending: "For Outreach", contacted: "Contacted",
+  negotiating: "In Conversation", interested: "In Conversation", agreed: "Deal Agreed",
+  for_order_creation: "Post Tracker", not_interested: "Not Interested",
+}
+const stageName = (v: unknown) =>
+  typeof v === "number" || /^\d+$/.test(String(v))
+    ? STAGE_LABEL[Number(v)] ?? String(v)
+    : BOARD_STAGE_NAME[String(v)] ?? contactStatusLabel(String(v ?? ""))
+
 function formatActivityDetails(action: string, details: Record<string, unknown>): string {
   switch (action) {
     case "pipeline.stage_changed":
-      return `Stage ${details.from} → ${details.to}`
+      return `${stageName(details.from)} → ${stageName(details.to)}`
     case "pipeline.status_changed":
-      if (details.ni_reason) return `${details.from} → ${details.to} · "${details.ni_reason}"`
-      return `${details.from} → ${details.to}`
+      if (details.ni_reason) return `${stageName(details.from)} → ${stageName(details.to)} · "${details.ni_reason}"`
+      return `${stageName(details.from)} → ${stageName(details.to)}`
     case "influencer.approval_changed":
       return `${details.from ?? "—"} → ${details.to}${details.notes ? ` · "${details.notes}"` : ""}`
     case "influencer.added":
       return `via ${details.method ?? "manual"}${details.platform ? ` on ${details.platform}` : ""}`
     case "posttracker.stage_changed":
+    case "influencer.identity_changed":
       return `${details.from} → ${details.to}`
     case "influencer.updated": {
       const fields = details.fields as string[] | undefined
@@ -253,20 +269,22 @@ export function HistoryTab({ brandId, biId }: { brandId?: string; biId?: string 
 // ─── LastEditedBy — compact "who touched this last" strip for the Basic tab ───
 // Exported: Post Tracker's Basic tab reuses this, same as HistoryTab below.
 export function LastEditedBy({ brandId, biId }: { brandId?: string; biId?: string }) {
-  const [log, setLog]         = useState<ActivityLog | null>(null)
-  const [loading, setLoading] = useState(true)
+  // Newest entry of the preloaded history; keyed so a switch never shows the previous one.
+  const key = `${brandId}/${biId}`
+  const cachedLogs = getCachedHistory<ActivityLog>(brandId, biId)
+  const [result, setResult] = useState<{ key: string; log: ActivityLog | null } | null>(null)
 
   useEffect(() => {
-    if (!brandId || !biId) { setLoading(false); return }
-    setLoading(true)
-    fetch(`/api/brand/${brandId}/influencers/${biId}/activity?limit=1`)
-      .then(r => r.ok ? r.json() : null)
-      .then(d => setLog(d?.logs?.[0] ?? null))
-      .catch(() => setLog(null))
-      .finally(() => setLoading(false))
-  }, [brandId, biId])
+    if (!brandId || !biId) return
+    let cancelled = false
+    loadHistory<ActivityLog>(brandId, biId)
+      .then(logs => { if (!cancelled) setResult({ key, log: logs[0] ?? null }) })
+      .catch(() => { if (!cancelled) setResult({ key, log: null }) })
+    return () => { cancelled = true }
+  }, [brandId, biId, key])
 
-  if (loading || !log) return null
+  const log = result?.key === key ? result.log : cachedLogs?.[0] ?? null
+  if (!log) return null
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#9ca3af", padding: "6px 10px", background: "#f9fafb", borderRadius: 8, border: "1px solid #f3f4f6" }}>
@@ -304,7 +322,6 @@ const LABEL_TO_KANBAN_ID: Record<string, string> = Object.fromEntries(
 
 // ─── NI Modal ────────────────────────────────────────────────────────────────
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-function formatMoney(v: number) { return "$" + Math.round(v).toLocaleString() }
 function autoTier(rev: number) { return rev >= 10001 ? "Gold" : rev >= 2001 ? "Silver" : "Bronze" }
 
 function fmt(n: number | null | undefined): string {
@@ -392,16 +409,6 @@ export default function InfluencerProfileSidebar({
 
   const tier = partner.tierOverride || autoTier(partner.rev)
 
-  const now  = new Date("2026-04-01")
-  const bday = partner.birthday ? new Date(partner.birthday) : null
-  let bdayPill = ""
-  if (bday) {
-    const nb = new Date(now.getFullYear(), bday.getMonth(), bday.getDate())
-    if (nb < now) nb.setFullYear(now.getFullYear() + 1)
-    const du = Math.ceil((nb.getTime() - now.getTime()) / 86400000)
-    if (du <= 30) bdayPill = `in ${du}d`
-  }
-
   const followers   = fmt(partner.follower_count ?? partner.fol)
   const engRate     = partner.engagement_rate != null ? `${partner.engagement_rate}%`
                     : partner.eng != null ? `${partner.eng}%` : "—"
@@ -410,7 +417,7 @@ export default function InfluencerProfileSidebar({
   // here (edited in Post Tracker) and disabled until the influencer is there.
   const TABS = ["Basic", "Order", "Attribution", "Post", "Stats", "Paid collab details", "History"]
   const inPostTracker = partner.commSt === "For Order Creation"
-  const { data: closedRows } = useClosedData(inPostTracker ? partner.brandId : undefined)
+  const { data: closedRows, isLoading: closedLoading } = useClosedData(inPostTracker ? partner.brandId : undefined)
   const closedRow = inPostTracker ? closedRows.find((r) => r.id === partner.brandInfluencerId) : undefined
   const tabDisabledReason = (idx: number): string | null => {
     if (idx !== 1 && idx !== 3 && idx !== 5) return null
@@ -418,8 +425,14 @@ export default function InfluencerProfileSidebar({
     if (idx === 5 && !PAID_COLLAB_TYPES.has(LABEL_TO_KANBAN_ID[collabType] ?? collabType)) return "Only for paid collaborations"
     return null
   }
+  // Hidden (not greyed) for non-paid types, as in Post Tracker.
+  const drawerTabs: DrawerTab[] = TABS.map((label, id) => ({
+    id, label,
+    disabledReason: tabDisabledReason(id),
+    hidden: id === 5 && !PAID_COLLAB_TYPES.has(LABEL_TO_KANBAN_ID[collabType] ?? collabType),
+  }))
   // Falls back to Basic if the open tab becomes unavailable (e.g. another influencer).
-  const activeTab = tabDisabledReason(profileTab) ? 0 : profileTab
+  const activeTab = resolveActiveTab(drawerTabs, profileTab)
 
 
   // ── Collab type change handler ────────────────────────────────────────────
@@ -458,12 +471,6 @@ export default function InfluencerProfileSidebar({
 
   return (
     <>
-      {/* ── Background overlay ── */}
-      <div
-        onClick={onClose}
-        style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.3)", zIndex: 400, cursor: "pointer" }}
-      />
-
       {/* ── NI Modal ── */}
       {showNIModal && (
         <DeclineModal
@@ -487,130 +494,60 @@ export default function InfluencerProfileSidebar({
         />
       )}
 
-      {/* ── Sidebar panel ── */}
-      <div className="pp">
-        {/* Header copied from Post Tracker's drawer so the two match. */}
-        <button onClick={onClose} title="Close" className="close-btn">✕</button>
-        <div className="pph">
-          <div className="ppt" style={{ paddingRight: 40 }}>Influencer Profile</div>
-          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, marginBottom: 12, paddingRight: 40 }}>
-            <div className="pav">
-              {partner.profileImageUrl ? (
-                // Shared avatar component, so a broken or expired image falls
-                // back to initials exactly as it does in the Influencer List.
-                <ProfilePicture
-                  src={partner.profileImageUrl}
-                  name={`${partner.firstName} ${partner.lastName}`.trim()}
-                  handle={partner.handle}
-                  size={44}
-                />
-              ) : (
-                partner.firstName ? partner.firstName[0] : partner.handle[1]?.toUpperCase()
-              )}
-            </div>
-            <div style={{ flexGrow: 1, flexShrink: 0, flexBasis: "auto" }}>
-              <div className="pnm">{partner.firstName} {partner.lastName}</div>
-              <div className="phd">@{partner.handle.replace(/^@/, "")}</div>
-            </div>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "flex-start" }}>
-              {/* STAGE dropdown */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                <span style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em" }}>Stage</span>
-                <select
-                  className="ssel"
-                  value={pipelineStatus}
-                  onChange={(e) => handlePipelineChange(e.target.value)}
-                  style={{
-                    borderColor: pipelineStatus === "Not Interested" ? "#fca5a5" : undefined,
-                    background:  pipelineStatus === "Not Interested" ? "#fef2f2" : undefined,
-                    color:       pipelineStatus === "Not Interested" ? "#dc2626" : undefined,
-                  }}
-                >
-                  {/* The current stage, plus only the stages it may actually
-                      move to (lib/pipeline-transitions.ts) — the same rule the
-                      card's quick-move buttons render and the PATCH route
-                      enforces.
-
-                      This listed all six stages unconditionally, which is how
-                      the panel could move a row from "For Outreach" straight to
-                      "For Order Creation" — a jump the card refuses. The
-                      current stage is always present so the select has a value
-                      to show; it is disabled because re-selecting it is a
-                      no-op. */}
-                  <option value={pipelineStatus} disabled
-                    style={pipelineStatus === "Not Interested" ? { color: "#dc2626", fontWeight: 600 } : undefined}>
-                    {pipelineStatus}
+      <DrawerShell onClose={onClose}>
+        <DrawerHeader
+          name={`${partner.firstName} ${partner.lastName}`}
+          handle={partner.handle}
+          platform={partner.plat}
+          avatarUrl={partner.profileImageUrl}
+          onSendEmail={() => setShowEmailModal(true)}
+          controls={<>
+            <DrawerControl label="Stage">
+              <select
+                className="ssel"
+                value={pipelineStatus}
+                onChange={(e) => handlePipelineChange(e.target.value)}
+                style={{
+                  borderColor: pipelineStatus === "Not Interested" ? "#fca5a5" : undefined,
+                  background:  pipelineStatus === "Not Interested" ? "#fef2f2" : undefined,
+                  color:       pipelineStatus === "Not Interested" ? "#dc2626" : undefined,
+                }}
+              >
+                {/* Current stage plus only the moves lib/pipeline-transitions allows. */}
+                <option value={pipelineStatus} disabled
+                  style={pipelineStatus === "Not Interested" ? { color: "#dc2626", fontWeight: 600 } : undefined}>
+                  {pipelineStatus}
+                </option>
+                {allowedTransitions(pipelineStatus).map((s) => (
+                  <option key={s} value={s}
+                    style={s === "Not Interested" ? { color: "#dc2626", fontWeight: 600 } : undefined}>
+                    {s}
                   </option>
-                  {allowedTransitions(pipelineStatus).map((s) => (
-                    <option key={s} value={s}
-                      style={s === "Not Interested" ? { color: "#dc2626", fontWeight: 600 } : undefined}>
-                      {s}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* COLLABORATION TYPE dropdown */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                <span style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em" }}>Collaboration Type</span>
-                <select
-                  className="csel"
-                  value={collabType}
-                  onChange={(e) => handleCollabTypeChange(e.target.value)}
-                >
-                  {COLLAB_TYPES.map((ct) => (
-                    <option key={ct.value} value={ct.value}>{ct.value}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          </div>
-
-          {/* NI status pill */}
-          {pipelineStatus === "Not Interested" && (
+                ))}
+              </select>
+            </DrawerControl>
+            <DrawerControl label="Collaboration Type">
+              <select
+                className="csel"
+                value={collabType}
+                onChange={(e) => handleCollabTypeChange(e.target.value)}
+              >
+                {COLLAB_TYPES.map((ct) => (
+                  <option key={ct.value} value={ct.value}>{ct.value}</option>
+                ))}
+              </select>
+            </DrawerControl>
+          </>}
+          notice={pipelineStatus === "Not Interested" && (
             <div style={{ marginTop: 8, padding: "6px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, fontSize: 11, color: "#dc2626", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
               <span>✕</span> Marked as Not Interested
             </div>
           )}
+        />
 
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-            <button className="atag plat" style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0, lineHeight: 1 }}>
-              <PlatformIcon platform={partner.plat} size={14} className="shrink-0" />
-              <span className="truncate">{getPlatformLabel(partner.plat) || "—"}</span>
-            </button>
-            <button className="atag" onClick={() => setShowEmailModal(true)}>Send Email</button>
-            <button
-              className="atag"
-              onClick={() => {
-                // getProfileUrl's map is keyed lowercase; partner.plat is capitalised here.
-                const url = getProfileUrl(partner.plat?.toLowerCase() ?? "", partner.handle)
-                if (url) window.open(url, "_blank", "noopener,noreferrer")
-              }}
-            >
-              Send DM
-            </button>
-            <button className="atag">Follow up</button>
-          </div>
-        </div>
+        <DrawerTabs tabs={drawerTabs} active={activeTab} onSelect={setProfileTab} />
 
-        {/* ── Tabs ── */}
-        <div className="pit-bar">
-          {TABS.map((tab, idx) => {
-            const reason = tabDisabledReason(idx)
-            // Hidden, not grayed, for non-paid collaborations — as Post Tracker does.
-            if (idx === 5 && !PAID_COLLAB_TYPES.has(LABEL_TO_KANBAN_ID[collabType] ?? collabType)) return null
-            return (
-              <div key={idx} title={reason ?? undefined}
-                className={`pit ${activeTab === idx ? "active" : ""} ${reason ? "pit-disabled" : ""}`}
-                onClick={() => { if (!reason) setProfileTab(idx) }}>
-                {tab}
-              </div>
-            )
-          })}
-        </div>
-
-        {/* ── Body ── */}
-        <div className="ppb">
+        <DrawerBody>
 
           {/* ════ BASIC TAB ════ — Post Tracker's layout plus the Pipeline extras */}
           {activeTab === 0 && (
@@ -619,15 +556,15 @@ export default function InfluencerProfileSidebar({
               <div className="sr4">
                 <div className="sbox"><div className="slb">Followers</div><div className="svl">{followers}</div></div>
                 <div className="sbox"><div className="slb">Eng Rate</div><div className="svl" style={{ color: "#2c8ec4" }}>{engRate}</div></div>
-                <div className="sbox"><div className="slb">Rate</div><div className="svl" style={{ color: "#1fae5b" }}>{partner.agreedRate ? formatMoney(partner.agreedRate) : "—"}</div></div>
+                <div className="sbox" title="Flat fee + commission per sale"><div className="slb">Rate</div><div className="svl" style={{ color: "#1fae5b" }}>{formatDealRate(partner.agreedRate, partner.defComm)}</div></div>
                 <div className="sbox"><div className="slb">Rating</div><div className="svl">{partner.internalRating ? `${partner.internalRating}/5` : "—"}</div></div>
               </div>
               <div>
                 <div className="section-label">Avg Metrics</div>
                 <div className="avg-row">
-                  <div className="avg-card"><div className="avg-val">{(partner.likesCount ?? 0).toLocaleString()}</div><div className="avg-lbl">Likes</div></div>
-                  <div className="avg-card"><div className="avg-val">{(partner.commentsCount ?? 0).toLocaleString()}</div><div className="avg-lbl">Comments</div></div>
-                  <div className="avg-card"><div className="avg-val">{(partner.viewsCount ?? 0).toLocaleString()}</div><div className="avg-lbl">Views</div></div>
+                  <div className="avg-card"><div className="avg-val">{fmt(partner.avg_likes)}</div><div className="avg-lbl">Avg Likes</div></div>
+                  <div className="avg-card"><div className="avg-val">{fmt(partner.avg_comments)}</div><div className="avg-lbl">Avg Comments</div></div>
+                  <div className="avg-card"><div className="avg-val">{fmt(partner.avg_views)}</div><div className="avg-lbl">Avg Views</div></div>
                 </div>
               </div>
               {/* Notes sit right under the metrics so they don't need a scroll. */}
@@ -649,23 +586,11 @@ export default function InfluencerProfileSidebar({
                 <div className="frow"><div className="flbl">Order Status</div><div className="fval">{partner.orderStatus || "—"}</div></div>
                 <div className="frow"><div className="flbl">Stage</div><div className="fval">{closedRow?.closedStatus ?? partner.commSt}</div></div>
                 <div className="frow"><div className="flbl">Campaign</div><div className="fval">{partner.campaignName || "—"}</div></div>
-                <div className="frow"><div className="flbl">Contact Status</div><div className="fval">{partner.contactStatus || "—"}</div></div>
+                <div className="frow"><div className="flbl">Contact Status</div><div className="fval">{contactStatusLabel(partner.contactStatus)}</div></div>
                 <div className="frow"><div className="flbl">Gender</div><div className="fval">{partner.gend || "—"}</div></div>
-                <div className="frow">
-                  <div className="flbl">Birthday</div>
-                  <div className="fval">{partner.birthday || "—"}{bdayPill && <span className="bp">{bdayPill}</span>}</div>
-                </div>
-                <div className="frow"><div className="flbl">Commission</div><div className="fval">{partner.defComm > 0 ? partner.defComm + "%" : "—"}</div></div>
                 <div className="frow"><div className="flbl">Tier</div><div className="fval">{tier}</div></div>
-                <div className="frow"><div className="flbl">Community</div><div className="fval">{partner.commSt}</div></div>
               </div>
-              {/* Same sticky action bar as the Influencer List profile — stays in
-                  view at the bottom of the drawer while the tab scrolls. */}
-              <div style={{
-                display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8,
-                position: "sticky", bottom: -18, margin: "8px -20px -18px",
-                padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2,
-              }}>
+              <DrawerActionBar>
                 {notesSaveState === "saved" && notesValue === savedNotes && <span style={{ marginRight: "auto", fontSize: 12, color: "#1fae5b", fontWeight: 600 }}>Saved</span>}
                 {notesSaveState === "error" && <span style={{ marginRight: "auto", fontSize: 12, color: "#dc2626" }}>Couldn&apos;t save — try again</span>}
                 <button className="btn-secondary" onClick={() => setNotesValue(savedNotes)} disabled={notesSaveState === "saving" || notesValue === savedNotes}
@@ -674,13 +599,13 @@ export default function InfluencerProfileSidebar({
                   style={{ opacity: notesSaveState === "saving" || notesValue === savedNotes ? 0.6 : 1 }}>
                   {notesSaveState === "saving" ? "Saving…" : "Save Changes"}
                 </button>
-              </div>
+              </DrawerActionBar>
             </div>
           )}
 
           {/* ════ ORDER / POST / PAID COLLAB — read-only, from Post Tracker's data ════ */}
           {(activeTab === 1 || activeTab === 3 || activeTab === 5) && !closedRow && (
-            <div style={{ fontSize: 12, color: "#9ca3af" }}>Loading…</div>
+            <ReadOnlyTabPlaceholder loading={closedLoading} brandId={partner.brandId} />
           )}
           {activeTab === 1 && closedRow && <ReadOnlyOrderTab inf={closedRow} brandId={partner.brandId} />}
           {activeTab === 3 && closedRow && <ReadOnlyPostTab inf={closedRow} brandId={partner.brandId} />}
@@ -698,7 +623,7 @@ export default function InfluencerProfileSidebar({
 
           {/* ════ STATS TAB ════ */}
           {activeTab === 4 && (
-            <InfluencerStatsTab brandId={partner.brandId} brandInfluencerId={partner.brandInfluencerId} />
+            <InfluencerStatsTab brandId={partner.brandId} brandInfluencerId={partner.brandInfluencerId} allowManualEntry />
           )}
 
           {/* ════ HISTORY TAB ════ */}
@@ -706,15 +631,9 @@ export default function InfluencerProfileSidebar({
             <HistoryTab brandId={partner.brandId} biId={partner.brandInfluencerId} />
           )}
 
-        </div>
+        </DrawerBody>
 
         <style jsx>{`
-          .pp { position:fixed; top:0; right:0; width:600px; max-width:100vw; height:100%; background:#fff; box-shadow:-8px 0 40px rgba(0,0,0,0.14); z-index:500; display:flex; flex-direction:column; font-family:"Inter",system-ui,sans-serif; }
-          .pph { padding:16px 20px; border-bottom:1px solid #f0f0f0; }
-          .ppt { font-size:11px; font-weight:600; color:#9ca3af; letter-spacing:.1em; text-transform:uppercase; margin-bottom:12px; }
-          .pav { width:44px; height:44px; border-radius:50%; background:#1fae5b; display:flex; align-items:center; justify-content:center; font-size:18px; font-weight:700; color:#fff; flex-shrink:0; box-shadow:0 0 0 3px #dcfce7; }
-          .pnm { font-size:15px; font-weight:700; color:#111827; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-          .phd { font-size:12px; color:#6b7280; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
           /* Pipeline select */
           .ssel { font-size:11px; padding:5px 10px; border-radius:8px; border:.5px solid #f4b740; background:#fffbeb; color:#854f0b; cursor:pointer; font-family:inherit; font-weight:500; transition:all .15s; width:115px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -722,18 +641,6 @@ export default function InfluencerProfileSidebar({
           /* Collab type select — adapts colour via inline style */
           .csel { font-size:11px; padding:5px 10px; border-radius:8px; border:1px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; font-family:inherit; font-weight:600; transition:all .15s; width:115px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
-          .close-btn { position:absolute; top:16px; right:20px; z-index:1; width:30px; height:30px; border-radius:50%; border:1.5px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; line-height:1; transition:background .15s,border-color .15s,color .15s; }
-          .close-btn:hover { background:#fee2e2; color:#dc2626; border-color:#fca5a5; }
-          .atag { font-size:12px; font-weight:500; padding:6px 14px; border-radius:20px; cursor:pointer; border:1px solid #e5e7eb; background:#f9fafb; color:#555; transition:background .15s,border-color .15s,color .15s; }
-          .atag:not(.plat):hover { background:#eafaf1; border-color:#1fae5b; color:#1fae5b; }
-          .atag.plat { background:#1fae5b; color:#fff; border-color:#1fae5b; }
-          .pit-bar { display:flex; gap:0; padding:0 20px; border-bottom:1px solid #f0f0f0; overflow-x:auto; scrollbar-width:thin; scrollbar-color:#d1d5db transparent; }
-          .pit-bar::-webkit-scrollbar { height:4px; }
-          .pit-bar::-webkit-scrollbar-thumb { background:#d1d5db; border-radius:4px; }
-          .pit { font-size:12px; font-weight:600; padding:11px 14px; cursor:pointer; color:#9ca3af; border-bottom:2px solid transparent; white-space:nowrap; transition:color .15s; flex-shrink:0; }
-          .pit.active { color:#1fae5b; border-bottom-color:#1fae5b; }
-          .pit-disabled { color:#d1d5db; cursor:not-allowed; }
-          .ppb { flex:1; overflow-y:auto; padding:18px 20px; }
           .sr4 { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; background:linear-gradient(135deg,#f0fdf4 0%,#f9fafb 100%); border-radius:12px; padding:14px; margin-bottom:4px; border:1px solid #dcfce7; }
           .sbox { text-align:center; }
           .slb { font-size:9px; font-weight:600; color:#6b7280; text-transform:uppercase; letter-spacing:.07em; }
@@ -747,7 +654,6 @@ export default function InfluencerProfileSidebar({
           .frow { min-width:0; padding:10px 12px; background:#fafaf9; border:1px solid #f0f0ee; border-radius:10px; }
           .flbl { font-size:11px; font-weight:500; color:#9ca3af; margin-bottom:3px; }
           .fval { font-size:13px; color:#111827; font-weight:600; overflow-wrap:anywhere; }
-          .bp { display:inline-block; font-size:10px; padding:1px 7px; border-radius:6px; background:#fce4ec; color:#880e4f; margin-left:6px; }
           .pfr { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
           .pfg { display:flex; flex-direction:column; gap:4px; margin-bottom:10px; }
           .pfl { font-size:10px; font-weight:600; color:#6b7280; }
@@ -776,7 +682,7 @@ export default function InfluencerProfileSidebar({
           .btn-secondary { background:transparent; color:#6b7280; border:1.5px solid #e5e7eb; padding:9px 18px; border-radius:8px; cursor:pointer; font-size:13px; font-weight:600; font-family:inherit; transition:background .15s,border-color .15s; }
           .btn-secondary:hover { background:#f9fafb; border-color:#d1d5db; }
         `}</style>
-      </div>
+      </DrawerShell>
     </>
   )
 }

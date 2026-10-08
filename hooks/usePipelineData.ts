@@ -43,6 +43,9 @@ export interface PipelineInfluencer {
   avgComments: number | null
   avgViews: number | null
   niche: string
+  gender?: string
+  /** Commission rate (%), if set. */
+  commissionRate?: number | null
   location: string
   email: string
   profileImageUrl: string | null
@@ -100,6 +103,10 @@ interface UsePipelineDataReturn {
     collaborationType?: string
     /** Deliverable names chosen on the hand-over into Post Tracker. */
     campaignDeliverables?: string[]
+    /** Flat fee (agreed rate) from the hand-over. */
+    agreedRate?: number
+    /** Commission rate (%) entered on the hand-over. */
+    commissionRate?: number
     /**
      * Skip marking the OTHER views stale after this row succeeds.
      *
@@ -144,6 +151,8 @@ function mapItem(item: any): PipelineInfluencer {
     avgComments:     item.avgComments ?? null,
     avgViews:        item.avgViews    ?? null,
     niche:           item.niche,
+    gender:          item.gender ?? "",
+    commissionRate:  item.commissionRate ?? null,
     location:        item.location,
     email:           item.email,
     profileImageUrl: item.profileImageUrl,
@@ -458,16 +467,26 @@ export function unseedPipelineRow(brandId: string, brandInfluencerId: string): v
  * not the raw response, or the board would read a payload it cannot render.
  */
 export async function fetchPipelineRows(brandId: string): Promise<PipelineInfluencer[]> {
-  const res = await fetch(`/api/brand/${brandId}/pipeline`)
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    // Status included so isTransientError (lib/user-facing-error) can spot a
-    // 503 from databaseCapacityResponse() and schedule a retry. Logs and
-    // classification only — useCachedFetch sanitises what the UI shows.
-    throw new Error(`[${res.status}] ${err.error || "Failed to fetch pipeline data"}`)
+  // All pages, 500 at a time (route max).
+  const MAX_PAGES = 40
+  const rows: PipelineInfluencer[] = []
+  let cursor: string | null = null
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const url: string = `/api/brand/${brandId}/pipeline?limit=500${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`
+    const res = await fetch(url)
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      // Status included so isTransientError (lib/user-facing-error) can spot a
+      // 503 from databaseCapacityResponse() and schedule a retry. Logs and
+      // classification only — useCachedFetch sanitises what the UI shows.
+      throw new Error(`[${res.status}] ${err.error || "Failed to fetch pipeline data"}`)
+    }
+    const json = await res.json()
+    rows.push(...(json.data || []).map(mapItem))
+    cursor = typeof json.nextCursor === "string" && json.nextCursor !== cursor ? json.nextCursor : null
+    if (!cursor) break
   }
-  const json = await res.json()
-  return (json.data || []).map(mapItem)
+  return rows
 }
 
 export function usePipelineData(brandId?: string): UsePipelineDataReturn {
@@ -566,6 +585,10 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
         collaborationType?: string
         /** Deliverable names chosen on the hand-over into Post Tracker. */
         campaignDeliverables?: string[]
+        /** Flat fee (agreed rate) from the hand-over. */
+        agreedRate?: number
+        /** Commission rate (%) entered on the hand-over. */
+        commissionRate?: number
         /**
          * Skip marking the OTHER views stale after this row succeeds.
          *
@@ -602,9 +625,15 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
         // optimistic change hit the cache twice and notified every subscriber
         // twice, and it put a side effect inside a function whose only job is
         // to compute the next value.
-        return prev.map((item) =>
-          item.id === id ? applyStatusChange(item, newStatus, extra?.niReason, extra?.collaborationType, extra?.declineNotes) : item
-        )
+        return prev.map((item) => {
+          if (item.id !== id) return item
+          const moved = applyStatusChange(item, newStatus, extra?.niReason, extra?.collaborationType, extra?.declineNotes)
+          return {
+            ...moved,
+            ...(extra?.agreedRate !== undefined ? { agreedRate: extra.agreedRate } : {}),
+            ...(extra?.commissionRate !== undefined ? { commissionRate: extra.commissionRate } : {}),
+          }
+        })
       })
 
       // ── Hand the row to Post Tracker's cache at the same moment ──────────
@@ -627,7 +656,7 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
         const closedRows = getCachedData<ClosedInfluencer[]>(closedKey)
         if (closedRows && !closedRows.some((row) => row.id === id)) {
           markCacheWrite(closedKey)
-          setCachedData(closedKey, [...closedRows, toClosedRow(previous, extra?.collaborationType, extra?.campaignDeliverables)])
+          setCachedData(closedKey, [...closedRows, toClosedRow(extra?.agreedRate !== undefined ? { ...previous, agreedRate: extra.agreedRate } : previous, extra?.collaborationType, extra?.campaignDeliverables)])
           // NOT invalidated here — that is what made the seeded card disappear.
           //
           // invalidateCache sets updatedAt = 0, so the entry read as stale the
@@ -691,6 +720,8 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
             ...(extra?.declineNotes ? { declineNotes: extra.declineNotes } : {}),
             ...(extra?.collaborationType !== undefined ? { collaborationType: extra.collaborationType } : {}),
             ...(extra?.campaignDeliverables ? { campaignDeliverables: extra.campaignDeliverables } : {}),
+            ...(extra?.agreedRate !== undefined ? { agreedRate: extra.agreedRate } : {}),
+            ...(extra?.commissionRate !== undefined ? { commissionRate: extra.commissionRate } : {}),
           }),
         })
 

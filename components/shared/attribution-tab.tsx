@@ -38,17 +38,22 @@ export function AttributionTab({
   brandInfluencerId,
   firstName,
   initial,
+  onSaved,
 }: {
   brandId?: string
   brandInfluencerId?: string
   firstName: string
   initial?: Attribution
+  onSaved?: () => void
 }) {
+  // Suggestions are placeholders only, so nothing made-up is saved.
   const defaults = (a: Attribution) => ({
-    discountCode: a.coupon || a.refCode || "CODE" + firstName.toUpperCase(),
-    affiliateLink: a.affiliateLink || "https://instroom.io/ref/" + firstName.toLowerCase(),
+    discountCode: a.coupon || a.refCode || "",
+    affiliateLink: a.affiliateLink || "",
     sparkAds: a.sparkAds || "",
   })
+  const suggestedCode = "CODE" + firstName.toUpperCase().replace(/[^A-Z0-9]/g, "")
+  const suggestedLink = "https://instroom.io/ref/" + firstName.toLowerCase().replace(/[^a-z0-9]/g, "")
 
   // A cached copy (from an earlier open, or the drawer's prefetch) renders at once.
   const cached = brandId && brandInfluencerId ? getCachedData<Attribution>(attributionKey(brandId, brandInfluencerId)) : undefined
@@ -91,6 +96,7 @@ export function AttributionTab({
         sparkAds: json.data?.sparkAds ?? (form.sparkAds || null),
       })
       setSaveState("saved")
+      onSaved?.()
       if (json.goAffPro?.synced === false && json.goAffPro?.reason) {
         setMessage(`Updated — GoAffPro sync skipped: ${json.goAffPro.reason}`)
       } else if (json.goAffPro?.synced) {
@@ -125,10 +131,10 @@ export function AttributionTab({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div className="pfr">
-        <div className="pfg"><div className="pfl">Discount Code</div><input className="pfi" value={form.discountCode} onChange={e => setForm(d => ({ ...d, discountCode: e.target.value }))} /></div>
+        <div className="pfg"><div className="pfl">Discount Code</div><input className="pfi" value={form.discountCode} onChange={e => setForm(d => ({ ...d, discountCode: e.target.value }))} placeholder={`e.g. ${suggestedCode}`} /></div>
         <div className="pfg"><div className="pfl">Ad Code/Spark Ads Code</div><input className="pfi" value={form.sparkAds} onChange={e => setForm(d => ({ ...d, sparkAds: e.target.value }))} placeholder="Ad Code/Spark Ads Code" /></div>
       </div>
-      <div className="pfg"><div className="pfl">Affiliate Link</div><input className="pfi" value={form.affiliateLink} onChange={e => setForm(d => ({ ...d, affiliateLink: e.target.value }))} /></div>
+      <div className="pfg"><div className="pfl">Affiliate Link</div><input className="pfi" value={form.affiliateLink} onChange={e => setForm(d => ({ ...d, affiliateLink: e.target.value }))} placeholder={`e.g. ${suggestedLink}`} /></div>
       <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10 }}>
         {message && (
           <div style={{ fontSize: 12, color: saveState === "error" ? "#B42318" : "#667085" }}>{message}</div>

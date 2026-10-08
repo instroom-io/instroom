@@ -29,6 +29,7 @@ import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma, withDbRetry } from "@/lib/prisma"
 import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
+import { resolveCommissionRate } from "@/lib/pipeline-transitions"
 
 // ─── Pipeline status derivation ───────────────────────────────────────────────
 // Pure function — no DB access, called in a tight .map() loop.
@@ -197,6 +198,7 @@ export async function GET(
             full_name:         true,
             email:             true,
             niche:             true,
+            gender:            true,
             location:          true,
             profile_image_url: true,
             follower_count:    true,
@@ -210,6 +212,10 @@ export async function GET(
         // Campaign — only id + name for the label
         campaign: {
           select: { id: true, name: true },
+        },
+
+        partner: {
+          select: { default_commission: true },
         },
       },
       orderBy: { created_at: "desc" },
@@ -290,6 +296,8 @@ export async function GET(
           avgViews:    inf.avg_views,
 
           niche:           inf.niche             || "",
+          gender:          inf.gender            || "",
+          commissionRate:  resolveCommissionRate({ partnerDefault: bi.partner?.default_commission, productDetails: bi.product_details }),
           location:        inf.location          || "",
           email:           inf.email             || "",
           profileImageUrl: inf.profile_image_url || null,
@@ -333,8 +341,9 @@ export async function GET(
       })
 
     // Next cursor = last record's id (for the next page call)
+    // Rows loaded, not kept, so a dropped orphan can't end paging early.
     const nextCursor =
-      data.length === limit ? data[data.length - 1].id : null
+      brandInfluencers.length === limit ? brandInfluencers[brandInfluencers.length - 1].id : null
 
     return NextResponse.json(
       { data, nextCursor },

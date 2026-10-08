@@ -163,6 +163,75 @@ export function productCostFromDetails(productDetails: string | null | undefined
   }
 }
 
+export type FeeSource = "paid" | "agreed" | "none"
+
+/** Fees: paid if entered, else agreed rate. A partner's 0 means "not entered". */
+export function resolveFees({ partnerFeesPaid, productDetails, agreedRate }: {
+  partnerFeesPaid?: number | string | { toString(): string } | null
+  productDetails?: string | null
+  agreedRate?: number | string | { toString(): string } | null
+}): { amount: number; source: FeeSource } {
+  const partner = Number(partnerFeesPaid ?? 0)
+  if (Number.isFinite(partner) && partner > 0) return { amount: partner, source: "paid" }
+  try {
+    const raw = JSON.parse(productDetails || "{}")?.feesPaid
+    const typed = raw == null || raw === "" ? NaN : Number(raw)
+    if (Number.isFinite(typed)) return { amount: typed, source: "paid" }
+  } catch { /* unreadable details: fall through */ }
+  const agreed = Number(agreedRate ?? 0)
+  if (Number.isFinite(agreed) && agreed > 0) return { amount: agreed, source: "agreed" }
+  return { amount: 0, source: "none" }
+}
+
+/** Commission rate (%): partner default, else product_details.commissionRate. */
+export function resolveCommissionRate({ partnerDefault, productDetails }: {
+  partnerDefault?: number | string | { toString(): string } | null
+  productDetails?: string | null
+}): number | null {
+  const partner = Number(partnerDefault ?? 0)
+  if (Number.isFinite(partner) && partner > 0) return partner
+  try {
+    const raw = JSON.parse(productDetails || "{}")?.commissionRate
+    const typed = raw == null || raw === "" ? NaN : Number(raw)
+    if (Number.isFinite(typed)) return typed
+  } catch { /* unreadable details */ }
+  return null
+}
+
+export type CommissionSource = "paid" | "goaffpro" | "estimated" | "none"
+
+/** Commission: paid if entered → GoAffPro → revenue × rate. A partner's 0 means "not entered". */
+export function resolveCommission({ partnerCommissionPaid, productDetails, goaffproCommission, revenue, commissionRate }: {
+  partnerCommissionPaid?: number | string | { toString(): string } | null
+  productDetails?: string | null
+  goaffproCommission?: number | null
+  revenue?: number | null
+  commissionRate?: number | null
+}): { amount: number; source: CommissionSource } {
+  const partner = Number(partnerCommissionPaid ?? 0)
+  if (Number.isFinite(partner) && partner > 0) return { amount: partner, source: "paid" }
+  try {
+    const raw = JSON.parse(productDetails || "{}")?.commissionPaid
+    const typed = raw == null || raw === "" ? NaN : Number(raw)
+    if (Number.isFinite(typed)) return { amount: typed, source: "paid" }
+  } catch { /* unreadable details: fall through */ }
+  if (goaffproCommission != null && goaffproCommission > 0) return { amount: goaffproCommission, source: "goaffpro" }
+  const rev = Number(revenue ?? 0)
+  const rate = Number(commissionRate ?? 0)
+  if (rev > 0 && rate > 0) return { amount: Math.round(rev * rate) / 100, source: "estimated" }
+  return { amount: 0, source: "none" }
+}
+
+/** "$100", "$100 + 10%", "10%" or "—". */
+export function formatDealRate(agreedRate?: number | string | null, commissionRate?: number | string | null): string {
+  const fee = Number(agreedRate ?? 0)
+  const pct = commissionRate == null || commissionRate === "" ? NaN : Number(commissionRate)
+  const parts: string[] = []
+  if (Number.isFinite(fee) && fee > 0) parts.push("$" + fee.toLocaleString())
+  if (Number.isFinite(pct) && pct > 0) parts.push(`${pct}%`)
+  return parts.length ? parts.join(" + ") : "—"
+}
+
 /** Post Tracker's product_details.completed flag. */
 export function isPostTrackerCompleted(productDetails: string | null | undefined): boolean {
   try {

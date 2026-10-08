@@ -9,6 +9,7 @@ import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capa
 // The canonical union — redeclared locally before, so adding a column meant
 // editing the same list in three files and the route silently disagreeing.
 import { CLOSED_COLUMNS, type ClosedColumn } from "@/lib/post-tracker-status"
+import { resolveCommissionRate } from "@/lib/pipeline-transitions"
 
 
 function deriveClosedStatus(
@@ -165,6 +166,7 @@ export async function GET(
         updated_at: true,
         created_at: true,
         campaign: { select: { name: true } },
+        partner: { select: { default_commission: true } },
         influencer: {
           select: {
             full_name: true,
@@ -172,6 +174,9 @@ export async function GET(
             platform: true,
             follower_count: true,
             engagement_rate: true,
+            avg_likes: true,
+            avg_comments: true,
+            avg_views: true,
             niche: true,
             location: true,
             email: true,
@@ -249,6 +254,9 @@ export async function GET(
 
         followers:       formatFollowers(inf?.follower_count || 0),
         followerCount:   inf?.follower_count || 0,
+        avgLikes:        inf?.avg_likes ?? null,
+        avgComments:     inf?.avg_comments ?? null,
+        avgViews:        inf?.avg_views ?? null,
         engagementRate:  inf?.engagement_rate
           ? `${Number(inf.engagement_rate).toFixed(1)}%`
           : "0%",
@@ -269,6 +277,7 @@ export async function GET(
         approvalNotes:   row.approval_notes   || "",
 
         agreedRate:      row.agreed_rate ? Number(row.agreed_rate) : null,
+        commissionRate:  resolveCommissionRate({ partnerDefault: row.partner?.default_commission, productDetails: row.product_details }),
         currency:        row.currency,
         deliverables:    row.deliverables,
         deadline:        row.deadline?.toISOString()     || null,

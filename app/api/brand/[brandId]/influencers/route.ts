@@ -7,7 +7,7 @@ import { logActivity } from "@/lib/activity-log"
 import { NextRequest, NextResponse } from "next/server"
 import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 import { publicHandle } from "@/lib/influencer-draft"
-import { productCostFromDetails } from "@/lib/pipeline-transitions"
+import { productCostFromDetails, resolveCommissionRate } from "@/lib/pipeline-transitions"
 
 export async function GET(
   req: NextRequest,
@@ -97,7 +97,7 @@ export async function GET(
 
     const brandInfluencerInclude = {
       attribution: true,
-      partner: { select: { product_cost: true } },
+      partner: { select: { product_cost: true, default_commission: true } },
       influencer: {
         select: {
           id: true,
@@ -305,6 +305,7 @@ export async function GET(
           product_cost: bi.partner
             ? Number(bi.partner.product_cost)
             : productCostFromDetails(bi.product_details),
+          commission_rate: resolveCommissionRate({ partnerDefault: bi.partner?.default_commission, productDetails: bi.product_details }),
           created_at: bi.created_at.toISOString(),
           updated_at: bi.updated_at.toISOString(),
           added_by: addedUser
