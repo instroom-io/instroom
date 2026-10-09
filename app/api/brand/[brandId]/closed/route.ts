@@ -289,6 +289,8 @@ export async function GET(
         shippedAt:       row.shipped_at?.toISOString()   || null,
         deliveredAt:     row.delivered_at?.toISOString() || null,
         trackingNumber:  productDetails.trackingNumber   || null,
+        usageRights:     productDetails.usageRights      || null,
+        driveLink:       productDetails.driveLink        || null,
 
         postUrl:         row.post_url,
         postedAt:        row.posted_at?.toISOString()    || null,

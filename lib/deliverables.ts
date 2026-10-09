@@ -24,6 +24,9 @@ export interface CampaignDeliverable {
   likes?: number | null
   comments?: number | null
   views?: number | null
+  driveLink?: string
+  /** Unset falls back to the influencer-level value. */
+  usageRights?: string
 }
 
 /** Same upper bound as the Paid Collaboration editor's "How many?" select. */
@@ -87,8 +90,29 @@ export function deliverablePostUrl(d: CampaignDeliverable, index: number, legacy
   return index === 0 ? (legacyPostUrl ?? "").trim() : ""
 }
 
-export function getDeliverableProgress(paidCollab: unknown, legacyPostUrl?: string | null) {
+/** Plain UGC: a Drive link counts as delivered. */
+export const isUgcOnly = (campaignType: unknown) => campaignType === "ugc"
+
+export function getDeliverableProgress(paidCollab: unknown, legacyPostUrl?: string | null, driveLinkCounts = false) {
   const list = getDeliverables(paidCollab)
-  const posted = list.filter((d, i) => Boolean(deliverablePostUrl(d, i, legacyPostUrl))).length
+  const posted = list.filter((d, i) =>
+    Boolean(deliverablePostUrl(d, i, legacyPostUrl)) || (driveLinkCounts && Boolean((d.driveLink ?? "").trim()))
+  ).length
   return { total: list.length, posted, complete: list.length > 0 && posted === list.length }
+}
+
+export function effectiveUsageRights(d: CampaignDeliverable | undefined, influencerRights?: string | null): string {
+  return d?.usageRights || influencerRights || ""
+}
+
+/** granted: any content granted; saved: granted with a Drive link. */
+export function ugcStatus(productDetails: { usageRights?: unknown; driveLink?: unknown; paidCollab?: unknown }) {
+  const rights = typeof productDetails.usageRights === "string" ? productDetails.usageRights : ""
+  const list = getDeliverables(productDetails.paidCollab)
+  if (list.length === 0) {
+    const granted = rights === "granted"
+    return { granted, saved: granted && Boolean(String(productDetails.driveLink ?? "").trim()) }
+  }
+  const grantedItems = list.filter(d => effectiveUsageRights(d, rights) === "granted")
+  return { granted: grantedItems.length > 0, saved: grantedItems.some(d => Boolean((d.driveLink ?? "").trim())) }
 }

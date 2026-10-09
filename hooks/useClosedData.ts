@@ -83,6 +83,8 @@ export interface ClosedInfluencer {
   shippedAt: string | null
   deliveredAt: string | null
   trackingNumber: string | null
+  usageRights?: string | null
+  driveLink?: string | null
 
   postUrl: string | null
   postedAt: string | null
@@ -177,6 +179,9 @@ export interface PostDetailsFields {
   contentStatus?: string
   /** Full deliverables write (per-deliverable post links); supersedes the rollup. */
   paidCollabData?: PaidCollabData
+  /** No-deliverable case only. */
+  usageRights?: string
+  driveLink?: string
 }
 
 interface UseClosedDataReturn {
@@ -954,6 +959,8 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
             ...(fields.comments !== undefined && { commentsCount: parseMetricInput(fields.comments) }),
             ...(fields.engagement !== undefined && { engagementCount: parseMetricInput(fields.engagement) }),
             ...(fields.views !== undefined && { viewsCount: parseMetricInput(fields.views) }),
+            ...(fields.usageRights !== undefined && { usageRights: fields.usageRights || null }),
+            ...(fields.driveLink !== undefined && { driveLink: fields.driveLink.trim() || null }),
             ...(fields.internalRating !== undefined && {
               internalRating: fields.internalRating === "" ? null : Number(fields.internalRating),
             }),

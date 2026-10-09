@@ -229,7 +229,7 @@ export default function TableSheet({
   onRowsChange?: (rows: InfluencerRow[]) => void
   onDeleteRow?: (rowId: string) => Promise<void>
   onFetchComplete?: (row: InfluencerRow) => void
-  onRegisterIdSwap?: (fn: (tempId: string, realId: string) => void) => void
+  onRegisterIdSwap?: (fn: (tempId: string, realId: string, asDraft?: boolean) => void) => void
   /**
    * Persist a blank row as a draft and resolve with its real database id.
    *
@@ -346,7 +346,7 @@ export default function TableSheet({
     pendingFetchRef.current.clear()
   }, [])
 
-  const swapIdRef = useRef<(tempId: string, realId: string) => void>(() => {})
+  const swapIdRef = useRef<(tempId: string, realId: string, asDraft?: boolean) => void>(() => {})
 
   // The latest onRowsChange, read through a ref so the registration effect below
   // does not depend on its identity. Registering the swap callback is a one-time
@@ -357,7 +357,7 @@ export default function TableSheet({
   useEffect(() => { onRowsChangeRef.current = onRowsChange }, [onRowsChange])
 
   useEffect(() => {
-    const swapFn = (tempId: string, realId: string) => {
+    const swapFn = (tempId: string, realId: string, asDraft?: boolean) => {
       setRows(prev => {
         // Global reuse can point the draft at a row ALREADY on screen: the user
         // types a handle this brand happens to have, the route answers
@@ -376,7 +376,8 @@ export default function TableSheet({
           onRowsChangeRef.current?.(next)
           return next
         }
-        return prev.map(r => r.id === tempId ? { ...r, id: realId } : r)
+        // asDraft keeps the local draft flag in step with the server.
+        return prev.map(r => r.id === tempId ? { ...r, id: realId, ...(asDraft !== undefined ? { is_draft: asDraft } : {}) } : r)
       })
       // The row now carries the real id, so the server's copy of it is the same
       // row and no longer needs suppressing.

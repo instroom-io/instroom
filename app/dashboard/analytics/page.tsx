@@ -904,10 +904,10 @@ function AnalyticsPageContent() {
     // Tracker. "Delivery Problem" is its Issues column and "No Content" its
     // No post column — both only reachable after a deal was agreed, so both
     // sit inside Responded too.
-    const RESPONDED_OR_BEYOND = ["In Conversation", "Onboarded", "In Transit", "Content Pending", "Posted", "Delivery Problem", "No Content", "Rejected"]
+    const RESPONDED_OR_BEYOND = ["In Conversation", "Onboarded", "In Transit", "Content Pending", "Posted", "UGC", "Delivery Problem", "No Content", "Rejected"]
     // Closed stays a strict SUBSET of responded. "Onboarded" is what Deal
     // Agreed / For Order Creation resolve to.
-    const CLOSED_OR_BEYOND    = ["Onboarded", "In Transit", "Content Pending", "Posted", "Delivery Problem", "No Content"]
+    const CLOSED_OR_BEYOND    = ["Onboarded", "In Transit", "Content Pending", "Posted", "UGC", "Delivery Problem", "No Content"]
 
     const totalOutreach = dataToUse.length
     // Responded = anyone whose resolved pipeline stage is In Conversation or
@@ -974,6 +974,8 @@ function AnalyticsPageContent() {
     const deliveryProblem = dataToUse.filter(i => i.pipelineStatus === "Delivery Problem").length
     const noPost = dataToUse.filter(i => i.pipelineStatus === "Content Pending").length
     const posted = dataToUse.filter(i => i.pipelineStatus === "Posted").length
+    // Plain UGC: outside post rate.
+    const ugcDeals = dataToUse.filter(i => i.pipelineStatus === "UGC").length
     const closedCollaborations = closed
     const receivedProduct = noPost + posted
     const postRate = receivedProduct > 0 ? (posted / receivedProduct) * 100 : 0
@@ -1062,7 +1064,7 @@ function AnalyticsPageContent() {
     return {
       totalOutreach, responded, closed, completed, notInterested, responseRate, closingRate,
       reasonsBreakdown, hardTotal, softTotal, otherTotal, noOrderYet, inTransit, deliveryProblem,
-      noPost, posted, closedCollaborations, receivedProduct, postRate, platformStats,
+      noPost, posted, ugcDeals, closedCollaborations, receivedProduct, postRate, platformStats,
       platformEMV, totalViews, totalLikes, totalComments, engagementRate, totalEMV,
       totalClicks, totalSalesQty, totalRevenue, conversionRate, aov, avgSalePerInfluencer,
       influencersWithSales, totalProductCost, totalFeesPaid, totalCommPaid, totalSpend,
@@ -1277,7 +1279,7 @@ function AnalyticsPageContent() {
     // Mirrors the UI: these have no backing column yet, so the export says so
     // rather than writing a 0 that reads as a real measurement.
     row('Usage rights granted', metrics.ugcTracked ? metrics.usageRights : untracked,
-      metrics.ugcTracked ? pctOf(metrics.usageRights, metrics.posted) + ' of those who posted' : 'no source field in schema')
+      metrics.ugcTracked ? pctOf(metrics.usageRights, metrics.closedCollaborations) + ' of closed collaborations' : 'no source field in schema')
     row('Content saved', metrics.ugcTracked ? metrics.contentSaved : untracked,
       metrics.ugcTracked ? pctOf(metrics.contentSaved, metrics.usageRights) + ' of usage rights granted' : 'no source field in schema')
     row('Ad codes given', metrics.adCodesTracked ? metrics.adCodesGiven : untracked,
@@ -1743,6 +1745,7 @@ function AnalyticsPageContent() {
                 <PipelineItem status="Delivery Problem" count={metrics.deliveryProblem} total={metrics.totalOutreach} color="#E24B4A" />
                 <PipelineItem status="Awaiting post" count={metrics.noPost} total={metrics.totalOutreach} color="#F4B740" agingData={metrics.agingData} />
                 <PipelineItem status="Posted" count={metrics.posted} total={metrics.totalOutreach} color="#1FAE5B" />
+                {metrics.ugcDeals > 0 && <PipelineItem status="UGC (no post required)" count={metrics.ugcDeals} total={metrics.totalOutreach} color="#9B7FD4" />}
               </SectionCard>
 
               <div className="flex flex-col gap-4">
@@ -1761,7 +1764,8 @@ function AnalyticsPageContent() {
                       { label: 'Awaiting post', value: metrics.noPost, color: '#F4B740' },
                       { label: 'No Order Yet', value: metrics.noOrderYet, color: '#B4B2A9' },
                       { label: 'In Transit', value: metrics.inTransit, color: '#2C8EC4' },
-                      { label: 'Delivery Problem', value: metrics.deliveryProblem, color: '#E24B4A' }
+                      { label: 'Delivery Problem', value: metrics.deliveryProblem, color: '#E24B4A' },
+                      { label: 'UGC (no post required)', value: metrics.ugcDeals, color: '#9B7FD4' },
                     ]}
                     centerLabel={`${Math.round(metrics.postRate)}%`}
                     centerSub="post rate"
@@ -1891,14 +1895,10 @@ function AnalyticsPageContent() {
             {/* UGC Overview */}
             <div className="space-y-3">
               <div className={LABEL}>UGC overview</div>
-              {/* Usage rights, content saved and ad codes have no column in the
-                  schema yet, so the API reports them as untracked. Showing "—"
-                  and saying so is the honest rendering; a confident "0" would
-                  read as "nobody granted rights" rather than "never recorded". */}
               {metrics.ugcTracked ? (
                 <>
                   <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-                    <StatTile value={metrics.usageRights} label="Usage rights granted" sub={`${formatPercent(metrics.usageRights, metrics.posted)} of those who posted`} />
+                    <StatTile value={metrics.usageRights} label="Usage rights granted" sub={`${formatPercent(metrics.usageRights, metrics.closedCollaborations)} of closed collaborations`} />
                     <StatTile value={metrics.contentSaved} label="Content saved" sub={`${formatPercent(metrics.contentSaved, metrics.usageRights)} of usage rights granted`} />
                     <StatTile value={metrics.adCodesGiven} label="Ad codes given" sub={`${formatPercent(metrics.adCodesGiven, metrics.posted)} of those who posted`} />
                   </div>
@@ -1912,9 +1912,9 @@ function AnalyticsPageContent() {
                         { label: 'Usage rights granted', value: metrics.usageRights, color: '#1FAE5B' },
                         { label: 'Content saved', value: metrics.contentSaved, color: '#2C8EC4' },
                         { label: 'Ad code given', value: metrics.adCodesGiven, color: '#F4B740' },
-                        { label: 'No rights', value: metrics.posted - metrics.usageRights, color: '#e0e0de' }
+                        { label: 'No rights', value: Math.max(0, metrics.closedCollaborations - metrics.usageRights), color: '#e0e0de' }
                       ]}
-                      centerLabel={formatPercent(metrics.usageRights, metrics.posted)}
+                      centerLabel={formatPercent(metrics.usageRights, metrics.closedCollaborations)}
                       centerSub="rights granted"
                     />
                   </SectionCard>

@@ -26,7 +26,7 @@ import { useClosedData, type ClosedInfluencer, type ClosedColumn, type OrderDeta
 import { parseMetricInput } from "@/lib/post-tracker-status"
 import {
   getDeliverables, getDeliverableProgress, deliverablePostUrl, blankDeliverable, MAX_DELIVERABLES,
-  type CampaignDeliverable,
+  effectiveUsageRights, isUgcOnly, type CampaignDeliverable,
 } from "@/lib/deliverables"
 import { invalidateInfluencerDerivedCaches, closedCacheKey } from "@/lib/cache-invalidation"
 import { DataSyncStatus } from "@/components/data-sync-status"
@@ -181,8 +181,11 @@ const hasPostEvidence = (inf: Pick<ClosedInfluencer, "postUrl" | "detectedPostCo
 // a link on any deliverable counts too — it then sits in Posted at
 // "1/N deliverables" until the rest are linked. Same rule as the closed PATCH
 // route.
-const canEnterPosted = (inf: Pick<ClosedInfluencer, "postUrl" | "detectedPostCount" | "paidCollabData">) =>
-  hasPostEvidence(inf) || getDeliverables(inf.paidCollabData).some(d => Boolean((d.postUrl ?? "").trim()))
+const canEnterPosted = (inf: Pick<ClosedInfluencer, "postUrl" | "detectedPostCount" | "paidCollabData" | "campaignType" | "driveLink">) =>
+  hasPostEvidence(inf) || getDeliverables(inf.paidCollabData).some(d => Boolean((d.postUrl ?? "").trim())) || hasUgcContent(inf)
+const hasUgcContent = (inf: Pick<ClosedInfluencer, "paidCollabData" | "campaignType" | "driveLink">) =>
+  isUgcOnly(inf.campaignType) &&
+  (Boolean(inf.driveLink?.trim()) || getDeliverables(inf.paidCollabData).some(d => Boolean((d.driveLink ?? "").trim())))
 
 /**
  * Stages where the post FIELDS make sense.
@@ -532,6 +535,39 @@ function CampaignBadge({ type }: { type: string | null }) {
   if (!found) return <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">Gifting</span>
   return <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${found.color}`}>{found.label}</span>
 }
+const UGC_INPUT: React.CSSProperties = { width: "100%", fontSize: 12, padding: "8px 10px", borderRadius: 8, border: "1.5px solid #e5e7eb", background: "#f9fafb", color: "#111827", fontFamily: "inherit", boxSizing: "border-box", outline: "none" }
+const UGC_LABEL: React.CSSProperties = { fontSize: 10, fontWeight: 600, color: "#6b7280" }
+
+function UgcFields({ driveLink, onDriveLink, rights, onRights }: {
+  driveLink: string; onDriveLink: (v: string) => void; rights: string; onRights: (v: string) => void
+}) {
+  const link = driveLink.trim()
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 8 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <div style={UGC_LABEL}>Drive link</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <input value={driveLink} onChange={e => onDriveLink(e.target.value)} placeholder="Saved content link" style={UGC_INPUT} />
+        {/^https?:\/\//i.test(link) && (
+          <a href={link} target="_blank" rel="noopener noreferrer" title="Open saved content" className="text-[#0F6B3E] hover:text-[#1FAE5B]">
+            <IconLink size={14} />
+          </a>
+        )}
+      </div>
+    </div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <div style={UGC_LABEL}>Usage rights</div>
+      <select value={rights} onChange={e => onRights(e.target.value)} style={UGC_INPUT}>
+        <option value="">Not discussed</option>
+        <option value="granted">Granted</option>
+        <option value="pending">Pending</option>
+        <option value="not_granted">Not granted</option>
+      </select>
+    </div>
+    </div>
+  )
+}
+
 function compactNum(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(Number(n))) return "—"
   const v = Number(n)
@@ -614,10 +650,10 @@ function PostTrackerCardBase({ inf, onOpen, onMove, onComplete, canApproveInflue
   // Posted column tracks campaign deliverables: "x/N deliverables" until every
   // one has a post link, then "Completed". Rows without deliverables keep the
   // original "Content live" pill.
-  const progress = getDeliverableProgress(inf.paidCollabData, inf.postUrl)
+  const progress = getDeliverableProgress(inf.paidCollabData, inf.postUrl, isUgcOnly(inf.campaignType))
   // Every deliverable linked (or, without deliverables, a Post URL) — same rule
   // the PATCH route enforces for "completed".
-  const canComplete = progress.total > 0 ? progress.complete : hasPostUrl(inf)
+  const canComplete = progress.total > 0 ? progress.complete : hasPostUrl(inf) || hasUgcContent(inf)
   const showComplete = inf.closedStatus === "Posted" && !inf.completed
 
   return (
@@ -681,9 +717,9 @@ function PostTrackerCardBase({ inf, onOpen, onMove, onComplete, canApproveInflue
               <IconLink size={10}/> {progress.posted}/{progress.total} deliverables
             </span>
           )}
-          {showComplete && progress.total === 0 && inf.postUrl && (
+          {showComplete && progress.total === 0 && (inf.postUrl || hasUgcContent(inf)) && (
             <span className="text-[10px] text-green-600 bg-green-50 rounded-full px-2 py-0.5 inline-flex items-center gap-1 font-medium">
-              <IconLink size={10}/> Content live
+              <IconLink size={10}/> {inf.postUrl ? "Content live" : "Content delivered"}
             </span>
           )}
           {isExit && (
@@ -945,6 +981,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
     views: inf.viewsCount ? String(inf.viewsCount) : "",
     scriptStatus: inf.scriptStatus || "", contentStatus: inf.contentStatus || "",
     internalRating: inf.internalRating ? String(inf.internalRating) : "",
+    usageRights: inf.usageRights || "", driveLink: inf.driveLink || "",
   })
   const [postData, setPostData] = useState(buildPostData)
   postUrlValueRef.current = postData.postUrl
@@ -1160,8 +1197,11 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
       [inf.postUrl ?? "", ...getDeliverables(inf.paidCollabData).map(d => d.postUrl ?? "")]
         .map(l => l.trim()).filter(Boolean)
     )
+    const ugcSaved = isUgcOnly(inf.campaignType) && (hasDeliverables
+      ? deliverableDrafts.some(d => Boolean((d.driveLink ?? "").trim()))
+      : Boolean(postData.driveLink.trim()))
     const markPosted = inf.closedStatus !== "Posted" &&
-      (Boolean(trimmedUrl) || (hasDeliverables ? hasDetectedPost(inf) : hasPostEvidence(inf)))
+      (Boolean(trimmedUrl) || ugcSaved || (hasDeliverables ? hasDetectedPost(inf) : hasPostEvidence(inf)))
     // With deliverables, the row-level metrics are the SUM of every
     // deliverable's own post, and the row's Posted At is the earliest one —
     // so the board, Analytics and Stats keep reading the same columns.
@@ -1180,6 +1220,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
         comments: totalOr("comments", postData.comments),
         views: totalOr("views", postData.views),
         internalRating: postData.internalRating,
+        ...(!hasDeliverables ? { usageRights: postData.usageRights, driveLink: postData.driveLink } : {}),
         ...(sendDeliverables
           ? {
               paidCollabData: {
@@ -1187,6 +1228,8 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                 deliverables: deliverableDrafts.map(d => ({
                   ...d,
                   postUrl: (d.postUrl ?? "").trim(),
+                  driveLink: (d.driveLink ?? "").trim(),
+                  usageRights: effectiveUsageRights(d, postData.usageRights),
                   ...(scriptChanged ? { scriptStatus: postData.scriptStatus } : {}),
                   ...(contentChanged ? { contentStatus: postData.contentStatus } : {}),
                 })),
@@ -1650,6 +1693,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                         d.views != null ? `${d.views.toLocaleString()} views` : null,
                       ].filter(Boolean).join(" · ")
                     : "Not posted yet"
+                  const saved = Boolean((d.driveLink ?? "").trim())
                   return (
                     <div
                       key={d.id}
@@ -1672,7 +1716,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                       >
                         <IconChevronDown size={14} style={{ color: "#6b7280", flexShrink: 0, transform: open ? "none" : "rotate(-90deg)", transition: "transform .15s" }} />
                         <span style={{ fontSize: 11, fontWeight: 600, color: "#374151", whiteSpace: "nowrap" }}>{i + 1}. {d.name || `Deliverable ${i + 1}`}</span>
-                        <span style={{ fontSize: 10, color: link ? "#0F6B3E" : "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{summary}</span>
+                        <span style={{ fontSize: 10, color: link ? "#0F6B3E" : "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{summary}{saved ? " · Saved" : ""}</span>
                       </button>
                       {open && (<>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -1689,6 +1733,10 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                           </a>
                         )}
                       </div>
+                      <UgcFields
+                        driveLink={d.driveLink ?? ""} onDriveLink={v => updateDeliverable(i, { driveLink: v })}
+                        rights={effectiveUsageRights(d, postData.usageRights)} onRights={v => updateDeliverable(i, { usageRights: v })}
+                      />
                       {/* This post's own date and metrics — each deliverable is a different post. */}
                       <div className="pfr" style={{ marginTop: 8 }}>
                         <div className="pfg"><div className="pfl">Posted At</div>
@@ -1753,6 +1801,10 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                     Dropped from a detected post — Update to keep it.
                   </div>
                 ) : null}
+                <UgcFields
+                  driveLink={postData.driveLink} onDriveLink={v => setPostData(d => ({ ...d, driveLink: v }))}
+                  rights={postData.usageRights} onRights={v => setPostData(d => ({ ...d, usageRights: v }))}
+                />
               </div>
               )}
               {hasDeliverables ? (

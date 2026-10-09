@@ -567,6 +567,7 @@ export async function PUT(
 
     return NextResponse.json({
       success: true,
+      id,
       ...(savedInf
         ? {
             // Blanked while the row is still a draft: the placeholder handle

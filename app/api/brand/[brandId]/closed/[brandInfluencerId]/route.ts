@@ -6,7 +6,7 @@ import { authOptions } from "@/lib/auth"
 import { prisma, timeStep } from "@/lib/prisma"
 import { hasBrandCapability } from "@/lib/permissions"
 import { mapClosedToPipelineFields, parseMetricInput, isClosedColumn, type ClosedColumn } from "@/lib/post-tracker-status"
-import { getDeliverables, getDeliverableProgress } from "@/lib/deliverables"
+import { getDeliverables, getDeliverableProgress, isUgcOnly } from "@/lib/deliverables"
 
 // ✅ Safe JSON parse
 function safeParse(value: string | null) {
@@ -77,7 +77,16 @@ export async function PATCH(
       scriptStatus, contentStatus,
       // "Mark as completed" on a Posted row — stored as product_details.completed.
       completed,
+      // No-deliverable case only.
+      usageRights, driveLink,
     } = body
+
+    if (usageRights !== undefined && !["", "granted", "pending", "not_granted"].includes(usageRights)) {
+      return NextResponse.json({ error: "Invalid usageRights" }, { status: 400 })
+    }
+    if (driveLink !== undefined && typeof driveLink !== "string") {
+      return NextResponse.json({ error: "Invalid driveLink" }, { status: 400 })
+    }
 
     if (completed !== undefined && typeof completed !== "boolean") {
       return NextResponse.json({ error: "Invalid completed" }, { status: 400 })
@@ -136,7 +145,11 @@ export async function PATCH(
     const deliverablesForCheck = getDeliverables(
       paidCollabData !== undefined ? paidCollabData : productDetails.paidCollab
     )
-    const hasDeliverableLink = deliverablesForCheck.some((d) => Boolean((d.postUrl ?? "").trim()))
+    const ugcOnly = isUgcOnly(campaignType !== undefined ? campaignType : productDetails.campaignType)
+    const singleDriveLink = String(driveLink !== undefined ? driveLink : productDetails.driveLink ?? "").trim()
+    const hasDeliverableLink = deliverablesForCheck.some((d) =>
+      Boolean((d.postUrl ?? "").trim()) || (ugcOnly && Boolean((d.driveLink ?? "").trim()))
+    ) || (ugcOnly && Boolean(singleDriveLink))
     if (closedStatus === "Posted") {
       // A Post URL submitted in THIS same request (the Post tab's Save button
       // sends the URL and the Posted move together) is evidence too — `record`
@@ -161,8 +174,9 @@ export async function PATCH(
       if (!hasUrl && detected === 0) {
         return NextResponse.json(
           {
-            error:
-              "This influencer has no post yet. Add a Post URL, or let Automatic Post Detection find the post, before moving to Posted.",
+            error: ugcOnly
+              ? "No content yet. Add a Drive link to the delivered content before moving to Posted."
+              : "This influencer has no post yet. Add a Post URL, or let Automatic Post Detection find the post, before moving to Posted.",
             needsPostEvidence: true,
           },
           { status: 409 }
@@ -227,6 +241,14 @@ export async function PATCH(
     if (trackingNumber !== undefined) {
       productDetails.trackingNumber = trackingNumber
     }
+    if (usageRights !== undefined) {
+      if (usageRights) productDetails.usageRights = usageRights
+      else delete productDetails.usageRights
+    }
+    if (driveLink !== undefined) {
+      if (driveLink.trim()) productDetails.driveLink = driveLink.trim()
+      else delete productDetails.driveLink
+    }
 
     // ── Completed ─────────────────────────────────────────────────────────────
     // Only a Posted row whose every deliverable has a post link (or, with no
@@ -235,8 +257,10 @@ export async function PATCH(
     if (completed === true) {
       const effectiveStatus = closedStatus ?? storedStatus
       const legacyUrl = typeof postUrl === "string" ? postUrl : record.post_url
-      const progress = getDeliverableProgress(productDetails.paidCollab, legacyUrl)
-      const ready = progress.total > 0 ? progress.complete : Boolean(legacyUrl && legacyUrl.trim())
+      const progress = getDeliverableProgress(productDetails.paidCollab, legacyUrl, ugcOnly)
+      const ready = progress.total > 0
+        ? progress.complete
+        : Boolean(legacyUrl && legacyUrl.trim()) || (ugcOnly && Boolean(singleDriveLink))
       if (effectiveStatus !== "Posted" || !ready) {
         return NextResponse.json(
           { error: "Add a post link for every deliverable before marking this influencer completed." },
