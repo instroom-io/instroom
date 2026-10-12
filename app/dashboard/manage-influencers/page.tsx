@@ -825,7 +825,7 @@ function InfluencersContent() {
     return run
   }, [])
 
-  const idSwapCallback = useRef<((tempId: string, realId: string) => void) | null>(null)
+  const idSwapCallback = useRef<((tempId: string, realId: string, asDraft?: boolean) => void) | null>(null)
 
   /**
    * Stable, so the sheet's registration effect does not re-run every render.
@@ -835,7 +835,7 @@ function InfluencersContent() {
    * re-ran constantly, re-registering it each time. It only writes a ref, so it
    * has no dependencies and never needs to change identity.
    */
-  const handleRegisterIdSwap = useCallback((fn: (tempId: string, realId: string) => void) => {
+  const handleRegisterIdSwap = useCallback((fn: (tempId: string, realId: string, asDraft?: boolean) => void) => {
     idSwapCallback.current = fn
   }, [])
 
@@ -1015,7 +1015,10 @@ function InfluencersContent() {
             // in (from the response where the route rewrote a field, from the
             // row that was sent otherwise) means the first paint is already
             // right, with no extra request and no full-page refresh.
-            const confirmed = { ...row, ...normalisedRow(normalised) }
+            // A typed save on a draft promotes it; the sheet must stop treating it as one.
+            const promoted = Boolean(row.is_draft && saved.handle)
+            if (promoted) idSwapCallback.current?.(row.id, row.id, false)
+            const confirmed = { ...row, ...normalisedRow(normalised), ...(promoted ? { is_draft: false } : {}) }
             setRows((prev) => prev.map((r) => (r.id === row.id ? confirmed : r)))
             markRowConfirmed(influencersCacheKey(brandId), row.id, confirmed)
 
@@ -1284,7 +1287,7 @@ function InfluencersContent() {
         // than create another.
         dbIds.current.add(realId)
         tempToReal.current.set(rowId, realId)
-        idSwapCallback.current?.(rowId, realId)
+        idSwapCallback.current?.(rowId, realId, true)
         return realId
       } catch {
         return null

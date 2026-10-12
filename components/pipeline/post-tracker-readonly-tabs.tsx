@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import type { ClosedInfluencer } from "@/hooks/useClosedData"
-import { getDeliverables, deliverablePostUrl } from "@/lib/deliverables"
+import { getDeliverables, deliverablePostUrl, effectiveUsageRights } from "@/lib/deliverables"
 import { PaidCollabTab } from "@/components/table-sheet/profile-sidebar"
 
 // Read-only copies of Post Tracker's Order, Post and Paid collab tabs for the
@@ -20,6 +20,8 @@ const STAGE_TO_ORDER_STATUS: Record<string, string> = {
 const STEP_LABEL: Record<string, string> = {
   n_a: "N/A", pending: "Pending", revision_requested: "Revision Requested", approved: "Approved",
 }
+const USAGE_RIGHTS_LABEL: Record<string, string> = { granted: "Granted", pending: "Pending", not_granted: "Not granted" }
+const rightsLabel = (v?: string | null) => USAGE_RIGHTS_LABEL[v ?? ""] ?? "Not discussed"
 const day = (iso: string | null) => (iso ? iso.slice(0, 10) : "")
 
 function Shell({ brandId, children }: { brandId?: string; children: React.ReactNode }) {
@@ -87,10 +89,22 @@ export function ReadOnlyPostTab({ inf, brandId }: { inf: ClosedInfluencer; brand
     <Shell brandId={brandId}>
       {deliverables.length > 0 ? (
         deliverables.map((d, i) => (
-          <Field key={d.id ?? i} label={`${i + 1}. ${d.name || `Deliverable ${i + 1}`}`} value={deliverablePostUrl(d, i, inf.postUrl)} />
+          <div key={d.id ?? i}>
+            <Field label={`${i + 1}. ${d.name || `Deliverable ${i + 1}`}`} value={deliverablePostUrl(d, i, inf.postUrl)} />
+            <div className="pfr">
+              <Field label="Drive link" value={d.driveLink} />
+              <Field label="Usage rights" value={rightsLabel(effectiveUsageRights(d, inf.usageRights))} />
+            </div>
+          </div>
         ))
       ) : (
-        <Field label="Post URL" value={inf.postUrl} />
+        <>
+          <Field label="Post URL" value={inf.postUrl} />
+          <div className="pfr">
+            <Field label="Drive link" value={inf.driveLink} />
+            <Field label="Usage rights" value={rightsLabel(inf.usageRights)} />
+          </div>
+        </>
       )}
       <div className="pfr">
         <Field label="Posted At" value={day(inf.postedAt)} />

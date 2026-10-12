@@ -24,10 +24,7 @@
 //                     is where the Post Tracker writes manual entries
 //   clicks / sales    Attribution.clicks / sales_count / gmv
 //   spend             product cost, fees (paid, else agreed rate), commission_paid
-//
-// Fields with NO storage anywhere in the schema — usage rights, content saved,
-// ad code — are reported as null rather than false, so the UI can say "not
-// tracked" instead of claiming a real zero. See DATA-GAPS below.
+//   usage rights / content saved   lib/deliverables ugcStatus
 
 import { NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
@@ -38,6 +35,7 @@ import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capa
 import { declineBucket, type DeclineBucket } from "@/lib/decline-reasons"
 import { isListDeclined, productCostFromDetails, resolveFees, resolveCommission, resolveCommissionRate } from "@/lib/pipeline-transitions"
 import { goaffproCommissionByInfluencer } from "@/lib/goaffpro-commission"
+import { ugcStatus } from "@/lib/deliverables"
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions)
@@ -260,9 +258,8 @@ export async function GET(req: Request) {
           commissionRate: resolveCommissionRate({ partnerDefault: r.partner?.default_commission, productDetails: r.product_details }),
         }).amount,
 
-        // No column for these two; null means "not tracked".
-        usageRights:  null,
-        contentSaved: null,
+        usageRights:  ugcStatus(productDetails).granted,
+        contentSaved: ugcStatus(productDetails).saved,
         adCode:       Boolean(r.attribution?.spark_ads?.trim()),
 
         deliveredDaysAgo: resolveDeliveredDaysAgo(r.delivered_at),
@@ -480,6 +477,9 @@ function resolveAnalyticsStatus(
     r.approval_status,
     (productDetails.closedStatus as string) ?? null
   )
+
+  // Plain UGC needs no post: keep out of post rate.
+  if ((closed === "Delivered" || closed === "Posted") && productDetails.campaignType === "ugc") return "UGC"
 
   if (closed) {
     switch (closed) {

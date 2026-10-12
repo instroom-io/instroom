@@ -200,6 +200,10 @@ export async function PATCH(
       let details: Record<string, unknown> = {}
       try { details = before?.product_details ? JSON.parse(before.product_details) : {} } catch { details = {} }
       details.campaignType = collaborationType
+      // UGC grants usage rights by default.
+      if ((collaborationType === "ugc" || collaborationType === "ugc-paid") && !details.usageRights) {
+        details.usageRights = "granted"
+      }
       // Campaign deliverables live in the same blob, in the array Post Tracker
       // and the Paid Collaboration editor already read (paidCollab.deliverables).
       if (deliverableNames) {
