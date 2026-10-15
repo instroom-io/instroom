@@ -4,6 +4,7 @@ import { Suspense } from "react"
 import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
 import { SubscriptionStatusProvider } from "@/components/subscription-status-provider"
+import { SubscriptionGate } from "@/components/subscription-gate"
 import { TourProvider } from "@/components/product-tour/tour-provider"
 import InstroomChatbot from "@/components/instroom-chatbot"
 import { DashboardPrefetcher } from "@/components/dashboard-prefetcher"
@@ -51,7 +52,9 @@ export default function DashboardLayout({
           <SubscriptionStatusProvider>
             <div className="flex flex-1 flex-col">
               <div className="@container/main flex flex-1 flex-col gap-2">
-                {children}
+                <Suspense fallback={null}>
+                  <SubscriptionGate>{children}</SubscriptionGate>
+                </Suspense>
               </div>
             </div>
           </SubscriptionStatusProvider>
