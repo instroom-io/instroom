@@ -81,6 +81,7 @@ export interface PipelineInfluencer {
   clicks: number
   salesCount: number
   gmv: number
+  autoOutreach?: { logId: string; state: "scheduled" | "failed"; sendAfter: string; error?: string } | null
 }
 
 interface UsePipelineDataReturn {
@@ -186,6 +187,7 @@ function mapItem(item: any): PipelineInfluencer {
     clicks:          item.clicks         ?? 0,
     salesCount:      item.salesCount     ?? 0,
     gmv:             item.gmv            ?? 0,
+    autoOutreach:    item.autoOutreach   ?? null,
   }
 }
 
@@ -446,6 +448,20 @@ export function seedPipelineFromApproval(brandId: string, seedRow: ApprovedRowSe
   invalidateCache(key)
   markCacheWrite(key)
   return true
+}
+
+/** Updates one card's auto outreach status in the cached board (after Cancel or Retry). */
+export function setPipelineOutreachStatus(
+  brandId: string,
+  brandInfluencerId: string,
+  autoOutreach: PipelineInfluencer["autoOutreach"]
+): void {
+  const key = pipelineCacheKey(brandId)
+  const rows = getCachedData<PipelineInfluencer[]>(key)
+  if (!rows) return
+  markCacheWrite(key)
+  setCachedData(key, rows.map((r) => (r.id === brandInfluencerId ? { ...r, autoOutreach } : r)))
+  markCacheWrite(key)
 }
 
 /** Undo a seed when the approval write turns out to have failed. */

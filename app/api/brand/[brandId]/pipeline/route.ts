@@ -25,6 +25,7 @@
 //      extra Prisma relation objects into memory.
 
 import { NextRequest, NextResponse } from "next/server"
+import { getOutreachStatuses } from "@/lib/auto-outreach-queue"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma, withDbRetry } from "@/lib/prisma"
@@ -252,6 +253,9 @@ export async function GET(
       )
     }
 
+    // Auto outreach status for For Outreach cards.
+    const outreachStatus = await getOutreachStatuses(brandInfluencers.map((bi) => bi.id))
+
     // ── Map to response shape ────────────────────────────────────────────────
     const data = brandInfluencers
       .filter((bi) => bi.influencer !== null) // drop orphaned records
@@ -337,6 +341,8 @@ export async function GET(
           clicks:          bi.attribution?.clicks         ?? 0,
           salesCount:      bi.attribution?.sales_count    ?? 0,
           gmv:             bi.attribution?.gmv ? Number(bi.attribution.gmv) : 0,
+
+          autoOutreach:    outreachStatus.get(bi.id) ?? null,
         }
       })
 

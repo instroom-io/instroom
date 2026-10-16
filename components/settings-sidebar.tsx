@@ -116,6 +116,18 @@ const settingsSections: SettingsSection[] = [
           </svg>
         ),
       },
+      {
+        key: "outreach",
+        label: "Auto Outreach",
+        href: "/dashboard/settings/outreach",
+        icon: (
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" width={14} height={14}>
+            <rect x="1.5" y="3.5" width="10" height="8" rx="1.5" />
+            <path d="M1.5 5l5 3.5 5-3.5" />
+            <path d="M13 6.5l2 1.5-2 1.5" />
+          </svg>
+        ),
+      },
     ],
   },
   {

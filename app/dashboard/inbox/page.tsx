@@ -2171,6 +2171,7 @@ function InboxContent() {
         form.append("includeSignature", String(replyIncludeSignature))
         if (brandId) form.append("brandId", brandId)
         if (!isOutlookThread && selectedEmail.gmailThreadId) form.append("threadId", selectedEmail.gmailThreadId)
+        if (isOutlookThread) form.append("isReply", "true")
         attachmentsToSend.forEach((a) => form.append("attachments", a.file, a.file.name))
         res = await fetch(replyApi, { method: "POST", body: form })
       } else {
@@ -2183,6 +2184,7 @@ function InboxContent() {
           includeSignature: replyIncludeSignature,
         }
         if (!isOutlookThread) replyPayload.threadId = selectedEmail.gmailThreadId
+        else replyPayload.isReply = true
 
         res = await fetch(replyApi, {
           method: "POST",

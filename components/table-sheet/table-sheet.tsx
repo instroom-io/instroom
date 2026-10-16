@@ -217,10 +217,21 @@ function EmptyState({
 /* ═══════════════════════════════════════════════════════════════════════════════
    MAIN TABLE SHEET
    ═══════════════════════════════════════════════════════════════════════════════ */
+/** Fields an approval changes; restores a cancelled one. */
+const approvalFieldsOf = (r: InfluencerRow): Partial<InfluencerRow> => ({
+  approval_status: r.approval_status,
+  transferred_date: r.transferred_date,
+  contact_status: r.contact_status,
+  stage: r.stage,
+  approval_notes: r.approval_notes,
+  decline_reason: r.decline_reason,
+  decline_notes: r.decline_notes,
+})
+
 export default function TableSheet({
   initialRows = [], initialCustomColumns = [],
   onRowsChange, onDeleteRow, onFetchComplete, onRegisterIdSwap,
-  onCustomColumnsChange, onImportRows, onBulkApprove, readOnly = false, brandId,
+  onCustomColumnsChange, onImportRows, onBulkApprove, onBeforeApprove, readOnly = false, brandId,
   subscriptionStatus, onShowTrialModal, canApproveInfluencers = true, onNotify, onLookupFailed, onIdentityChange,
   onCreateDraft, onSaveState, onEnrichmentStart, onEnrichmentFailed, onContactHoldChange,
 }: {
@@ -273,6 +284,8 @@ export default function TableSheet({
   onImportRows?: (rows: InfluencerRow[]) => void
   /** Approves a whole selection in one request; resolves with what the DB stored. */
   onBulkApprove?: (influencerIds: string[]) => Promise<BulkApprovalResult | null>
+  /** Runs before a new approval; false cancels it. */
+  onBeforeApprove?: (influencerIds: string[]) => Promise<boolean>
   readOnly?: boolean
   brandId?: string
   subscriptionStatus?: { status: string; isExpired: boolean; subscription?: { plan?: { name?: string } } | null } | null
@@ -1004,7 +1017,14 @@ export default function TableSheet({
       requestIdentityChange(current, cleanHandle(r.handle), r.platform)
       r = { ...r, handle: current.handle, platform: current.platform, social_link: current.social_link }
     }
-    setRows(prev => { const n = prev.map(x => x.id === r.id ? r : x); onRowsChange?.(n); return n })
+    const save = (next: InfluencerRow) =>
+      setRows(prev => { const n = prev.map(x => x.id === next.id ? next : x); onRowsChange?.(n); return n })
+    if (onBeforeApprove && current && r.approval_status === "Approved" && current.approval_status !== "Approved") {
+      const edited = r
+      void onBeforeApprove([r.id]).then(ok => save(ok ? edited : { ...edited, ...approvalFieldsOf(current) }))
+      return
+    }
+    save(r)
   }
 
   const handleApplyFilters  = (nf: FilterState) => { setFilters(nf); setCurrentPage(1) }
@@ -1028,6 +1048,10 @@ export default function TableSheet({
       .filter(r => selectedRowIds.has(r.id) && !r.id.startsWith("temp-") && !r.is_draft)
       .map(r => r.id)
     if (!ids.length) { setShowBulkTransferConfirm(false); return }
+    if (onBeforeApprove) {
+      setShowBulkTransferConfirm(false)
+      if (!(await onBeforeApprove(ids))) return
+    }
 
     setBulkApproving(true)
     try {
@@ -1881,9 +1905,18 @@ export default function TableSheet({
     void switchIdentity(row, handle, platform)
   }, [addToast, switchIdentity])
 
-  const applyCellValue = useCallback((rowIdx: number, colKey: string, value: string) => {
+  const applyCellValue = useCallback((rowIdx: number, colKey: string, value: string, approvalConfirmed = false) => {
     const actualRow = filteredRows[rowIdx]; const actualRowIdx = rows.findIndex(r => r.id === actualRow.id); if (actualRowIdx === -1) return
     if (colKey === "approval_status" && !canApproveInfluencers) return
+    if (colKey === "approval_status" && value === "Approved" && actualRow.approval_status !== "Approved" && onBeforeApprove && !approvalConfirmed) {
+      const rowId = actualRow.id
+      void onBeforeApprove([rowId]).then(ok => {
+        if (!ok) return
+        const idx = filteredRowsRef.current.findIndex(r => r.id === rowId)
+        if (idx !== -1) applyCellValueRef.current(idx, colKey, value, true)
+      })
+      return
+    }
     if (actualRow.approval_status === "Declined" && isOutreachField(colKey)) return
     const currentRow = rows[actualRowIdx]
     let shouldFetch = false, fetchRowId = currentRow.id, fetchHandle = "", fetchPlatform = ""
@@ -1943,7 +1976,11 @@ export default function TableSheet({
       const typed = cleanedValue
       if (typed) setTimeout(() => checkContactDuplicate(currentRow.id, typed), 0)
     }
-  }, [onRowsChange, customCols, filteredRows, rows, isOutreachField, nicheOptions, locationOptions, scheduleAutoFetch, canApproveInfluencers, checkContactDuplicate, addToast, requestIdentityChange])
+  }, [onRowsChange, customCols, filteredRows, rows, isOutreachField, nicheOptions, locationOptions, scheduleAutoFetch, canApproveInfluencers, checkContactDuplicate, addToast, requestIdentityChange, onBeforeApprove])
+
+  // Latest version, for the popup's resumed call.
+  const applyCellValueRef = useRef(applyCellValue)
+  useEffect(() => { applyCellValueRef.current = applyCellValue }, [applyCellValue])
 
   const addOptionToCol = useCallback((fk: string, no: string) => {
     setCustomCols(prev => { const n = prev.map(c => c.field_key !== fk ? c : { ...c, field_options: [...(c.field_options ?? []), no] }); onCustomColumnsChange?.(n); return n })

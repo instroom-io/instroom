@@ -151,7 +151,14 @@ export function SidebarUserCard({
     <>
       {image && failedSrc !== image ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={image} alt="" className="h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-white/20 @max-[190px]:hidden" />
+        <img
+          src={image}
+          alt=""
+          // Google avatars can refuse requests that send a referrer.
+          referrerPolicy="no-referrer"
+          onError={() => setFailedSrc(image)}
+          className="h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-white/20 @max-[190px]:hidden"
+        />
       ) : (
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/15 text-[11px] font-semibold text-white ring-1 ring-white/20 @max-[190px]:hidden">
           {initials}
