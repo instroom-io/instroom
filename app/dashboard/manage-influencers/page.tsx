@@ -2,6 +2,7 @@
 "use client"
 
 import { useState, useRef, Suspense, useCallback, useEffect } from "react"
+import { AutoOutreachConfirm, type OutreachChoice, type OutreachPreview } from "@/components/auto-outreach-confirm"
 import { useSearchParams, useRouter } from "next/navigation"
 import { useSession } from "next-auth/react"
 
@@ -1435,6 +1436,50 @@ function InfluencersContent() {
   )
 
   // ── handleBulkApprove ─────────────────────────────────────────────────────
+  // Auto outreach popup before an approval.
+  const [outreachPreview, setOutreachPreview] = useState<OutreachPreview | null>(null)
+  const outreachChoice = useRef<((choice: OutreachChoice) => void) | null>(null)
+  const handleBeforeApprove = useCallback(
+    async (influencerIds: string[]): Promise<boolean> => {
+      if (!brandId) return true
+      const url = `/api/brand/${brandId}/auto-outreach/queue`
+      const post = (preview: boolean) =>
+        fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ influencerIds, preview }),
+        }).then((r) => (r.ok ? r.json() : Promise.reject(r)))
+
+      let preview
+      try {
+        preview = await post(true)
+      } catch {
+        notify("error", "Couldn't check auto outreach. Approving without sending.")
+        return true
+      }
+      if (!preview.enabled) return true
+
+      const choice = await new Promise<OutreachChoice>((resolve) => {
+        outreachChoice.current = resolve
+        setOutreachPreview(preview)
+      })
+      setOutreachPreview(null)
+      if (choice === "cancel") return false
+      if (choice === "send") {
+        try {
+          const queued = await post(false)
+          if (queued.queued > 0) {
+            notify("success", `Outreach scheduled for ${queued.queued} influencer${queued.queued === 1 ? "" : "s"}`)
+          }
+        } catch {
+          notify("error", "Approved, but the outreach emails couldn't be scheduled. Please try again from the Pipeline.")
+        }
+      }
+      return true
+    },
+    [brandId, notify]
+  )
+
   // One request for the whole selection instead of one debounced PUT per row.
   // The route applies the writes in a transaction and returns the persisted
   // rows, which TableSheet then renders; the derived caches are marked stale
@@ -1983,6 +2028,7 @@ function InfluencersContent() {
 
   return (
     <div className="flex flex-col gap-4 p-6 relative min-h-screen">
+      <AutoOutreachConfirm preview={outreachPreview} onChoose={(c) => outreachChoice.current?.(c)} />
       {isLoading ? (
         <TableSkeleton rows={10} cols={7} label="Fetching data..." />
       ) : (
@@ -1995,6 +2041,7 @@ function InfluencersContent() {
           onCustomColumnsChange={handleCustomColumnsChange}
           onImportRows={handleImportRows}
           onBulkApprove={handleBulkApprove}
+          onBeforeApprove={handleBeforeApprove}
           onRegisterIdSwap={handleRegisterIdSwap}
           onCreateDraft={handleCreateDraft}
           onContactHoldChange={handleContactHoldChange}

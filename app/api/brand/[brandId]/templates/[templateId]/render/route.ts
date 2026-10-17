@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
+import { fillTemplate } from "@/lib/template-placeholders"
 
 async function checkBrandAccess(brandId: string, userId: string) {
   return prisma.brand.findFirst({
@@ -12,21 +13,12 @@ async function checkBrandAccess(brandId: string, userId: string) {
         { members: { some: { user_id: userId } } },
       ],
     },
-    select: { id: true },
+    select: { id: true, name: true },
   })
 }
 
-function substitute(text: string, name: string, handle: string): string {
-  return text
-    .replace(/\{\{\s*name\s*\}\}/gi, name)
-    .replace(/\{\{\s*handle\s*\}\}/gi, handle)
-}
-
 // GET /api/brand/[brandId]/templates/[templateId]/render?email=<recipient>
-// Substitutes {{name}} / {{handle}} with the matched influencer's real name
-// and social handle, falling back to generic text when the recipient email
-// doesn't match a known influencer — used by every "Use template" picker
-// (Inbox compose, Inbox reply, EmailModal) so there's one substitution path.
+// Fills template placeholders for the recipient.
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ brandId: string; templateId: string }> }
@@ -53,19 +45,25 @@ export async function GET(
       return NextResponse.json({ error: "Not found" }, { status: 404 })
     }
 
+    // Prefer this brand's influencer.
+    const select = { full_name: true, handle: true, platform: true } as const
     const influencer = email
-      ? await prisma.influencer.findFirst({
-          where: { email },
-          select: { full_name: true, handle: true },
-        })
+      ? (await prisma.brandInfluencer.findFirst({
+          where: { brand_id: brandId, influencer: { email } },
+          select: { influencer: { select } },
+        }))?.influencer ??
+        (await prisma.influencer.findFirst({ where: { email }, select }))
       : null
 
-    const name = influencer?.full_name ?? "there"
-    const handle = influencer?.handle ?? ""
-
+    const values = {
+      name: influencer?.full_name,
+      handle: influencer?.handle,
+      platform: influencer?.platform,
+      brand: brand.name,
+    }
     return NextResponse.json({
-      subject: substitute(template.subject, name, handle),
-      body: substitute(template.body, name, handle),
+      subject: fillTemplate(template.subject, values),
+      body: fillTemplate(template.body, values),
     })
   } catch (error: any) {
     console.error("Render template error:", error)

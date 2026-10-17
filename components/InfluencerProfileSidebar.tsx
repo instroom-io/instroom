@@ -120,6 +120,7 @@ const ACTION_COLORS: Record<string, { bg: string; color: string }> = {
   "influencer.submitted":        { bg: "#ffedd5", color: "#9a3412" },
   "influencer.updated":          { bg: "#e0f2fe", color: "#0369a1" },
   "influencer.identity_changed": { bg: "#fef3c7", color: "#92400e" },
+  "outreach.auto_sent":          { bg: "#e0f2fe", color: "#075985" },
 }
 
 function formatActivityDate(iso: string) {
@@ -154,6 +155,8 @@ function formatActivityDetails(action: string, details: Record<string, unknown>)
     case "posttracker.stage_changed":
     case "influencer.identity_changed":
       return `${details.from} → ${details.to}`
+    case "outreach.auto_sent":
+      return details.subject ? `"${details.subject}" to ${details.to}` : ""
     case "influencer.updated": {
       const fields = details.fields as string[] | undefined
       return fields?.length ? `Updated ${fields.length} field${fields.length > 1 ? "s" : ""}` : ""
