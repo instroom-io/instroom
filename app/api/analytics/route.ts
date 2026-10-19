@@ -119,7 +119,7 @@ export async function GET(req: Request) {
         },
         // Campaign spend, entered per partner.
         partner: {
-          select: { product_cost: true, fees_paid: true, commission_paid: true, default_commission: true },
+          select: { commission_paid: true, default_commission: true },
         },
       },
     })
@@ -246,10 +246,8 @@ export async function GET(req: Request) {
         salesQty: Number(r.attribution?.sales_count ?? 0),
         salesAmt: r.attribution?.gmv ? Number(r.attribution.gmv) : 0,
 
-        prodCost:      r.partner
-          ? Number(r.partner.product_cost ?? 0)
-          : productCostFromDetails(r.product_details),
-        feesPaid:      resolveFees({ partnerFeesPaid: r.partner?.fees_paid, productDetails: r.product_details, agreedRate: r.agreed_rate }).amount,
+        prodCost:      productCostFromDetails(r.product_details),
+        feesPaid:      resolveFees({ productDetails: r.product_details, agreedRate: r.agreed_rate }).amount,
         commissionPaid: resolveCommission({
           partnerCommissionPaid: r.partner?.commission_paid,
           productDetails: r.product_details,

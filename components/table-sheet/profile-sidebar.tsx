@@ -13,7 +13,7 @@ import type { CampaignDeliverable } from "@/lib/deliverables"
 import { AttributionTab } from "@/components/shared/attribution-tab"
 import { InfluencerStatsTab } from "@/components/shared/influencer-stats-tab"
 import { HistoryTab, LastEditedBy } from "@/components/InfluencerProfileSidebar"
-import { formatDealRate } from "@/lib/pipeline-transitions"
+import { formatDealRate, paymentMilestones, type PayStructure } from "@/lib/pipeline-transitions"
 import {
   DrawerShell, DrawerHeader, DrawerControl, DrawerTabs, DrawerBody, DrawerActionBar, resolveActiveTab, type DrawerTab,
 } from "@/components/shared/influencer-drawer"
@@ -30,8 +30,15 @@ import {
 type StepStatus = "n_a" | "pending" | "submitted" | "revision_requested" | "resubmitted" | "approved"
 type ContractStatus = "not_started" | "draft" | "sent" | "signed"
 type PostStatus = "pending" | "submitted" | "live"
-type PayStructure = "upfront" | "5050" | "after" | "custom"
 type MilestoneStatus = "unpaid" | "due" | "paid"
+
+/** Fee goes to agreed_rate, the rest to product_details.paidCollab. */
+export interface PaidCollabPayment {
+  agreedRate: number | null
+  payStructure: PayStructure
+  milestoneStatuses: MilestoneStatus[]
+  paymentMethod: string
+}
 
 interface PaidDeliverable {
   id: number
@@ -79,11 +86,14 @@ function pcStatusSelectStyle(status: string, disabled?: boolean) {
   }
 }
 
-export function PaidCollabTab({ influencerName, rateHint, initialDeliverables }: {
+export function PaidCollabTab({ influencerName, rateHint, initialDeliverables, initialPayment, onPaymentChange }: {
   influencerName: string
   rateHint?: number
   /** The influencer's saved campaign deliverables (lib/deliverables), when known. */
   initialDeliverables?: CampaignDeliverable[]
+  initialPayment?: { payStructure?: string; milestoneStatuses?: string[]; paymentMethod?: string } | null
+  /** Saves each Payment change; without it nothing is saved. */
+  onPaymentChange?: (payment: PaidCollabPayment) => void
 }) {
   const [contractEnabled, setContractEnabled] = useState(false)
   const [contractStatus, setContractStatus] = useState<ContractStatus>("not_started")
@@ -108,20 +118,36 @@ export function PaidCollabTab({ influencerName, rateHint, initialDeliverables }:
   )
   const nextIdRef = React.useRef(deliverables.reduce((m, d) => Math.max(m, Number(d.id) || 0), 0) + 1)
 
-  // Payment starts in a blank / zero state. An agreed fee already stored on the
-  // record is real data and is still honoured; everything else (no rate, or 0)
-  // starts empty so nothing is calculated until the user enters a fee. No
-  // template amount, no pre-marked "paid" milestone.
   const initialRate = rateHint && rateHint > 0 ? String(rateHint) : ""
   const [rate, setRate] = useState(initialRate)
-  // Committed value that drives every amount — the draft above only becomes
-  // committed once the user leaves the field or presses Enter, so milestones
-  // don't churn on each keystroke.
+  // Set on blur or Enter, so milestones don't change on each keystroke.
   const [committedRate, setCommittedRate] = useState(initialRate)
-  const [paymentMethod, setPaymentMethod] = useState("Bank transfer")
-  const [paymentStatus, setPaymentStatus] = useState("Unpaid")
-  const [payStructure, setPayStructure] = useState<PayStructure>("5050")
-  const [milestoneStatuses, setMilestoneStatuses] = useState<MilestoneStatus[]>([])
+  const [paymentMethod, setPaymentMethod] = useState(initialPayment?.paymentMethod || "Bank transfer")
+  const [payStructure, setPayStructure] = useState<PayStructure>(() => {
+    const s = initialPayment?.payStructure
+    return s === "upfront" || s === "after" || s === "custom" ? s : "5050"
+  })
+  const [milestoneStatuses, setMilestoneStatuses] = useState<MilestoneStatus[]>(() =>
+    (initialPayment?.milestoneStatuses ?? []).map(s => (s === "paid" || s === "due" ? s : "unpaid"))
+  )
+
+  const savePayment = (patch: Partial<PaidCollabPayment>) => {
+    if (!onPaymentChange) return
+    const fee = Math.max(0, parseFloat(committedRate) || 0)
+    onPaymentChange({
+      agreedRate: fee > 0 ? fee : null,
+      payStructure,
+      milestoneStatuses: paymentMilestones(fee, payStructure).map((_, i) => milestoneStatuses[i] ?? "unpaid"),
+      paymentMethod,
+      ...patch,
+    })
+  }
+  const commitRate = () => {
+    if (rate === committedRate) return
+    setCommittedRate(rate)
+    const fee = Math.max(0, parseFloat(rate) || 0)
+    savePayment({ agreedRate: fee > 0 ? fee : null })
+  }
 
   const updateDeliverable = (id: number, patch: Partial<PaidDeliverable>) =>
     setDeliverables(ds => ds.map(d => d.id === id ? { ...d, ...patch } : d))
@@ -150,31 +176,25 @@ export function PaidCollabTab({ influencerName, rateHint, initialDeliverables }:
   const doneSteps = steps.filter(Boolean).length
   const pct = steps.length > 0 ? Math.round((doneSteps / steps.length) * 100) : 0
 
-  // Amounts derive from the committed fee only, and never go negative
+  // Same split as resolveFees, so Stats counts what this shows.
   const rateNum = Math.max(0, parseFloat(committedRate) || 0)
   const hasAgreedFee = rateNum > 0
-  const milestones: { label: string; amount: number; dot: string }[] =
-    payStructure === "upfront" ? [{ label: "100% upfront — before shoot", amount: rateNum, dot: "#1fae5b" }]
-    : payStructure === "5050" ? [{ label: "50% upfront — before shoot", amount: rateNum / 2, dot: "#1fae5b" }, { label: "50% — after post goes live", amount: rateNum / 2, dot: "#ef9f27" }]
-    : payStructure === "after" ? [{ label: "100% — after all deliverables", amount: rateNum, dot: "#ef9f27" }]
-    : (() => {
-        const p1 = Math.round(rateNum * 0.4), p2 = Math.round(rateNum * 0.4), p3 = rateNum - p1 - p2
-        return [
-          { label: "Payment 1 — upfront", amount: p1, dot: "#1fae5b" },
-          { label: "Payment 2 — after content approved", amount: p2, dot: "#ef9f27" },
-          { label: "Payment 3 — after post goes live", amount: p3, dot: "#aaaaaa" },
-        ]
-      })()
+  const milestones = paymentMilestones(rateNum, payStructure)
 
-  useEffect(() => {
-    setMilestoneStatuses(prev => {
-      const next = milestones.map((_, i) => prev[i] ?? "unpaid")
-      return next
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [payStructure])
+  const changeStructure = (s: PayStructure) => {
+    const next = paymentMilestones(rateNum, s).map((_, i) => milestoneStatuses[i] ?? "unpaid")
+    setPayStructure(s)
+    setMilestoneStatuses(next)
+    savePayment({ payStructure: s, milestoneStatuses: next })
+  }
+  const changeMilestone = (i: number, status: MilestoneStatus) => {
+    const next = milestones.map((_, idx) => idx === i ? status : milestoneStatuses[idx] ?? "unpaid")
+    setMilestoneStatuses(next)
+    savePayment({ milestoneStatuses: next })
+  }
 
   const totalPaid = milestones.reduce((sum, m, i) => sum + (milestoneStatuses[i] === "paid" ? m.amount : 0), 0)
+  const paymentStatus = totalPaid <= 0 ? "Unpaid" : totalPaid >= rateNum ? "Fully paid" : "Partially paid"
 
   const P = {
     label: { fontSize: 10, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase" as const, letterSpacing: "0.06em" },
@@ -371,26 +391,24 @@ export function PaidCollabTab({ influencerName, rateHint, initialDeliverables }:
             style={P.smallInput}
             value={rate}
             onChange={e => setRate(e.target.value)}
-            onBlur={() => setCommittedRate(rate)}
-            onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); setCommittedRate(rate) } }}
+            onBlur={commitRate}
+            onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); commitRate() } }}
           />
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <label style={{ fontSize: 11, color: "#888" }}>Payment method</label>
-          <select style={P.smallInput} value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)}>
+          <select style={P.smallInput} value={paymentMethod} onChange={e => { setPaymentMethod(e.target.value); savePayment({ paymentMethod: e.target.value }) }}>
             <option>Bank transfer</option><option>PayPal</option><option>Wise</option><option>GCash</option><option>Other</option>
           </select>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <label style={{ fontSize: 11, color: "#888" }}>Overall payment status</label>
-          <select style={P.smallInput} value={paymentStatus} onChange={e => setPaymentStatus(e.target.value)}>
-            <option>Unpaid</option><option>Partially paid</option><option>Fully paid</option>
-          </select>
+          <div style={{ ...P.smallInput, background: "#f9fafb", color: "#555" }} title="Set by the milestones marked Paid below">{paymentStatus}</div>
         </div>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 4, maxWidth: 260, marginBottom: 14 }}>
         <label style={{ fontSize: 11, color: "#888" }}>Payment structure</label>
-        <select style={P.smallInput} value={payStructure} onChange={e => setPayStructure(e.target.value as PayStructure)}>
+        <select style={P.smallInput} value={payStructure} onChange={e => changeStructure(e.target.value as PayStructure)}>
           <option value="upfront">100% upfront</option>
           <option value="5050">50% / 50%</option>
           <option value="after">After all deliverables</option>
@@ -414,7 +432,7 @@ export function PaidCollabTab({ influencerName, rateHint, initialDeliverables }:
             <span style={{ fontSize: 13, fontWeight: 600, color: "#222" }}>${m.amount.toLocaleString()}</span>
             <select
               value={milestoneStatuses[i] || "unpaid"}
-              onChange={e => setMilestoneStatuses(s => s.map((v, idx) => idx === i ? e.target.value as MilestoneStatus : v))}
+              onChange={e => changeMilestone(i, e.target.value as MilestoneStatus)}
               style={pcStatusSelectStyle(milestoneStatuses[i] || "unpaid")}
             >
               <option value="unpaid">Pending</option><option value="due">Due</option><option value="paid">Paid</option>

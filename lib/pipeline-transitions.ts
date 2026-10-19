@@ -153,34 +153,83 @@ export function isListDeclined(approvalStatus: string | null | undefined, contac
   return approvalStatus === "Declined" && contactStatus !== "not_interested"
 }
 
-/** Product Cost saved from the profile order form (product_details.productCost). */
+/** unitCost null = not entered. */
+export type OrderProduct = { name: string; qty: number; unitCost: number | null }
+
+/** product_details.products; older records only have names in `note` (qty 1, no cost). */
+export function orderProductsOf(details: unknown): OrderProduct[] {
+  const d = (details && typeof details === "object" ? details : {}) as { products?: unknown; note?: unknown }
+  if (Array.isArray(d.products)) {
+    return d.products.flatMap((p): OrderProduct[] => {
+      if (!p || typeof p !== "object") return []
+      const { name, qty, unitCost } = p as Record<string, unknown>
+      const q = Number(qty), c = unitCost == null || unitCost === "" ? NaN : Number(unitCost)
+      return [{
+        name: typeof name === "string" ? name : "",
+        qty: Number.isFinite(q) && q > 0 ? q : 1,
+        unitCost: Number.isFinite(c) && c >= 0 ? c : null,
+      }]
+    })
+  }
+  if (typeof d.note === "string") {
+    return d.note.split("\n").map(x => x.trim()).filter(Boolean).map(name => ({ name, qty: 1, unitCost: null }))
+  }
+  return []
+}
+
+export function productCostOf(products: readonly OrderProduct[]): number {
+  return products.reduce((sum, p) => sum + (p.unitCost ?? 0) * p.qty, 0)
+}
+
 export function productCostFromDetails(productDetails: string | null | undefined): number {
   try {
-    const cost = Number(JSON.parse(productDetails || "{}")?.productCost)
-    return Number.isFinite(cost) ? cost : 0
+    return productCostOf(orderProductsOf(JSON.parse(productDetails || "{}")))
   } catch {
     return 0
   }
 }
 
-export type FeeSource = "paid" | "agreed" | "none"
+export type PayStructure = "upfront" | "5050" | "after" | "custom"
 
-/** Fees: paid if entered, else agreed rate. A partner's 0 means "not entered". */
-export function resolveFees({ partnerFeesPaid, productDetails, agreedRate }: {
-  partnerFeesPaid?: number | string | { toString(): string } | null
+export function paymentMilestones(agreed: number, structure: PayStructure | null | undefined): { label: string; amount: number; dot: string }[] {
+  const fee = Number.isFinite(agreed) ? Math.max(0, agreed) : 0
+  switch (structure) {
+    case "upfront": return [{ label: "100% upfront — before shoot", amount: fee, dot: "#1fae5b" }]
+    case "after": return [{ label: "100% — after all deliverables", amount: fee, dot: "#ef9f27" }]
+    case "custom": {
+      const p1 = Math.round(fee * 0.4), p2 = Math.round(fee * 0.4), p3 = fee - p1 - p2
+      return [
+        { label: "Payment 1 — upfront", amount: p1, dot: "#1fae5b" },
+        { label: "Payment 2 — after content approved", amount: p2, dot: "#ef9f27" },
+        { label: "Payment 3 — after post goes live", amount: p3, dot: "#aaaaaa" },
+      ]
+    }
+    default: return [
+      { label: "50% upfront — before shoot", amount: fee / 2, dot: "#1fae5b" },
+      { label: "50% — after post goes live", amount: fee / 2, dot: "#ef9f27" },
+    ]
+  }
+}
+
+export function totalPaidOf(agreed: number, structure: PayStructure | null | undefined, statuses: readonly (string | null | undefined)[] | null | undefined): number {
+  return paymentMilestones(agreed, structure).reduce((sum, m, i) => sum + (statuses?.[i] === "paid" ? m.amount : 0), 0)
+}
+
+export type FeeSource = "paid" | "none"
+
+/** Fees: milestones marked Paid in Paid collab details, else $0. */
+export function resolveFees({ productDetails, agreedRate }: {
   productDetails?: string | null
   agreedRate?: number | string | { toString(): string } | null
-}): { amount: number; source: FeeSource } {
-  const partner = Number(partnerFeesPaid ?? 0)
-  if (Number.isFinite(partner) && partner > 0) return { amount: partner, source: "paid" }
+}): { amount: number; agreed: number; source: FeeSource } {
+  const rawAgreed = Number(agreedRate ?? 0)
+  const agreed = Number.isFinite(rawAgreed) && rawAgreed > 0 ? rawAgreed : 0
+  let amount = 0
   try {
-    const raw = JSON.parse(productDetails || "{}")?.feesPaid
-    const typed = raw == null || raw === "" ? NaN : Number(raw)
-    if (Number.isFinite(typed)) return { amount: typed, source: "paid" }
-  } catch { /* unreadable details: fall through */ }
-  const agreed = Number(agreedRate ?? 0)
-  if (Number.isFinite(agreed) && agreed > 0) return { amount: agreed, source: "agreed" }
-  return { amount: 0, source: "none" }
+    const pc = JSON.parse(productDetails || "{}")?.paidCollab
+    if (pc && Array.isArray(pc.milestoneStatuses)) amount = totalPaidOf(agreed, pc.payStructure, pc.milestoneStatuses)
+  } catch { /* unreadable details: nothing paid */ }
+  return { amount, agreed, source: amount > 0 ? "paid" : "none" }
 }
 
 /** Commission rate (%): partner default, else product_details.commissionRate. */

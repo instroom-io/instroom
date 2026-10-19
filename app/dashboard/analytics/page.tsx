@@ -1025,11 +1025,7 @@ function AnalyticsPageContent() {
     const influencersWithSales = dataToUse.filter(i => i.pipelineStatus === "Posted" && (i.salesQty || 0) > 0).length
     const totalProductCost = dataToUse.reduce((sum, i) => sum + (i.prodCost || 0), 0)
 
-    // Spend/ROI metrics — every component is a stored per-partner figure
-    // (BrandPartner.fees_paid / commission_paid / product_cost). The previous
-    // code assumed a flat $300 fee per posted influencer and a 10% commission,
-    // which invented spend that was never recorded and made ROAS/ROI/profit
-    // fiction whenever the real figures differed.
+    // Recorded spend only (see resolveFees, resolveCommission, productCostFromDetails).
     const totalFeesPaid = dataToUse.reduce((sum, i) => sum + (i.feesPaid || 0), 0)
     const totalCommPaid = dataToUse.reduce((sum, i) => sum + (i.commissionPaid || 0), 0)
     const totalSpend = totalProductCost + totalFeesPaid + totalCommPaid

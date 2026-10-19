@@ -97,7 +97,7 @@ export async function GET(
 
     const brandInfluencerInclude = {
       attribution: true,
-      partner: { select: { product_cost: true, default_commission: true } },
+      partner: { select: { default_commission: true } },
       influencer: {
         select: {
           id: true,
@@ -302,9 +302,7 @@ export async function GET(
           clicks: bi.attribution?.clicks               ?? 0,
           sales_count: bi.attribution?.sales_count     ?? 0,
           gmv: bi.attribution?.gmv ? Number(bi.attribution.gmv) : 0,
-          product_cost: bi.partner
-            ? Number(bi.partner.product_cost)
-            : productCostFromDetails(bi.product_details),
+          product_cost: productCostFromDetails(bi.product_details),
           commission_rate: resolveCommissionRate({ partnerDefault: bi.partner?.default_commission, productDetails: bi.product_details }),
           created_at: bi.created_at.toISOString(),
           updated_at: bi.updated_at.toISOString(),

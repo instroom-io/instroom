@@ -30,7 +30,7 @@ import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma, withDbRetry } from "@/lib/prisma"
 import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
-import { resolveCommissionRate } from "@/lib/pipeline-transitions"
+import { resolveCommissionRate, resolveFees } from "@/lib/pipeline-transitions"
 
 // ─── Pipeline status derivation ───────────────────────────────────────────────
 // Pure function — no DB access, called in a tight .map() loop.
@@ -302,7 +302,8 @@ export async function GET(
           niche:           inf.niche             || "",
           gender:          inf.gender            || "",
           commissionRate:  resolveCommissionRate({ partnerDefault: bi.partner?.default_commission, productDetails: bi.product_details }),
-          location:        inf.location          || "",
+          feesPaid:        resolveFees({ productDetails: bi.product_details, agreedRate: bi.agreed_rate }).amount,
+          location:       inf.location          || "",
           email:           inf.email             || "",
           profileImageUrl: inf.profile_image_url || null,
 

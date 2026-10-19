@@ -24,6 +24,7 @@ import {
 import { invalidateInfluencerDerivedCaches, closedCacheKey } from "@/lib/cache-invalidation"
 import { parseMetricInput } from "@/lib/post-tracker-status"
 import type { CampaignDeliverable } from "@/lib/deliverables"
+import type { PayStructure, OrderProduct } from "@/lib/pipeline-transitions"
 import { mutationErrorMessage } from "@/lib/user-facing-error"
 
 /** Stable empty reference used before the first payload arrives. */
@@ -118,10 +119,13 @@ export interface PaidCollabData {
   scriptEnabled: boolean
   postStatus: string
   deliverables: CollabDeliverable[]
-  agreedRate: number
-  payStructure: "upfront" | "5050" | "after" | "custom"
+  /** Unused: the fee is the agreed_rate column. */
+  agreedRate?: number
+  payStructure: PayStructure
+  /** Per milestone: unpaid | due | paid */
   milestoneStatuses: string[]
   milestoneProofLinks: string[]
+  paymentMethod?: string
 }
 
 // One shape for campaign deliverables everywhere — see lib/deliverables.ts.
@@ -145,6 +149,8 @@ export interface OrderDetailsFields {
   /** Human-typed product note — kept separate from the Shopify-order JSON
    *  that shares the same underlying column. */
   note?: string
+  /** Also rewrites `note` with the names. */
+  products?: OrderProduct[]
   trackingNumber?: string
   shippedAt?: string
   deliveredAt?: string
@@ -199,7 +205,8 @@ interface UseClosedDataReturn {
     newColumn: ClosedColumn,
     options?: { resetWorkflow?: boolean; deferDerivedInvalidation?: boolean; notes?: string }
   ) => Promise<UpdateColumnResult>
-  updatePaidCollab: (id: string, paidCollabData: PaidCollabData) => Promise<boolean>
+  /** `agreedRate`: null clears. */
+  updatePaidCollab: (id: string, paidCollabData: PaidCollabData, agreedRate?: number | null) => Promise<boolean>
   /** "Mark as completed" on a Posted row — moves it to the Completed column. */
   markCompleted: (id: string, completed: boolean) => Promise<UpdateColumnResult>
   updateCampaignType: (id: string, campaignType: string) => Promise<boolean>
@@ -231,6 +238,19 @@ interface UseClosedDataReturn {
   /** Processing wording for the write in flight; null takes "Saving changes…". */
   saveMessage: string | null
   refetch: () => void
+}
+
+/** Mirrors the closed PATCH route's product_details write. */
+function withOrderProducts(productDetails: string | null, fields: Pick<OrderDetailsFields, "note" | "products">): string {
+  let details: Record<string, unknown>
+  try { details = JSON.parse(productDetails || "{}") ?? {} } catch { details = { note: productDetails } }
+  if (fields.note !== undefined) details.note = fields.note
+  if (fields.products !== undefined) {
+    const products = fields.products.filter(p => p.name.trim() || p.unitCost != null).map(p => ({ ...p, name: p.name.trim() }))
+    details.products = products
+    details.note = products.map(p => p.name).filter(Boolean).join("\n")
+  }
+  return JSON.stringify(details)
 }
 
 // ─── Infer script/content status from paidCollabData ─────────────────────────
@@ -652,7 +672,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
 
   // ── Update Paid Collab (optimistic) ───────────────────────────────────────
   const updatePaidCollab = useCallback(
-    async (id: string, paidCollabData: PaidCollabData): Promise<boolean> => {
+    async (id: string, paidCollabData: PaidCollabData, agreedRate?: number | null): Promise<boolean> => {
       if (!brandId) return false
 
       // Claim this row's newest write and open the write window BEFORE the
@@ -670,6 +690,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
             ...item,
             paidCollabData,
             ...inferContentStatuses({ paidCollabData }),
+            ...(agreedRate !== undefined ? { agreedRate: agreedRate && agreedRate > 0 ? agreedRate : null } : {}),
           }
         )
       })
@@ -696,7 +717,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         const res = await rowFetch(id, `/api/brand/${brandId}/closed/${id}`, {
           method:  "PATCH",
           headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify({ paidCollabData }),
+          body:    JSON.stringify({ paidCollabData, ...(agreedRate !== undefined ? { agreedRate } : {}) }),
         })
 
         if (!res.ok) {
@@ -874,6 +895,9 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
             ...(fields.currency !== undefined && { currency: fields.currency || null }),
             ...(fields.deliverables !== undefined && { deliverables: fields.deliverables || null }),
             ...(fields.notes !== undefined && { notes: fields.notes || "" }),
+            ...((fields.note !== undefined || fields.products !== undefined) && {
+              productDetails: withOrderProducts(item.productDetails, fields),
+            }),
           }
         })
       })

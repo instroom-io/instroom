@@ -48,7 +48,7 @@ export async function GET(
           select: { follower_count: true, engagement_rate: true, avg_likes: true, avg_comments: true, avg_views: true },
         },
         attribution: { select: { clicks: true, sales_count: true, gmv: true } },
-        partner: { select: { product_cost: true, fees_paid: true, commission_paid: true, default_commission: true } },
+        partner: { select: { commission_paid: true, default_commission: true } },
       },
     })
     if (!bi) {
@@ -57,8 +57,8 @@ export async function GET(
 
     const agreedRate = bi.agreed_rate ? Number(bi.agreed_rate) : null
     // Same product cost, fees and commission rules as Analytics.
-    const productCost = bi.partner ? Number(bi.partner.product_cost) : productCostFromDetails(bi.product_details)
-    const fees = resolveFees({ partnerFeesPaid: bi.partner?.fees_paid, productDetails: bi.product_details, agreedRate })
+    const productCost = productCostFromDetails(bi.product_details)
+    const fees = resolveFees({ productDetails: bi.product_details, agreedRate })
     const feesPaid = fees.amount
     const revenue = bi.attribution?.gmv ? Number(bi.attribution.gmv) : 0
     const commissionRate = resolveCommissionRate({ partnerDefault: bi.partner?.default_commission, productDetails: bi.product_details })

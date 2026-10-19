@@ -3,6 +3,8 @@ import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import { assignGoAffProCoupon } from "@/lib/goaffpro-provision"
+import { resolveCommission, resolveCommissionRate } from "@/lib/pipeline-transitions"
+import { goaffproCommissionByInfluencer } from "@/lib/goaffpro-commission"
 
 // Read for drawers whose own data doesn't carry attribution (e.g. Post Tracker's).
 export async function GET(
@@ -33,12 +35,33 @@ export async function GET(
     const bi = await prisma.brandInfluencer.findFirst({
       where: { id: brandInfluencerId, brand_id: brandId },
       select: {
-        attribution: { select: { coupon: true, ref_code: true, affiliate_link: true, spark_ads: true } },
+        product_details: true,
+        attribution: { select: { coupon: true, ref_code: true, affiliate_link: true, spark_ads: true, gmv: true } },
+        partner: { select: { default_commission: true, commission_paid: true } },
       },
     })
     if (!bi) {
       return NextResponse.json({ error: "Not found" }, { status: 404 })
     }
+
+    // A partner's 0 means not entered.
+    let commissionPaid: number | null = null
+    const partnerPaid = Number(bi.partner?.commission_paid ?? 0)
+    if (partnerPaid > 0) commissionPaid = partnerPaid
+    else {
+      try {
+        const raw = JSON.parse(bi.product_details || "{}")?.commissionPaid
+        if (raw != null && raw !== "" && Number.isFinite(Number(raw))) commissionPaid = Number(raw)
+      } catch { /* unreadable details */ }
+    }
+
+    // What a blank Commission paid works out to, as in Stats.
+    const commissionRate = resolveCommissionRate({ partnerDefault: bi.partner?.default_commission, productDetails: bi.product_details })
+    const calculated = resolveCommission({
+      goaffproCommission: (await goaffproCommissionByInfluencer(brandId, [brandInfluencerId])).get(brandInfluencerId) ?? null,
+      revenue: bi.attribution?.gmv ? Number(bi.attribution.gmv) : 0,
+      commissionRate,
+    })
 
     return NextResponse.json({
       data: {
@@ -46,6 +69,9 @@ export async function GET(
         refCode: bi.attribution?.ref_code ?? null,
         affiliateLink: bi.attribution?.affiliate_link ?? null,
         sparkAds: bi.attribution?.spark_ads ?? null,
+        commissionRate,
+        commissionPaid,
+        commissionCalculated: { amount: calculated.amount, source: calculated.source },
       },
     })
   } catch (error) {
@@ -66,13 +92,11 @@ export async function PATCH(
 
     const { brandId, brandInfluencerId } = await params
     const body = await req.json()
-    const { coupon, affiliateLink, sparkAds, productCost, feesPaid, agreedRate, commissionRate, commissionPaid, clicks, sales, revenue } = body as {
+    // Fees and product cost are set in their own tabs.
+    const { coupon, affiliateLink, sparkAds, commissionRate, commissionPaid, clicks, sales, revenue } = body as {
       coupon?: string | null
       affiliateLink?: string | null
       sparkAds?: string | null
-      productCost?: string | number | null
-      feesPaid?: string | number | null
-      agreedRate?: string | number | null
       commissionRate?: string | number | null
       commissionPaid?: string | number | null
       clicks?: string | number | null
@@ -107,15 +131,6 @@ export async function PATCH(
       const n = Number(raw)
       return Number.isFinite(n) && n >= 0 ? n : "invalid"
     }
-    const parsedProductCost = parseMoney(productCost)
-    const parsedFeesPaid = parseMoney(feesPaid)
-    if (parsedProductCost === "invalid") {
-      return NextResponse.json({ error: "Product cost must be a positive number" }, { status: 400 })
-    }
-    if (parsedFeesPaid === "invalid") {
-      return NextResponse.json({ error: "Fees paid must be a positive number" }, { status: 400 })
-    }
-    const parsedAgreedRate = parseMoney(agreedRate)
     const parsedCommissionPaid = parseMoney(commissionPaid)
     const rateMoney = parseMoney(typeof commissionRate === "string" ? commissionRate.replace(/%/g, "") : commissionRate)
     const parsedCommissionRate = typeof rateMoney === "number" && rateMoney > 100 ? "invalid" : rateMoney
@@ -124,9 +139,6 @@ export async function PATCH(
     }
     if (parsedCommissionRate === "invalid") {
       return NextResponse.json({ error: "Commission rate must be between 0 and 100" }, { status: 400 })
-    }
-    if (parsedAgreedRate === "invalid") {
-      return NextResponse.json({ error: "Agreed rate must be a positive number" }, { status: 400 })
     }
 
     // ── Access check — only brand owner/members can edit attribution data ────
@@ -183,21 +195,12 @@ export async function PATCH(
       },
     })
 
-    if (parsedAgreedRate !== undefined) {
-      await prisma.brandInfluencer.update({
-        where: { id: brandInfluencerId },
-        data: { agreed_rate: parsedAgreedRate },
-      })
-    }
-
     // Brand Partners keep these on the partner record; others in product_details.
-    if (parsedProductCost !== undefined || parsedFeesPaid !== undefined || parsedCommissionPaid !== undefined || parsedCommissionRate !== undefined) {
+    if (parsedCommissionPaid !== undefined || parsedCommissionRate !== undefined) {
       if (brandInfluencer.partner) {
         await prisma.brandPartner.update({
           where: { id: brandInfluencer.partner.id },
           data: {
-            ...(parsedProductCost !== undefined ? { product_cost: parsedProductCost ?? 0 } : {}),
-            ...(parsedFeesPaid !== undefined ? { fees_paid: parsedFeesPaid ?? 0 } : {}),
             ...(parsedCommissionPaid !== undefined ? { commission_paid: parsedCommissionPaid ?? 0 } : {}),
             ...(parsedCommissionRate !== undefined ? { default_commission: parsedCommissionRate ?? 0 } : {}),
           },
@@ -212,8 +215,6 @@ export async function PATCH(
             if (v === null) delete d[key]
             else d[key] = v
           }
-          setOrClear("productCost", parsedProductCost)
-          setOrClear("feesPaid", parsedFeesPaid)
           setOrClear("commissionPaid", parsedCommissionPaid)
           setOrClear("commissionRate", parsedCommissionRate)
           await prisma.brandInfluencer.update({
@@ -248,8 +249,6 @@ export async function PATCH(
         coupon: updated.coupon,
         affiliateLink: updated.affiliate_link,
         sparkAds: updated.spark_ads,
-        ...(parsedProductCost !== undefined ? { productCost: parsedProductCost } : {}),
-        ...(parsedFeesPaid !== undefined ? { feesPaid: parsedFeesPaid } : {}),
       },
       goAffPro,
     })

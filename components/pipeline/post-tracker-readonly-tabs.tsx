@@ -4,6 +4,7 @@ import Link from "next/link"
 import type { ClosedInfluencer } from "@/hooks/useClosedData"
 import { getDeliverables, deliverablePostUrl, effectiveUsageRights } from "@/lib/deliverables"
 import { PaidCollabTab } from "@/components/table-sheet/profile-sidebar"
+import { orderProductsOf, productCostOf, type OrderProduct } from "@/lib/pipeline-transitions"
 
 // Read-only copies of Post Tracker's Order, Post and Paid collab tabs for the
 // Pipeline drawer. Editing stays in Post Tracker; layout mirrors its drawer.
@@ -63,12 +64,16 @@ export function ReadOnlyTabPlaceholder({ loading, brandId }: { loading: boolean;
 }
 
 export function ReadOnlyOrderTab({ inf, brandId }: { inf: ClosedInfluencer; brandId?: string }) {
-  let productDetails = ""
-  try { productDetails = (JSON.parse(inf.productDetails || "{}") as { note?: string }).note || "" } catch { productDetails = inf.productDetails || "" }
+  let products: OrderProduct[] = []
+  try { products = orderProductsOf(JSON.parse(inf.productDetails || "{}")) } catch { products = orderProductsOf({ note: inf.productDetails || "" }) }
   return (
     <Shell brandId={brandId}>
       <Field label="Order Status" value={STAGE_TO_ORDER_STATUS[inf.closedStatus]} />
-      <Field label="Product Details" value={productDetails} />
+      {products.length === 0 ? <Field label="Product Details" value="" /> : products.map((p, i) => (
+        <Field key={i} label={i === 0 ? "Product Details" : ""}
+          value={`${p.name || `Product ${i + 1}`} · ${p.qty} × ${p.unitCost != null ? `$${p.unitCost.toLocaleString()}` : "no cost"}`} />
+      ))}
+      <Field label="Product Cost" value={`$${productCostOf(products).toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
       <Field label="Tracking Number" value={inf.trackingNumber} />
       <div className="pfr">
         <Field label="Shipped At" value={day(inf.shippedAt)} />
@@ -130,6 +135,7 @@ export function ReadOnlyPaidCollabTab({ inf, brandId }: { inf: ClosedInfluencer;
         influencerName={inf.influencer}
         rateHint={inf.agreedRate ?? undefined}
         initialDeliverables={getDeliverables(inf.paidCollabData).map((d, i) => ({ ...d, postUrl: deliverablePostUrl(d, i, inf.postUrl) }))}
+        initialPayment={inf.paidCollabData}
       />
     </Shell>
   )

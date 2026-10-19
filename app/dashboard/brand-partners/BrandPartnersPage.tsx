@@ -7,7 +7,7 @@ import NewCampaignModal from "./NewCampaignModal"
 import InfluencerProfileSidebar from "./InfluencerProfileSidebar"
 import { IconSearch, IconFilter, IconBuildingStore, IconX } from "@tabler/icons-react"
 import { getPlatformLabel } from "@/components/table-sheet/utils"
-import { resolveFees } from "@/lib/pipeline-transitions"
+import { resolveFees, productCostFromDetails } from "@/lib/pipeline-transitions"
 import { DEFAULT_PLATFORMS } from "@/components/table-sheet/constants"
 import { ReactNode } from "react"
 import { useBrandTaxonomy } from "@/hooks/useBrandTaxonomy"
@@ -298,11 +298,9 @@ export default function BrandPartnersPage({ brandId }: Props) {
       const nameParts = (inf.full_name || inf.handle.replace("@", "")).split(" ")
 
       // ── Revenue is GMV (what the influencer actually generated in sales) ──
-      // agreed_rate is what you PAY the influencer — a cost, not revenue —
-      // so it's folded into totalSpend below instead of treated as rev.
       const gmv        = bi.gmv != null ? Number(bi.gmv) : 0
-      const prodCost   = bp ? Number(bp.product_cost) : 0
-      const feesPaid   = bi.fees_resolved ?? resolveFees({ partnerFeesPaid: bp?.fees_paid, productDetails: bi.product_details, agreedRate: bi.agreed_rate }).amount
+      const prodCost   = bi.product_cost_resolved ?? productCostFromDetails(bi.product_details)
+      const feesPaid   = bi.fees_resolved ?? resolveFees({ productDetails: bi.product_details, agreedRate: bi.agreed_rate }).amount
       const commPaid   = bi.commission_paid_resolved ?? (bp ? Number(bp.commission_paid) : 0)
 
       const totalSpend = prodCost + feesPaid + commPaid

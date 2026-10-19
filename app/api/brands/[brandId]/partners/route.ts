@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { checkBrandAccess } from "@/lib/brand-access"
-import { resolveFees, resolveCommissionRate, resolveCommission } from "@/lib/pipeline-transitions"
+import { resolveFees, resolveCommissionRate, resolveCommission, productCostFromDetails } from "@/lib/pipeline-transitions"
 import { goaffproCommissionByInfluencer } from "@/lib/goaffpro-commission"
 
 // Re-flattens the Attribution relation back onto the response object so
@@ -105,14 +105,13 @@ function flattenAttribution<T extends { attribution?: { affiliate_id: string | n
   }
 }
 
-/** Fees and commission, resolved with the same rules as Stats and Analytics. */
+/** Same spend rules as Stats and Analytics. */
 function withResolvedFees<T extends {
   id: string; product_details: string | null; agreed_rate: unknown; gmv: number
   partner: { fees_paid: unknown; default_commission: unknown; commission_paid: unknown } | null
 }>(bi: T, goaffpro: Map<string, number>) {
   const { product_details, ...rest } = bi
   const fees = resolveFees({
-    partnerFeesPaid: bi.partner?.fees_paid as number | null | undefined,
     productDetails: product_details,
     agreedRate: bi.agreed_rate as number | null | undefined,
   })
@@ -130,6 +129,7 @@ function withResolvedFees<T extends {
   return {
     ...rest,
     fees_resolved: fees.amount, fees_source: fees.source,
+    product_cost_resolved: productCostFromDetails(product_details),
     commission_resolved: commission,
     commission_paid_resolved: commissionPaid.amount, commission_source: commissionPaid.source,
   }
