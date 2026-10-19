@@ -32,7 +32,7 @@ import { invalidateInfluencerDerivedCaches, closedCacheKey } from "@/lib/cache-i
 import { DataSyncStatus } from "@/components/data-sync-status"
 import { ProfilePicture, PlatformIcon } from "@/components/table-sheet/ui-atoms"
 import { getPlatformLabel, contactStatusLabel } from "@/components/table-sheet/utils"
-import { formatDealRate } from "@/lib/pipeline-transitions"
+import { formatDealRate, orderProductsOf, productCostOf, type OrderProduct } from "@/lib/pipeline-transitions"
 import {
   DrawerShell, DrawerHeader, DrawerControl, DrawerTabs, DrawerBody, DrawerActionBar,
 } from "@/components/shared/influencer-drawer"
@@ -45,7 +45,7 @@ import { HistoryTab, LastEditedBy } from "@/components/InfluencerProfileSidebar"
 import { AttributionTab, prefetchAttribution } from "@/components/shared/attribution-tab"
 import { InfluencerStatsTab, prefetchStats } from "@/components/shared/influencer-stats-tab"
 import { prefetchHistory } from "@/lib/activity-history"
-import { PaidCollabTab } from "@/components/table-sheet/profile-sidebar"
+import { PaidCollabTab, type PaidCollabPayment } from "@/components/table-sheet/profile-sidebar"
 import { BoardSkeleton } from "@/components/shared/skeletons"
 import { StageDropdown, type StageOption } from "@/components/shared/stage-dropdown"
 import { StageActionButton } from "@/components/shared/stage-action-button"
@@ -576,6 +576,29 @@ function compactNum(n: number | null | undefined): string {
   return String(v)
 }
 
+// Strings, so half-typed input like "1." isn't lost.
+type FormProduct = { name: string; qty: string; unitCost: string }
+
+function toFormProducts(products: OrderProduct[]): FormProduct[] {
+  const lines = products.map(p => ({ name: p.name, qty: String(p.qty), unitCost: p.unitCost != null ? String(p.unitCost) : "" }))
+  return lines.length ? lines : [{ name: "", qty: "1", unitCost: "" }]
+}
+
+/** Drops blank lines. null on a bad qty or cost, unless `lenient` (ignores it). */
+function fromFormProducts(lines: FormProduct[], lenient = false): OrderProduct[] | null {
+  const out: OrderProduct[] = []
+  for (const l of lines) {
+    if (!l.name.trim() && !l.unitCost.trim()) continue
+    const qty = l.qty.trim() === "" ? 1 : Number(l.qty)
+    const cost = l.unitCost.trim() === "" ? null : Number(l.unitCost.replace(/[$,\s]/g, ""))
+    const badQty = !(Number.isFinite(qty) && qty > 0)
+    const badCost = cost !== null && !(Number.isFinite(cost) && cost >= 0)
+    if ((badQty || badCost) && !lenient) return null
+    out.push({ name: l.name.trim(), qty: badQty ? 1 : qty, unitCost: badCost ? null : cost })
+  }
+  return out
+}
+
 function fmtMoney(v: number | null | undefined) {
   return v ? "$" + Math.round(v).toLocaleString() : "—"
 }
@@ -871,7 +894,7 @@ const STAGE_TO_ORDER_STATUS: Partial<Record<ClosedColumn, string>> = {
  */
 const BULK_CONCURRENCY = 2
 
-function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onCollabTypeChange, onPostDetailsChange, onRefreshMetrics, onOrderDetailsChange, canApproveInfluencers, subscriptionStatus, initialTab = 0, focusPostUrl = false }: {
+function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onCollabTypeChange, onPostDetailsChange, onRefreshMetrics, onOrderDetailsChange, onPaymentChange, canApproveInfluencers, subscriptionStatus, initialTab = 0, focusPostUrl = false }: {
   inf: ClosedInfluencer; brandId?: string; onClose: () => void
   /**
    * Report a save through the PAGE's notification dock.
@@ -890,6 +913,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
   /** Fetches Likes/Comments/Views from the saved post link(s). */
   onRefreshMetrics: (id: string) => Promise<PostMetricsResult>
   onOrderDetailsChange: (id: string, fields: OrderDetailsFields) => Promise<boolean>
+  onPaymentChange: (inf: ClosedInfluencer, payment: PaidCollabPayment) => Promise<boolean>
   canApproveInfluencers: boolean
   subscriptionStatus?: string
   /** Tab to open on — used by the "Go to Post Details" warning action */
@@ -952,7 +976,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
   // "discard my edits" reverts to exactly what was last loaded, not some
   // separately-maintained copy of the same defaults.
   const buildOrderData = () => ({
-    productDetails: (savedProductDetails.note || "") as string,
+    products: toFormProducts(orderProductsOf(savedProductDetails)),
     trackingNumber: inf.trackingNumber || "", shippedAt: inf.shippedAt ? inf.shippedAt.slice(0,10) : "",
     deliveredAt: inf.deliveredAt ? inf.deliveredAt.slice(0,10) : "", deadline: inf.deadline ? inf.deadline.slice(0,10) : "",
     deliverables: inf.deliverables || "", currency: inf.currency || "USD",
@@ -1099,10 +1123,9 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
       .then(json => {
         if (!json?.order) return
         setShopifyOrderResult(json.order)
-        // Suggest the real ordered product as the note, but only into an
-        // empty field — never overwrite something someone already typed.
+        // Only into an empty list.
         if (json.order.productSummary) {
-          setOrderData(d => d.productDetails ? d : { ...d, productDetails: json.order.productSummary })
+          setOrderData(d => d.products.some(p => p.name.trim()) ? d : { ...d, products: [{ name: json.order.productSummary, qty: "1", unitCost: "" }] })
         }
       })
       .catch(() => {})
@@ -1132,6 +1155,9 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
     if (!brandId || !shopifyForm.variantId || !shopifyAddressComplete) return
     setShopifySubmitting(true)
     setShopifyError("")
+    const productName = selectedShopifyVariant
+      ? `${selectedShopifyVariant.productTitle}${selectedShopifyVariant.title && selectedShopifyVariant.title !== "Default Title" ? ` — ${selectedShopifyVariant.title}` : ""}`
+      : undefined
     try {
       const res = await fetch(`/api/brand/${brandId}/pipeline/${inf.id}/shopify-order`, {
         method: "POST",
@@ -1139,6 +1165,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
         body: JSON.stringify({
           variantId: shopifyForm.variantId,
           quantity: shopifyQuantity,
+          productName,
           shippingAddress: {
             first_name: shopifyForm.firstName || undefined,
             last_name: shopifyForm.lastName || undefined,
@@ -1155,7 +1182,12 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
       const json = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(json?.error || "Failed to create order")
       setShopifyOrderResult(json)
-      showToast("Shopify order created")
+      // Already saved by the server.
+      setOrderData(d => ({
+        ...d,
+        products: [...d.products.filter(p => p.name.trim() || p.unitCost.trim()), { name: productName || "Shopify product", qty: String(shopifyQuantity), unitCost: "" }],
+      }))
+      showToast("Shopify order created — add its cost under Product Details")
     } catch (e: any) {
       setShopifyError(e?.message || "Failed to create order")
     } finally {
@@ -1283,9 +1315,11 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
     }
   }
   const handleSaveOrder = async () => {
+    const products = fromFormProducts(orderData.products)
+    if (!products) { showToast("Quantity and cost must be positive numbers", "error"); return }
     setSavingOrder(true)
     const ok = await onOrderDetailsChange(inf.id, {
-      note: orderData.productDetails.split("\n").map(x => x.trim()).filter(Boolean).join("\n"),
+      products,
       trackingNumber: orderData.trackingNumber,
       shippedAt: orderData.shippedAt,
       deliveredAt: orderData.deliveredAt,
@@ -1513,25 +1547,39 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                   <option value="">Select...</option><option value="pending">Pending</option><option value="shipped">Shipped</option><option value="delivered">Delivered</option>
                 </select>
               </div>
-              {/* One product per line of the saved note — same field, same storage. */}
               <div className="pfg">
-                <div className="pfl">Product Details</div>
-                {orderData.productDetails.split("\n").map((product, i, list) => (
-                  <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    <input className="pfi" value={product} placeholder={`Product ${i + 1}`}
-                      onChange={e => setOrderData(d => ({ ...d, productDetails: d.productDetails.split("\n").map((x, j) => j === i ? e.target.value : x).join("\n") }))} />
-                    {list.length > 1 && (
-                      <button type="button" aria-label="Remove product" className="text-gray-400 hover:text-red-500 transition"
-                        onClick={() => setOrderData(d => ({ ...d, productDetails: d.productDetails.split("\n").filter((_, j) => j !== i).join("\n") }))}>
-                        <IconX size={14} />
-                      </button>
-                    )}
-                  </div>
-                ))}
-                <button type="button" className="text-xs font-medium text-[#0F6B3E] hover:text-[#1FAE5B] transition self-start"
-                  onClick={() => setOrderData(d => ({ ...d, productDetails: d.productDetails + "\n" }))}>
-                  + Add product
-                </button>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <div className="pfl" style={{ flex: 1 }}>Product Details</div>
+                  <div className="pfl" style={{ width: 52 }}>Qty</div>
+                  <div className="pfl" style={{ width: 84 }}>Unit cost ($)</div>
+                  {orderData.products.length > 1 && <div style={{ width: 14 }} />}
+                </div>
+                {orderData.products.map((product, i, list) => {
+                  const setProduct = (patch: Partial<FormProduct>) =>
+                    setOrderData(d => ({ ...d, products: d.products.map((x, j) => j === i ? { ...x, ...patch } : x) }))
+                  return (
+                    <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <input className="pfi" style={{ flex: 1 }} value={product.name} placeholder={`Product ${i + 1}`} onChange={e => setProduct({ name: e.target.value })} />
+                      <input className="pfi" style={{ width: 52 }} inputMode="numeric" value={product.qty} placeholder="1" aria-label="Quantity" onChange={e => setProduct({ qty: e.target.value })} />
+                      <input className="pfi" style={{ width: 84 }} inputMode="decimal" value={product.unitCost} placeholder="0.00" aria-label="Unit cost" onChange={e => setProduct({ unitCost: e.target.value })} />
+                      {list.length > 1 && (
+                        <button type="button" aria-label="Remove product" className="text-gray-400 hover:text-red-500 transition"
+                          onClick={() => setOrderData(d => ({ ...d, products: d.products.filter((_, j) => j !== i) }))}>
+                          <IconX size={14} />
+                        </button>
+                      )}
+                    </div>
+                  )
+                })}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <button type="button" className="text-xs font-medium text-[#0F6B3E] hover:text-[#1FAE5B] transition"
+                    onClick={() => setOrderData(d => ({ ...d, products: [...d.products, { name: "", qty: "1", unitCost: "" }] }))}>
+                    + Add product
+                  </button>
+                  <span style={{ fontSize: 11, color: "#6b7280" }} title="Counted as product COGS in Stats">
+                    Product cost: <strong style={{ color: "#111827" }}>${productCostOf(fromFormProducts(orderData.products, true) ?? []).toLocaleString(undefined, { maximumFractionDigits: 2 })}</strong>
+                  </span>
+                </div>
               </div>
               <div className="pfg"><div className="pfl">Tracking Number</div><input className="pfi" value={orderData.trackingNumber} onChange={e => setOrderData(d => ({ ...d, trackingNumber: e.target.value }))} placeholder="Tracking Number" /></div>
               <div className="pfr">
@@ -1871,6 +1919,8 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
               influencerName={inf.influencer}
               rateHint={inf.agreedRate ?? undefined}
               initialDeliverables={getDeliverables(inf.paidCollabData).map((d, i) => ({ ...d, postUrl: deliverablePostUrl(d, i, inf.postUrl) }))}
+              initialPayment={inf.paidCollabData}
+              onPaymentChange={(payment) => { onPaymentChange(inf, payment).then(ok => { if (!ok) onNotify("Couldn't save payment details", "error") }) }}
             />
           )}
 
@@ -1956,7 +2006,7 @@ function PostTrackerContent() {
   // feature for free-tier users. A cached answer resolves on mount instead.
   const { isSubscribed, status: subscriptionStatus } = useSubscriptionGate(brandId)
 
-  const { data, isLoading, error, hasGivenUp, updateColumn, markCompleted, updateCampaignType, updatePostDetails, updateOrderDetails, refreshPostMetrics, isSaving, saveFailed, saveMessage, refetch } = useClosedData(brandId)
+  const { data, isLoading, error, hasGivenUp, updateColumn, markCompleted, updateCampaignType, updatePostDetails, updatePaidCollab, updateOrderDetails, refreshPostMetrics, isSaving, saveFailed, saveMessage, refetch } = useClosedData(brandId)
 
   // Same approach and constant as the Pipeline board (kanban/kanban-board.tsx)
   // — see there for why it's measured rather than a flat vh, and why this
@@ -2297,6 +2347,18 @@ function PostTrackerContent() {
     return res
   }, [updatePostDetails])
 
+  const handlePaymentChange = useCallback(async (inf: ClosedInfluencer, payment: PaidCollabPayment) => {
+    const paidCollabData = {
+      ...(inf.paidCollabData ?? {}),
+      payStructure: payment.payStructure,
+      milestoneStatuses: payment.milestoneStatuses,
+      paymentMethod: payment.paymentMethod,
+    } as PaidCollabData
+    const ok = await updatePaidCollab(inf.id, paidCollabData, payment.agreedRate)
+    if (ok) setSelectedInf(p => p?.id === inf.id ? { ...p, paidCollabData, agreedRate: payment.agreedRate } : p)
+    return ok
+  }, [updatePaidCollab])
+
   const handleRefreshMetrics = useCallback(async (id: string) => {
     const m = await refreshPostMetrics(id)
     if (m.ok) {
@@ -2471,6 +2533,7 @@ function PostTrackerContent() {
           onNotify={showToast}
           onColumnChange={handleMove} onCollabTypeChange={handleCollabTypeChange}
           onPostDetailsChange={handlePostDetailsChange} onRefreshMetrics={handleRefreshMetrics} onOrderDetailsChange={handleOrderDetailsChange}
+          onPaymentChange={handlePaymentChange}
           canApproveInfluencers={canApprove}
           subscriptionStatus={subscriptionStatus}
           initialTab={drawerFocusPostUrl ? 2 : 0} focusPostUrl={drawerFocusPostUrl}/>

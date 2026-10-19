@@ -7,6 +7,7 @@ import { prisma, timeStep } from "@/lib/prisma"
 import { hasBrandCapability } from "@/lib/permissions"
 import { mapClosedToPipelineFields, parseMetricInput, isClosedColumn, type ClosedColumn } from "@/lib/post-tracker-status"
 import { getDeliverables, getDeliverableProgress, isUgcOnly } from "@/lib/deliverables"
+import { orderProductsOf, type OrderProduct } from "@/lib/pipeline-transitions"
 
 // ✅ Safe JSON parse
 function safeParse(value: string | null) {
@@ -79,7 +80,24 @@ export async function PATCH(
       completed,
       // No-deliverable case only.
       usageRights, driveLink,
+      agreedRate, // null clears
+      products,
     } = body
+
+    let cleanProducts: OrderProduct[] | undefined
+    if (products !== undefined) {
+      if (!Array.isArray(products)) {
+        return NextResponse.json({ error: "Invalid products" }, { status: 400 })
+      }
+      cleanProducts = orderProductsOf({ products }).filter(p => p.name.trim() || p.unitCost != null)
+      if (products.some((p: { unitCost?: unknown }) => p?.unitCost != null && p.unitCost !== "" && !(Number(p.unitCost) >= 0))) {
+        return NextResponse.json({ error: "Product cost must be a positive number" }, { status: 400 })
+      }
+    }
+
+    if (agreedRate !== undefined && agreedRate !== null && !(typeof agreedRate === "number" && Number.isFinite(agreedRate) && agreedRate >= 0)) {
+      return NextResponse.json({ error: "Agreed rate must be a positive number" }, { status: 400 })
+    }
 
     if (usageRights !== undefined && !["", "granted", "pending", "not_granted"].includes(usageRights)) {
       return NextResponse.json({ error: "Invalid usageRights" }, { status: 400 })
@@ -238,6 +256,11 @@ export async function PATCH(
     if (note !== undefined) {
       productDetails.note = note
     }
+    if (cleanProducts !== undefined) {
+      productDetails.products = cleanProducts.map(p => ({ ...p, name: p.name.trim() }))
+      // Kept in `note` for older readers.
+      productDetails.note = cleanProducts.map(p => p.name.trim()).filter(Boolean).join("\n")
+    }
     if (trackingNumber !== undefined) {
       productDetails.trackingNumber = trackingNumber
     }
@@ -336,6 +359,10 @@ export async function PATCH(
 
     if (notes !== undefined) {
       updateData.notes = typeof notes === "string" ? (notes || null) : null
+    }
+
+    if (agreedRate !== undefined) {
+      updateData.agreed_rate = agreedRate && agreedRate > 0 ? agreedRate : null
     }
 
     // ✅ Order tab fields with their own columns — an empty string clears them.

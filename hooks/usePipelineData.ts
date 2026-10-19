@@ -46,6 +46,7 @@ export interface PipelineInfluencer {
   gender?: string
   /** Commission rate (%), if set. */
   commissionRate?: number | null
+  feesPaid?: number
   location: string
   email: string
   profileImageUrl: string | null
@@ -154,6 +155,7 @@ function mapItem(item: any): PipelineInfluencer {
     niche:           item.niche,
     gender:          item.gender ?? "",
     commissionRate:  item.commissionRate ?? null,
+    feesPaid:        item.feesPaid ?? 0,
     location:        item.location,
     email:           item.email,
     profileImageUrl: item.profileImageUrl,

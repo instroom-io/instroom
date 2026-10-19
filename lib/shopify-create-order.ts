@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma"
 import { getShopifyConnection } from "@/lib/shopify-connection"
+import { orderProductsOf, type OrderProduct } from "@/lib/pipeline-transitions"
 import {
   createShopifyDraftOrder,
   completeShopifyDraftOrder,
@@ -28,8 +29,9 @@ export async function createShopifyOrderForInfluencer(params: {
   variantId: string | number
   quantity: number
   shippingAddress: ShopifyShippingAddress
+  productName?: string
 }) {
-  const { brandId, brandInfluencerId, variantId, quantity, shippingAddress } = params
+  const { brandId, brandInfluencerId, variantId, quantity, shippingAddress, productName } = params
 
   const connection = await getShopifyConnection(brandId)
   if (!connection) {
@@ -109,6 +111,11 @@ export async function createShopifyOrderForInfluencer(params: {
 
   productDetails.shippingAddress = shippingAddress
   productDetails.variantId = String(variantId)
+  // Cost is entered in the Order tab.
+  const name = productName?.trim() || "Shopify product"
+  const products = orderProductsOf(productDetails).filter(p => p.name.trim() || p.unitCost != null)
+  productDetails.products = [...products, { name, qty: quantity, unitCost: null }]
+  productDetails.note = productDetails.products.map((p: OrderProduct) => p.name).filter(Boolean).join("\n")
   await prisma.brandInfluencer.update({
     where: { id: brandInfluencerId },
     data: { product_details: JSON.stringify(productDetails) },

@@ -8,7 +8,7 @@ import { formatDealRate } from "@/lib/pipeline-transitions"
 
 type Stats = {
   clicks: number; sales: number; revenue: number
-  productCost: number; feesPaid: number; feesSource?: "paid" | "agreed" | "none"; commissionPaid: number; commissionSource?: "paid" | "goaffpro" | "estimated" | "none"; commissionRate?: number | null; totalSpend: number
+  productCost: number; feesPaid: number; feesSource?: "paid" | "none"; commissionPaid: number; commissionSource?: "paid" | "goaffpro" | "estimated" | "none"; commissionRate?: number | null; totalSpend: number
   followers: number | null; engagementRate: number | null
   likes: number; comments: number; views: number; postedPosts?: number; agreedRate: number | null
   avgLikes: number | null; avgComments: number | null; avgViews: number | null
@@ -70,7 +70,8 @@ export function InfluencerStatsTab({ brandId, brandInfluencerId, allowManualEntr
   const cached = brandId && brandInfluencerId ? getCachedData<Stats>(statsKey(brandId, brandInfluencerId)) : undefined
   const [reload, setReload] = useState(0)
   // Manual entry, for brands not using GoAffPro or another tracking tool.
-  const [manual, setManual] = useState<{ clicks: string; sales: string; revenue: string; productCost: string; agreedRate: string; feesPaid: string; commissionRate: string; commissionPaid: string } | null>(null)
+  // Costs, fees and commission are set in their own tabs.
+  const [manual, setManual] = useState<{ clicks: string; sales: string; revenue: string } | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
 
@@ -91,6 +92,10 @@ export function InfluencerStatsTab({ brandId, brandInfluencerId, allowManualEntr
   const stats = current?.stats ?? cached
   if (!stats && current?.error) return <div style={{ fontSize: 12, color: "#B42318" }}>Couldn&apos;t load stats</div>
   if (!stats) return <StatsSkeleton />
+
+  const feesLine = stats.agreedRate && stats.agreedRate > 0
+    ? `${money(stats.feesPaid)} of ${money(stats.agreedRate)} paid`
+    : stats.feesPaid > 0 ? `${money(stats.feesPaid)} paid` : "—"
 
   const cvr = stats.clicks > 0 ? (stats.sales / stats.clicks) * 100 : 0
   const roas = stats.totalSpend > 0 ? stats.revenue / stats.totalSpend : null
@@ -128,7 +133,7 @@ export function InfluencerStatsTab({ brandId, brandInfluencerId, allowManualEntr
         <span>Performance — all campaigns combined</span>
         {allowManualEntry && !manual && (
           <button type="button" className="manual-link"
-            onClick={() => setManual({ clicks: String(stats.clicks), sales: String(stats.sales), revenue: String(stats.revenue), productCost: String(stats.productCost), agreedRate: stats.agreedRate ? String(stats.agreedRate) : "", feesPaid: stats.feesSource === "paid" ? String(stats.feesPaid) : "", commissionRate: stats.commissionRate != null ? String(stats.commissionRate) : "", commissionPaid: stats.commissionSource === "paid" ? String(stats.commissionPaid) : "" })}>
+            onClick={() => setManual({ clicks: String(stats.clicks), sales: String(stats.sales), revenue: String(stats.revenue) })}>
             Enter manually
           </button>
         )}
@@ -139,11 +144,14 @@ export function InfluencerStatsTab({ brandId, brandInfluencerId, allowManualEntr
             <label>Total clicks<input className="manual-input" inputMode="numeric" value={manual.clicks} onChange={(e) => setManual((m) => m && { ...m, clicks: e.target.value })} /></label>
             <label>Total sales<input className="manual-input" inputMode="numeric" value={manual.sales} onChange={(e) => setManual((m) => m && { ...m, sales: e.target.value })} /></label>
             <label>Total revenue<input className="manual-input" inputMode="decimal" value={manual.revenue} onChange={(e) => setManual((m) => m && { ...m, revenue: e.target.value })} /></label>
-            <label>Product cost<input className="manual-input" inputMode="decimal" value={manual.productCost} onChange={(e) => setManual((m) => m && { ...m, productCost: e.target.value })} /></label>
-            <label>Agreed rate<input className="manual-input" inputMode="decimal" placeholder="Flat fee" value={manual.agreedRate} onChange={(e) => setManual((m) => m && { ...m, agreedRate: e.target.value })} /></label>
-            <label>Fees paid<input className="manual-input" inputMode="decimal" placeholder="Blank = agreed rate" value={manual.feesPaid} onChange={(e) => setManual((m) => m && { ...m, feesPaid: e.target.value })} /></label>
-            <label>Commission rate (%)<input className="manual-input" inputMode="decimal" placeholder="e.g. 10" value={manual.commissionRate} onChange={(e) => setManual((m) => m && { ...m, commissionRate: e.target.value })} /></label>
-            <label>Commission paid<input className="manual-input" inputMode="decimal" placeholder="Blank = calculated" value={manual.commissionPaid} onChange={(e) => setManual((m) => m && { ...m, commissionPaid: e.target.value })} /></label>
+            <div className="manual-fees" title="Quantity × unit cost of the products in the Order tab">
+              Product cost
+              <div className="manual-readonly">{money(stats.productCost)}</div>
+            </div>
+            <div className="manual-fees" title="From the Payment section of Paid collab details">
+              Fees paid
+              <div className="manual-readonly">{feesLine}</div>
+            </div>
           </div>
           {saveError && <div style={{ color: "#B42318", marginTop: 6 }}>{saveError}</div>}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginTop: 8 }}>
@@ -162,7 +170,7 @@ export function InfluencerStatsTab({ brandId, brandInfluencerId, allowManualEntr
       </div>
       <div className="breakdown-box">
         <strong>Spend breakdown:</strong>{" "}
-        {money(stats.productCost)} product COGS + {money(stats.feesPaid)} fees{stats.feesSource === "paid" ? " (paid)" : stats.feesSource === "agreed" ? " (agreed rate)" : ""} + {money(stats.commissionPaid)} commission{stats.commissionSource === "paid" ? " (paid)" : stats.commissionSource === "goaffpro" ? " (GoAffPro)" : stats.commissionSource === "estimated" ? " (estimated)" : ""}
+        {money(stats.productCost)} product COGS + {feesLine === "—" ? "$0" : feesLine} fees +{money(stats.commissionPaid)} commission{stats.commissionSource === "paid" ? " (paid)" : stats.commissionSource === "goaffpro" ? " (GoAffPro)" : stats.commissionSource === "estimated" ? " (estimated)" : ""}
       </div>
 
       <div className="stit">Profile <span className="ssub">from the influencer&apos;s account</span></div>
@@ -221,6 +229,8 @@ export function InfluencerStatsTab({ brandId, brandInfluencerId, allowManualEntr
         .manual-grid label { display:flex; flex-direction:column; gap:4px; font-size:10px; font-weight:600; color:#6b7280; }
         .manual-input { width:100%; font-size:12px; padding:6px 8px; border-radius:8px; border:1.5px solid #e5e7eb; background:#fff; color:#111827; box-sizing:border-box; outline:none; }
         .manual-input:focus { border-color:#1fae5b; }
+        .manual-fees { display:flex; flex-direction:column; gap:4px; font-size:10px; font-weight:600; color:#6b7280; }
+        .manual-readonly { font-size:12px; font-weight:500; padding:6px 8px; border-radius:8px; border:1.5px solid #f3f4f6; background:#f9fafb; color:#374151; }
         .manual-cancel { font-size:11px; padding:5px 12px; border-radius:7px; border:1px solid #e5e7eb; background:#fff; color:#6b7280; cursor:pointer; }
         .manual-save { font-size:11px; padding:5px 12px; border-radius:7px; border:none; background:#1FAE5B; color:#fff; cursor:pointer; }
         .manual-save:disabled, .manual-cancel:disabled { opacity:.5; cursor:default; }
