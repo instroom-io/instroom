@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useState } from "react"
 import { IconX, IconPlus, IconEdit, IconTrash, IconArrowLeft } from "@tabler/icons-react"
 import { TEMPLATE_PLACEHOLDERS } from "@/lib/template-placeholders"
 
@@ -33,17 +33,13 @@ export function EmailTemplatesModal({
   const [body, setBody] = useState("")
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState("")
-  const bodyRef = useRef<HTMLTextAreaElement>(null)
+  const [copied, setCopied] = useState<string | null>(null)
 
-  const insertPlaceholder = (token: string) => {
-    const el = bodyRef.current
-    const start = el?.selectionStart ?? body.length
-    const end = el?.selectionEnd ?? body.length
-    setBody(body.slice(0, start) + token + body.slice(end))
-    requestAnimationFrame(() => {
-      el?.focus()
-      el?.setSelectionRange(start + token.length, start + token.length)
-    })
+  const copyPlaceholder = (token: string) => {
+    navigator.clipboard?.writeText(token).then(() => {
+      setCopied(token)
+      setTimeout(() => setCopied((c) => (c === token ? null : c)), 1500)
+    }).catch(() => {})
   }
 
   useEffect(() => {
@@ -186,7 +182,6 @@ export function EmailTemplatesModal({
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Body</label>
               <textarea
-                ref={bodyRef}
                 value={body}
                 onChange={(e) => setBody(e.target.value)}
                 rows={10}
@@ -194,18 +189,18 @@ export function EmailTemplatesModal({
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-400 focus:border-green-400 outline-none transition resize-none"
               />
               <p className="text-[11px] text-gray-400 mt-1">
-                Click to insert. Filled in with the recipient&apos;s details when the template is used.
+                Click to copy, then paste where you want it. Filled in with the recipient&apos;s details when the template is used.
               </p>
               <div className="flex flex-wrap gap-1.5 mt-1.5">
                 {TEMPLATE_PLACEHOLDERS.map((p) => (
                   <button
                     key={p.token}
                     type="button"
-                    onClick={() => insertPlaceholder(p.token)}
+                    onClick={() => copyPlaceholder(p.token)}
                     title={`e.g. ${p.example}`}
                     className="text-[11px] px-2 py-0.5 rounded-full border border-gray-200 bg-gray-50 text-gray-600 hover:border-green-400 hover:text-green-700 transition"
                   >
-                    {p.label} <code className="text-gray-400">{p.token}</code>
+                    {copied === p.token ? "Copied" : p.label} <code className="text-gray-400">{p.token}</code>
                   </button>
                 ))}
               </div>

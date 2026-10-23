@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react"
 import { useSearchParams } from "next/navigation"
-import { AlertCircle, Mail, PauseCircle, Plus } from "lucide-react"
+import { AlertCircle, Mail, PauseCircle, Plus, Repeat, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -23,6 +23,7 @@ type Config = {
   dailyCap: number
   paused: boolean
   pausedReason: string | null
+  followUps: { enabled: boolean; steps: { waitDays: number; templateId: string | null }[] }
 }
 type Template = { id: string; name: string }
 type Mailbox = { id: string; provider: "gmail" | "outlook"; email: string | null }
@@ -44,6 +45,21 @@ const STARTER_TEMPLATE = {
   ].join("\n"),
 }
 
+// Starter follow-up template (subject unused: follow-ups reply in the thread).
+const STARTER_FOLLOW_UP = {
+  name: "Follow-up",
+  subject: "Following up",
+  body: [
+    "Hi {{first_name}},",
+    "",
+    "Just following up on my last email in case it got buried. We'd still love to work with you at {{brand}}.",
+    "",
+    "If you're open to it, just reply here and I'll share the details.",
+  ].join("\n"),
+}
+const MAX_FOLLOW_UPS = 3
+type StepForm = { waitDays: string; templateId: string }
+
 function LoadingScreen() {
   return <SettingsSkeleton sections={[{ fields: 4 }]} label="Loading auto outreach…" />
 }
@@ -59,7 +75,9 @@ function OutreachContent() {
   const [form, setForm] = useState({ templateId: "", senderAccountId: "", cancelWindowMinutes: "5", intervalMinutes: "2", dailyCap: "50" })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState("")
-  const [creatingTemplate, setCreatingTemplate] = useState(false)
+  // null: closed; "outreach" or a follow-up index.
+  const [creatingTemplate, setCreatingTemplate] = useState<null | "outreach" | number>(null)
+  const [steps, setSteps] = useState<StepForm[]>([{ waitDays: "3", templateId: "" }])
 
   useEffect(() => {
     if (!brandId) return
@@ -82,6 +100,7 @@ function OutreachContent() {
           intervalMinutes: String(c.intervalMinutes),
           dailyCap: String(c.dailyCap),
         })
+        setSteps(c.followUps.steps.map((st) => ({ waitDays: String(st.waitDays), templateId: st.templateId ?? "" })))
       })
       .catch((e) => setError(e.message || "Couldn't load auto outreach settings."))
   }, [brandId])
@@ -133,6 +152,12 @@ function OutreachContent() {
       },
       "Auto outreach settings saved"
     )
+
+  const followUpsPatch = (enabled: boolean) => ({
+    followUps: { enabled, steps: steps.map((st) => ({ waitDays: Number(st.waitDays), templateId: st.templateId || null })) },
+  })
+  const setStep = (i: number, patch: Partial<StepForm>) =>
+    setSteps((prev) => prev.map((st, j) => (j === i ? { ...st, ...patch } : st)))
 
   return (
     <div className="max-w-3xl px-4 py-5 sm:px-6 sm:py-6 md:px-9 md:py-7">
@@ -187,14 +212,14 @@ function OutreachContent() {
             <div className="sm:col-span-2">
               <Label className="mb-2 block text-[11px] uppercase tracking-wide text-muted-foreground">Outreach template</Label>
               {templates.length === 0 ? (
-                <Button variant="outline" className="w-full justify-start" disabled={!canEdit} onClick={() => setCreatingTemplate(true)}>
+                <Button variant="outline" className="w-full justify-start" disabled={!canEdit} onClick={() => setCreatingTemplate("outreach")}>
                   <Plus className="h-4 w-4" /> Create outreach template
                 </Button>
               ) : (
                 <Select
                   value={form.templateId}
                   onValueChange={(v) =>
-                    v === NEW_TEMPLATE ? setCreatingTemplate(true) : setForm((f) => ({ ...f, templateId: v }))
+                    v === NEW_TEMPLATE ? setCreatingTemplate("outreach") : setForm((f) => ({ ...f, templateId: v }))
                   }
                   disabled={!canEdit}
                 >
@@ -290,14 +315,120 @@ function OutreachContent() {
         </Card>
       )}
 
+      {config && (
+        <Card className="mb-4">
+          <div className="flex items-center gap-3 border-b px-5 py-3">
+            <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-emerald-50">
+              <Repeat className="h-4 w-4 text-emerald-600" />
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-semibold leading-tight text-foreground">Follow-ups</p>
+              <p className="text-xs leading-tight text-muted-foreground">
+                If there&apos;s no reply, send a follow-up in the same email thread. Weekdays only; stops when they reply or move on.
+              </p>
+            </div>
+            <Switch
+              checked={config.followUps.enabled}
+              disabled={!canEdit || saving}
+              onCheckedChange={(on) => save(followUpsPatch(on), on ? "Follow-ups are on" : "Follow-ups are off")}
+            />
+          </div>
+
+          <CardContent className="flex flex-col gap-4 pt-5">
+            {steps.map((st, i) => (
+              <div key={i} className="grid items-end gap-3 sm:grid-cols-[110px_1fr_auto]">
+                <div>
+                  <Label className="mb-2 block text-[11px] uppercase tracking-wide text-muted-foreground">
+                    Follow-up {i + 1} after
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="number"
+                      min={1}
+                      max={30}
+                      value={st.waitDays}
+                      disabled={!canEdit}
+                      onChange={(e) => setStep(i, { waitDays: e.target.value })}
+                    />
+                    <span className="text-xs text-muted-foreground">days</span>
+                  </div>
+                </div>
+                <div>
+                  <Label className="mb-2 block text-[11px] uppercase tracking-wide text-muted-foreground">Template</Label>
+                  {templates.length === 0 ? (
+                    <Button variant="outline" className="w-full justify-start" disabled={!canEdit} onClick={() => setCreatingTemplate(i)}>
+                      <Plus className="h-4 w-4" /> Create follow-up template
+                    </Button>
+                  ) : (
+                    <Select
+                      value={st.templateId}
+                      onValueChange={(v) => (v === NEW_TEMPLATE ? setCreatingTemplate(i) : setStep(i, { templateId: v }))}
+                      disabled={!canEdit}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Pick a template" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {templates.map((t) => (
+                          <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                        ))}
+                        <SelectSeparator />
+                        <SelectItem value={NEW_TEMPLATE} className="text-emerald-700">
+                          <Plus className="h-4 w-4 text-emerald-700" /> New follow-up template
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
+                {canEdit && steps.length > 1 ? (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`Remove follow-up ${i + 1}`}
+                    onClick={() => setSteps((prev) => prev.filter((_, j) => j !== i))}
+                  >
+                    <Trash2 className="h-4 w-4 text-muted-foreground" />
+                  </Button>
+                ) : (
+                  <span className="hidden sm:block sm:w-9" />
+                )}
+              </div>
+            ))}
+            <p className="text-[11px] text-muted-foreground">
+              Days are weekdays after the previous email. The template&apos;s subject isn&apos;t used; follow-ups reply in the first email&apos;s thread.
+            </p>
+
+            {canEdit ? (
+              <div className="flex flex-wrap gap-2">
+                {steps.length < MAX_FOLLOW_UPS && (
+                  <Button variant="outline" onClick={() => setSteps((prev) => [...prev, { waitDays: "3", templateId: "" }])}>
+                    <Plus className="h-4 w-4" /> Add follow-up
+                  </Button>
+                )}
+                <Button
+                  className="bg-[#15803d] text-white hover:bg-[#166534]"
+                  disabled={saving}
+                  onClick={() => save(followUpsPatch(config.followUps.enabled), "Follow-up settings saved")}
+                >
+                  {saving ? "Saving…" : "Save follow-ups"}
+                </Button>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">Only Owners and Managers can change these settings.</p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       <EmailTemplatesModal
-        isOpen={creatingTemplate}
-        onClose={() => setCreatingTemplate(false)}
+        isOpen={creatingTemplate !== null}
+        onClose={() => setCreatingTemplate(null)}
         brandId={brandId}
-        draft={STARTER_TEMPLATE}
+        draft={creatingTemplate === "outreach" ? STARTER_TEMPLATE : STARTER_FOLLOW_UP}
         onSaved={(t) => {
           setTemplates((prev) => (prev.some((p) => p.id === t.id) ? prev : [t, ...prev]))
-          setForm((f) => ({ ...f, templateId: t.id }))
+          if (creatingTemplate === "outreach") setForm((f) => ({ ...f, templateId: t.id }))
+          else if (typeof creatingTemplate === "number") setStep(creatingTemplate, { templateId: t.id })
         }}
       />
     </div>

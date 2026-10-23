@@ -11,6 +11,8 @@ import {
   CANCEL_WINDOW_RANGE,
   INTERVAL_RANGE,
   DAILY_CAP_RANGE,
+  WAIT_DAYS_RANGE,
+  MAX_FOLLOW_UPS,
   type AutoOutreachConfig,
 } from "@/lib/auto-outreach"
 
@@ -114,6 +116,33 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ bran
         return NextResponse.json({ error: `Daily limit must be ${DAILY_CAP_RANGE.min}–${DAILY_CAP_RANGE.max}.` }, { status: 400 })
       }
       next.dailyCap = v
+    }
+    if (body.followUps !== undefined) {
+      const raw = body.followUps ?? {}
+      const steps = Array.isArray(raw.steps) ? raw.steps : []
+      if (steps.length < 1 || steps.length > MAX_FOLLOW_UPS) {
+        return NextResponse.json({ error: `Add between 1 and ${MAX_FOLLOW_UPS} follow-ups.` }, { status: 400 })
+      }
+      const templateIds = new Set(
+        (await prisma.emailTemplate.findMany({ where: { brand_id: brandId }, select: { id: true } })).map((t) => t.id)
+      )
+      const clean = []
+      for (const [i, step] of steps.entries()) {
+        const waitDays = clampInt(step?.waitDays, WAIT_DAYS_RANGE)
+        if (waitDays === null) {
+          return NextResponse.json({ error: `Follow-up ${i + 1}: wait must be ${WAIT_DAYS_RANGE.min}–${WAIT_DAYS_RANGE.max} weekdays.` }, { status: 400 })
+        }
+        const templateId = step?.templateId ? String(step.templateId) : null
+        if (templateId && !templateIds.has(templateId)) {
+          return NextResponse.json({ error: `Follow-up ${i + 1}: that template no longer exists.` }, { status: 400 })
+        }
+        clean.push({ waitDays, templateId })
+      }
+      const enabled = raw.enabled === true
+      if (enabled && clean.some((s) => !s.templateId)) {
+        return NextResponse.json({ error: "Pick a template for every follow-up before turning follow-ups on." }, { status: 400 })
+      }
+      next.followUps = { enabled, steps: clean }
     }
     if (body.resume === true) {
       next.paused = false

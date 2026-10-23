@@ -11,6 +11,9 @@ export type OutreachSender = {
   email: string | null
 }
 
+/** Sent waitDays weekdays after the previous email, in its thread. */
+export type FollowUpStep = { waitDays: number; templateId: string | null }
+
 export type AutoOutreachConfig = {
   enabled: boolean
   templateId: string | null
@@ -22,6 +25,7 @@ export type AutoOutreachConfig = {
   /** Set on mailbox failure; cleared on resume. */
   paused: boolean
   pausedReason: string | null
+  followUps: { enabled: boolean; steps: FollowUpStep[] }
 }
 
 export const DEFAULT_AUTO_OUTREACH: AutoOutreachConfig = {
@@ -33,11 +37,14 @@ export const DEFAULT_AUTO_OUTREACH: AutoOutreachConfig = {
   dailyCap: 50,
   paused: false,
   pausedReason: null,
+  followUps: { enabled: false, steps: [{ waitDays: 3, templateId: null }] },
 }
 
 export const CANCEL_WINDOW_RANGE = { min: 1, max: 60 }
 export const INTERVAL_RANGE = { min: 1, max: 60 }
 export const DAILY_CAP_RANGE = { min: 1, max: 500 }
+export const WAIT_DAYS_RANGE = { min: 1, max: 30 }
+export const MAX_FOLLOW_UPS = 3
 
 export async function getAutoOutreachConfig(brandId: string): Promise<AutoOutreachConfig> {
   const row = await prisma.integrationConnection.findUnique({
@@ -45,7 +52,11 @@ export async function getAutoOutreachConfig(brandId: string): Promise<AutoOutrea
     select: { config: true },
   })
   const stored = (row?.config ?? {}) as Partial<AutoOutreachConfig>
-  return { ...DEFAULT_AUTO_OUTREACH, ...stored }
+  return {
+    ...DEFAULT_AUTO_OUTREACH,
+    ...stored,
+    followUps: { ...DEFAULT_AUTO_OUTREACH.followUps, ...(stored.followUps ?? {}) },
+  }
 }
 
 export async function saveAutoOutreachConfig(brandId: string, config: AutoOutreachConfig) {
