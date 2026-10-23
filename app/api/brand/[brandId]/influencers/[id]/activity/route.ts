@@ -14,6 +14,7 @@ const ACTION_LABELS: Record<string, string> = {
   "pipeline.status_changed":     "Moved stage",
   "posttracker.stage_changed":   "Updated post tracker stage",
   "outreach.auto_sent":          "Outreach email sent",
+  "outreach.auto_followup_sent": "Follow-up email sent",
 }
 
 export async function GET(

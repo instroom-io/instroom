@@ -254,7 +254,7 @@ export async function GET(
     }
 
     // Auto outreach status for For Outreach cards.
-    const outreachStatus = await getOutreachStatuses(brandInfluencers.map((bi) => bi.id))
+    const outreachStatus = await getOutreachStatuses(brandId, brandInfluencers.map((bi) => bi.id))
 
     // ── Map to response shape ────────────────────────────────────────────────
     const data = brandInfluencers

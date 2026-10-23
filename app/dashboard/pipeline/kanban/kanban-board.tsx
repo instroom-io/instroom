@@ -710,16 +710,21 @@ const OFFSCREEN_SKIP: CSSProperties = {
   containIntrinsicSize: "auto 178px",
 }
 
-/** Auto outreach: scheduled (Cancel) or failed (Retry). */
+/** Auto outreach status: scheduled or failed, first email or follow-up. */
 function AutoOutreachChip({ biId, status, canAct }: { biId: string; status: NonNullable<PipelineInfluencer["autoOutreach"]>; canAct: boolean }) {
   const brandId = useSearchParams().get("brandId")
   const [done, setDone] = useState<"cancelled" | "retrying" | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
 
-  const act = async (e: React.MouseEvent, action: "cancel" | "retry") => {
+  const isFollowUp = status.state === "followup" || status.state === "followup_failed"
+  const failed = (status.state === "failed" || status.state === "followup_failed") && done !== "retrying"
+  const what = isFollowUp ? `Follow-up ${status.step ?? 1}` : "Outreach"
+
+  const act = async (e: React.MouseEvent, kind: "cancel" | "retry") => {
     e.stopPropagation()
     if (!brandId || busy) return
+    const action = isFollowUp ? (`${kind}_followups` as const) : kind
     setBusy(true)
     setError("")
     try {
@@ -730,12 +735,14 @@ function AutoOutreachChip({ biId, status, canAct }: { biId: string; status: NonN
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || "Please try again.")
-      setDone(action === "cancel" ? "cancelled" : "retrying")
+      setDone(kind === "cancel" ? "cancelled" : "retrying")
       // Keep the cached board in step, or a repaint from it brings the old status back.
       setPipelineOutreachStatus(
         brandId,
         biId,
-        action === "cancel" ? null : { ...status, state: "scheduled", sendAfter: new Date().toISOString(), error: undefined }
+        kind === "cancel"
+          ? null
+          : { ...status, state: isFollowUp ? "followup" : "scheduled", sendAfter: new Date().toISOString(), error: undefined }
       )
     } catch (err) {
       setError(err instanceof Error ? err.message : "Please try again.")
@@ -746,25 +753,42 @@ function AutoOutreachChip({ biId, status, canAct }: { biId: string; status: NonN
 
   const chip = "inline-flex items-center gap-1 h-5 px-2 text-[10px] font-medium rounded-full border"
   const link = "text-[10px] font-medium underline underline-offset-2 disabled:opacity-50"
-  if (done === "cancelled") return <p className="mt-1.5 text-[10px] text-gray-500">Outreach cancelled</p>
+  if (done === "cancelled") {
+    return <p className="mt-1.5 text-[10px] text-gray-500">{isFollowUp ? "Follow-ups cancelled" : "Outreach cancelled"}</p>
+  }
 
-  const failed = status.state === "failed" && done !== "retrying"
   const at = new Date(status.sendAfter)
+  const when = isFollowUp
+    ? at > new Date()
+      ? `on ${at.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" })}`
+      : "sending soon"
+    : at > new Date()
+      ? `at ${at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+      : "sending soon"
+
   return (
     <div className="mt-1.5" onClick={(e) => e.stopPropagation()}>
       <div className="flex items-center gap-1.5 flex-wrap">
         {failed ? (
-          <span className={`${chip} text-red-700 bg-red-50 border-red-200`} title={status.error}>Outreach failed</span>
+          <span className={`${chip} text-red-700 bg-red-50 border-red-200`} title={status.error}>{what} failed</span>
         ) : (
           <span className={`${chip} text-sky-700 bg-sky-50 border-sky-200`}>
-            {done === "retrying" ? "Outreach retrying" : `Outreach ${at > new Date() ? `at ${at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "sending soon"}`}
+            {done === "retrying" ? `${what} retrying` : `${what} ${when}`}
           </span>
         )}
         {canAct && !done && (
           failed ? (
             <button type="button" className={`${link} text-red-700`} disabled={busy} onClick={(e) => act(e, "retry")}>Retry</button>
           ) : (
-            <button type="button" className={`${link} text-gray-600`} disabled={busy} onClick={(e) => act(e, "cancel")}>Cancel</button>
+            <button
+              type="button"
+              className={`${link} text-gray-600`}
+              disabled={busy}
+              title={isFollowUp ? "Stops all remaining follow-ups for this influencer" : undefined}
+              onClick={(e) => act(e, "cancel")}
+            >
+              Cancel
+            </button>
           )
         )}
       </div>
@@ -886,7 +910,10 @@ function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApprov
           )
         })()}
 
-        {influencer.autoOutreach && influencer.pipelineStatus === "For Outreach" && (
+        {influencer.autoOutreach &&
+          (influencer.autoOutreach.state.startsWith("followup")
+            ? influencer.pipelineStatus === "Contacted"
+            : influencer.pipelineStatus === "For Outreach") && (
           <AutoOutreachChip biId={influencer.id} status={influencer.autoOutreach} canAct={canApproveInfluencers} />
         )}
       </div>

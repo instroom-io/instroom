@@ -53,7 +53,7 @@ export function buildRawEmail({
     `To: ${to}`,
     `Subject: ${replySubject}`,
     `MIME-Version: 1.0`,
-    ...(inReplyTo ? [`In-Reply-To: ${inReplyTo}`] : []),
+    ...(inReplyTo ? [`In-Reply-To: ${inReplyTo}`, `References: ${inReplyTo}`] : []),
   ]
 
   if (attachments.length === 0) {

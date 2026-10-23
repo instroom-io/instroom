@@ -3,7 +3,8 @@ import { prisma } from "@/lib/prisma"
 import { logActivity } from "@/lib/activity-log"
 import { sendNotification } from "@/lib/notifications"
 import { fillTemplate } from "@/lib/template-placeholders"
-import { sendFromMailbox } from "@/lib/mail-send"
+import { sendFromMailbox, hasReplyFrom, type MailThread } from "@/lib/mail-send"
+import { autoAdvanceRepliedToInConversation } from "@/lib/pipeline"
 import { getAutoOutreachConfig, saveAutoOutreachConfig, AUTO_OUTREACH_KEY, type AutoOutreachConfig } from "@/lib/auto-outreach"
 
 // Queue in OutreachLog: outreach_type = state, response_text = meta JSON, response_date = sent time.
@@ -16,7 +17,22 @@ export const OUTREACH_STATE = {
 } as const
 const ACTIVE_STATES: string[] = [OUTREACH_STATE.queued, OUTREACH_STATE.sending, OUTREACH_STATE.sent]
 
-type QueueMeta = { sendAfter: string; attempts: number; error?: string; queuedBy?: string }
+type QueueMeta = {
+  sendAfter: string
+  attempts: number
+  error?: string
+  queuedBy?: string
+  /** 0 = first email, 1+ = follow-up. */
+  step?: number
+  /** Follow-up row: its first email. */
+  parentId?: string
+  /** First email: its thread. */
+  thread?: MailThread
+  /** First email: why follow-ups stopped, and failures. */
+  followUpsStopped?: string
+  followUpAttempts?: number
+  followUpError?: string
+}
 
 const RETRY_DELAY_MS = 5 * 60 * 1000
 const MAX_ATTEMPTS = 2
@@ -105,9 +121,58 @@ export async function queueOutreach(brandId: string, eligible: Candidate[], conf
   return sendAfter
 }
 
-/** Pipeline card status (scheduled or failed). */
-export async function getOutreachStatuses(brandInfluencerIds: string[]) {
-  if (brandInfluencerIds.length === 0) return new Map<string, { logId: string; state: "scheduled" | "failed"; sendAfter: string; error?: string }>()
+export type OutreachStatus = {
+  logId: string
+  state: "scheduled" | "failed" | "followup" | "followup_failed"
+  sendAfter: string
+  error?: string
+  step?: number
+}
+
+/** Adds n weekdays (UTC). */
+export function addWeekdays(from: Date, n: number): Date {
+  const d = new Date(from)
+  let left = n
+  while (left > 0) {
+    d.setUTCDate(d.getUTCDate() + 1)
+    const day = d.getUTCDay()
+    if (day !== 0 && day !== 6) left--
+  }
+  return d
+}
+const isWeekend = (d: Date) => d.getUTCDay() === 0 || d.getUTCDay() === 6
+
+type SentRow = { id: string; brand_influencer_id: string; response_text: string | null; response_date: Date | null; subject: string | null }
+
+/** Per first email: follow-ups sent, last send time, next step. */
+function followUpChains(sent: SentRow[], steps: AutoOutreachConfig["followUps"]["steps"]) {
+  const firsts = new Map<string, { row: SentRow; meta: QueueMeta; done: number; lastAt: Date }>()
+  for (const r of sent) {
+    const meta = parseMeta(r.response_text)
+    if (!meta.step && meta.thread && r.response_date) firsts.set(r.id, { row: r, meta, done: 0, lastAt: r.response_date })
+  }
+  for (const r of sent) {
+    const meta = parseMeta(r.response_text)
+    const chain = meta.parentId ? firsts.get(meta.parentId) : undefined
+    if (chain && meta.step && r.response_date) {
+      chain.done = Math.max(chain.done, meta.step)
+      if (r.response_date > chain.lastAt) chain.lastAt = r.response_date
+    }
+  }
+  return [...firsts.values()].map((c) => {
+    const next = c.meta.followUpsStopped ? undefined : steps[c.done]
+    return {
+      ...c,
+      nextStep: next ? c.done + 1 : null,
+      dueAt: next ? addWeekdays(c.lastAt, next.waitDays) : null,
+      templateId: next?.templateId ?? null,
+    }
+  })
+}
+
+/** Pipeline card status for first emails and follow-ups. */
+export async function getOutreachStatuses(brandId: string, brandInfluencerIds: string[]) {
+  if (brandInfluencerIds.length === 0) return new Map<string, OutreachStatus>()
   const rows = await prisma.outreachLog.findMany({
     where: {
       brand_influencer_id: { in: brandInfluencerIds },
@@ -116,7 +181,7 @@ export async function getOutreachStatuses(brandInfluencerIds: string[]) {
     select: { id: true, brand_influencer_id: true, outreach_type: true, response_text: true },
     orderBy: { created_at: "desc" },
   })
-  const map = new Map<string, { logId: string; state: "scheduled" | "failed"; sendAfter: string; error?: string }>()
+  const map = new Map<string, OutreachStatus>()
   for (const r of rows) {
     if (map.has(r.brand_influencer_id)) continue
     const meta = parseMeta(r.response_text)
@@ -127,14 +192,44 @@ export async function getOutreachStatuses(brandInfluencerIds: string[]) {
       error: meta.error,
     })
   }
+
+  const config = await getAutoOutreachConfig(brandId)
+  if (!config.followUps.enabled) return map
+  const sent = await prisma.outreachLog.findMany({
+    where: { brand_influencer_id: { in: brandInfluencerIds }, outreach_type: OUTREACH_STATE.sent },
+    select: { id: true, brand_influencer_id: true, response_text: true, response_date: true, subject: true },
+  })
+  for (const c of followUpChains(sent, config.followUps.steps)) {
+    if (map.has(c.row.brand_influencer_id)) continue
+    if (c.meta.followUpsStopped?.startsWith("failed")) {
+      map.set(c.row.brand_influencer_id, { logId: c.row.id, state: "followup_failed", sendAfter: "", error: c.meta.followUpError, step: c.done + 1 })
+    } else if (c.dueAt && c.nextStep) {
+      map.set(c.row.brand_influencer_id, { logId: c.row.id, state: "followup", sendAfter: c.dueAt.toISOString(), step: c.nextStep })
+    }
+  }
   return map
 }
 
-export async function updateQueuedOutreach(brandId: string, logId: string, action: "cancel" | "retry") {
+export async function updateQueuedOutreach(
+  brandId: string,
+  logId: string,
+  action: "cancel" | "retry" | "cancel_followups" | "retry_followups"
+) {
   const row = await prisma.outreachLog.findUnique({ where: { id: logId } })
   if (!row) return { ok: false as const, error: "Not found" }
   const bi = await prisma.brandInfluencer.findFirst({ where: { id: row.brand_influencer_id, brand_id: brandId }, select: { id: true } })
   if (!bi) return { ok: false as const, error: "Not found" }
+
+  if (action === "cancel_followups" || action === "retry_followups") {
+    if (row.outreach_type !== OUTREACH_STATE.sent) return { ok: false as const, error: "Not found" }
+    const meta = parseMeta(row.response_text)
+    const next =
+      action === "cancel_followups"
+        ? { ...meta, followUpsStopped: "cancelled" }
+        : { ...meta, followUpsStopped: undefined, followUpAttempts: 0, followUpError: undefined }
+    await prisma.outreachLog.update({ where: { id: logId }, data: { response_text: JSON.stringify(next) } })
+    return { ok: true as const }
+  }
 
   if (action === "cancel") {
     const res = await prisma.outreachLog.updateMany({
@@ -253,7 +348,7 @@ async function processBrand(brandId: string): Promise<string> {
     orderBy: { created_at: "asc" },
   })
   const due = queued.find((q) => new Date(parseMeta(q.response_text).sendAfter).getTime() <= now)
-  if (!due) return "nothing due"
+  if (!due) return processFollowUp(brandId, config, biIds, now)
 
   // Claim it so overlapping runs can't double-send.
   const claimed = await prisma.outreachLog.updateMany({
@@ -308,7 +403,7 @@ async function processBrand(brandId: string): Promise<string> {
         subject: content.subject,
         message: content.body,
         response_date: new Date(),
-        response_text: JSON.stringify({ ...meta, attempts: meta.attempts + 1, error: undefined }),
+        response_text: JSON.stringify({ ...meta, step: 0, thread: result.thread ?? undefined, attempts: meta.attempts + 1, error: undefined }),
       },
     })
     // Same as a manual send: move to Contacted.
@@ -347,4 +442,101 @@ async function processBrand(brandId: string): Promise<string> {
         : { outreach_type: OUTREACH_STATE.failed, response_text: JSON.stringify({ ...meta, attempts, error: result.message }) },
   })
   return attempts < MAX_ATTEMPTS ? "retry scheduled" : "failed"
+}
+
+/** Sends the oldest due follow-up in its thread (weekdays only). */
+async function processFollowUp(brandId: string, config: AutoOutreachConfig, biIds: string[], now: number): Promise<string> {
+  if (!config.followUps.enabled || !config.sender) return "nothing due"
+  if (isWeekend(new Date(now))) return "weekend"
+
+  const sent = await prisma.outreachLog.findMany({
+    where: { brand_influencer_id: { in: biIds }, outreach_type: OUTREACH_STATE.sent },
+    select: { id: true, brand_influencer_id: true, response_text: true, response_date: true, subject: true },
+  })
+  const due = followUpChains(sent, config.followUps.steps)
+    .filter((c) => c.dueAt && c.dueAt.getTime() <= now && c.templateId)
+    .sort((a, b) => a.dueAt!.getTime() - b.dueAt!.getTime())[0]
+  if (!due) return "nothing due"
+
+  const first = due.row
+  const stop = async (reason: string, extra: Partial<QueueMeta> = {}) => {
+    await prisma.outreachLog.update({
+      where: { id: first.id },
+      data: { response_text: JSON.stringify({ ...due.meta, ...extra, followUpsStopped: reason }) },
+    })
+    return `follow-ups stopped: ${reason}`
+  }
+
+  const bi = await prisma.brandInfluencer.findUnique({
+    where: { id: first.brand_influencer_id },
+    select: { id: true, stage: true, contact_status: true, influencer: { select: { handle: true, full_name: true, platform: true, email: true } } },
+  })
+  if (!bi) return stop("influencer removed")
+  if (bi.stage !== 2 || bi.contact_status === "not_interested") return stop("moved on from Contacted")
+  if (!isValidEmail(bi.influencer.email)) return stop("no valid email address")
+  const to = bi.influencer.email!.trim()
+
+  const reply = await hasReplyFrom(config.sender, to, first.response_date!)
+  if (!reply.ok) {
+    if (reply.kind === "auth") {
+      await pause(brandId, config, `${reply.message} Reconnect ${config.sender.email ?? "the sender mailbox"} and resume.`)
+      return "paused: mailbox"
+    }
+    return "reply check failed; will retry"
+  }
+  if (reply.replied) {
+    await autoAdvanceRepliedToInConversation(brandId, [bi.id])
+    return stop("replied")
+  }
+
+  const content = await renderOutreach(brandId, due.templateId!, {
+    name: bi.influencer.full_name,
+    handle: bi.influencer.handle,
+    platform: bi.influencer.platform,
+  })
+  if (!content) {
+    await pause(brandId, config, `The template for follow-up ${due.nextStep} was deleted. Pick another one to resume.`)
+    return "paused: template missing"
+  }
+
+  const result = await sendFromMailbox(config.sender, { to, subject: content.subject, text: content.body, replyTo: due.meta.thread })
+  if (result.ok) {
+    await prisma.outreachLog.create({
+      data: {
+        brand_influencer_id: bi.id,
+        outreach_type: OUTREACH_STATE.sent,
+        subject: `Re: ${due.meta.thread!.subject}`,
+        message: content.body,
+        response_date: new Date(),
+        response_text: JSON.stringify({ sendAfter: new Date().toISOString(), attempts: 1, step: due.nextStep!, parentId: first.id } satisfies QueueMeta),
+      },
+    })
+    if (due.meta.followUpAttempts) {
+      await prisma.outreachLog.update({
+        where: { id: first.id },
+        data: { response_text: JSON.stringify({ ...due.meta, followUpAttempts: 0, followUpError: undefined }) },
+      })
+    }
+    await logActivity({
+      brandId,
+      userId: config.sender.userId,
+      action: "outreach.auto_followup_sent",
+      entityType: "brand_influencer",
+      entityId: bi.id,
+      details: { to, step: due.nextStep },
+    })
+    return `follow-up ${due.nextStep} sent to @${bi.influencer.handle}`
+  }
+
+  if (result.kind === "auth") {
+    await pause(brandId, config, `${result.message} Reconnect ${config.sender.email ?? "the sender mailbox"} and resume.`)
+    return "paused: mailbox"
+  }
+  const attempts = (due.meta.followUpAttempts ?? 0) + 1
+  if (attempts >= MAX_ATTEMPTS) return stop(`failed: ${result.message}`, { followUpAttempts: attempts, followUpError: result.message })
+  await prisma.outreachLog.update({
+    where: { id: first.id },
+    data: { response_text: JSON.stringify({ ...due.meta, followUpAttempts: attempts, followUpError: result.message }) },
+  })
+  return "follow-up retry next run"
 }

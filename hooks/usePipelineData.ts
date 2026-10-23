@@ -82,7 +82,13 @@ export interface PipelineInfluencer {
   clicks: number
   salesCount: number
   gmv: number
-  autoOutreach?: { logId: string; state: "scheduled" | "failed"; sendAfter: string; error?: string } | null
+  autoOutreach?: {
+    logId: string
+    state: "scheduled" | "failed" | "followup" | "followup_failed"
+    sendAfter: string
+    error?: string
+    step?: number
+  } | null
 }
 
 interface UsePipelineDataReturn {

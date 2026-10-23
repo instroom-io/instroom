@@ -81,9 +81,8 @@ export function ReadOnlyOrderTab({ inf, brandId }: { inf: ClosedInfluencer; bran
       </div>
       <div className="pfr">
         <Field label="Deadline" value={day(inf.deadline)} />
-        <Field label="Currency" value={inf.currency || "USD"} />
+        <Field label="Deliverables" value={inf.deliverables} />
       </div>
-      <Field label="Deliverables" value={inf.deliverables} />
     </Shell>
   )
 }

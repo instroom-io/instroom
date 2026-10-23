@@ -12,8 +12,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ br
     return NextResponse.json({ error: "Forbidden" }, { status: 403 })
   }
   const { action } = await req.json().catch(() => ({}))
-  if (action !== "cancel" && action !== "retry") {
-    return NextResponse.json({ error: "action must be cancel or retry" }, { status: 400 })
+  const ACTIONS = ["cancel", "retry", "cancel_followups", "retry_followups"] as const
+  if (!ACTIONS.includes(action)) {
+    return NextResponse.json({ error: `action must be one of ${ACTIONS.join(", ")}` }, { status: 400 })
   }
   const result = await updateQueuedOutreach(brandId, logId, action)
   return result.ok ? NextResponse.json({ success: true }) : NextResponse.json({ error: result.error }, { status: 409 })

@@ -1588,9 +1588,8 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
               </div>
               <div className="pfr">
                 <div className="pfg"><div className="pfl">Deadline</div><input type="date" className="pfi" value={orderData.deadline} onChange={e => setOrderData(d => ({ ...d, deadline: e.target.value }))} /></div>
-                <div className="pfg"><div className="pfl">Currency</div><input className="pfi" value={orderData.currency} onChange={e => setOrderData(d => ({ ...d, currency: e.target.value }))} /></div>
+                <div className="pfg"><div className="pfl">Deliverables</div><input className="pfi" value={orderData.deliverables} onChange={e => setOrderData(d => ({ ...d, deliverables: e.target.value }))} placeholder="Deliverables" /></div>
               </div>
-              <div className="pfg"><div className="pfl">Deliverables</div><input className="pfi" value={orderData.deliverables} onChange={e => setOrderData(d => ({ ...d, deliverables: e.target.value }))} placeholder="Deliverables" /></div>
 
               {/* ── Shopify order creation — self-contained, own submit path ── */}
               <div style={{ borderTop: "1px solid #eee", marginTop: 4, paddingTop: 14 }}>
