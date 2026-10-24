@@ -115,10 +115,11 @@ export async function POST(
     }
 
     const body = await req.json().catch(() => ({}))
-    const { variantId, quantity, shippingAddress } = body as {
+    const { variantId, quantity, shippingAddress, productName } = body as {
       variantId?: string | number
       quantity?: number
       shippingAddress?: ShopifyShippingAddress
+      productName?: string
     }
 
     if (!variantId) {
@@ -134,6 +135,7 @@ export async function POST(
       variantId,
       quantity: quantity && quantity > 0 ? quantity : 1,
       shippingAddress,
+      productName: typeof productName === "string" ? productName.slice(0, 200) : undefined,
     })
 
     return NextResponse.json(result)

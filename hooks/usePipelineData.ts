@@ -43,6 +43,10 @@ export interface PipelineInfluencer {
   avgComments: number | null
   avgViews: number | null
   niche: string
+  gender?: string
+  /** Commission rate (%), if set. */
+  commissionRate?: number | null
+  feesPaid?: number
   location: string
   email: string
   profileImageUrl: string | null
@@ -51,6 +55,8 @@ export interface PipelineInfluencer {
   stage: number | null
   orderStatus: string | null
   contentPosted: boolean
+  /** Post Tracker's completed flag. */
+  completed?: boolean
   approvalStatus: string | null
   approvalNotes: string | null
   niReason?: string
@@ -61,6 +67,9 @@ export interface PipelineInfluencer {
   currency: string | null
   deliverables: string | null
   deadline: string | null
+  likesCount?: number
+  commentsCount?: number
+  viewsCount?: number
   notes: string
   internalRating: number | null
   lastContact: string
@@ -73,6 +82,13 @@ export interface PipelineInfluencer {
   clicks: number
   salesCount: number
   gmv: number
+  autoOutreach?: {
+    logId: string
+    state: "scheduled" | "failed" | "followup" | "followup_failed"
+    sendAfter: string
+    error?: string
+    step?: number
+  } | null
 }
 
 interface UsePipelineDataReturn {
@@ -95,6 +111,10 @@ interface UsePipelineDataReturn {
     collaborationType?: string
     /** Deliverable names chosen on the hand-over into Post Tracker. */
     campaignDeliverables?: string[]
+    /** Flat fee (agreed rate) from the hand-over. */
+    agreedRate?: number
+    /** Commission rate (%) entered on the hand-over. */
+    commissionRate?: number
     /**
      * Skip marking the OTHER views stale after this row succeeds.
      *
@@ -139,6 +159,9 @@ function mapItem(item: any): PipelineInfluencer {
     avgComments:     item.avgComments ?? null,
     avgViews:        item.avgViews    ?? null,
     niche:           item.niche,
+    gender:          item.gender ?? "",
+    commissionRate:  item.commissionRate ?? null,
+    feesPaid:        item.feesPaid ?? 0,
     location:        item.location,
     email:           item.email,
     profileImageUrl: item.profileImageUrl,
@@ -147,6 +170,7 @@ function mapItem(item: any): PipelineInfluencer {
     stage:           item.stage          ?? null,
     orderStatus:     item.orderStatus    ?? null,
     contentPosted:   item.contentPosted  ?? false,
+    completed:       item.completed      === true,
     approvalStatus:  item.approvalStatus ?? null,
     approvalNotes:   item.approvalNotes  ?? null,
     niReason:        item.approvalNotes  || undefined,
@@ -156,6 +180,9 @@ function mapItem(item: any): PipelineInfluencer {
     currency:        item.currency       ?? null,
     deliverables:    item.deliverables   ?? null,
     deadline:        item.deadline       ?? null,
+    likesCount:      item.likesCount     ?? 0,
+    commentsCount:   item.commentsCount  ?? 0,
+    viewsCount:      item.viewsCount     ?? 0,
     notes:           item.notes          || "",
     internalRating:  item.internalRating ?? null,
     lastContact:     item.lastContact,
@@ -168,6 +195,7 @@ function mapItem(item: any): PipelineInfluencer {
     clicks:          item.clicks         ?? 0,
     salesCount:      item.salesCount     ?? 0,
     gmv:             item.gmv            ?? 0,
+    autoOutreach:    item.autoOutreach   ?? null,
   }
 }
 
@@ -430,6 +458,20 @@ export function seedPipelineFromApproval(brandId: string, seedRow: ApprovedRowSe
   return true
 }
 
+/** Updates one card's auto outreach status in the cached board (after Cancel or Retry). */
+export function setPipelineOutreachStatus(
+  brandId: string,
+  brandInfluencerId: string,
+  autoOutreach: PipelineInfluencer["autoOutreach"]
+): void {
+  const key = pipelineCacheKey(brandId)
+  const rows = getCachedData<PipelineInfluencer[]>(key)
+  if (!rows) return
+  markCacheWrite(key)
+  setCachedData(key, rows.map((r) => (r.id === brandInfluencerId ? { ...r, autoOutreach } : r)))
+  markCacheWrite(key)
+}
+
 /** Undo a seed when the approval write turns out to have failed. */
 export function unseedPipelineRow(brandId: string, brandInfluencerId: string): void {
   const key = pipelineCacheKey(brandId)
@@ -449,16 +491,26 @@ export function unseedPipelineRow(brandId: string, brandInfluencerId: string): v
  * not the raw response, or the board would read a payload it cannot render.
  */
 export async function fetchPipelineRows(brandId: string): Promise<PipelineInfluencer[]> {
-  const res = await fetch(`/api/brand/${brandId}/pipeline`)
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    // Status included so isTransientError (lib/user-facing-error) can spot a
-    // 503 from databaseCapacityResponse() and schedule a retry. Logs and
-    // classification only — useCachedFetch sanitises what the UI shows.
-    throw new Error(`[${res.status}] ${err.error || "Failed to fetch pipeline data"}`)
+  // All pages, 500 at a time (route max).
+  const MAX_PAGES = 40
+  const rows: PipelineInfluencer[] = []
+  let cursor: string | null = null
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const url: string = `/api/brand/${brandId}/pipeline?limit=500${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`
+    const res = await fetch(url)
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      // Status included so isTransientError (lib/user-facing-error) can spot a
+      // 503 from databaseCapacityResponse() and schedule a retry. Logs and
+      // classification only — useCachedFetch sanitises what the UI shows.
+      throw new Error(`[${res.status}] ${err.error || "Failed to fetch pipeline data"}`)
+    }
+    const json = await res.json()
+    rows.push(...(json.data || []).map(mapItem))
+    cursor = typeof json.nextCursor === "string" && json.nextCursor !== cursor ? json.nextCursor : null
+    if (!cursor) break
   }
-  const json = await res.json()
-  return (json.data || []).map(mapItem)
+  return rows
 }
 
 export function usePipelineData(brandId?: string): UsePipelineDataReturn {
@@ -557,6 +609,10 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
         collaborationType?: string
         /** Deliverable names chosen on the hand-over into Post Tracker. */
         campaignDeliverables?: string[]
+        /** Flat fee (agreed rate) from the hand-over. */
+        agreedRate?: number
+        /** Commission rate (%) entered on the hand-over. */
+        commissionRate?: number
         /**
          * Skip marking the OTHER views stale after this row succeeds.
          *
@@ -593,9 +649,15 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
         // optimistic change hit the cache twice and notified every subscriber
         // twice, and it put a side effect inside a function whose only job is
         // to compute the next value.
-        return prev.map((item) =>
-          item.id === id ? applyStatusChange(item, newStatus, extra?.niReason, extra?.collaborationType, extra?.declineNotes) : item
-        )
+        return prev.map((item) => {
+          if (item.id !== id) return item
+          const moved = applyStatusChange(item, newStatus, extra?.niReason, extra?.collaborationType, extra?.declineNotes)
+          return {
+            ...moved,
+            ...(extra?.agreedRate !== undefined ? { agreedRate: extra.agreedRate } : {}),
+            ...(extra?.commissionRate !== undefined ? { commissionRate: extra.commissionRate } : {}),
+          }
+        })
       })
 
       // ── Hand the row to Post Tracker's cache at the same moment ──────────
@@ -618,7 +680,7 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
         const closedRows = getCachedData<ClosedInfluencer[]>(closedKey)
         if (closedRows && !closedRows.some((row) => row.id === id)) {
           markCacheWrite(closedKey)
-          setCachedData(closedKey, [...closedRows, toClosedRow(previous, extra?.collaborationType, extra?.campaignDeliverables)])
+          setCachedData(closedKey, [...closedRows, toClosedRow(extra?.agreedRate !== undefined ? { ...previous, agreedRate: extra.agreedRate } : previous, extra?.collaborationType, extra?.campaignDeliverables)])
           // NOT invalidated here — that is what made the seeded card disappear.
           //
           // invalidateCache sets updatedAt = 0, so the entry read as stale the
@@ -682,6 +744,8 @@ export function usePipelineData(brandId?: string): UsePipelineDataReturn {
             ...(extra?.declineNotes ? { declineNotes: extra.declineNotes } : {}),
             ...(extra?.collaborationType !== undefined ? { collaborationType: extra.collaborationType } : {}),
             ...(extra?.campaignDeliverables ? { campaignDeliverables: extra.campaignDeliverables } : {}),
+            ...(extra?.agreedRate !== undefined ? { agreedRate: extra.agreedRate } : {}),
+            ...(extra?.commissionRate !== undefined ? { commissionRate: extra.commissionRate } : {}),
           }),
         })
 

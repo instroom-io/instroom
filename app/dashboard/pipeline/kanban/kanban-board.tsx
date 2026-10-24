@@ -9,6 +9,7 @@
 "use client"
 
 import { useState, useEffect, useMemo, useRef, useCallback, memo, type CSSProperties } from "react"
+import { useSearchParams } from "next/navigation"
 import ReactDOM from "react-dom"
 import {
   DndContext,
@@ -49,30 +50,35 @@ import InfluencerProfileSidebar, {
   type Campaign,
 } from "@/components/InfluencerProfileSidebar"
 
-import { usePipelineData, type PipelineInfluencer } from "@/hooks/usePipelineData"
+import { usePipelineData, setPipelineOutreachStatus, type PipelineInfluencer } from "@/hooks/usePipelineData"
 import { invalidateInfluencerDerivedCaches, pipelineCacheKey } from "@/lib/cache-invalidation"
 import { DataSyncStatus } from "@/components/data-sync-status"
 import { SaveStatusPill } from "@/components/save-status-pill"
 import { StaleDataNotice } from "@/components/stale-data-notice"
 import { ProfilePicture, PlatformIcon } from "@/components/table-sheet/ui-atoms"
 import { getPlatformLabel } from "@/components/table-sheet/utils"
+import { DEFAULT_PLATFORMS } from "@/components/table-sheet/constants"
 import { useBrandCapabilities } from "@/hooks/useBrandCapabilities"
 import { BoardSkeleton } from "@/components/shared/skeletons"
 import { DeclineModal } from "@/components/shared/decline-modal"
 import { StageActionButton } from "@/components/shared/stage-action-button"
 import { InfoTooltip } from "@/components/shared/anchored-tooltip"
 import { DELIVERABLE_COLLAB_TYPES, MAX_DELIVERABLES } from "@/lib/deliverables"
+import { PAID_COLLAB_TYPES } from "@/components/pipeline/post-tracker-readonly-tabs"
+
+/** Commission-based types; the hand-over asks for the rate. */
+const COMMISSION_COLLAB_TYPES = new Set(["affiliate", "paid-affiliate", "tiktok-shop", "tiktok-shop-paid"])
+import { useBrandTaxonomy } from "@/hooks/useBrandTaxonomy"
 import {
   allowedTransitions,
   isTerminalStage,
   isTransitionAllowed,
   suggestedTransitions,
   transitionRefusalReason,
+  formatDealRate,
 } from "@/lib/pipeline-transitions"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const NICHES    = ["Beauty", "Fitness", "Lifestyle", "Food", "Tech", "Fashion", "Travel"]
-const LOCATIONS = ["Philippines", "Singapore", "United States", "Australia", "United Kingdom", "Malaysia", "Indonesia", "Thailand", "Vietnam"]
 
 // ─── Collaboration Types ──────────────────────────────────────────────────────
 /**
@@ -321,13 +327,13 @@ function influencerToPartner(inf: PipelineInfluencer, brandId?: string): Partner
     // filter).
     plat:         inf.platform || "",
     niche:        inf.niche || "",
-    gend:         "",
+    gend:         inf.gender || "",
     loc:          inf.location || "",
     tier:         "",
     tierOverride: null,
     onRet:        false,
     retFee:       0,
-    defComm:      0,
+    defComm:      inf.commissionRate ?? 0,
     commSt:       inf.pipelineStatus || "Pending",
     clicks:       inf.clicks || 0,
     cvr:          inf.clicks > 0 ? (inf.salesCount / inf.clicks) * 100 : 0,
@@ -349,9 +355,9 @@ function influencerToPartner(inf: PipelineInfluencer, brandId?: string): Partner
     added:        inf.createdAt ? new Date(inf.createdAt) : new Date(),
     prods:        [],
     prodCost:     0,
-    feesPaid:     inf.agreedRate || 0,
+    feesPaid:     inf.feesPaid ?? 0,
     commPaid:     0,
-    totalSpend:   inf.agreedRate || 0,
+    totalSpend:   inf.feesPaid ?? 0,
     roi_val:      0,
     roas_val:     0,
     monthly:      MONTHS.map((m) => ({ month: m, posts: 0, clicks: 0, rev: 0, eng: 0, sales: 0 })),
@@ -369,6 +375,14 @@ function influencerToPartner(inf: PipelineInfluencer, brandId?: string): Partner
     brandInfluencerId:  inf.id,
     collabType:         inf.collabType,
     notes:              inf.notes,
+    agreedRate:         inf.agreedRate,
+    internalRating:     inf.internalRating,
+    likesCount:         inf.likesCount,
+    commentsCount:      inf.commentsCount,
+    viewsCount:         inf.viewsCount,
+    orderStatus:        inf.orderStatus,
+    campaignName:       inf.campaignName,
+    contactStatus:      inf.contactStatus,
   }
 }
 
@@ -436,117 +450,26 @@ function TagSelect({ label, options, selected, onChange, colorClass = "bg-[#1FAE
   )
 }
 
-// ─── Searchable Multi-Select ──────────────────────────────────────────────────
-// Renders as a single dropdown box (same shape as the Post Tracker's Location /
-// Niche selects) but keeps the pipeline's existing multi-select semantics, and
-// adds a type-ahead so long option lists stay usable.
-function SearchableMultiSelect({ label, options, selected, onChange, allLabel }: {
-  label: string
-  options: string[]
-  selected: string[]
-  onChange: (values: string[]) => void
-  allLabel: string
-}) {
-  const [open, setOpen]   = useState(false)
-  const [query, setQuery] = useState("")
-  const wrapRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false) }
-    document.addEventListener("mousedown", onDown)
-    document.addEventListener("keydown", onKey)
-    return () => {
-      document.removeEventListener("mousedown", onDown)
-      document.removeEventListener("keydown", onKey)
-    }
-  }, [open])
-
-  const matches = options.filter((o) => o.toLowerCase().includes(query.trim().toLowerCase()))
-  const summary = selected.length === 0 ? allLabel : selected.length === 1 ? selected[0] : `${selected.length} selected`
-  const toggle  = (option: string) =>
-    onChange(selected.includes(option) ? selected.filter((s) => s !== option) : [...selected, option])
-
-  return (
-    <div className="flex flex-col gap-1" ref={wrapRef}>
-      <div className="flex items-center justify-between">
-        <label className="text-xs text-gray-500">{label}</label>
-        {selected.length > 0 && (
-          <button onClick={() => onChange([])} className="text-[10px] text-gray-400 hover:text-gray-600 transition underline underline-offset-2">Clear</button>
-        )}
-      </div>
-      <div className="relative">
-        <button
-          type="button"
-          onClick={() => { setOpen((v) => !v); setQuery("") }}
-          aria-haspopup="listbox"
-          aria-expanded={open}
-          className={`w-full px-3 py-2 border rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] cursor-pointer flex items-center justify-between gap-1 text-left ${
-            selected.length > 0 ? "border-[#1FAE5B]/40 text-gray-800" : "border-gray-200 text-gray-500"
-          }`}
-        >
-          <span className="truncate">{summary}</span>
-          <IconChevronDown size={14} className={`flex-shrink-0 text-gray-400 transition-transform ${open ? "rotate-180" : ""}`} />
-        </button>
-
-        {open && (
-          <div role="listbox" aria-label={label} className="absolute left-0 right-0 top-full mt-1 z-40 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
-            <div className="p-2 border-b border-gray-100">
-              <input
-                autoFocus
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder={`Search ${label.toLowerCase()}...`}
-                className="w-full px-2 py-1.5 text-xs border border-gray-200 rounded-md outline-none focus:ring-2 focus:ring-[#1FAE5B]"
-              />
-            </div>
-            <div className="max-h-44 overflow-y-auto py-1">
-              {matches.length === 0 ? (
-                <p className="px-3 py-2 text-xs text-gray-400">No matches</p>
-              ) : matches.map((option) => {
-                const isSelected = selected.includes(option)
-                return (
-                  <button
-                    key={option}
-                    type="button"
-                    role="option"
-                    aria-selected={isSelected}
-                    onClick={() => toggle(option)}
-                    className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-gray-50 focus:bg-gray-50 focus:outline-none transition"
-                  >
-                    <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center flex-shrink-0 text-[9px] ${
-                      isSelected ? "bg-[#1FAE5B] border-[#1FAE5B] text-white" : "border-gray-300"
-                    }`}>
-                      {isSelected && "✓"}
-                    </span>
-                    <span className="truncate text-gray-700">{option}</span>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
 // ─── Collaboration Type Modal ─────────────────────────────────────────────────
 // Now fires when moving TO "Deal Agreed" — user picks collab type first, THEN it moves
 interface CollabTypeModalProps {
   influencer: PipelineInfluencer
-  /** `deliverables` is set for Gifting / Paid types — one name per expected post. */
-  onConfirm: (collabType: CollabType, deliverables?: string[]) => void
+  /** agreedRate for paid types; commissionRate (%) for commission types. */
+  onConfirm: (collabType: CollabType, deliverables?: string[], agreedRate?: number, commissionRate?: number) => void
   onCancel: () => void
   /** Set when the modal drives a bulk move — one collab type applies to all. */
   bulkCount?: number
 }
 
 function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabTypeModalProps) {
-  const [selectedType, setSelectedType] = useState<CollabType | null>(null)
+  const [selectedType, setSelectedType] = useState<CollabType | null>(() =>
+    !bulkCount && COLLAB_TYPES.some((c) => c.id === influencer.collabType) ? (influencer.collabType as CollabType) : null
+  )
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onCancel() }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [onCancel])
   // Campaign deliverables for Post Tracker — one entry per expected post.
   const [deliverableNames, setDeliverableNames] = useState<string[]>([""])
   const initials = influencer.influencer.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()
@@ -555,6 +478,19 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
   const needsDeliverables = selectedType !== null && DELIVERABLE_COLLAB_TYPES.has(selectedType)
   const setDeliverableCount = (n: number) =>
     setDeliverableNames((prev) => Array.from({ length: n }, (_, i) => prev[i] ?? ""))
+
+  // Flat fee: required for paid types; not asked on bulk moves.
+  const [flatFee, setFlatFee] = useState(influencer.agreedRate ? String(influencer.agreedRate) : "")
+  const [feeTouched, setFeeTouched] = useState(false)
+  const needsFee = !bulkCount && selectedType !== null && PAID_COLLAB_TYPES.has(selectedType)
+  const parsedFee = Number(flatFee.replace(/[$,\s]/g, ""))
+  const feeValid = flatFee.trim() !== "" && Number.isFinite(parsedFee) && parsedFee > 0
+
+  const [commission, setCommission] = useState(influencer.commissionRate != null ? String(influencer.commissionRate) : "")
+  const needsCommission = !bulkCount && selectedType !== null && COMMISSION_COLLAB_TYPES.has(selectedType)
+  const parsedCommission = Number(commission.replace(/[%\s]/g, ""))
+  const commissionBlank = commission.trim() === ""
+  const commissionValid = commissionBlank || (Number.isFinite(parsedCommission) && parsedCommission >= 0 && parsedCommission <= 100)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4" onClick={onCancel}>
@@ -588,7 +524,7 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
             ) : (
               <>
                 {influencer.profileImageUrl ? (
-                  <img src={influencer.profileImageUrl} alt={influencer.influencer} className="w-10 h-10 rounded-full object-cover" />
+                  <ProfilePicture src={influencer.profileImageUrl} name={influencer.influencer} handle={influencer.handle} size={40} />
                 ) : (
                   <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center text-green-600 font-semibold text-sm">{initials}</div>
                 )}
@@ -649,15 +585,18 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Campaign Deliverables</p>
               <label className="flex items-center gap-2 text-[11px] text-gray-500">
                 How many?
-                <select
-                  value={deliverableNames.length}
-                  onChange={(e) => setDeliverableCount(parseInt(e.target.value, 10))}
-                  className="text-xs px-2 py-1 rounded-lg border border-gray-200 bg-white text-gray-700 focus:outline-none focus:border-green-500"
-                >
-                  {Array.from({ length: MAX_DELIVERABLES }, (_, i) => i + 1).map((v) => (
-                    <option key={v} value={v}>{v}</option>
-                  ))}
-                </select>
+                <span className="relative inline-flex items-center">
+                  <select
+                    value={deliverableNames.length}
+                    onChange={(e) => setDeliverableCount(parseInt(e.target.value, 10))}
+                    className="appearance-none h-8 w-16 pl-3 pr-7 text-xs font-medium text-gray-700 bg-white border border-gray-200 rounded-lg cursor-pointer hover:border-gray-300 focus:outline-none focus:border-green-500"
+                  >
+                    {Array.from({ length: MAX_DELIVERABLES }, (_, i) => i + 1).map((v) => (
+                      <option key={v} value={v}>{v}</option>
+                    ))}
+                  </select>
+                  <IconChevronDown size={14} className="pointer-events-none absolute right-2 text-gray-400" />
+                </span>
               </label>
             </div>
             <div className="flex flex-col gap-2">
@@ -679,8 +618,53 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
           </div>
         )}
 
+        {(needsFee || needsCommission) && (
+          <div className="px-4 sm:px-6 pt-2 pb-4">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Payment</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {needsFee && (
+                <div>
+                  <p className="text-[11px] font-semibold text-gray-600 mb-1.5">Flat fee (agreed rate)</p>
+                  <div className={`flex items-center gap-2 h-9 px-3 bg-white border rounded-lg ${feeTouched && !feeValid ? "border-red-300" : "border-gray-200 focus-within:border-green-500"}`}>
+                    <span className="text-xs font-semibold text-gray-400">$</span>
+                    <input
+                      value={flatFee}
+                      inputMode="decimal"
+                      placeholder="e.g. 500"
+                      onChange={(e) => setFlatFee(e.target.value)}
+                      onBlur={() => setFeeTouched(true)}
+                      className="flex-1 min-w-0 text-xs text-gray-700 bg-transparent focus:outline-none"
+                    />
+                  </div>
+                  <p className={`text-[11px] mt-1.5 ${feeTouched && !feeValid ? "text-red-500" : "text-gray-400"}`}>
+                    {feeTouched && !feeValid ? "Enter the flat fee agreed with the influencer." : "Required. Used for spend and ROAS."}
+                  </p>
+                </div>
+              )}
+              {needsCommission && (
+                <div>
+                  <p className="text-[11px] font-semibold text-gray-600 mb-1.5">Commission rate</p>
+                  <div className={`flex items-center gap-2 h-9 px-3 bg-white border rounded-lg ${commissionValid ? "border-gray-200 focus-within:border-green-500" : "border-red-300"}`}>
+                    <input
+                      value={commission}
+                      inputMode="decimal"
+                      placeholder="e.g. 10"
+                      onChange={(e) => setCommission(e.target.value)}
+                      className="flex-1 min-w-0 text-xs text-gray-700 bg-transparent focus:outline-none"
+                    />
+                    <span className="text-xs font-semibold text-gray-400">%</span>
+                  </div>
+                  <p className={`text-[11px] mt-1.5 ${commissionValid ? "text-gray-400" : "text-red-500"}`}>
+                    {commissionValid ? "Optional. Commission per sale." : "Enter a percentage between 0 and 100."}
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Footer */}
-        <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 px-4 sm:px-6 py-3 sm:py-4 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl">
+        <div className="sticky bottom-0 z-10 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 px-4 sm:px-6 py-3 sm:py-4 border-t border-gray-100 bg-gray-50 rounded-b-2xl">
           <p className="text-[11px] text-gray-400">
             This marks the deal agreed and moves the influencer to Post Tracker
           </p>
@@ -692,8 +676,14 @@ function CollabTypeModal({ influencer, onConfirm, onCancel, bulkCount }: CollabT
               Cancel
             </button>
             <button
-              onClick={() => selectedType && onConfirm(selectedType, needsDeliverables ? deliverableNames : undefined)}
-              disabled={!selectedType}
+              onClick={() => selectedType && onConfirm(
+                selectedType,
+                needsDeliverables ? deliverableNames : undefined,
+                needsFee ? parsedFee : undefined,
+                needsCommission && !commissionBlank ? parsedCommission : undefined,
+              )}
+              disabled={!selectedType || (needsFee && !feeValid) || (needsCommission && !commissionValid)}
+              title={needsFee && !feeValid ? "Enter the flat fee first" : undefined}
               className="px-4 sm:px-6 py-2 text-sm font-medium text-white bg-green-500 rounded-lg hover:bg-green-600 transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 whitespace-nowrap"
             >
               <IconArrowRight size={14} />
@@ -720,6 +710,94 @@ const OFFSCREEN_SKIP: CSSProperties = {
   containIntrinsicSize: "auto 178px",
 }
 
+/** Auto outreach status: scheduled or failed, first email or follow-up. */
+function AutoOutreachChip({ biId, status, canAct }: { biId: string; status: NonNullable<PipelineInfluencer["autoOutreach"]>; canAct: boolean }) {
+  const brandId = useSearchParams().get("brandId")
+  const [done, setDone] = useState<"cancelled" | "retrying" | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+
+  const isFollowUp = status.state === "followup" || status.state === "followup_failed"
+  const failed = (status.state === "failed" || status.state === "followup_failed") && done !== "retrying"
+  const what = isFollowUp ? `Follow-up ${status.step ?? 1}` : "Outreach"
+
+  const act = async (e: React.MouseEvent, kind: "cancel" | "retry") => {
+    e.stopPropagation()
+    if (!brandId || busy) return
+    const action = isFollowUp ? (`${kind}_followups` as const) : kind
+    setBusy(true)
+    setError("")
+    try {
+      const res = await fetch(`/api/brand/${brandId}/auto-outreach/queue/${status.logId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || "Please try again.")
+      setDone(kind === "cancel" ? "cancelled" : "retrying")
+      // Keep the cached board in step, or a repaint from it brings the old status back.
+      setPipelineOutreachStatus(
+        brandId,
+        biId,
+        kind === "cancel"
+          ? null
+          : { ...status, state: isFollowUp ? "followup" : "scheduled", sendAfter: new Date().toISOString(), error: undefined }
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Please try again.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const chip = "inline-flex items-center gap-1 h-5 px-2 text-[10px] font-medium rounded-full border"
+  const link = "text-[10px] font-medium underline underline-offset-2 disabled:opacity-50"
+  if (done === "cancelled") {
+    return <p className="mt-1.5 text-[10px] text-gray-500">{isFollowUp ? "Follow-ups cancelled" : "Outreach cancelled"}</p>
+  }
+
+  const at = new Date(status.sendAfter)
+  const when = isFollowUp
+    ? at > new Date()
+      ? `on ${at.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" })}`
+      : "sending soon"
+    : at > new Date()
+      ? `at ${at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+      : "sending soon"
+
+  return (
+    <div className="mt-1.5" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {failed ? (
+          <span className={`${chip} text-red-700 bg-red-50 border-red-200`} title={status.error}>{what} failed</span>
+        ) : (
+          <span className={`${chip} text-sky-700 bg-sky-50 border-sky-200`}>
+            {done === "retrying" ? `${what} retrying` : `${what} ${when}`}
+          </span>
+        )}
+        {canAct && !done && (
+          failed ? (
+            <button type="button" className={`${link} text-red-700`} disabled={busy} onClick={(e) => act(e, "retry")}>Retry</button>
+          ) : (
+            <button
+              type="button"
+              className={`${link} text-gray-600`}
+              disabled={busy}
+              title={isFollowUp ? "Stops all remaining follow-ups for this influencer" : undefined}
+              onClick={(e) => act(e, "cancel")}
+            >
+              Cancel
+            </button>
+          )
+        )}
+      </div>
+      {failed && status.error && <p className="mt-1 text-[10px] text-red-600 leading-snug break-words">{status.error}</p>}
+      {error && <p className="mt-1 text-[10px] text-red-600">{error}</p>}
+    </div>
+  )
+}
+
 function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApproveInfluencers }: {
   influencer: PipelineInfluencer
   onOpenSidebar: (inf: PipelineInfluencer) => void
@@ -734,7 +812,7 @@ function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApprov
   const terminal   = isTerminal(influencer.pipelineStatus)
 
   return (
-    <div style={OFFSCREEN_SKIP} className={`bg-white border rounded-lg p-3 hover:shadow-md transition-shadow ${
+    <div style={OFFSCREEN_SKIP} className={`bg-white border rounded-lg p-2.5 hover:shadow-md transition-shadow ${
       influencer.pipelineStatus === "Not Interested"      ? "border-red-100 bg-red-50/30"     :
       influencer.pipelineStatus === "For Order Creation"  ? "border-emerald-100 bg-emerald-50/30" :
       "border-gray-200"
@@ -744,48 +822,39 @@ function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApprov
             Influencer List persisted on the Influencer record, already carried
             in this row by the pipeline payload — nothing extra is fetched or
             uploaded here. ProfilePicture supplies the initials fallback. */}
-        <div className="flex items-center gap-2 mb-2">
+        <div className="flex items-center gap-2 mb-1.5">
           <ProfilePicture
             src={influencer.profileImageUrl ?? undefined}
             name={influencer.influencer}
             handle={influencer.handle}
-            size={36}
+            size={28}
           />
-          <div className="flex flex-col text-sm min-w-0">
-            <span className="font-medium text-gray-900">{influencer.influencer}</span>
-            <span className="text-xs text-gray-500">@{influencer.handle}</span>
+          <div className="flex flex-col text-[13px] leading-tight min-w-0">
+            <span className="truncate font-medium text-gray-900">{influencer.influencer}</span>
+            <span className="truncate text-[11px] text-gray-500">@{influencer.handle}</span>
           </div>
         </div>
-        <div className="flex items-center gap-2 text-xs text-gray-500 mb-2">
-          {/* Icon then name, in the one treatment every board uses: the mark at
-              14px, centred against the label, gap-1.5. Narrow columns take
-              their space out of the TEXT — min-w-0 on the pair with truncate on
-              the label — while shrink-0 keeps the mark at full size, so it can
-              never squash or disappear. Both halves come from the shared
-              platform list the Influencer List reads; the board's own icon
-              table used to be keyed by the CAPITALISED display name while the
-              stored value is lowercase, so every lookup missed and a TikTok
-              creator showed as Instagram. */}
-          <span className="inline-flex min-w-0 items-center gap-1.5 leading-none">
-            <PlatformIcon platform={influencer.platform} size={14} className="shrink-0" />
-            <span className="truncate">{getPlatformLabel(influencer.platform) || "—"}</span>
+        {/* Compact info line — platform icon (name on hover), followers,
+            engagement and location share one row instead of two. */}
+        <div className="flex items-center gap-1.5 text-[11px] text-gray-500 min-w-0">
+          <span title={getPlatformLabel(influencer.platform) || undefined} className="inline-flex shrink-0 items-center">
+            <PlatformIcon platform={influencer.platform} size={13} className="shrink-0" />
           </span>
-          <span>•</span>
-          <span className="flex items-center gap-0.5">
-            <IconLocation size={11} />{influencer.location || "—"}
+          <span className="shrink-0">{influencer.followers || "—"}</span>
+          <span className="shrink-0 text-gray-300">·</span>
+          <span className="shrink-0">{influencer.engagementRate || "—"} eng</span>
+          <span className="shrink-0 text-gray-300">·</span>
+          <span className="flex min-w-0 items-center gap-0.5">
+            <IconLocation size={10} className="shrink-0" /><span className="truncate">{influencer.location || "—"}</span>
           </span>
-        </div>
-        <div className="flex items-center gap-3 text-xs text-gray-500">
-          <span>{influencer.followers || "—"} followers</span>
-          <span>{influencer.engagementRate || "—"} eng</span>
         </div>
 
         {/* NI reason pill, plus the free-text note when there is one.
             The note only ever accompanies an "Others" decline, so nothing is
             rendered for the predefined reasons that explain themselves. */}
         {influencer.pipelineStatus === "Not Interested" && influencer.niReason && (
-          <div className="mt-2">
-            <div className="text-[10px] text-red-500 bg-red-50 rounded-full px-2.5 py-1 inline-block font-medium">
+          <div className="mt-1.5">
+            <div className="text-[10px] text-red-500 bg-red-50 rounded-full px-2 py-0.5 inline-block font-medium">
               {influencer.niReason}
             </div>
             {influencer.declineNotes && (
@@ -814,25 +883,39 @@ function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApprov
               ? COLLAB_TYPES.find((c) => c.id === influencer.collabType)
               : undefined
 
+          const deal = collab ? formatDealRate(influencer.agreedRate, influencer.commissionRate) : "—"
           if (!inPostTracker && !collab) return null
 
+          const chip = "inline-flex items-center gap-1 h-5 px-2 text-[10px] font-medium rounded-full border [&_svg]:w-2.5 [&_svg]:h-2.5 [&_svg]:flex-shrink-0"
           return (
-            <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+            <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
               {inPostTracker && (
-                <span className="text-[10px] text-green-600 bg-green-50 rounded-full px-2.5 py-1 inline-flex items-center gap-1 font-medium">
+                <span className={`${chip} text-green-700 bg-green-50 border-green-200`}>
                   <IconPackage size={10} />
                   In Post Tracker
                 </span>
               )}
               {collab && (
-                <span className={`inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full border ${collab.color.split(" ")[0]} ${collab.color.split(" ")[1]}`}>
+                <span className={`${chip} ${collab.color.split(" ")[0]} ${collab.color.split(" ")[1]}`}>
                   {collab.icon}
                   {collab.title}
+                </span>
+              )}
+              {deal !== "—" && (
+                <span className={`${chip} text-gray-700 bg-gray-50 border-gray-200`} title="Flat fee + commission per sale">
+                  {deal}
                 </span>
               )}
             </div>
           )
         })()}
+
+        {influencer.autoOutreach &&
+          (influencer.autoOutreach.state.startsWith("followup")
+            ? influencer.pipelineStatus === "Contacted"
+            : influencer.pipelineStatus === "For Outreach") && (
+          <AutoOutreachChip biId={influencer.id} status={influencer.autoOutreach} canAct={canApproveInfluencers} />
+        )}
       </div>
 
       {/* Quick-move buttons — only for non-terminal cards.
@@ -840,7 +923,7 @@ function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApprov
           destination comes from getNextStages, so the tooltip always names the
           stage this card would actually land in rather than a fixed string. */}
       {nextStages.length > 0 && !terminal && (
-        <div className="flex gap-1.5 mt-2.5 pt-2 border-t border-gray-100 flex-nowrap">
+        <div className="flex gap-1.5 mt-2 pt-1.5 border-t border-gray-100 flex-wrap">
           {/* The hand-over to Post Tracker, on the one stage it starts from.
               Dropping a card on the Deal Agreed column used to trigger this
               cascade implicitly, which left the row at the terminal
@@ -868,7 +951,7 @@ function PipelineCardBase({ influencer, onOpenSidebar, onStatusChange, canApprov
               key={stage}
               destination={stage}
               label={`Move influencer to ${stage}`}
-              tone={stage === "Not Interested" ? "danger" : "forward"}
+              tone={stage === "Not Interested" ? (influencer.pipelineStatus === "For Order Creation" ? "dangerSubtle" : "danger") : "forward"}
               disabled={!canApproveInfluencers}
               disabledReason="Only Owners and Managers can approve influencers"
               icon={stage === "Not Interested"
@@ -991,7 +1074,7 @@ function DroppableColumn({ id, children, height }: { id: string; children: React
   return (
     <div ref={setNodeRef}
       style={{ scrollSnapAlign: "start", height: height ?? undefined }}
-      className={`flex flex-col gap-2.5 w-[min(78vw,240px)] sm:w-[240px] flex-shrink-0 transition-all rounded-lg ${
+      className={`flex flex-col gap-2.5 w-[min(78vw,200px)] sm:w-auto sm:min-w-[200px] sm:max-w-[340px] sm:grow sm:basis-[200px] flex-shrink-0 transition-all rounded-lg ${
         isOver ? (isExit ? "bg-red-50" : "bg-gray-50") : ""
       }`}>
       {children}
@@ -1018,20 +1101,19 @@ interface FilterState {
   locations: string[]
   niches:    string[]
   stages:    string[]
-  approvals: string[]
+  platforms: string[]
 }
 
 const EMPTY_FILTERS: FilterState = {
   locations: [],
   niches:    [],
   stages:    [],
-  approvals: [],
+  platforms: [],
 }
 
 // Every stage a row can hold, including the hidden "For Order Creation" column
 // so list-view rows in that stage are still filterable.
 const STAGE_OPTIONS   = columns.map((c) => c.status)
-const APPROVAL_OPTIONS = ["Approved", "Pending", "Declined"]
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 interface PipelinePageProps { brandId?: string }
@@ -1051,9 +1133,17 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   const [selectedColumnStatus, setSelectedColumnStatus] = useState<string | null>(null)
   const [showFilterPanel,      setShowFilterPanel]      = useState(false)
   const [filters,              setFilters]              = useState<FilterState>(EMPTY_FILTERS)
+  // The brand's own niches / locations — the lists added in the Influencers List.
+  const { niches: brandNiches, locations: brandLocations } = useBrandTaxonomy(brandId ?? null)
   const [niModalInfluencer,    setNiModalInfluencer]    = useState<PipelineInfluencer | null>(null)
   const [pendingNiId,          setPendingNiId]          = useState<string | null>(null)
   const [sortOrder,            setSortOrder]            = useState<"newest"|"oldest">("newest")
+  // Filters apply live; Cancel restores what was set when the panel opened.
+  const filterSnapshot = useRef<{ filters: FilterState; sortOrder: "newest"|"oldest" } | null>(null)
+  const cancelFilters = () => {
+    if (filterSnapshot.current) { setFilters(filterSnapshot.current.filters); setSortOrder(filterSnapshot.current.sortOrder) }
+    setShowFilterPanel(false)
+  }
 
   // ── Collab type modal — fires when moving TO "Deal Agreed" ──
   const [collabModalInfluencer, setCollabModalInfluencer] = useState<PipelineInfluencer | null>(null)
@@ -1108,7 +1198,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
       const top = panel.getBoundingClientRect().top
       // Tuned empirically against the real page — adjust if columns end up
       // clipped or leave dead space above the horizontal scrollbar.
-      const RESERVED_BELOW_TOP = 76
+      const RESERVED_BELOW_TOP = 48
       const available = window.innerHeight - top - RESERVED_BELOW_TOP
       setColumnHeight(Math.max(220, Math.round(available)))
     }
@@ -1127,9 +1217,9 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   // Confirming a Collaboration Type is the single action that both marks the
   // deal agreed and moves the influencer into Post Tracker with its default
   // initial status — no separate "Move to Post Tracker" click needed anymore.
-  const handleCollabTypeConfirm = async (collabType: CollabType, deliverables?: string[]) => {
+  const handleCollabTypeConfirm = async (collabType: CollabType, deliverables?: string[], agreedRate?: number, commissionRate?: number) => {
     if (!pendingCollabId || !collabModalInfluencer) return
-    const success = await updateStatus(pendingCollabId, "Deal Agreed", { collaborationType: collabType, campaignDeliverables: deliverables })
+    const success = await updateStatus(pendingCollabId, "Deal Agreed", { collaborationType: collabType, campaignDeliverables: deliverables, agreedRate, commissionRate })
     const collabName = COLLAB_TYPES.find((c) => c.id === collabType)?.title ?? collabType
     toast(
       success
@@ -1520,8 +1610,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     // Same widening as the column/list filter above: ticking "Deal Agreed" in
     // the filter panel has to find the same rows the Deal Agreed column shows.
     if (filters.stages.length > 0)    result = result.filter((p) => filters.stages.some((s) => matchesColumnStatus(p.pipelineStatus, s)))
-    // A row with no approval decision yet reads as Pending
-    if (filters.approvals.length > 0) result = result.filter((p) => filters.approvals.includes(p.approvalStatus ?? "Pending"))
+    if (filters.platforms.length > 0) result = result.filter((p) => filters.platforms.includes(getPlatformLabel(p.platform)))
     result = [...result].sort((a, b) => {
       const da = new Date(a.createdAt ?? 0).getTime()
       const db = new Date(b.createdAt ?? 0).getTime()
@@ -1577,7 +1666,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
     filters.locations.length +
     filters.niches.length +
     filters.stages.length +
-    filters.approvals.length +
+    filters.platforms.length +
     (search ? 1 : 0) +
     (selectedColumnStatus ? 1 : 0)
 
@@ -1623,7 +1712,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
   )
 
   return (
-    <div className="flex flex-col gap-4 p-6">
+    <div className="flex flex-col gap-3 p-3 sm:p-4">
       {/* A refresh failed but the board still has its last good cards — say so
           inline instead of replacing the board (see the error gate above).
           hasGivenUp, not error: while the bounded retry is still running there
@@ -1708,7 +1797,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
         {/* Filters */}
         <div className="relative">
           <button
-            onClick={() => setShowFilterPanel(!showFilterPanel)}
+            onClick={() => { if (!showFilterPanel) filterSnapshot.current = { filters, sortOrder }; setShowFilterPanel(!showFilterPanel) }}
             data-tour="pipeline-filters"
             className={`h-9 px-3 rounded-lg text-sm flex items-center gap-1.5 border transition-colors ${
               hasActiveFilters ? "bg-[#1FAE5B] text-white border-[#1FAE5B]" : "border-[#0F6B3E]/20 hover:border-[#0F6B3E]/40"
@@ -1726,8 +1815,8 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
           </button>
 
           {showFilterPanel && (
-            <div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-30 w-[420px] max-w-[90vw] p-5">
-              <div className="flex items-center justify-between mb-4">
+            <div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg z-30 w-[420px] max-w-[90vw] max-h-[calc(100vh-240px)] overflow-y-auto p-4">
+              <div className="flex items-center justify-between mb-3">
                 <span className="text-xs font-bold text-gray-800 uppercase tracking-wide">Filter by</span>
                 {hasActiveFilters && (
                   <button onClick={() => setFilters(EMPTY_FILTERS)}
@@ -1738,27 +1827,24 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
               </div>
               {/* Section order, spacing and dividers mirror the Post Tracker
                   panel: chip groups first, then the two dropdowns in one row. */}
-              <div className="flex flex-col gap-5">
+              <div className="flex flex-col gap-3">
                 <TagSelect label="Pipeline Stage" options={STAGE_OPTIONS} selected={filters.stages}
                   onChange={(v) => setFilters((p) => ({ ...p, stages: v }))}
                   colorClass="bg-purple-50 text-purple-700 border-purple-200"
                   layout="grid" />
                 <div className="border-t border-gray-100" />
-                <TagSelect label="Approval Status" options={APPROVAL_OPTIONS} selected={filters.approvals}
-                  onChange={(v) => setFilters((p) => ({ ...p, approvals: v }))}
+                <TagSelect label="Platform" options={DEFAULT_PLATFORMS} selected={filters.platforms}
+                  onChange={(v) => setFilters((p) => ({ ...p, platforms: v }))}
                   colorClass="bg-amber-50 text-amber-700 border-amber-200" />
                 <div className="border-t border-gray-100" />
-                <div className="grid grid-cols-2 gap-x-4 gap-y-4">
-                  <SearchableMultiSelect label="Location" options={LOCATIONS} selected={filters.locations}
-                    onChange={(v) => setFilters((p) => ({ ...p, locations: v }))}
-                    allLabel="All Locations" />
-                  <SearchableMultiSelect label="Niche" options={NICHES} selected={filters.niches}
-                    onChange={(v) => setFilters((p) => ({ ...p, niches: v }))}
-                    allLabel="All Niches" />
+                <div className="grid grid-cols-2 gap-x-3 gap-y-3">
+                  {/* Native selects, same as the Post Tracker panel. */}
+                  <div className="flex flex-col gap-1"><label className="text-xs text-gray-500">Location</label><select value={filters.locations[0] ?? "all"} onChange={(e) => setFilters((p) => ({ ...p, locations: e.target.value === "all" ? [] : [e.target.value] }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] appearance-none cursor-pointer"><option value="all">All Locations</option>{brandLocations.map((l) => <option key={l.id}>{l.name}</option>)}</select></div>
+                  <div className="flex flex-col gap-1"><label className="text-xs text-gray-500">Niche</label><select value={filters.niches[0] ?? "all"} onChange={(e) => setFilters((p) => ({ ...p, niches: e.target.value === "all" ? [] : [e.target.value] }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] appearance-none cursor-pointer"><option value="all">All Niches</option>{brandNiches.map((n) => <option key={n.id}>{n.name}</option>)}</select></div>
                 </div>
               </div>
               {/* Sort inside filter panel */}
-              <div className="mt-4 pt-4 border-t border-gray-100">
+              <div className="mt-3 pt-3 border-t border-gray-100">
                 <label className="text-xs text-gray-500 block mb-2">Sort by date</label>
                 <div className="flex gap-2">
                   <button onClick={() => setSortOrder("newest")}
@@ -1771,18 +1857,18 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                   </button>
                 </div>
               </div>
-              {(filters.locations.length > 0 || filters.niches.length > 0 || filters.stages.length > 0 || filters.approvals.length > 0) && (
-                <div className="mt-4 pt-4 border-t border-gray-100 flex flex-wrap gap-1.5">
+              {(filters.locations.length > 0 || filters.niches.length > 0 || filters.stages.length > 0 || filters.platforms.length > 0) && (
+                <div className="mt-3 pt-3 border-t border-gray-100 flex flex-wrap gap-1.5">
                   {filters.stages.map((s) => (
                     <span key={s} className="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-50 text-purple-700 rounded-full text-[11px] font-medium">
                       {s}
                       <button onClick={() => setFilters((p) => ({ ...p, stages: p.stages.filter((x) => x !== s) }))} className="hover:text-purple-900 transition"><IconX size={10} /></button>
                     </span>
                   ))}
-                  {filters.approvals.map((a) => (
+                  {filters.platforms.map((a) => (
                     <span key={a} className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-50 text-amber-700 rounded-full text-[11px] font-medium">
                       {a}
-                      <button onClick={() => setFilters((p) => ({ ...p, approvals: p.approvals.filter((x) => x !== a) }))} className="hover:text-amber-900 transition"><IconX size={10} /></button>
+                      <button onClick={() => setFilters((p) => ({ ...p, platforms: p.platforms.filter((x) => x !== a) }))} className="hover:text-amber-900 transition"><IconX size={10} /></button>
                     </span>
                   ))}
                   {filters.locations.map((l) => (
@@ -1799,7 +1885,11 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                   ))}
                 </div>
               )}
-              <div className="flex items-center justify-end mt-4">
+              <div className="flex items-center justify-end gap-2 mt-3 pt-3 border-t border-gray-100">
+                <button onClick={cancelFilters}
+                  className="px-5 py-1.5 border border-gray-200 text-gray-600 rounded-lg text-sm font-medium hover:border-gray-300 transition">
+                  Cancel
+                </button>
                 <button onClick={() => setShowFilterPanel(false)}
                   className="px-5 py-1.5 bg-[#1FAE5B] text-white rounded-lg text-sm font-medium hover:bg-[#178a48] transition">
                   Apply
@@ -1850,15 +1940,15 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
       {/* ── KANBAN VIEW ── */}
       {view === "Board" && (
         <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-          <div ref={boardPanelRef} className="rounded-xl border border-[#0F6B3E]/10 bg-white px-5 pt-5 pb-6 overflow-x-auto" style={{ scrollSnapType: "x proximity" }}>
-            <div className="flex gap-4 min-w-max">
+          <div ref={boardPanelRef} className="rounded-xl border border-[#0F6B3E]/10 bg-white px-3 pt-3 pb-3 overflow-x-auto" style={{ scrollSnapType: "x proximity" }}>
+            <div className="flex gap-3">
 
               {visibleColumns.filter((c) => c.key !== "not-interested").map((col, colIndex) => {
                 const items = getItemsByColumn(col.key)
                 return (
                   <DroppableColumn key={col.key} id={col.key} height={columnHeight}>
                     <div
-                      className={`${col.color} text-white rounded-lg px-3 py-2 text-sm font-semibold flex items-center justify-between`}
+                      className={`${col.color} text-white rounded-lg px-3 py-1.5 text-[13px] font-semibold flex items-center justify-between`}
                       data-tour={colIndex === 0 ? "pipeline-board" : undefined}
                     >
                       <span
@@ -1873,14 +1963,14 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                       </div>
                     </div>
 
-                    <div className="flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto mt-2 pr-1">
+                    <div className="flex flex-col gap-2 flex-1 min-h-0 overflow-y-auto mt-2 pr-1">
                       {items.map((inf) => (
                         <DraggableCard key={inf.id} id={inf.id} disabled={!canApprove}>
                           {renderCard(inf)}
                         </DraggableCard>
                       ))}
                       {items.length === 0 && (
-                        <div className="border-2 border-dashed border-gray-200 rounded-lg p-4 text-center text-xs text-gray-400">Drop here</div>
+                        <div className="border-2 border-dashed border-gray-200 rounded-lg p-3 text-center text-xs text-gray-400">Drop here</div>
                       )}
                     </div>
                   </DroppableColumn>
@@ -1900,7 +1990,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                 const items = getItemsByColumn(col.key)
                 return (
                   <DroppableColumn id={col.key} height={columnHeight}>
-                    <div className="bg-red-100 text-red-700 border border-red-200 rounded-lg px-3 py-2 text-sm font-semibold flex items-center justify-between">
+                    <div className="bg-red-100 text-red-700 border border-red-200 rounded-lg px-3 py-1.5 text-[13px] font-semibold flex items-center justify-between">
                       <span
                         onClick={() => handleColumnClick(col)}
                         className="flex-1 cursor-pointer hover:opacity-90 transition-opacity truncate mr-2"
@@ -1913,14 +2003,14 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                       </div>
                     </div>
 
-                    <div className="flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto mt-2 pr-1">
+                    <div className="flex flex-col gap-2 flex-1 min-h-0 overflow-y-auto mt-2 pr-1">
                       {items.map((inf) => (
                         <DraggableCard key={inf.id} id={inf.id} disabled={!canApprove}>
                           {renderCard(inf)}
                         </DraggableCard>
                       ))}
                       {items.length === 0 && (
-                        <div className="border-2 border-dashed border-red-200 rounded-lg p-4 text-center text-xs text-gray-400">Drop here</div>
+                        <div className="border-2 border-dashed border-red-200 rounded-lg p-3 text-center text-xs text-gray-400">Drop here</div>
                       )}
                     </div>
                   </DroppableColumn>
@@ -1931,7 +2021,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
 
           <DragOverlay>
             {activeInfluencer ? (
-              <div className="bg-white border border-gray-200 rounded-lg p-3 shadow-lg rotate-2 w-[min(78vw,240px)] sm:w-[240px]">
+              <div className="bg-white border border-gray-200 rounded-lg p-3 shadow-lg rotate-2 w-[min(78vw,200px)] sm:w-[200px]">
                 {renderCard(activeInfluencer)}
               </div>
             ) : null}
@@ -2029,7 +2119,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
             <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
               <thead className="bg-gray-50 border-b">
                 <tr>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600 w-10">
+                  <th className="px-3 py-2 text-left font-medium text-gray-600 w-10">
                     <input
                       ref={selectAllRef}
                       type="checkbox"
@@ -2040,14 +2130,14 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                       className="w-4 h-4 rounded accent-[#1FAE5B] cursor-pointer disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] focus:ring-offset-1"
                     />
                   </th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Influencer</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Platform</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Handle</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Location</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Followers</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Engagement</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Niche</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Status</th>
+                  <th className="px-3 py-2 text-left font-medium text-gray-600">Influencer</th>
+                  <th className="px-3 py-2 text-left font-medium text-gray-600">Platform</th>
+                  <th className="px-3 py-2 text-left font-medium text-gray-600">Handle</th>
+                  <th className="px-3 py-2 text-left font-medium text-gray-600">Location</th>
+                  <th className="px-3 py-2 text-left font-medium text-gray-600">Followers</th>
+                  <th className="px-3 py-2 text-left font-medium text-gray-600">Engagement</th>
+                  <th className="px-3 py-2 text-left font-medium text-gray-600">Niche</th>
+                  <th className="px-3 py-2 text-left font-medium text-gray-600">Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -2060,7 +2150,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                       className={`border-t hover:bg-gray-50 cursor-pointer transition ${selectedIds.has(inf.id) ? "bg-blue-50/60" : ""}`}
                       onClick={() => openSidebar(inf)}
                     >
-                      <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                         <input
                           type="checkbox"
                           checked={selectedIds.has(inf.id)}
@@ -2069,7 +2159,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                           className="w-4 h-4 rounded accent-[#1FAE5B] cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] focus:ring-offset-1"
                         />
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-3 py-2">
                         <div className="flex items-center gap-3">
                           {inf.profileImageUrl ? (
                             <img src={inf.profileImageUrl} alt="" className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
@@ -2108,19 +2198,19 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                           </div>
                         </div>
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-3 py-2">
                         <div className="inline-flex min-w-0 items-center gap-1.5 leading-none">
                           <PlatformIcon platform={inf.platform} size={14} className="shrink-0" />
                           <span className="truncate">{getPlatformLabel(inf.platform) || "—"}</span>
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-[#0F6B3E] font-medium">{inf.instagramHandle}</td>
-                      <td className="px-4 py-3">
+                      <td className="px-3 py-2 text-[#0F6B3E] font-medium">{inf.instagramHandle}</td>
+                      <td className="px-3 py-2">
                         <div className="flex items-center gap-1"><IconLocation size={14} className="text-gray-400" />{inf.location || "—"}</div>
                       </td>
-                      <td className="px-4 py-3">{inf.followerCount?.toLocaleString() || inf.followers}</td>
-                      <td className="px-4 py-3">{inf.engagementRate}</td>
-                      <td className="px-4 py-3">
+                      <td className="px-3 py-2">{inf.followerCount?.toLocaleString() || inf.followers}</td>
+                      <td className="px-3 py-2">{inf.engagementRate}</td>
+                      <td className="px-3 py-2">
                         {inf.niche ? (
                           <button
                             onClick={(e) => {
@@ -2144,7 +2234,7 @@ export default function PipelinePage({ brandId }: PipelinePageProps) {
                           <span className="text-gray-400">—</span>
                         )}
                       </td>
-                      <td className="px-4 py-3 align-middle">
+                      <td className="px-3 py-2 align-middle">
                         <div className="flex items-center" onClick={(e) => e.stopPropagation()}>
                           <StatusDropdown currentStatus={inf.pipelineStatus} onStatusChange={(s) => handleStatusUpdate(inf.id, s)} canApproveInfluencers={canApprove} />
                         </div>

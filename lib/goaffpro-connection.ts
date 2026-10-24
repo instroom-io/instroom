@@ -47,6 +47,41 @@ export async function listConnectedGoAffProBrandIds(): Promise<string[]> {
   return connections.map((c) => c.brand_id)
 }
 
+/** Last visit counted, and the affiliates it covers. */
+export type GoAffProClickSyncState = { lastTrafficId: string | null; countedAffiliateIds: string[] }
+
+export async function getGoAffProClickSyncState(brandId: string): Promise<GoAffProClickSyncState> {
+  const connection = await prisma.integrationConnection.findUnique({
+    where: { brand_id_integration_key: { brand_id: brandId, integration_key: GOAFFPRO_KEY } },
+    select: { config: true },
+  })
+  const config = (connection?.config as Record<string, unknown> | null) ?? {}
+  const ids = config.clickCountedAffiliateIds
+  return {
+    lastTrafficId: typeof config.clickLastTrafficId === "string" ? config.clickLastTrafficId : null,
+    countedAffiliateIds: Array.isArray(ids) ? ids.map(String) : [],
+  }
+}
+
+export async function setGoAffProClickSyncState(brandId: string, state: GoAffProClickSyncState) {
+  const connection = await prisma.integrationConnection.findUnique({
+    where: { brand_id_integration_key: { brand_id: brandId, integration_key: GOAFFPRO_KEY } },
+  })
+  if (!connection) return
+
+  const config = (connection.config as Record<string, unknown> | null) ?? {}
+  await prisma.integrationConnection.update({
+    where: { brand_id_integration_key: { brand_id: brandId, integration_key: GOAFFPRO_KEY } },
+    data: {
+      config: {
+        ...config,
+        clickLastTrafficId: state.lastTrafficId,
+        clickCountedAffiliateIds: state.countedAffiliateIds,
+      },
+    },
+  })
+}
+
 export async function setGoAffProOrderSyncCursor(brandId: string, syncedAt: Date) {
   const connection = await prisma.integrationConnection.findUnique({
     where: { brand_id_integration_key: { brand_id: brandId, integration_key: GOAFFPRO_KEY } },

@@ -20,6 +20,7 @@ import { Link2, ShoppingCart, FolderOpen } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { SettingsSkeleton } from "@/components/shared/skeletons"
 import { fetchCached, invalidateCache, getCachedData } from "@/lib/data-cache"
+import { invalidateInfluencerDerivedCaches } from "@/lib/cache-invalidation"
 
 function LoadingScreen() {
   return (
@@ -261,28 +262,23 @@ function IntegrationsContent() {
     setGoaffproSyncing(true)
 
     try {
-      const res = await fetch(
-        `/api/settings/integrations/goaffpro/clicks?days=7&brandId=${encodeURIComponent(brandId ?? "")}`
-      )
+      const res = await fetch("/api/settings/integrations/goaffpro/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ brandId }),
+      })
       const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "Failed to sync GoAffPro")
 
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to sync GoAffPro clicks")
-      }
-
-      const topAffiliate = data?.data?.affiliates?.[0]
-      const topLabel = topAffiliate
-        ? topAffiliate.name || topAffiliate.email || topAffiliate.ref_code || topAffiliate.id
-        : null
-
+      invalidateInfluencerDerivedCaches(brandId)
       show(
-        topLabel
-          ? `GoAffPro synced: ${data.data.totalClicks} clicks in the last ${data.data.windowDays} days. Top affiliate: ${topLabel} (${topAffiliate.clicks})`
-          : `GoAffPro synced: ${data.data.totalClicks} clicks in the last ${data.data.windowDays} days`,
+        data.influencersUpdated === 0
+          ? "GoAffPro synced: no influencers are linked to a GoAffPro affiliate yet"
+          : `GoAffPro synced: ${data.ordersSynced} new orders, clicks updated for ${data.influencersUpdated} influencers`,
         "success"
       )
     } catch (err: any) {
-      show(err.message || "Failed to sync GoAffPro clicks", "error")
+      show(err.message || "Failed to sync GoAffPro", "error")
     } finally {
       setGoaffproSyncing(false)
     }
@@ -352,6 +348,7 @@ function IntegrationsContent() {
             onConnect={() => handleConnect("goaffpro", "GoAffPro")}
             onDisconnect={() => handleDisconnect("goaffpro", "GoAffPro")}
             onManage={handleGoAffProManage}
+            manageLabel={goaffproSyncing ? "Syncing…" : "Sync now"}
           />
           <IntegrationRow
             logo={<span className="text-[13px]">🔗</span>}
@@ -462,10 +459,11 @@ function IntegrationsContent() {
                 onChange={(e) => setGoaffproWebhookSecret(e.target.value)}
               />
               <div className="text-[11px] text-[#888]">
-                Leave empty to sync via polling every 15 minutes. If your GoAffPro plan
-                supports webhooks, create one in GoAffPro (Settings → Developer → Webhooks)
-                pointing to the URL below with topic <code>orders/after</code>, then paste
-                the resulting signature secret here for real-time sync.
+                Leave empty to sync with the <strong>Sync now</strong> button after connecting.
+                If your GoAffPro plan supports webhooks, create one in GoAffPro (Settings →
+                Developer → Webhooks) pointing to the URL below with topic <code>orders/after</code>,
+                then paste the resulting signature secret here so new orders sync in real time.
+                Clicks always come from Sync now.
               </div>
               {goaffproWebhookUrl && (
                 <Input readOnly value={goaffproWebhookUrl} className="text-[11px]" />

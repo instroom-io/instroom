@@ -2,239 +2,27 @@
 // table-sheet/profile-sidebar.tsx
 
 import React, { useState, useEffect, useRef } from "react"
+import { FileSearch } from "lucide-react"
+import { ResearchGuideModal } from "@/components/research-sop/research-guide"
+import { prefetchHistory } from "@/lib/activity-history"
 import type { InfluencerRow, CustomColumn } from "./types"
-import { platforms } from "./constants"
-import { STATUS_LABEL, JOURNEY_STATUSES, getJourneyStatus, journeyStatusToFields, type JourneyStatus } from "./constants"
-import { getProfileUrl, handleApprovalChange, formatFollowers } from "./utils"
-import { ProfilePicture } from "./ui-atoms"
-import { DeclineModal } from "@/components/shared/decline-modal"
+import { getProfileUrl, handleApprovalChange, canListDecline, drawerStageLabel, formatFollowers } from "./utils"
 import { EmailModal } from "@/components/shared/email-modal"
+import { invalidateInfluencerDerivedCaches } from "@/lib/cache-invalidation"
 import type { CampaignDeliverable } from "@/lib/deliverables"
+import { AttributionTab } from "@/components/shared/attribution-tab"
+import { InfluencerStatsTab } from "@/components/shared/influencer-stats-tab"
+import { HistoryTab, LastEditedBy } from "@/components/InfluencerProfileSidebar"
+import { formatDealRate, paymentMilestones, type PayStructure } from "@/lib/pipeline-transitions"
+import {
+  DrawerShell, DrawerHeader, DrawerControl, DrawerTabs, DrawerBody, DrawerActionBar, resolveActiveTab, type DrawerTab,
+} from "@/components/shared/influencer-drawer"
+import { useClosedData } from "@/hooks/useClosedData"
+import {
+  PAID_COLLAB_TYPES, ReadOnlyTabPlaceholder, ReadOnlyOrderTab, ReadOnlyPostTab, ReadOnlyPaidCollabTab,
+} from "@/components/pipeline/post-tracker-readonly-tabs"
 
-// Instagram's official "message me" shortlink opens a DM composer directly.
-// No platform exposes an equivalent deep link for an arbitrary handle, so
-// everywhere else we just open the profile and let the user hit Message there.
-function getDmUrl(platform: string, handle: string): string {
-  const clean = handle.replace(/^@/, "")
-  if (platform === "instagram") return `https://ig.me/m/${clean}`
-  return getProfileUrl(platform, handle)
-}
 
-/**
- * How long the History tab waits for its activity log before giving up.
- *
- * Shorter than the profile lookup's 15s: this is a same-origin read of our own
- * database behind an already-open panel, so a slow answer is a problem, and the
- * tab has a perfectly good error state to fall back to.
- */
-const HISTORY_FETCH_TIMEOUT_MS = 10_000
-
-// ─── Activity log types ───────────────────────────────────────────────────────
-interface ActivityLog {
-  id: string
-  action: string
-  label: string
-  details: Record<string, unknown>
-  created_at: string
-  user: {
-    id: string
-    name: string | null
-    image: string | null
-    initials: string
-  } | null
-}
-
-const ACTION_COLORS: Record<string, { bg: string; color: string }> = {
-  "influencer.added":            { bg: "#dcfce7", color: "#166534" },
-  "influencer.removed":          { bg: "#fee2e2", color: "#991b1b" },
-  "influencer.approval_changed": { bg: "#f3e8ff", color: "#6b21a8" },
-  "pipeline.stage_changed":      { bg: "#dbeafe", color: "#1e40af" },
-  "pipeline.status_changed":     { bg: "#fef9c3", color: "#854d0e" },
-  "posttracker.stage_changed":   { bg: "#ccfbf1", color: "#0f766e" },
-  "influencer.submitted":        { bg: "#ffedd5", color: "#9a3412" },
-}
-
-function formatActivityDate(iso: string) {
-  return new Date(iso).toLocaleString("en-US", {
-    month: "short", day: "numeric", year: "numeric",
-    hour: "numeric", minute: "2-digit",
-  })
-}
-
-function formatActivityDetails(action: string, details: Record<string, unknown>): string {
-  switch (action) {
-    case "pipeline.stage_changed":
-      return `Stage ${details.from} → ${details.to}`
-    case "pipeline.status_changed":
-      if (details.ni_reason) return `${details.from} → ${details.to} · "${details.ni_reason}"`
-      return `${details.from} → ${details.to}`
-    case "influencer.approval_changed":
-      return `${details.from ?? "—"} → ${details.to}${details.notes ? ` · "${details.notes}"` : ""}`
-    case "influencer.added":
-      return `via ${details.method ?? "manual"}${details.platform ? ` on ${details.platform}` : ""}`
-    case "posttracker.stage_changed":
-      return `${details.from} → ${details.to}`
-    case "influencer.updated": {
-      const fields = details.fields as string[] | undefined
-      return fields?.length ? `Updated ${fields.length} field${fields.length > 1 ? "s" : ""}` : ""
-    }
-    default:
-      return ""
-  }
-}
-
-// ─── History Tab Component ────────────────────────────────────────────────────
-function HistoryTab({ brandId, biId }: { brandId?: string; biId: string }) {
-  const [logs, setLogs] = useState<ActivityLog[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!brandId || !biId) {
-      setLoading(false)
-      return
-    }
-    setLoading(true)
-    setError(null)
-    // Aborted on cleanup, so switching influencer (or closing the panel) drops
-    // the previous request instead of letting it land on the new one's tab —
-    // and the timeout stops an unreachable backend leaving this stuck on
-    // "loading" forever. Both failures are contained in this tab: an inline
-    // line of text, never a dialog over the sheet.
-    const controller = new AbortController()
-    // `cancelled` separates the two reasons this request can abort. Both raise
-    // an AbortError, but only one of them should stay silent: a cleanup abort
-    // means the component moved on and setting state would flash an error onto
-    // the influencer the user just switched to, while a TIMEOUT abort is a real
-    // failure the tab has to report — swallowing it would leave the panel
-    // spinning forever.
-    let cancelled = false
-    const timeout = setTimeout(() => controller.abort(), HISTORY_FETCH_TIMEOUT_MS)
-    fetch(`/api/brand/${brandId}/influencers/${biId}/activity`, { signal: controller.signal })
-      .then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        return r.json()
-      })
-      .then(d => { if (!cancelled) { setLogs(d.logs ?? []); setLoading(false) } })
-      .catch(err => {
-        if (cancelled) return
-        console.error("[HistoryTab]", err)
-        setError("Failed to load history")
-        setLoading(false)
-      })
-      .finally(() => clearTimeout(timeout))
-    return () => { cancelled = true; clearTimeout(timeout); controller.abort() }
-  }, [brandId, biId])
-
-  if (!brandId) {
-    return (
-      <div style={{ textAlign: "center", padding: "40px 20px", color: "#9ca3af", fontSize: 12 }}>
-        Brand context required to view history
-      </div>
-    )
-  }
-
-  if (loading) {
-    return (
-      <div style={{ textAlign: "center", padding: "48px 20px", color: "#9ca3af", fontSize: 13 }}>
-        Loading history…
-      </div>
-    )
-  }
-
-  if (error) {
-    return (
-      <div style={{ textAlign: "center", padding: "48px 20px" }}>
-        <div style={{ fontSize: 13, color: "#ef4444", marginBottom: 4 }}>{error}</div>
-        <div style={{ fontSize: 11, color: "#9ca3af" }}>bi.id: {biId}</div>
-      </div>
-    )
-  }
-
-  if (logs.length === 0) {
-    return (
-      <div style={{ textAlign: "center", padding: "48px 20px" }}>
-        <div style={{ fontSize: 28, marginBottom: 10, opacity: 0.2 }}>🕐</div>
-        <div style={{ fontSize: 13, fontWeight: 600, color: "#6b7280", marginBottom: 6 }}>
-          No activity yet
-        </div>
-        <div style={{ fontSize: 11, color: "#d1d5db", maxWidth: 220, margin: "0 auto" }}>
-          Actions like adding, approving, or moving this influencer will appear here
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div style={{ position: "relative" }}>
-      {/* Timeline line */}
-      <div style={{
-        position: "absolute", left: 19, top: 8, bottom: 8,
-        width: 1, background: "#f3f4f6",
-      }} />
-
-      <div style={{ display: "flex", flexDirection: "column" }}>
-        {logs.map(log => {
-          const colorScheme = ACTION_COLORS[log.action] ?? { bg: "#f3f4f6", color: "#374151" }
-          const detail = formatActivityDetails(log.action, log.details)
-
-          return (
-            <div key={log.id} style={{ display: "flex", gap: 14, paddingBottom: 22, position: "relative" }}>
-              {/* Avatar */}
-              <div style={{ flexShrink: 0, zIndex: 1 }}>
-                {log.user?.image ? (
-                  <img
-                    src={log.user.image}
-                    alt={log.user.name ?? ""}
-                    style={{ width: 38, height: 38, borderRadius: "50%", objectFit: "cover", border: "2px solid #f0fdf4" }}
-                  />
-                ) : (
-                  <div style={{
-                    width: 38, height: 38, borderRadius: "50%",
-                    background: "#dcfce7", border: "2px solid #f0fdf4",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 12, fontWeight: 700, color: "#1fae5b",
-                  }}>
-                    {log.user?.initials ?? "?"}
-                  </div>
-                )}
-              </div>
-
-              {/* Content */}
-              <div style={{ flex: 1, minWidth: 0, paddingTop: 2 }}>
-                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, marginBottom: 4 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: "#111827" }}>
-                      {log.user?.name ?? "Unknown user"}
-                    </span>
-                    <span style={{
-                      fontSize: 10, fontWeight: 600, padding: "2px 8px",
-                      borderRadius: 20, background: colorScheme.bg, color: colorScheme.color,
-                    }}>
-                      {log.label}
-                    </span>
-                  </div>
-                  <span style={{ fontSize: 10, color: "#9ca3af", whiteSpace: "nowrap", flexShrink: 0 }}>
-                    {formatActivityDate(log.created_at)}
-                  </span>
-                </div>
-                {detail && (
-                  <div style={{
-                    fontSize: 11, color: "#6b7280",
-                    background: "#f9fafb", borderRadius: 8,
-                    padding: "5px 10px", display: "inline-block", marginTop: 2,
-                  }}>
-                    {detail}
-                  </div>
-                )}
-              </div>
-            </div>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
 
 // ─── Paid Collab Details tab ────────────────────────────────────────────────────
 // "n_a": this deliverable has no script / content review step. Treated as
@@ -242,8 +30,15 @@ function HistoryTab({ brandId, biId }: { brandId?: string; biId: string }) {
 type StepStatus = "n_a" | "pending" | "submitted" | "revision_requested" | "resubmitted" | "approved"
 type ContractStatus = "not_started" | "draft" | "sent" | "signed"
 type PostStatus = "pending" | "submitted" | "live"
-type PayStructure = "upfront" | "5050" | "after" | "custom"
 type MilestoneStatus = "unpaid" | "due" | "paid"
+
+/** Fee goes to agreed_rate, the rest to product_details.paidCollab. */
+export interface PaidCollabPayment {
+  agreedRate: number | null
+  payStructure: PayStructure
+  milestoneStatuses: MilestoneStatus[]
+  paymentMethod: string
+}
 
 interface PaidDeliverable {
   id: number
@@ -291,11 +86,14 @@ function pcStatusSelectStyle(status: string, disabled?: boolean) {
   }
 }
 
-export function PaidCollabTab({ influencerName, rateHint, initialDeliverables }: {
+export function PaidCollabTab({ influencerName, rateHint, initialDeliverables, initialPayment, onPaymentChange }: {
   influencerName: string
   rateHint?: number
   /** The influencer's saved campaign deliverables (lib/deliverables), when known. */
   initialDeliverables?: CampaignDeliverable[]
+  initialPayment?: { payStructure?: string; milestoneStatuses?: string[]; paymentMethod?: string } | null
+  /** Saves each Payment change; without it nothing is saved. */
+  onPaymentChange?: (payment: PaidCollabPayment) => void
 }) {
   const [contractEnabled, setContractEnabled] = useState(false)
   const [contractStatus, setContractStatus] = useState<ContractStatus>("not_started")
@@ -320,20 +118,36 @@ export function PaidCollabTab({ influencerName, rateHint, initialDeliverables }:
   )
   const nextIdRef = React.useRef(deliverables.reduce((m, d) => Math.max(m, Number(d.id) || 0), 0) + 1)
 
-  // Payment starts in a blank / zero state. An agreed fee already stored on the
-  // record is real data and is still honoured; everything else (no rate, or 0)
-  // starts empty so nothing is calculated until the user enters a fee. No
-  // template amount, no pre-marked "paid" milestone.
   const initialRate = rateHint && rateHint > 0 ? String(rateHint) : ""
   const [rate, setRate] = useState(initialRate)
-  // Committed value that drives every amount — the draft above only becomes
-  // committed once the user leaves the field or presses Enter, so milestones
-  // don't churn on each keystroke.
+  // Set on blur or Enter, so milestones don't change on each keystroke.
   const [committedRate, setCommittedRate] = useState(initialRate)
-  const [paymentMethod, setPaymentMethod] = useState("Bank transfer")
-  const [paymentStatus, setPaymentStatus] = useState("Unpaid")
-  const [payStructure, setPayStructure] = useState<PayStructure>("5050")
-  const [milestoneStatuses, setMilestoneStatuses] = useState<MilestoneStatus[]>([])
+  const [paymentMethod, setPaymentMethod] = useState(initialPayment?.paymentMethod || "Bank transfer")
+  const [payStructure, setPayStructure] = useState<PayStructure>(() => {
+    const s = initialPayment?.payStructure
+    return s === "upfront" || s === "after" || s === "custom" ? s : "5050"
+  })
+  const [milestoneStatuses, setMilestoneStatuses] = useState<MilestoneStatus[]>(() =>
+    (initialPayment?.milestoneStatuses ?? []).map(s => (s === "paid" || s === "due" ? s : "unpaid"))
+  )
+
+  const savePayment = (patch: Partial<PaidCollabPayment>) => {
+    if (!onPaymentChange) return
+    const fee = Math.max(0, parseFloat(committedRate) || 0)
+    onPaymentChange({
+      agreedRate: fee > 0 ? fee : null,
+      payStructure,
+      milestoneStatuses: paymentMilestones(fee, payStructure).map((_, i) => milestoneStatuses[i] ?? "unpaid"),
+      paymentMethod,
+      ...patch,
+    })
+  }
+  const commitRate = () => {
+    if (rate === committedRate) return
+    setCommittedRate(rate)
+    const fee = Math.max(0, parseFloat(rate) || 0)
+    savePayment({ agreedRate: fee > 0 ? fee : null })
+  }
 
   const updateDeliverable = (id: number, patch: Partial<PaidDeliverable>) =>
     setDeliverables(ds => ds.map(d => d.id === id ? { ...d, ...patch } : d))
@@ -362,31 +176,25 @@ export function PaidCollabTab({ influencerName, rateHint, initialDeliverables }:
   const doneSteps = steps.filter(Boolean).length
   const pct = steps.length > 0 ? Math.round((doneSteps / steps.length) * 100) : 0
 
-  // Amounts derive from the committed fee only, and never go negative
+  // Same split as resolveFees, so Stats counts what this shows.
   const rateNum = Math.max(0, parseFloat(committedRate) || 0)
   const hasAgreedFee = rateNum > 0
-  const milestones: { label: string; amount: number; dot: string }[] =
-    payStructure === "upfront" ? [{ label: "100% upfront — before shoot", amount: rateNum, dot: "#1fae5b" }]
-    : payStructure === "5050" ? [{ label: "50% upfront — before shoot", amount: rateNum / 2, dot: "#1fae5b" }, { label: "50% — after post goes live", amount: rateNum / 2, dot: "#ef9f27" }]
-    : payStructure === "after" ? [{ label: "100% — after all deliverables", amount: rateNum, dot: "#ef9f27" }]
-    : (() => {
-        const p1 = Math.round(rateNum * 0.4), p2 = Math.round(rateNum * 0.4), p3 = rateNum - p1 - p2
-        return [
-          { label: "Payment 1 — upfront", amount: p1, dot: "#1fae5b" },
-          { label: "Payment 2 — after content approved", amount: p2, dot: "#ef9f27" },
-          { label: "Payment 3 — after post goes live", amount: p3, dot: "#aaaaaa" },
-        ]
-      })()
+  const milestones = paymentMilestones(rateNum, payStructure)
 
-  useEffect(() => {
-    setMilestoneStatuses(prev => {
-      const next = milestones.map((_, i) => prev[i] ?? "unpaid")
-      return next
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [payStructure])
+  const changeStructure = (s: PayStructure) => {
+    const next = paymentMilestones(rateNum, s).map((_, i) => milestoneStatuses[i] ?? "unpaid")
+    setPayStructure(s)
+    setMilestoneStatuses(next)
+    savePayment({ payStructure: s, milestoneStatuses: next })
+  }
+  const changeMilestone = (i: number, status: MilestoneStatus) => {
+    const next = milestones.map((_, idx) => idx === i ? status : milestoneStatuses[idx] ?? "unpaid")
+    setMilestoneStatuses(next)
+    savePayment({ milestoneStatuses: next })
+  }
 
   const totalPaid = milestones.reduce((sum, m, i) => sum + (milestoneStatuses[i] === "paid" ? m.amount : 0), 0)
+  const paymentStatus = totalPaid <= 0 ? "Unpaid" : totalPaid >= rateNum ? "Fully paid" : "Partially paid"
 
   const P = {
     label: { fontSize: 10, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase" as const, letterSpacing: "0.06em" },
@@ -583,26 +391,24 @@ export function PaidCollabTab({ influencerName, rateHint, initialDeliverables }:
             style={P.smallInput}
             value={rate}
             onChange={e => setRate(e.target.value)}
-            onBlur={() => setCommittedRate(rate)}
-            onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); setCommittedRate(rate) } }}
+            onBlur={commitRate}
+            onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); commitRate() } }}
           />
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <label style={{ fontSize: 11, color: "#888" }}>Payment method</label>
-          <select style={P.smallInput} value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)}>
+          <select style={P.smallInput} value={paymentMethod} onChange={e => { setPaymentMethod(e.target.value); savePayment({ paymentMethod: e.target.value }) }}>
             <option>Bank transfer</option><option>PayPal</option><option>Wise</option><option>GCash</option><option>Other</option>
           </select>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <label style={{ fontSize: 11, color: "#888" }}>Overall payment status</label>
-          <select style={P.smallInput} value={paymentStatus} onChange={e => setPaymentStatus(e.target.value)}>
-            <option>Unpaid</option><option>Partially paid</option><option>Fully paid</option>
-          </select>
+          <div style={{ ...P.smallInput, background: "#f9fafb", color: "#555" }} title="Set by the milestones marked Paid below">{paymentStatus}</div>
         </div>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 4, maxWidth: 260, marginBottom: 14 }}>
         <label style={{ fontSize: 11, color: "#888" }}>Payment structure</label>
-        <select style={P.smallInput} value={payStructure} onChange={e => setPayStructure(e.target.value as PayStructure)}>
+        <select style={P.smallInput} value={payStructure} onChange={e => changeStructure(e.target.value as PayStructure)}>
           <option value="upfront">100% upfront</option>
           <option value="5050">50% / 50%</option>
           <option value="after">After all deliverables</option>
@@ -626,7 +432,7 @@ export function PaidCollabTab({ influencerName, rateHint, initialDeliverables }:
             <span style={{ fontSize: 13, fontWeight: 600, color: "#222" }}>${m.amount.toLocaleString()}</span>
             <select
               value={milestoneStatuses[i] || "unpaid"}
-              onChange={e => setMilestoneStatuses(s => s.map((v, idx) => idx === i ? e.target.value as MilestoneStatus : v))}
+              onChange={e => changeMilestone(i, e.target.value as MilestoneStatus)}
               style={pcStatusSelectStyle(milestoneStatuses[i] || "unpaid")}
             >
               <option value="unpaid">Pending</option><option value="due">Due</option><option value="paid">Paid</option>
@@ -648,13 +454,6 @@ function displayMetric(val: string | number | undefined | null): string {
   const n = Number(val)
   if (isNaN(n)) return "—"
   return formatFollowers(n)
-}
-
-function formatMoney(val: string | number | undefined | null): string {
-  if (val === null || val === undefined || val === "") return "—"
-  const n = Number(val)
-  if (isNaN(n)) return "—"
-  return `$${n.toLocaleString()}`
 }
 
 function FieldSelect({ label, icon, value, options, onChange, readOnly }: {
@@ -727,36 +526,25 @@ export default function ProfileSidebar({
   brandId?: string
 }) {
   const [profileTab, setProfileTab] = useState(0)
+  // Load History in the background as the drawer opens, so it is ready when clicked.
+  const historyBiId = row ? row.brand_influencer_id || row.id : ""
+  useEffect(() => {
+    if (historyBiId && !historyBiId.startsWith("temp-")) prefetchHistory(brandId, historyBiId)
+  }, [brandId, historyBiId])
   const [editedRow, setEditedRow] = useState<InfluencerRow | null>(row ? { ...row } : null)
-  const [showDeclineModal, setShowDeclineModal] = useState(false)
   const [showEmailModal, setShowEmailModal] = useState(false)
-  const [isSaving, setIsSaving] = useState(false)
-  const defaultDiscountCode = row ? "CODE" + (row.first_name || row.handle).toUpperCase().replace(/[^A-Z]/g, "") : ""
-  const defaultAffiliateLink = row ? "https://instroom.io/ref/" + (row.first_name || row.handle).toLowerCase().replace(/[^a-z]/g, "") : ""
-  const [orderData, setOrderData] = useState({
-    productName: "", orderNumber: "", productCost: "",
-    discountCode: row ? (row.coupon || row.ref_code || defaultDiscountCode) : "",
-    affiliateLink: row ? (row.affiliate_link || defaultAffiliateLink) : "",
-    sparkAds: row ? (row.spark_ads || "") : "",
-    shippingAddress: "", trackingLink: "",
-  })
-  const [attributionSaveMessage, setAttributionSaveMessage] = useState<string | null>(null)
-  const [postData, setPostData] = useState({
-    postLink: "", likes: "", sales: "", driveLink: "",
-    comments: "", amount: "", usageRights: "", views: "", clicks: "",
-  })
-
+  // Read-only research playbook (published SOPs) for the researcher to follow.
+  const [showResearchGuide, setShowResearchGuide] = useState(false)
   const resetFormToRow = () => {
     if (!row) return
     setEditedRow({ ...row })
-    setOrderData(d => ({
-      ...d,
-      discountCode: row.coupon || row.ref_code || defaultDiscountCode,
-      affiliateLink: row.affiliate_link || defaultAffiliateLink,
-      sparkAds: row.spark_ads || "",
-    }))
-    setPostData({ postLink: "", likes: "", sales: "", driveLink: "", comments: "", amount: "", usageRights: "", views: "", clicks: "" })
   }
+
+  const biId = row?.brand_influencer_id
+  const inPostTracker = row ? drawerStageLabel(row) === "Post Tracker" : false
+  const { data: closedRows, isLoading: closedLoading } = useClosedData(inPostTracker ? brandId : undefined)
+  const closedRow = inPostTracker && biId ? closedRows.find(r => r.id === biId) : undefined
+  const refreshSheet = () => invalidateInfluencerDerivedCaches(brandId)
 
   // Keyed on the row's IDENTITY, not the row object.
   //
@@ -795,56 +583,10 @@ export default function ProfileSidebar({
 
   if (!row || !editedRow) return null
 
-  const platformLabel = platforms.find(p => p.value === editedRow.platform)?.name || editedRow.platform
-  const postCVR = postData.clicks && parseFloat(postData.clicks) > 0
-    ? ((parseFloat(postData.sales || "0") / parseFloat(postData.clicks)) * 100).toFixed(2) + "%"
-    : ""
-  const affiliateClicks = Number(editedRow.clicks || 0)
-  const affiliateSales = Number(editedRow.sales_count || 0)
-  const affiliateRevenue = Number(editedRow.gmv || 0)
-  const affiliateSpend = Number(editedRow.agreed_rate || 0)
-  const affiliateCvr = affiliateClicks > 0 ? (affiliateSales / affiliateClicks) * 100 : 0
-  const affiliateRoas = affiliateSpend > 0 ? affiliateRevenue / affiliateSpend : 0
-  const hasAffiliateData = Boolean(
-    editedRow.affiliate_id ||
-    editedRow.ref_code ||
-    editedRow.coupon ||
-    editedRow.affiliate_link ||
-    affiliateClicks ||
-    affiliateSales ||
-    affiliateRevenue
-  )
-
-  const PIPELINE_STAGE_BY_CONTACT_STATUS: Record<string, string> = {
-    not_contacted: "1", contacted: "2", negotiating: "3", agreed: "4", for_order_creation: "5",
-  }
-
-  const handlePipelineChange = (value: string) => {
-    if (!editedRow) return
-    setEditedRow({
-      ...editedRow,
-      contact_status: value,
-      stage: PIPELINE_STAGE_BY_CONTACT_STATUS[value] ?? editedRow.stage,
-      approval_status: "Approved",
-    })
-  }
-
-  const handleJourneyStatusChange = (value: string) => {
-    if (!editedRow) return
-    if (value === "Declined") { setShowDeclineModal(true); return }
-    if (value === "Pending") {
-      const fields = journeyStatusToFields("Pending")
-      setEditedRow({ ...editedRow, ...fields })
-      return
-    }
-    const fields = journeyStatusToFields(value as JourneyStatus)
-    setEditedRow({ ...editedRow, ...fields })
-  }
 
   const handleFieldChange = (field: string, value: string) => {
     if (!editedRow) return
     if (field === "approval_status") {
-      if (value === "Declined") { setShowDeclineModal(true); return }
       setEditedRow(handleApprovalChange(editedRow, value))
     } else if (field.startsWith("custom.")) {
       setEditedRow({ ...editedRow, custom: { ...editedRow.custom, [field.slice(7)]: value } })
@@ -862,64 +604,18 @@ export default function ProfileSidebar({
     }
   }
 
-  // The influencer fields are already persisted by the autosave above — this
-  // does NOT issue a second PUT for them, which is what used to race the
-  // table's own save and write the same row twice per click.
-  //
-  // What is left here is the attribution record (coupon, affiliate link, spark
-  // ads), which lives on its own endpoint and has no autosave of its own. The
-  // in-flight guard makes a double-click a no-op rather than a second request.
-  const handleSave = async () => {
-    if (!editedRow || !row?.id || isSaving) return
-    if (row.id.trim() === "") { onToast?.("error", "Cannot save: Influencer ID is missing."); return }
-    setIsSaving(true)
-    try {
-      const existingLastName = editedRow.full_name ? editedRow.full_name.split(" ").slice(1).join(" ") : ""
-      const rebuiltFullName = editedRow.first_name
-        ? existingLastName ? `${editedRow.first_name} ${existingLastName}` : editedRow.first_name
-        : editedRow.full_name || null
-
-      // Flushed through the same single pipeline every other edit takes.
-      const synced = { ...editedRow, full_name: rebuiltFullName || editedRow.full_name }
-      setEditedRow(synced)
-
-      setAttributionSaveMessage(null)
-      if (brandId && row.brand_influencer_id) {
-        try {
-          const attrRes = await fetch(`/api/brand/${brandId}/attribution/${row.brand_influencer_id}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              coupon: orderData.discountCode || null,
-              affiliateLink: orderData.affiliateLink || null,
-              sparkAds: orderData.sparkAds || null,
-            }),
-          })
-          if (attrRes.ok) {
-            const attrJson = await attrRes.json()
-            if (attrJson.goAffPro?.synced === false && attrJson.goAffPro?.reason) {
-              setAttributionSaveMessage(`GoAffPro sync skipped: ${attrJson.goAffPro.reason}`)
-            }
-          } else {
-            onToast?.("error", "Could not save the attribution details")
-          }
-        } catch {
-          onToast?.("error", "Could not save the attribution details")
-        }
-      }
-    } finally { setIsSaving(false) }
+  // Fields autosave; Save only folds the first name into the full name.
+  const handleSave = () => {
+    const existingLastName = editedRow.full_name ? editedRow.full_name.split(" ").slice(1).join(" ") : ""
+    const rebuiltFullName = editedRow.first_name
+      ? existingLastName ? `${editedRow.first_name} ${existingLastName}` : editedRow.first_name
+      : editedRow.full_name
+    setEditedRow({ ...editedRow, full_name: rebuiltFullName || editedRow.full_name })
+    onToast?.("success", "Changes saved")
   }
 
   const S = {
-    overlay: { position: "fixed" as const, inset: 0, zIndex: 400, cursor: "pointer" },
-    panel: { position: "fixed" as const, top: 0, right: 0, width: 520, maxWidth: "100vw", height: "100%", background: "#fff", boxShadow: "-8px 0 40px rgba(0,0,0,0.14)", zIndex: 500, display: "flex", flexDirection: "column" as const, fontFamily: "'Inter',system-ui,sans-serif" },
-    header: { padding: "16px 20px", borderBottom: "1px solid #f0f0f0" },
     pipeSel: { fontSize: 11, padding: "5px 10px", borderRadius: 8, border: "0.5px solid #f4b740", background: "#fffbeb", color: "#854f0b", cursor: "pointer", fontWeight: 500 },
-    atag: { fontSize: 12, fontWeight: 500, padding: "6px 14px", borderRadius: 20, cursor: "pointer", border: "1px solid #e5e7eb", background: "#f9fafb", color: "#555", transition: "all 0.15s" },
-    atagPlat: { fontSize: 12, fontWeight: 500, padding: "6px 14px", borderRadius: 20, cursor: "pointer", border: "1px solid #1fae5b", background: "#1fae5b", color: "#fff" },
-    tabBar: { display: "flex", gap: 0, padding: "0 20px", borderBottom: "1px solid #f0f0f0", overflowX: "auto" as const },
-    tab: (a: boolean) => ({ fontSize: 12, fontWeight: 600, padding: "11px 16px", cursor: "pointer", color: a ? "#1fae5b" : "#9ca3af", borderBottom: a ? "2px solid #1fae5b" : "2px solid transparent", whiteSpace: "nowrap" as const, transition: "color 0.15s" }),
-    body: { flex: 1, overflowY: "auto" as const, padding: "20px" },
     statRow: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8, background: "linear-gradient(135deg, #f0fdf4 0%, #f9fafb 100%)", borderRadius: 12, padding: 14, marginBottom: 18, border: "1px solid #dcfce7" },
     statBox: { textAlign: "center" as const },
     statLabel: { fontSize: 9, fontWeight: 600, color: "#6b7280", textTransform: "uppercase" as const, letterSpacing: "0.07em" },
@@ -927,7 +623,6 @@ export default function ProfileSidebar({
     formInput: { width: "100%", fontSize: 12, padding: "8px 10px", borderRadius: 8, border: "1.5px solid #e5e7eb", background: "#f9fafb", color: "#111827", boxSizing: "border-box" as const, outline: "none", transition: "border-color 0.15s, background 0.15s" },
     saveBtn: { background: "#1fae5b", color: "#fff", border: "none", padding: "9px 20px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 600, transition: "background 0.15s" },
     cancelBtn: { background: "transparent", color: "#6b7280", border: "1.5px solid #e5e7eb", padding: "9px 18px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 600, transition: "background 0.15s, border-color 0.15s" },
-    actionBar: { display: "flex", alignItems: "center" as const, justifyContent: "flex-end" as const, gap: 8, position: "sticky" as const, bottom: -20, margin: "8px -20px -20px", padding: "10px 20px", background: "#fff", borderTop: "1px solid #eee", zIndex: 2 },
     sectionTitle: { fontSize: 10, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase" as const, letterSpacing: "0.08em", padding: "14px 0 8px", marginBottom: 10, borderBottom: "1px solid #f3f4f6" },
     metricBox: { background: "#f9fafb", borderRadius: 10, padding: "12px 10px", textAlign: "center" as const, border: "1px solid #f3f4f6" },
     metricVal: { fontSize: 16, fontWeight: 700, color: "#111827" },
@@ -936,6 +631,9 @@ export default function ProfileSidebar({
     formGroup: { display: "flex", flexDirection: "column" as const, gap: 4, marginBottom: 10 },
     formLabel: { fontSize: 10, fontWeight: 600, color: "#6b7280" },
   }
+
+  const focusIn = (e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) => { e.currentTarget.style.borderColor = "#1fae5b"; e.currentTarget.style.background = "#fff" }
+  const focusOut = (e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) => { e.currentTarget.style.borderColor = "#e5e7eb"; e.currentTarget.style.background = "#f9fafb" }
 
   const locationOptions = locations.map(l => ({ value: l, label: l }))
   const nicheOptions = niches.map(n => ({ value: n, label: n }))
@@ -952,37 +650,22 @@ export default function ProfileSidebar({
     { value: "twitter", label: "X (Twitter)" },
   ]
 
-  // Tabs: 0=Basic, 1=Order, 2=Attribution, 3=Post, 4=Stats, 5=History
-  const TABS = ["Basic", "Order", "Attribution", "Post", "Stats", "History"]
+  const TABS = ["Basic", "Order", "Attribution", "Post", "Stats", "Paid collab details", "History"]
+  const isSaved = !!biId && !editedRow.is_draft && !editedRow.id.startsWith("temp-")
+  const tabDisabledReason = (idx: number): string | null => {
+    if (idx === 0) return null
+    if (!isSaved) return "Available once this influencer is saved"
+    if (idx !== 1 && idx !== 3 && idx !== 5) return null
+    if (!inPostTracker) return "Available once this influencer is in Post Tracker"
+    if (idx === 5 && closedRow && !PAID_COLLAB_TYPES.has(closedRow.campaignType ?? "")) return "Only for paid collaborations"
+    return null
+  }
+  // Falls back to Basic if the open tab becomes unavailable.
+  const drawerTabs: DrawerTab[] = TABS.map((label, id) => ({ id, label, disabledReason: tabDisabledReason(id) }))
+  const activeTab = resolveActiveTab(drawerTabs, profileTab)
 
   return (
     <>
-      {/* The SAME modal and reason list the Pipeline board uses — see
-          components/shared/decline-modal.tsx. */}
-      {showDeclineModal && (
-        <DeclineModal
-          name={editedRow.full_name || editedRow.handle || "this influencer"}
-          handle={editedRow.handle}
-          profileImageUrl={editedRow.profile_image_url}
-          /* Above S.panel's zIndex 500 — otherwise the sidebar stays painted
-             over the modal's right-hand reason column. */
-          zIndex={600}
-          onCancel={() => setShowDeclineModal(false)}
-          onConfirm={(r, declineNotes) => {
-            setShowDeclineModal(false)
-            if (!editedRow) return
-            // Confirm is the final action, exactly as it is on the Pipeline
-            // board — commit straight through the table's save pipeline and
-            // close the panel, rather than staging the change and leaving the
-            // sidebar open waiting for a Save Changes the user has no reason
-            // to expect. The row is declined and off the active list, so
-            // there is nothing left to edit in it.
-            onUpdate(handleApprovalChange(editedRow, "Declined", r, declineNotes))
-            onClose()
-          }}
-        />
-      )}
-
       {showEmailModal && (
         <EmailModal
           partnerName={editedRow.full_name || editedRow.first_name || editedRow.handle}
@@ -994,114 +677,109 @@ export default function ProfileSidebar({
         />
       )}
 
-      <div style={S.overlay} onClick={onClose} />
-
-      <div data-profile-panel style={S.panel}>
-        {/* ── Header ── */}
-        <div style={S.header}>
-          <div style={{ fontSize: 11, fontWeight: 600, color: "#9ca3af", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 12 }}>Influencer Profile</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
-            <div style={{ width: 46, height: 46, borderRadius: "50%", background: "#1fae5b", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "0 0 0 3px #dcfce7" }}>
-              <ProfilePicture src={editedRow.profile_image_url} socialLink={editedRow.social_link || getProfileUrl(editedRow.platform, editedRow.handle)} name={editedRow.full_name || editedRow.handle} handle={editedRow.handle} size={52} />
-            </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: "#111827", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{editedRow.full_name || editedRow.first_name || ""}</div>
-              <div style={{ fontSize: 12, color: "#6b7280", marginTop: 1 }}>@{editedRow.handle.replace(/^@/, "")}</div>
-            </div>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", flexShrink: 0 }}>
-              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                <span style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em" }}>Stage</span>
-                <select style={S.pipeSel} value={editedRow.contact_status} onChange={e => handlePipelineChange(e.target.value)}>
-                  <option value="not_contacted">For Outreach</option>
-                  <option value="contacted">Contacted</option>
-                  <option value="negotiating">In Conversation</option>
-                  <option value="agreed">Deal Agreed</option>
-                  <option value="for_order_creation">Post Tracker</option>
-                </select>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                <span style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em" }}>Status</span>
-                {editedRow.approval_status === "Declined" ? (
-                  <select style={{ ...S.pipeSel, borderColor: "#dc2626", background: "#fef2f2", color: "#991b1b" }}
-                    value="Declined" onChange={e => handleJourneyStatusChange(e.target.value)}>
-                    <option value="Declined">Declined</option>
-                    {JOURNEY_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+      <DrawerShell onClose={onClose}>
+        <DrawerHeader
+          name={editedRow.full_name || editedRow.first_name}
+          handle={editedRow.handle}
+          platform={editedRow.platform}
+          avatarUrl={editedRow.profile_image_url}
+          onSendEmail={() => setShowEmailModal(true)}
+          onNotify={(msg, type) => onToast?.(type, msg)}
+          handleExtra={brandId && (
+            <button
+              type="button"
+              onClick={() => setShowResearchGuide(true)}
+              title="Research guide"
+              aria-label="Open research guide"
+              style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, borderRadius: 6, border: "1px solid #e5e7eb", background: "#f9fafb", color: "#0f6b3e", cursor: "pointer", padding: 0 }}
+            >
+              <FileSearch size={12} />
+            </button>
+          )}
+          controls={<>
+            {/* Read-only: stages are changed on the Pipeline, inbox and Post Tracker. */}
+            <DrawerControl label="Stage">
+              <select disabled value="stage" title="Change the stage on the Pipeline"
+                style={{ ...S.pipeSel, width: 115, borderColor: "#e5e7eb", background: "#f3f4f6", color: "#9ca3af", cursor: "not-allowed" }}>
+                <option value="stage">{drawerStageLabel(editedRow)}</option>
+              </select>
+            </DrawerControl>
+            <DrawerControl label="Status">
+              {(() => {
+                const approval = editedRow.approval_status === "Approved" || editedRow.approval_status === "Declined"
+                  ? editedRow.approval_status
+                  : "Pending"
+                const tone = approval === "Declined"
+                  ? { borderColor: "#dc2626", background: "#fef2f2", color: "#991b1b" }
+                  : approval === "Pending"
+                    ? { borderColor: "#f4b740", background: "#fffbeb", color: "#854f0b" }
+                    : { borderColor: "#16a34a", background: "#f0fdf4", color: "#166534" }
+                return (
+                  <select style={{ ...S.pipeSel, width: 115, ...tone }} value={approval}
+                    onChange={e => handleFieldChange("approval_status", e.target.value)}>
+                    <option value="Pending">Pending</option>
+                    <option value="Approved">Approved</option>
+                    {canListDecline(editedRow) && <option value="Declined">Declined</option>}
                   </select>
-                ) : (
-                  <select
-                    style={
-                      getJourneyStatus(editedRow.approval_status, editedRow.stage) === "Pending"
-                        ? { ...S.pipeSel, borderColor: "#f4b740", background: "#fffbeb", color: "#854f0b" }
-                        : { ...S.pipeSel, borderColor: "#16a34a", background: "#f0fdf4", color: "#166534" }
-                    }
-                    value={getJourneyStatus(editedRow.approval_status, editedRow.stage)}
-                    onChange={e => handleJourneyStatusChange(e.target.value)}>
-                    {JOURNEY_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
-                    <option value="Declined">Declined</option>
-                  </select>
-                )}
-              </div>
-              <button
-                onClick={onClose} title="Close"
-                style={{ width: 30, height: 30, borderRadius: "50%", border: "1.5px solid #e5e7eb", background: "#f9fafb", color: "#374151", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 700, flexShrink: 0, lineHeight: 1, marginTop: 14 }}
-                onMouseEnter={e => { e.currentTarget.style.background = "#fee2e2"; e.currentTarget.style.color = "#dc2626"; e.currentTarget.style.borderColor = "#fca5a5" }}
-                onMouseLeave={e => { e.currentTarget.style.background = "#f9fafb"; e.currentTarget.style.color = "#374151"; e.currentTarget.style.borderColor = "#e5e7eb" }}
-              >✕</button>
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            <button
-              style={S.atagPlat}
-              onClick={() => {
-                const url = getProfileUrl(editedRow.platform, editedRow.handle)
-                if (url) window.open(url, "_blank", "noopener,noreferrer")
-              }}
-            >{platformLabel}</button>
-            <button style={S.atag} onClick={() => setShowEmailModal(true)}>Send Email</button>
-            <button
-              style={S.atag}
-              onClick={() => {
-                const url = getDmUrl(editedRow.platform, editedRow.handle)
-                if (url) window.open(url, "_blank", "noopener,noreferrer")
-              }}
-            >Send DM</button>
-            <button style={S.atag}>Follow up</button>
-            <button
-              style={S.atag}
-              onClick={async () => {
-                const url = getProfileUrl(editedRow.platform, editedRow.handle)
-                if (!url) return
-                try {
-                  await navigator.clipboard.writeText(url)
-                  onToast?.("success", "Profile link copied")
-                } catch {
-                  onToast?.("error", "Couldn't copy link")
-                }
-              }}
-            >Copy Link</button>
-          </div>
-        </div>
+                )
+              })()}
+            </DrawerControl>
+          </>}
+        />
+        {showResearchGuide && brandId && (
+          <ResearchGuideModal
+            brandId={brandId}
+            influencerLabel={`@${editedRow.handle.replace(/^@/, "")}`}
+            onClose={() => setShowResearchGuide(false)}
+          />
+        )}
 
-        {/* ── Tab bar — now 5 tabs ── */}
-        <div style={S.tabBar}>
-          {TABS.map((tab, idx) => (
-            <div key={idx} style={S.tab(profileTab === idx)} onClick={() => setProfileTab(idx)}>
-              {tab === "History" ? "History" : tab}
-            </div>
-          ))}
-        </div>
+        <DrawerTabs tabs={drawerTabs} active={activeTab} onSelect={setProfileTab} />
 
-        {/* ── Body ── */}
-        <div style={S.body}>
+        <DrawerBody>
 
           {/* ════ BASIC TAB ════ */}
-          {profileTab === 0 && (
+          {activeTab === 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+              {isSaved && <div style={{ marginBottom: 12 }}><LastEditedBy brandId={brandId} biId={biId} /></div>}
               <div style={S.statRow}>
                 <div style={S.statBox}><div style={S.statLabel}>Followers</div><div style={S.statVal}>{displayMetric(editedRow.follower_count)}</div></div>
                 <div style={S.statBox}><div style={S.statLabel}>Eng Rate</div><div style={{ ...S.statVal, color: "#2c8ec4" }}>{editedRow.engagement_rate ? `${editedRow.engagement_rate}%` : "—"}</div></div>
+                <div style={S.statBox} title="Flat fee + commission per sale"><div style={S.statLabel}>Rate</div><div style={{ ...S.statVal, color: "#1fae5b" }}>{formatDealRate(editedRow.agreed_rate, editedRow.commission_rate)}</div></div>
                 <div style={S.statBox}><div style={S.statLabel}>Tier</div><div style={{ ...S.statVal, fontSize: 13 }}>{editedRow.tier || "Bronze"}</div></div>
-                <div style={S.statBox}><div style={S.statLabel}>Rate</div><div style={{ ...S.statVal, color: "#1fae5b" }}>{editedRow.agreed_rate ? "$" + Number(editedRow.agreed_rate).toLocaleString() : "—"}</div></div>
+              </div>
+              <div style={S.sectionTitle}>Avg Metrics</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 14 }}>
+                <div style={S.metricBox}><div style={S.metricVal}>{displayMetric(editedRow.avg_likes)}</div><div style={S.metricLabel}>Avg Likes</div></div>
+                <div style={S.metricBox}><div style={S.metricVal}>{displayMetric(editedRow.avg_comments)}</div><div style={S.metricLabel}>Avg Comments</div></div>
+                <div style={S.metricBox}><div style={S.metricVal}>{displayMetric(editedRow.avg_views)}</div><div style={S.metricLabel}>Avg Views</div></div>
+              </div>
+              {editedRow.transferred_date && (() => {
+                const declined = editedRow.approval_status === "Declined"
+                return (
+                  <div style={{ background: declined ? "#fef2f2" : "#f0fdf4", borderRadius: 10, padding: "10px 14px", fontSize: 12, color: declined ? "#991b1b" : "#166534", border: `1px solid ${declined ? "#fee2e2" : "#dcfce7"}`, display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+                    <span>{declined ? "✕" : "✅"}</span>
+                    <span><strong>Reviewed:</strong> {new Date(editedRow.transferred_date).toLocaleDateString()}</span>
+                  </div>
+                )
+              })()}
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 6 }}>Notes</div>
+                {readOnly
+                  ? <div style={{ fontSize: 12, color: "#374151", background: "#f9fafb", borderRadius: 8, padding: 10, minHeight: 56, border: "1px solid #f3f4f6" }}>{editedRow.notes || <span style={{ color: "#d1d5db" }}>No notes</span>}</div>
+                  : <textarea style={{ ...S.formInput, minHeight: 72, resize: "vertical" as const, fontFamily: "inherit" }} value={editedRow.notes} onChange={e => handleFieldChange("notes", e.target.value)} placeholder="Add notes…" onFocus={focusIn} onBlur={focusOut} />
+                }
+              </div>
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 6 }}>Approval Notes</div>
+                {readOnly
+                  ? <div style={{ fontSize: 12, color: "#374151", background: "#f9fafb", borderRadius: 8, padding: 10, minHeight: 38, border: "1px solid #f3f4f6" }}>{editedRow.approval_notes || <span style={{ color: "#d1d5db" }}>No notes</span>}</div>
+                  : <textarea style={{ ...S.formInput, minHeight: 60, resize: "vertical" as const, fontFamily: "inherit" }} value={editedRow.approval_notes || ""} onChange={e => handleFieldChange("approval_notes", e.target.value)} placeholder="Add approval notes…" onFocus={focusIn} onBlur={focusOut} />
+                }
+              </div>
+              <div style={S.formRow}>
+                <div style={S.formGroup}><div style={S.formLabel}>First name</div><input style={S.formInput} value={editedRow.first_name || ""} readOnly={readOnly} onChange={e => handleFieldChange("first_name", e.target.value)} onFocus={focusIn} onBlur={focusOut} /></div>
+                <div style={S.formGroup}><div style={S.formLabel}>Email</div><input style={S.formInput} value={editedRow.contact_info || editedRow.email || ""} readOnly={readOnly} onChange={e => handleFieldChange("contact_info", e.target.value)} onFocus={focusIn} onBlur={focusOut} /></div>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
                 <FieldSelect label="Location" icon="" value={editedRow.location || ""} options={locationOptions} onChange={v => handleFieldChange("location", v)} readOnly={readOnly} />
@@ -1109,33 +787,11 @@ export default function ProfileSidebar({
                 <FieldSelect label="Gender" icon="" value={editedRow.gender || ""} options={genderOptions} onChange={v => handleFieldChange("gender", v)} readOnly={readOnly} />
                 <FieldSelect label="Platform" icon="" value={editedRow.platform} options={platformOptions} onChange={v => handleFieldChange("platform", v)} readOnly={readOnly} />
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
-                <div style={{ background: "#f9fafb", borderRadius: 10, padding: "10px 12px", border: "1px solid #f3f4f6" }}>
-                  <div style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 5 }}>Email</div>
-                  {editedRow.contact_info ? (
-                    <a href={`mailto:${editedRow.contact_info}`} style={{ fontSize: 12, fontWeight: 500, color: "#374151", textDecoration: "none", wordBreak: "break-all" as const, display: "block" }}>{editedRow.contact_info}</a>
-                  ) : <span style={{ fontSize: 12, color: "#d1d5db" }}>—</span>}
-                </div>
-                <div style={{ background: "#f9fafb", borderRadius: 10, padding: "10px 12px", border: "1px solid #f3f4f6" }}>
-                  <div style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 5 }}>Social Link</div>
-                  {editedRow.social_link ? (
-                    <a href={editedRow.social_link.startsWith("http") ? editedRow.social_link : `https://${editedRow.social_link}`} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, fontWeight: 500, color: "#1fae5b", textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const, display: "block" }} title={editedRow.social_link}>{editedRow.social_link.replace(/^https?:\/\//, "").slice(0, 28)}{editedRow.social_link.replace(/^https?:\/\//, "").length > 28 ? "…" : ""}</a>
-                  ) : <span style={{ fontSize: 12, color: "#d1d5db" }}>—</span>}
-                </div>
-              </div>
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 6 }}>Approval Notes</div>
-                {readOnly
-                  ? <div style={{ fontSize: 12, color: "#374151", background: "#f9fafb", borderRadius: 8, padding: 10, minHeight: 38, border: "1px solid #f3f4f6" }}>{editedRow.approval_notes || <span style={{ color: "#d1d5db" }}>No notes</span>}</div>
-                  : <textarea style={{ ...S.formInput, minHeight: 60, resize: "vertical" as const, fontFamily: "inherit" }} value={editedRow.approval_notes || ""} onChange={e => handleFieldChange("approval_notes", e.target.value)} placeholder="Add approval notes…" onFocus={e => { e.currentTarget.style.borderColor = "#1fae5b"; e.currentTarget.style.background = "#fff" }} onBlur={e => { e.currentTarget.style.borderColor = "#e5e7eb"; e.currentTarget.style.background = "#f9fafb" }} />
-                }
-              </div>
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 6 }}>Notes</div>
-                {readOnly
-                  ? <div style={{ fontSize: 12, color: "#374151", background: "#f9fafb", borderRadius: 8, padding: 10, minHeight: 56, border: "1px solid #f3f4f6" }}>{editedRow.notes || <span style={{ color: "#d1d5db" }}>No notes</span>}</div>
-                  : <textarea style={{ ...S.formInput, minHeight: 80, resize: "vertical" as const, fontFamily: "inherit" }} value={editedRow.notes} onChange={e => handleFieldChange("notes", e.target.value)} placeholder="Add notes…" onFocus={e => { e.currentTarget.style.borderColor = "#1fae5b"; e.currentTarget.style.background = "#fff" }} onBlur={e => { e.currentTarget.style.borderColor = "#e5e7eb"; e.currentTarget.style.background = "#f9fafb" }} />
-                }
+              <div style={{ background: "#f9fafb", borderRadius: 10, padding: "10px 12px", border: "1px solid #f3f4f6", marginBottom: 14 }}>
+                <div style={{ fontSize: 9, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 5 }}>Social Link</div>
+                {editedRow.social_link ? (
+                  <a href={editedRow.social_link.startsWith("http") ? editedRow.social_link : `https://${editedRow.social_link}`} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, fontWeight: 500, color: "#1fae5b", textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const, display: "block" }} title={editedRow.social_link}>{editedRow.social_link.replace(/^https?:\/\//, "")}</a>
+                ) : <span style={{ fontSize: 12, color: "#d1d5db" }}>—</span>}
               </div>
               {customCols.length > 0 && (
                 <div style={{ marginBottom: 16 }}>
@@ -1158,118 +814,40 @@ export default function ProfileSidebar({
                 </div>
               )}
               {!readOnly && (
-                <div style={S.actionBar}>
-                  <button style={S.cancelBtn} onClick={handleCancel} disabled={isSaving}>Cancel</button>
-                  <button style={{ ...S.saveBtn, opacity: isSaving ? 0.6 : 1, cursor: isSaving ? "not-allowed" : "pointer" }} onClick={handleSave} disabled={isSaving} onMouseEnter={e => { if (!isSaving) e.currentTarget.style.background = "#0f6b3e" }} onMouseLeave={e => { e.currentTarget.style.background = "#1fae5b" }}>{isSaving ? "Saving…" : "Save Changes"}</button>
-                </div>
+                <DrawerActionBar>
+                  <button style={S.cancelBtn} onClick={handleCancel}>Cancel</button>
+                  <button style={S.saveBtn} onClick={handleSave} onMouseEnter={e => { e.currentTarget.style.background = "#0f6b3e" }} onMouseLeave={e => { e.currentTarget.style.background = "#1fae5b" }}>Save Changes</button>
+                </DrawerActionBar>
               )}
             </div>
           )}
 
-          {/* ════ ORDER TAB ════ */}
-          {profileTab === 1 && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-              <div style={S.formRow}>
-                <div style={S.formGroup}><div style={S.formLabel}>First name</div><input style={S.formInput} value={editedRow.first_name || ""} onChange={e => handleFieldChange("first_name", e.target.value)} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
-                <div style={S.formGroup}><div style={S.formLabel}>Last name</div><input style={{ ...S.formInput, background: "#f3f4f6", color: "#9ca3af" }} value={editedRow.full_name?.split(" ").slice(1).join(" ") || ""} readOnly /></div>
-              </div>
-              <div style={S.formGroup}><div style={S.formLabel}>Email</div><input style={S.formInput} value={editedRow.contact_info || editedRow.email || ""} onChange={e => handleFieldChange("contact_info", e.target.value)} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
-              <div style={S.formGroup}><div style={S.formLabel}>Product Name</div><input style={S.formInput} value={orderData.productName} onChange={e => setOrderData(d => ({ ...d, productName: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
-              <div style={S.formGroup}><div style={S.formLabel}>Order Number</div><input style={S.formInput} value={orderData.orderNumber} onChange={e => setOrderData(d => ({ ...d, orderNumber: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
-              <div style={S.formGroup}><div style={S.formLabel}>Product Cost</div><input style={S.formInput} value={orderData.productCost} onChange={e => setOrderData(d => ({ ...d, productCost: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
-              <div style={S.formGroup}><div style={S.formLabel}>Shipping Address</div><input style={S.formInput} value={orderData.shippingAddress} onChange={e => setOrderData(d => ({ ...d, shippingAddress: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
-              <div style={S.formGroup}><div style={S.formLabel}>Tracking Link</div><input style={S.formInput} value={orderData.trackingLink} onChange={e => setOrderData(d => ({ ...d, trackingLink: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
-              <div style={S.actionBar}>
-                <button style={S.cancelBtn} onClick={handleCancel} disabled={isSaving}>Cancel</button>
-                <button style={{ ...S.saveBtn, opacity: isSaving ? 0.6 : 1, cursor: isSaving ? "not-allowed" : "pointer" }} onClick={handleSave} disabled={isSaving}>{isSaving ? "Saving…" : "Save Changes"}</button>
-              </div>
-            </div>
+          {/* ════ ORDER / POST / PAID COLLAB (read-only) ════ */}
+          {(activeTab === 1 || activeTab === 3 || activeTab === 5) && !closedRow && (
+            <ReadOnlyTabPlaceholder loading={closedLoading} brandId={brandId} />
           )}
+          {activeTab === 1 && closedRow && <ReadOnlyOrderTab inf={closedRow} brandId={brandId} />}
+          {activeTab === 3 && closedRow && <ReadOnlyPostTab inf={closedRow} brandId={brandId} />}
+          {activeTab === 5 && closedRow && <ReadOnlyPaidCollabTab inf={closedRow} brandId={brandId} />}
 
-          {/* ════ ATTRIBUTION TAB ════ */}
-          {profileTab === 2 && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-              <div style={S.formRow}>
-                <div style={S.formGroup}><div style={S.formLabel}>Discount Code</div><input style={S.formInput} value={orderData.discountCode} placeholder="—" onChange={e => setOrderData(d => ({ ...d, discountCode: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
-                <div style={S.formGroup}><div style={S.formLabel}>Ad Code/Spark Ads Code</div><input style={S.formInput} value={orderData.sparkAds} placeholder="Ad Code/Spark Ads Code" onChange={e => setOrderData(d => ({ ...d, sparkAds: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
-              </div>
-              <div style={S.formGroup}><div style={S.formLabel}>Affiliate Link</div><input style={S.formInput} value={orderData.affiliateLink} placeholder="—" onChange={e => setOrderData(d => ({ ...d, affiliateLink: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div>
-              <div style={{ ...S.actionBar, justifyContent: attributionSaveMessage ? "space-between" : "flex-end" }}>
-                {attributionSaveMessage && <div style={{ fontSize: 12, color: "#667085" }}>{attributionSaveMessage}</div>}
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button style={S.cancelBtn} onClick={handleCancel} disabled={isSaving}>Cancel</button>
-                  <button style={{ ...S.saveBtn, opacity: isSaving ? 0.6 : 1, cursor: isSaving ? "not-allowed" : "pointer" }} onClick={handleSave} disabled={isSaving}>{isSaving ? "Saving…" : "Save Changes"}</button>
-                </div>
-              </div>
-            </div>
+          {/* ════ ATTRIBUTION / STATS ════ */}
+          {activeTab === 2 && (
+            <AttributionTab brandId={brandId} brandInfluencerId={biId} firstName={editedRow.first_name || editedRow.handle} onSaved={refreshSheet} />
           )}
-
-          {/* ════ POST TAB ════ */}
-          {profileTab === 3 && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-              <div style={S.formRow}><div style={S.formGroup}><div style={S.formLabel}>Post Link</div><input style={S.formInput} value={postData.postLink} onChange={e => setPostData(d => ({ ...d, postLink: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div><div style={S.formGroup}><div style={S.formLabel}>Likes</div><input style={S.formInput} value={postData.likes} onChange={e => setPostData(d => ({ ...d, likes: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div></div>
-              <div style={S.formRow}><div style={S.formGroup}><div style={S.formLabel}>Sales</div><input style={S.formInput} value={postData.sales} onChange={e => setPostData(d => ({ ...d, sales: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div><div style={S.formGroup}><div style={S.formLabel}>Drive Link</div><input style={S.formInput} value={postData.driveLink} onChange={e => setPostData(d => ({ ...d, driveLink: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div></div>
-              <div style={S.formRow}><div style={S.formGroup}><div style={S.formLabel}>Comments</div><input style={S.formInput} value={postData.comments} onChange={e => setPostData(d => ({ ...d, comments: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div><div style={S.formGroup}><div style={S.formLabel}>Amount ($)</div><input style={S.formInput} value={postData.amount} onChange={e => setPostData(d => ({ ...d, amount: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div></div>
-              <div style={S.formRow}><div style={S.formGroup}><div style={S.formLabel}>Usage Rights</div><select style={S.formInput} value={postData.usageRights} onChange={e => setPostData(d => ({ ...d, usageRights: e.target.value }))}><option value="">Select…</option><option>Granted</option><option>Not Granted</option><option>Pending</option></select></div><div style={S.formGroup}><div style={S.formLabel}>Views</div><input style={S.formInput} value={postData.views} onChange={e => setPostData(d => ({ ...d, views: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div></div>
-              <div style={S.formRow}><div style={S.formGroup}><div style={S.formLabel}>Clicks</div><input style={S.formInput} value={postData.clicks} onChange={e => setPostData(d => ({ ...d, clicks: e.target.value }))} onFocus={e => { e.currentTarget.style.borderColor="#1fae5b"; e.currentTarget.style.background="#fff" }} onBlur={e => { e.currentTarget.style.borderColor="#e5e7eb"; e.currentTarget.style.background="#f9fafb" }} /></div><div style={S.formGroup}><div style={S.formLabel}>CVR (auto)</div><input style={{ ...S.formInput, background: "#f0fdf4", color: "#1fae5b", fontWeight: 600 }} readOnly value={postCVR || "—"} /></div></div>
-              <div style={S.actionBar}>
-                <button style={S.cancelBtn} onClick={handleCancel} disabled={isSaving}>Cancel</button>
-                <button style={{ ...S.saveBtn, opacity: isSaving ? 0.6 : 1, cursor: isSaving ? "not-allowed" : "pointer" }} onClick={handleSave} disabled={isSaving}>{isSaving ? "Saving…" : "Save Changes"}</button>
-              </div>
-            </div>
-          )}
-
-          {/* ════ STATS TAB ════ */}
-          {profileTab === 4 && (
-            <div style={{ display: "flex", flexDirection: "column" }}>
-              <div style={S.sectionTitle}>Performance</div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 16 }}>
-                <div style={S.metricBox}><div style={S.metricVal}>{displayMetric(editedRow.follower_count)}</div><div style={S.metricLabel}>Followers</div></div>
-                <div style={S.metricBox}><div style={{ ...S.metricVal, color: "#2c8ec4" }}>{editedRow.engagement_rate ? `${editedRow.engagement_rate}%` : "—"}</div><div style={S.metricLabel}>Eng. Rate</div></div>
-                <div style={S.metricBox}><div style={{ ...S.metricVal, color: "#1fae5b" }}>{editedRow.agreed_rate ? "$" + Number(editedRow.agreed_rate).toLocaleString() : "—"}</div><div style={S.metricLabel}>Agreed Rate</div></div>
-              </div>
-
-              <div style={S.sectionTitle}>GoAffPro</div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 16 }}>
-                <div style={S.metricBox}><div style={S.metricVal}>{affiliateClicks > 0 ? affiliateClicks.toLocaleString() : "—"}</div><div style={S.metricLabel}>Total Clicks</div></div>
-                <div style={S.metricBox}><div style={S.metricVal}>{affiliateSales > 0 ? affiliateSales.toLocaleString() : "—"}</div><div style={S.metricLabel}>Total Sales</div></div>
-                <div style={S.metricBox}><div style={S.metricVal}>{affiliateRevenue > 0 ? formatMoney(affiliateRevenue) : "—"}</div><div style={S.metricLabel}>Total Revenue</div></div>
-                <div style={S.metricBox}><div style={S.metricVal}>{affiliateSpend > 0 ? formatMoney(affiliateSpend) : "—"}</div><div style={S.metricLabel}>Total Spend</div></div>
-                <div style={S.metricBox}><div style={{ ...S.metricVal, color: affiliateRoas >= 1 ? "#1fae5b" : "#e24b4a" }}>{affiliateSpend > 0 ? `${affiliateRoas.toFixed(1)}x` : "—"}</div><div style={S.metricLabel}>ROAS</div></div>
-                <div style={S.metricBox}><div style={{ ...S.metricVal, color: "#2c8ec4" }}>{affiliateClicks > 0 ? `${affiliateCvr.toFixed(2)}%` : "—"}</div><div style={S.metricLabel}>CVR</div></div>
-              </div>
-
-              <div style={S.sectionTitle}>Avg Metrics</div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 16 }}>
-                <div style={S.metricBox}><div style={S.metricVal}>{displayMetric(editedRow.avg_likes)}</div><div style={S.metricLabel}>Avg Likes</div></div>
-                <div style={S.metricBox}><div style={S.metricVal}>{displayMetric(editedRow.avg_comments)}</div><div style={S.metricLabel}>Avg Comments</div></div>
-                <div style={S.metricBox}><div style={S.metricVal}>{displayMetric(editedRow.avg_views)}</div><div style={S.metricLabel}>Avg Views</div></div>
-              </div>
-              <div style={S.sectionTitle}>Status</div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 16 }}>
-                <div style={S.metricBox}><div style={{ fontSize: 14, fontWeight: 700, color: "#111827" }}>{editedRow.tier || "Bronze"}</div><div style={S.metricLabel}>Tier</div></div>
-                <div style={S.metricBox}><div style={{ fontSize: 14, fontWeight: 700, color: editedRow.approval_status === "Approved" ? "#1fae5b" : editedRow.approval_status === "Declined" ? "#e24b4a" : "#854f0b" }}>{editedRow.approval_status || "Pending"}</div><div style={S.metricLabel}>Approval</div></div>
-                <div style={S.metricBox}><div style={{ fontSize: 13, fontWeight: 700, color: "#111827" }}>{STATUS_LABEL[editedRow.contact_status] || editedRow.contact_status}</div><div style={S.metricLabel}>Stage</div></div>
-              </div>
-              {editedRow.transferred_date && (
-                <div style={{ background: "#f0fdf4", borderRadius: 10, padding: "10px 14px", fontSize: 12, color: "#166534", border: "1px solid #dcfce7", display: "flex", alignItems: "center", gap: 8 }}>
-                  <span>✅</span>
-                  <span><strong>Transferred:</strong> {new Date(editedRow.transferred_date).toLocaleDateString()}</span>
-                </div>
-              )}
-            </div>
+          {activeTab === 4 && (
+            <InfluencerStatsTab brandId={brandId} brandInfluencerId={biId} allowManualEntry onSaved={refreshSheet} />
           )}
 
           {/* ════ HISTORY TAB ════ */}
-          {profileTab === 5 && (
+          {activeTab === 6 && (
             <HistoryTab
               brandId={brandId}
               biId={row.brand_influencer_id || row.id}
             />
           )}
 
-        </div>
-      </div>
+        </DrawerBody>
+      </DrawerShell>
     </>
   )
 }

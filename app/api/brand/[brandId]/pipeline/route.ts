@@ -25,10 +25,12 @@
 //      extra Prisma relation objects into memory.
 
 import { NextRequest, NextResponse } from "next/server"
+import { getOutreachStatuses } from "@/lib/auto-outreach-queue"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma, withDbRetry } from "@/lib/prisma"
 import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
+import { resolveCommissionRate, resolveFees } from "@/lib/pipeline-transitions"
 
 // ─── Pipeline status derivation ───────────────────────────────────────────────
 // Pure function — no DB access, called in a tight .map() loop.
@@ -103,7 +105,6 @@ export async function GET(
     //
     // The OR on approval_status / contact_status is intentional:
     //   - "Approved"         → active pipeline cards
-    //   - "Declined"         → Not Interested column (must persist on refresh)
     //   - "not_interested"   → legacy rows before approval_status was set
     //   - "for_order_creation" → moved to Post Tracker but still shown here
     //   - stage >= 5         → same as for_order_creation, stage-based
@@ -136,7 +137,7 @@ export async function GET(
         // ── Pipeline visibility filter ─────────────────────────────────────
         OR: [
           { approval_status: "Approved"  },
-          { approval_status: "Declined"  },
+          // List declines (Declined without not_interested) stay off the board.
           { contact_status:  "not_interested"    },
           { contact_status:  "for_order_creation" },
           { stage:           { gte: 5 }  },
@@ -165,6 +166,7 @@ export async function GET(
         post_url:        true,
         likes_count:     true,
         comments_count:  true,
+        views_count:     true,
         engagement_count: true,
         posted_at:       true,
         shipped_at:      true,
@@ -197,6 +199,7 @@ export async function GET(
             full_name:         true,
             email:             true,
             niche:             true,
+            gender:            true,
             location:          true,
             profile_image_url: true,
             follower_count:    true,
@@ -210,6 +213,10 @@ export async function GET(
         // Campaign — only id + name for the label
         campaign: {
           select: { id: true, name: true },
+        },
+
+        partner: {
+          select: { default_commission: true },
         },
       },
       orderBy: { created_at: "desc" },
@@ -246,6 +253,9 @@ export async function GET(
       )
     }
 
+    // Auto outreach status for For Outreach cards.
+    const outreachStatus = await getOutreachStatuses(brandId, brandInfluencers.map((bi) => bi.id))
+
     // ── Map to response shape ────────────────────────────────────────────────
     const data = brandInfluencers
       .filter((bi) => bi.influencer !== null) // drop orphaned records
@@ -259,8 +269,13 @@ export async function GET(
         )
 
         let collabType: string | undefined
+        let completed = false
         if (bi.product_details) {
-          try { collabType = JSON.parse(bi.product_details)?.campaignType || undefined } catch { /* malformed — ignore */ }
+          try {
+            const details = JSON.parse(bi.product_details)
+            collabType = details?.campaignType || undefined
+            completed = details?.completed === true
+          } catch { /* malformed — ignore */ }
         }
 
         return {
@@ -285,7 +300,10 @@ export async function GET(
           avgViews:    inf.avg_views,
 
           niche:           inf.niche             || "",
-          location:        inf.location          || "",
+          gender:          inf.gender            || "",
+          commissionRate:  resolveCommissionRate({ partnerDefault: bi.partner?.default_commission, productDetails: bi.product_details }),
+          feesPaid:        resolveFees({ productDetails: bi.product_details, agreedRate: bi.agreed_rate }).amount,
+          location:       inf.location          || "",
           email:           inf.email             || "",
           profileImageUrl: inf.profile_image_url || null,
 
@@ -294,6 +312,7 @@ export async function GET(
           stage:           bi.stage,
           orderStatus:     bi.order_status,
           contentPosted:   bi.content_posted,
+          completed,
           approvalStatus:  bi.approval_status,
           approvalNotes:   bi.approval_notes,   // doubles as NI reason
           declineNotes:    bi.decline_notes,    // free text, "Others" declines only
@@ -305,6 +324,7 @@ export async function GET(
           postUrl:         bi.post_url,
           likesCount:      bi.likes_count,
           commentsCount:   bi.comments_count,
+          viewsCount:      bi.views_count,
           engagementCount: bi.engagement_count,
           postedAt:        bi.posted_at      ? bi.posted_at.toISOString()      : null,
           shippedAt:       bi.shipped_at     ? bi.shipped_at.toISOString()     : null,
@@ -322,12 +342,15 @@ export async function GET(
           clicks:          bi.attribution?.clicks         ?? 0,
           salesCount:      bi.attribution?.sales_count    ?? 0,
           gmv:             bi.attribution?.gmv ? Number(bi.attribution.gmv) : 0,
+
+          autoOutreach:    outreachStatus.get(bi.id) ?? null,
         }
       })
 
     // Next cursor = last record's id (for the next page call)
+    // Rows loaded, not kept, so a dropped orphan can't end paging early.
     const nextCursor =
-      data.length === limit ? data[data.length - 1].id : null
+      brandInfluencers.length === limit ? brandInfluencers[brandInfluencers.length - 1].id : null
 
     return NextResponse.json(
       { data, nextCursor },

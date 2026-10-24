@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { ForgotPasswordModal } from "@/components/forgot-password-modal"
+import { IconEye, IconEyeOff } from "@tabler/icons-react"
 
 export function LoginForm({
   className,
@@ -39,6 +40,7 @@ export function LoginForm({
     password: "",
   })
   const [twoFactorCode, setTwoFactorCode] = useState("")
+  const [showPassword, setShowPassword] = useState(false)
 
   useEffect(() => {
     const errorParam = searchParams?.get("error")
@@ -350,15 +352,25 @@ export function LoginForm({
                     Forgot your password?
                   </button>
                 </div>
-                <Input
-                  id="password"
-                  type="password"
-                  value={formData.password}
-                  onChange={handleInputChange}
-                  disabled={isLoading}
-                  required
-                  className="rounded-lg border border-gray-200 bg-gray-50/50 text-gray-900 placeholder:text-gray-400 focus:bg-white focus:border-[#0F6B3E] focus:ring-[#0F6B3E]/20 transition-colors"
-                />
+                <div className="relative">
+                  <Input
+                    id="password"
+                    type={showPassword ? "text" : "password"}
+                    value={formData.password}
+                    onChange={handleInputChange}
+                    disabled={isLoading}
+                    required
+                    className="rounded-lg border border-gray-200 bg-gray-50/50 pr-10 text-gray-900 placeholder:text-gray-400 focus:bg-white focus:border-[#0F6B3E] focus:ring-[#0F6B3E]/20 transition-colors"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((prev) => !prev)}
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    className="absolute inset-y-0 right-0 flex items-center px-3 text-gray-400 hover:text-[#0F6B3E]"
+                  >
+                    {showPassword ? <IconEyeOff size={16} /> : <IconEye size={16} />}
+                  </button>
+                </div>
               </Field>
               <Field className="space-y-2 sm:space-y-3 pt-4">
                 <Button

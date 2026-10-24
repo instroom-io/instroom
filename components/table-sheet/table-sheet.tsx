@@ -21,7 +21,7 @@ import {
 } from "./constants"
 import {
   cleanHandle, getProfileUrl, sortRows, newEmptyRow, getStaticCols,
-  handleApprovalChange, isValidUrl, normalizeUrl, formatFollowers,
+  handleApprovalChange, canListDecline, drawerStageLabel, getPlatformLabel, isValidUrl, normalizeUrl, formatFollowers,
   exportToCSV, downloadTemplate, importFromCSV,
   normalizeApiUsername, isValidApiUsername, describeLookupFailure, lookupFailureMessage,
   isUsableEmail, normalizeEmail, normalizeContactInfo, isUniqueContact, contactMatchKey,
@@ -34,7 +34,6 @@ import {
   ManageOptionsModal, AddColumnModal, FilterPopover,
 } from "./modals"
 import { MobileRowCards } from "./mobile-row-cards"
-import { DeclineModal } from "@/components/shared/decline-modal"
 import { ToastContainer } from "./toast"
 import { DataSyncStatus } from "@/components/data-sync-status"
 import ProfileSidebar from "./profile-sidebar"
@@ -218,11 +217,22 @@ function EmptyState({
 /* ═══════════════════════════════════════════════════════════════════════════════
    MAIN TABLE SHEET
    ═══════════════════════════════════════════════════════════════════════════════ */
+/** Fields an approval changes; restores a cancelled one. */
+const approvalFieldsOf = (r: InfluencerRow): Partial<InfluencerRow> => ({
+  approval_status: r.approval_status,
+  transferred_date: r.transferred_date,
+  contact_status: r.contact_status,
+  stage: r.stage,
+  approval_notes: r.approval_notes,
+  decline_reason: r.decline_reason,
+  decline_notes: r.decline_notes,
+})
+
 export default function TableSheet({
   initialRows = [], initialCustomColumns = [],
   onRowsChange, onDeleteRow, onFetchComplete, onRegisterIdSwap,
-  onCustomColumnsChange, onImportRows, onBulkApprove, readOnly = false, brandId,
-  subscriptionStatus, onShowTrialModal, canApproveInfluencers = true, onNotify, onLookupFailed,
+  onCustomColumnsChange, onImportRows, onBulkApprove, onBeforeApprove, readOnly = false, brandId,
+  subscriptionStatus, onShowTrialModal, canApproveInfluencers = true, onNotify, onLookupFailed, onIdentityChange,
   onCreateDraft, onSaveState, onEnrichmentStart, onEnrichmentFailed, onContactHoldChange,
 }: {
   initialRows?: InfluencerRow[]
@@ -230,7 +240,7 @@ export default function TableSheet({
   onRowsChange?: (rows: InfluencerRow[]) => void
   onDeleteRow?: (rowId: string) => Promise<void>
   onFetchComplete?: (row: InfluencerRow) => void
-  onRegisterIdSwap?: (fn: (tempId: string, realId: string) => void) => void
+  onRegisterIdSwap?: (fn: (tempId: string, realId: string, asDraft?: boolean) => void) => void
   /**
    * Persist a blank row as a draft and resolve with its real database id.
    *
@@ -274,6 +284,8 @@ export default function TableSheet({
   onImportRows?: (rows: InfluencerRow[]) => void
   /** Approves a whole selection in one request; resolves with what the DB stored. */
   onBulkApprove?: (influencerIds: string[]) => Promise<BulkApprovalResult | null>
+  /** Runs before a new approval; false cancels it. */
+  onBeforeApprove?: (influencerIds: string[]) => Promise<boolean>
   readOnly?: boolean
   brandId?: string
   subscriptionStatus?: { status: string; isExpired: boolean; subscription?: { plan?: { name?: string } } | null } | null
@@ -303,6 +315,10 @@ export default function TableSheet({
    * become the user's to complete, without polling or a timer.
    */
   onLookupFailed?: (rowId: string) => void
+  /** Points a saved row at the record for its edited handle/platform; returns the new id. */
+  onIdentityChange?: (rowId: string, handle: string, platform: string, socialLink: string) => Promise<
+    { ok: true; id: string; influencer?: Record<string, unknown>; commit?: (row: InfluencerRow) => void } | { ok: false; error: string }
+  >
 }) {
   // Import/Export are a Solo & Team feature — Basic (the free plan) doesn't
   // include them, regardless of subscription status.
@@ -326,10 +342,7 @@ export default function TableSheet({
   //   pendingFetchRef   — one debounce timer per row, so the handle edit and the
   //                       platform edit that follows it coalesce into one fetch
   //                       for the final pair.
-  //   requestedPairsRef — every platform|handle already requested. A repeat
-  //                       commit of the same pair is not a new question, so it
-  //                       is not asked again. The Retry button clears its own
-  //                       key, since that IS a deliberate re-ask.
+  //   requestedPairsRef — pairs the provider said don't exist; not asked again.
   const pendingFetchRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
   const requestedPairsRef = useRef<Set<string>>(new Set())
 
@@ -346,7 +359,7 @@ export default function TableSheet({
     pendingFetchRef.current.clear()
   }, [])
 
-  const swapIdRef = useRef<(tempId: string, realId: string) => void>(() => {})
+  const swapIdRef = useRef<(tempId: string, realId: string, asDraft?: boolean) => void>(() => {})
 
   // The latest onRowsChange, read through a ref so the registration effect below
   // does not depend on its identity. Registering the swap callback is a one-time
@@ -357,7 +370,7 @@ export default function TableSheet({
   useEffect(() => { onRowsChangeRef.current = onRowsChange }, [onRowsChange])
 
   useEffect(() => {
-    const swapFn = (tempId: string, realId: string) => {
+    const swapFn = (tempId: string, realId: string, asDraft?: boolean) => {
       setRows(prev => {
         // Global reuse can point the draft at a row ALREADY on screen: the user
         // types a handle this brand happens to have, the route answers
@@ -376,7 +389,8 @@ export default function TableSheet({
           onRowsChangeRef.current?.(next)
           return next
         }
-        return prev.map(r => r.id === tempId ? { ...r, id: realId } : r)
+        // asDraft keeps the local draft flag in step with the server.
+        return prev.map(r => r.id === tempId ? { ...r, id: realId, ...(asDraft !== undefined ? { is_draft: asDraft } : {}) } : r)
       })
       // The row now carries the real id, so the server's copy of it is the same
       // row and no longer needs suppressing.
@@ -480,7 +494,10 @@ export default function TableSheet({
       const seen = new Set<string>()
       const merged = prev.map(local => {
         seen.add(local.id)
-        return serverById.get(local.id) ?? local
+        const server = serverById.get(local.id)
+        // Server drafts are blank; keep what's typed until it saves.
+        if (!server || server.is_draft) return local
+        return server
       })
       const added = initialRows.filter(r =>
         !seen.has(r.id) &&
@@ -530,8 +547,6 @@ export default function TableSheet({
   })
 
   const [showAddRowsModal, setShowAddRowsModal]   = useState(false)
-  const [showDeclineModal, setShowDeclineModal]   = useState(false)
-  const [pendingDeclineRowIdx, setPendingDeclineRowIdx] = useState<number | null>(null)
   const [showImportExportMenu, setShowImportExportMenu]           = useState(false)
   const [showSettingsMenu, setShowSettingsMenu]       = useState(false)
   const [showManageNiches, setShowManageNiches]       = useState(false)
@@ -604,6 +619,8 @@ export default function TableSheet({
 
   const [openRowMenuId, setOpenRowMenuId]                 = useState<string | null>(null)
   const [showBulkTransferConfirm, setShowBulkTransferConfirm] = useState(false)
+  /** Handle/platform change awaiting confirmation (influencer already past outreach). */
+  const [identityConfirm, setIdentityConfirm] = useState<{ row: InfluencerRow; handle: string; platform: string; stage: string } | null>(null)
   // Guards against a second submit while the bulk write is in flight.
   const [bulkApproving, setBulkApproving] = useState(false)
 
@@ -646,8 +663,11 @@ export default function TableSheet({
    * nothing downstream treats a failure as a success.
    */
   const notifiedLookupFailures = useRef<Set<string>>(new Set())
+  /** Handles whose last lookup errored, so they can be retried. */
+  const erroredLookups = useRef<Set<string>>(new Set())
   const notifyLookupFailed = useCallback((cleanHandleValue: string) => {
     const key = cleanHandleValue.toLowerCase()
+    erroredLookups.current.add(key)
     if (notifiedLookupFailures.current.has(key)) return
     notifiedLookupFailures.current.add(key)
     addToast("warning", lookupFailureMessage(cleanHandleValue))
@@ -990,7 +1010,21 @@ export default function TableSheet({
   }
 
   const handleUpdateRow = (r: InfluencerRow) => {
-    setRows(prev => { const n = prev.map(x => x.id === r.id ? r : x); onRowsChange?.(n); return n })
+    // A drawer platform/handle change on a saved row goes through the switch; other fields save as usual.
+    const current = rowsRef.current.find(x => x.id === r.id)
+    if (current && !current.is_draft && !current.id.startsWith("temp-") && cleanHandle(current.handle) &&
+        (r.platform !== current.platform || cleanHandle(r.handle).toLowerCase() !== cleanHandle(current.handle).toLowerCase())) {
+      requestIdentityChange(current, cleanHandle(r.handle), r.platform)
+      r = { ...r, handle: current.handle, platform: current.platform, social_link: current.social_link }
+    }
+    const save = (next: InfluencerRow) =>
+      setRows(prev => { const n = prev.map(x => x.id === next.id ? next : x); onRowsChange?.(n); return n })
+    if (onBeforeApprove && current && r.approval_status === "Approved" && current.approval_status !== "Approved") {
+      const edited = r
+      void onBeforeApprove([r.id]).then(ok => save(ok ? edited : { ...edited, ...approvalFieldsOf(current) }))
+      return
+    }
+    save(r)
   }
 
   const handleApplyFilters  = (nf: FilterState) => { setFilters(nf); setCurrentPage(1) }
@@ -1014,6 +1048,10 @@ export default function TableSheet({
       .filter(r => selectedRowIds.has(r.id) && !r.id.startsWith("temp-") && !r.is_draft)
       .map(r => r.id)
     if (!ids.length) { setShowBulkTransferConfirm(false); return }
+    if (onBeforeApprove) {
+      setShowBulkTransferConfirm(false)
+      if (!(await onBeforeApprove(ids))) return
+    }
 
     setBulkApproving(true)
     try {
@@ -1401,7 +1439,8 @@ export default function TableSheet({
         { signal: AbortSignal.timeout(PROFILE_LOOKUP_TIMEOUT_MS) }
       ).then(r => (r.ok ? r.json() : null)).catch(() => null)
 
-      if (known?.id) {
+      // 0 followers = empty record from a failed lookup; ask the API instead.
+      if (known?.id && Number(known.follower_count) > 0) {
         // Mapped onto the row shape the merge below expects. `engagement_rate`
         // is a Prisma Decimal, so it arrives as a string; the numeric fields
         // are sent through String() because the merge skips a literal "0" and
@@ -1426,7 +1465,12 @@ export default function TableSheet({
         // nothing for is not asked again either — that was a credit per commit.
         // Only set on the path that actually spends one.
         requestedPairsRef.current.add(pairKey)
+        // Each attempt can toast again.
+        notifiedLookupFailures.current.delete(clean)
+        erroredLookups.current.delete(clean)
         data = await fetchInfluencerFromAPI(handle, platform)
+        // Remember only genuine not-founds.
+        if (data || erroredLookups.current.has(clean)) requestedPairsRef.current.delete(pairKey)
       }
       // ── Stale response guard ─────────────────────────────────────────────
       // The row is re-read AFTER the await. A lookup can take seconds, and the
@@ -1443,15 +1487,7 @@ export default function TableSheet({
       if (!rowNow) return
       if (cleanHandle(rowNow.handle).trim().toLowerCase() !== clean || rowNow.platform !== platform) return
 
-      // Nothing came back: not found, an API error, or no API host configured.
-      // A genuine not-found is announced here; every other cause has already
-      // raised its own non-blocking toast inside fetchInfluencerFromAPI, so
-      // this one stays quiet rather than also calling it "not found" — which
-      // was never true of a private profile or an unreachable API.
-      //
-      // Either way the row is handed to the page as manually-completable (see
-      // onLookupFailed) and left fully editable. Nothing is saved by this; the
-      // row is written only once the user actually edits it.
+      // Not found or failed (errors toast in fetchInfluencerFromAPI); the user fills the row in.
       if (!data) {
         if (!notifiedLookupFailures.current.has(clean)) {
           addToast("error", `${clean} not found on ${platform}`)
@@ -1722,18 +1758,6 @@ export default function TableSheet({
     return OUTREACH_FIELDS.has(colKey)
   }, [customCols])
 
-  const handleDeclineConfirm = (reason: string, declineNotes?: string) => {
-    if (pendingDeclineRowIdx === null) return
-    const ar = filteredRows[pendingDeclineRowIdx]; const ai = rows.findIndex(r => r.id === ar.id); if (ai === -1) return
-    setRows(prev => { const n = [...prev]; n[ai] = handleApprovalChange(prev[ai], "Declined", reason, declineNotes); onRowsChange?.(n); return n })
-    setShowDeclineModal(false); setPendingDeclineRowIdx(null)
-    // Close the profile panel if it is showing the row just declined — it is
-    // off the active list now, so leaving it open next to the grid invites
-    // edits to a record the user has finished with.
-    if (sidebarRowId === ar.id) setSidebarRowId(null)
-    containerRef.current?.focus()
-  }
-
   /**
    * Queue an auto-fetch for a row once its handle/platform edits settle.
    *
@@ -1780,7 +1804,10 @@ export default function TableSheet({
     const clean = cleanHandle(handle).trim().toLowerCase()
     if (!clean || clean.length < 2) return
     if (platform !== "instagram" && platform !== "tiktok") return
-    if (requestedPairsRef.current.has(fetchPairKey(handle, platform))) return
+    if (requestedPairsRef.current.has(fetchPairKey(handle, platform))) {
+      addToast("error", `${clean} was already checked — not found on ${platform}`)
+      return
+    }
 
     const existing = pendingFetchRef.current.get(rowId)
     if (existing) clearTimeout(existing)
@@ -1813,17 +1840,101 @@ export default function TableSheet({
       })
       runQueuedFetch()
     }, AUTO_FETCH_DEBOUNCE_MS))
-  }, [autoFetchInfluencer, runQueuedFetch, releaseFetchSlot])
+  }, [autoFetchInfluencer, runQueuedFetch, releaseFetchSlot, addToast])
 
-  const applyCellValue = useCallback((rowIdx: number, colKey: string, value: string) => {
+  // Saved row, new handle/platform: switch the row to that influencer's record
+  // first, then look the new profile up. The old person's details are cleared
+  // meanwhile so they can't be saved onto the new record.
+  const switchIdentity = useCallback(async (row: InfluencerRow, handle: string, platform: string) => {
+    if (!onIdentityChange) return
+    const socialLink = getProfileUrl(platform, handle)
+    const cleared: InfluencerRow = {
+      ...row, handle, platform, social_link: socialLink,
+      full_name: "", first_name: "", email: "", contact_info: "", location: "", niche: "", gender: "",
+      bio: "", profile_image_url: "", follower_count: "", engagement_rate: "",
+      avg_likes: "", avg_comments: "", avg_views: "",
+    }
+    setRows(prev => prev.map(r => (r.id === row.id ? cleared : r)))
+    setFetchingRows(prev => new Set(prev).add(row.id))
+
+    const result = await onIdentityChange(row.id, handle, platform, socialLink)
+    clearFetching(row.id)
+    if (!result.ok) {
+      addToast("error", result.error)
+      setRows(prev => prev.map(r => (r.id === row.id ? row : r)))
+      return
+    }
+
+    const inf = result.influencer ?? {}
+    const text = (k: string) => (typeof inf[k] === "string" ? (inf[k] as string) : "")
+    const num = (k: string) => (Number(inf[k]) > 0 ? String(inf[k]) : "")
+    const fullName = text("full_name")
+    const switched: InfluencerRow = {
+      ...cleared,
+      id: result.id,
+      full_name: fullName, first_name: fullName.split(" ")[0] || "",
+      email: text("email"), contact_info: text("email"), location: text("location"), niche: text("niche"),
+      gender: text("gender"), bio: text("bio"), profile_image_url: text("profile_image_url"),
+      social_link: text("social_link") || socialLink,
+      follower_count: num("follower_count"), engagement_rate: num("engagement_rate"),
+      avg_likes: num("avg_likes"), avg_comments: num("avg_comments"), avg_views: num("avg_views"),
+    }
+    setRows(prev => prev.map(r => (r.id === row.id ? switched : r)))
+    result.commit?.(switched)
+    setSidebarRowId(id => (id === row.id ? result.id : id))
+    const handleChanged = handle.toLowerCase() !== cleanHandle(row.handle).toLowerCase()
+    const platformChanged = platform !== row.platform
+    addToast("success",
+      !platformChanged ? `Changed to @${handle}`
+        : !handleChanged ? `@${handle} changed to ${getPlatformLabel(platform)}`
+        : `Changed to @${handle} on ${getPlatformLabel(platform)}`)
+    // Known profiles come back filled; anything else is looked up.
+    if (!(Number(inf.follower_count) > 0)) scheduleAutoFetch(result.id, handle, platform)
+  }, [onIdentityChange, addToast, clearFetching, scheduleAutoFetch])
+
+  const requestIdentityChange = useCallback((row: InfluencerRow, handle: string, platform: string) => {
+    if (handle.length < 2 || !platform) {
+      addToast("error", "A saved influencer needs a handle and a platform.")
+      return
+    }
+    // Once outreach has started the row carries real history, so confirm first.
+    if (!canListDecline(row) || row.contact_status === "not_interested") {
+      setIdentityConfirm({ row, handle, platform, stage: drawerStageLabel(row) })
+      return
+    }
+    void switchIdentity(row, handle, platform)
+  }, [addToast, switchIdentity])
+
+  const applyCellValue = useCallback((rowIdx: number, colKey: string, value: string, approvalConfirmed = false) => {
     const actualRow = filteredRows[rowIdx]; const actualRowIdx = rows.findIndex(r => r.id === actualRow.id); if (actualRowIdx === -1) return
     if (colKey === "approval_status" && !canApproveInfluencers) return
+    if (colKey === "approval_status" && value === "Approved" && actualRow.approval_status !== "Approved" && onBeforeApprove && !approvalConfirmed) {
+      const rowId = actualRow.id
+      void onBeforeApprove([rowId]).then(ok => {
+        if (!ok) return
+        const idx = filteredRowsRef.current.findIndex(r => r.id === rowId)
+        if (idx !== -1) applyCellValueRef.current(idx, colKey, value, true)
+      })
+      return
+    }
     if (actualRow.approval_status === "Declined" && isOutreachField(colKey)) return
-    if (colKey === "approval_status" && value === "Declined") { setPendingDeclineRowIdx(rowIdx); setShowDeclineModal(true); return }
     const currentRow = rows[actualRowIdx]
     let shouldFetch = false, fetchRowId = currentRow.id, fetchHandle = "", fetchPlatform = ""
     let cleanedValue = value
     if (colKey === "handle") cleanedValue = cleanHandle(value)
+    // Editing a saved influencer's handle/platform switches the row to that influencer.
+    const identitySaved = !currentRow.is_draft && !currentRow.id.startsWith("temp-") && !!cleanHandle(currentRow.handle)
+    if (identitySaved && (
+      (colKey === "handle" && cleanedValue.toLowerCase() !== cleanHandle(currentRow.handle).toLowerCase()) ||
+      (colKey === "platform" && value !== currentRow.platform)
+    )) {
+      requestIdentityChange(
+        currentRow,
+        colKey === "handle" ? cleanedValue : cleanHandle(currentRow.handle),
+        colKey === "platform" ? value : currentRow.platform
+      )
+      return
+    }
     if (colKey === "handle" && cleanedValue && cleanedValue.length >= 2) { shouldFetch = true; fetchHandle = cleanedValue; fetchPlatform = currentRow.platform }
     if (colKey === "platform" && currentRow.handle && cleanHandle(currentRow.handle).length >= 2) { shouldFetch = true; fetchHandle = currentRow.handle; fetchPlatform = value }
     // Auto-add a newly typed niche/location — kept OUTSIDE the setRows updater below,
@@ -1865,7 +1976,11 @@ export default function TableSheet({
       const typed = cleanedValue
       if (typed) setTimeout(() => checkContactDuplicate(currentRow.id, typed), 0)
     }
-  }, [onRowsChange, customCols, filteredRows, rows, isOutreachField, nicheOptions, locationOptions, scheduleAutoFetch, canApproveInfluencers, checkContactDuplicate])
+  }, [onRowsChange, customCols, filteredRows, rows, isOutreachField, nicheOptions, locationOptions, scheduleAutoFetch, canApproveInfluencers, checkContactDuplicate, addToast, requestIdentityChange, onBeforeApprove])
+
+  // Latest version, for the popup's resumed call.
+  const applyCellValueRef = useRef(applyCellValue)
+  useEffect(() => { applyCellValueRef.current = applyCellValue }, [applyCellValue])
 
   const addOptionToCol = useCallback((fk: string, no: string) => {
     setCustomCols(prev => { const n = prev.map(c => c.field_key !== fk ? c : { ...c, field_options: [...(c.field_options ?? []), no] }); onCustomColumnsChange?.(n); return n })
@@ -2293,7 +2408,7 @@ export default function TableSheet({
           giving onAddOption its own dbAdd call here double-fired the create request. */}
       if (col.key === "niche") return <td key={col.key} className={`border border-gray-200 px-1.5 py-1 text-xs relative ${ringCls}`} style={{ minWidth: col.minWidth }}>{value ? <span className="inline-block px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 text-xs font-medium truncate max-w-full">{value}</span> : <span className="text-gray-300">—</span>}<DropdownEditor value={value} options={nicheOptions} onChange={v => applyCellValue(rowIdx, col.key, v)} onClose={closeP} onAddOption={() => {}} /></td>
       if (col.key === "location") return <td key={col.key} className={`border border-gray-200 px-1.5 py-1 text-xs relative ${ringCls}`} style={{ minWidth: col.minWidth }}>{value ? <span className="truncate block text-sm">{value}</span> : <span className="text-gray-300">—</span>}<DropdownEditor value={value} options={locationOptions} onChange={v => applyCellValue(rowIdx, col.key, v)} onClose={closeP} onAddOption={() => {}} /></td>
-      if (col.key === "approval_status") return <td key={col.key} className={`border border-gray-200 px-1.5 py-1 text-xs relative ${ringCls}`} style={{ minWidth: col.minWidth }}><ApprovalBadge value={value} /><FloatingPopup onClose={closeP}><div className="w-52 max-h-60 overflow-auto py-1">{(["Approved", "Declined", "Pending"] as const).map(o => (<button key={o} onMouseDown={e => e.preventDefault()} onClick={() => { applyCellValue(rowIdx, col.key, o); closeP() }} className={`flex items-center gap-2 w-full text-left px-2.5 py-1.5 text-xs hover:bg-gray-50 transition ${value === o ? "font-medium bg-gray-50" : "text-gray-700"}`}>{value === o && <IconCheck size={12} className="text-indigo-600 flex-shrink-0" />}<span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${APPROVAL_STYLE[o] ?? ""}`}>{o}</span></button>))}</div></FloatingPopup></td>
+      if (col.key === "approval_status") return <td key={col.key} className={`border border-gray-200 px-1.5 py-1 text-xs relative ${ringCls}`} style={{ minWidth: col.minWidth }}><ApprovalBadge value={value} /><FloatingPopup onClose={closeP}><div className="w-52 max-h-60 overflow-auto py-1">{(["Approved", "Declined", "Pending"] as const).filter(o => o !== "Declined" || canListDecline(filteredRows[rowIdx])).map(o => (<button key={o} onMouseDown={e => e.preventDefault()} onClick={() => { applyCellValue(rowIdx, col.key, o); closeP() }} className={`flex items-center gap-2 w-full text-left px-2.5 py-1.5 text-xs hover:bg-gray-50 transition ${value === o ? "font-medium bg-gray-50" : "text-gray-700"}`}>{value === o && <IconCheck size={12} className="text-indigo-600 flex-shrink-0" />}<span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${APPROVAL_STYLE[o] ?? ""}`}>{o}</span></button>))}</div></FloatingPopup></td>
       if (col.key === "contact_status") return <td key={col.key} className={`border border-gray-200 px-1.5 py-1 text-xs relative ${ringCls}`} style={{ minWidth: col.minWidth }}><StatusBadge value={value} /><FloatingPopup onClose={closeP}><div className="w-52 max-h-60 overflow-auto py-1">{DEFAULT_CONTACT_STATUSES.map(o => (<button key={o.value} onMouseDown={e => e.preventDefault()} onClick={() => { applyCellValue(rowIdx, col.key, o.value); closeP() }} className={`flex items-center gap-2 w-full text-left px-2.5 py-1.5 text-xs hover:bg-gray-50 transition ${value === o.value ? "font-medium bg-gray-50" : "text-gray-700"}`}>{value === o.value && <IconCheck size={12} className="text-indigo-600 flex-shrink-0" />}<span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${STATUS_STYLE[o.value] ?? ""}`}>{o.label}</span></button>))}</div></FloatingPopup></td>
       if (col.key === "gender") return <td key={col.key} className={`border border-gray-200 px-1.5 py-1 text-xs relative ${ringCls}`} style={{ minWidth: col.minWidth }}><span className="block truncate">{value || <span className="text-gray-300">—</span>}</span><FloatingPopup onClose={closeP}><div className="w-52 max-h-60 overflow-auto py-1"><button onMouseDown={e => e.preventDefault()} onClick={() => { applyCellValue(rowIdx, col.key, ""); closeP() }} className={`w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50 transition ${!value ? "text-indigo-600 font-medium" : "text-gray-400"}`}>— Non —</button>{DEFAULT_GENDERS.map(g => (<button key={g} onMouseDown={e => e.preventDefault()} onClick={() => { applyCellValue(rowIdx, col.key, g); closeP() }} className={`flex items-center gap-2 w-full text-left px-2.5 py-1.5 text-xs hover:bg-gray-50 transition ${value === g ? "text-indigo-700 font-medium bg-indigo-50" : "text-gray-700"}`}>{value === g && <IconCheck size={12} className="text-indigo-600 flex-shrink-0" />}{g}</button>))}</div></FloatingPopup></td>
       if (col.type === "dropdown" && col.isCustom) return <td key={col.key} className={`border border-gray-200 px-1.5 py-1 text-xs relative ${ringCls}`} style={{ minWidth: col.minWidth }}>{value ? <span className="inline-block px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 text-xs font-medium truncate max-w-full">{value}</span> : <span className="text-gray-300">—</span>}<DropdownEditor value={value} options={col.options ?? []} onChange={v => applyCellValue(rowIdx, col.key, v)} onClose={closeP} onAddOption={o => addOptionToCol((col as CustomColDef).fieldKey, o)} /></td>
@@ -2601,24 +2716,50 @@ export default function TableSheet({
         </div>
       )}
 
-      <AddRowsModal isOpen={showAddRowsModal} onClose={() => setShowAddRowsModal(false)} onAdd={handleAddMultipleRows} selectedCount={selectedRowIds.size} />
+      {identityConfirm && (() => {
+        const { row, handle, platform, stage } = identityConfirm
+        const oldHandle = cleanHandle(row.handle)
+        const from = getPlatformLabel(row.platform)
+        const to = getPlatformLabel(platform)
+        const platformChanged = platform !== row.platform
+        const handleChanged = handle.toLowerCase() !== oldHandle.toLowerCase()
+        const change = !platformChanged
+          ? `@${oldHandle} to @${handle}`
+          : handleChanged
+            ? `@${oldHandle} (${from}) to @${handle} (${to})`
+            : `@${oldHandle} from ${from} to ${to}`
+        const where = stage === "Post Tracker"
+          ? "is already in Post Tracker"
+          : stage === "Not Interested"
+            ? "was marked Not Interested in the Pipeline"
+            : `is already at ${stage} in the Pipeline`
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={e => { if (e.target === e.currentTarget) setIdentityConfirm(null) }}>
+            <div className="bg-white rounded-xl shadow-xl w-[420px] max-w-[90vw] p-5">
+              <div className="flex items-start gap-2.5 mb-3">
+                <div className="p-1.5 bg-amber-100 rounded-full flex-shrink-0"><IconAlertTriangle size={18} className="text-amber-600" /></div>
+                <div className="flex-1">
+                  <h3 className="text-sm font-semibold text-gray-900">Change {change}?</h3>
+                  <p className="text-xs text-gray-500 mt-1 leading-relaxed">
+                    @{oldHandle} {where}. Everything on this row stays with it and will now belong to <strong>@{handle} on {to}</strong>: approval, stage, notes, emails, order and post details, coupon and affiliate link.
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => setIdentityConfirm(null)} className="flex-1 px-3 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition">Cancel</button>
+                <button
+                  onClick={() => { setIdentityConfirm(null); void switchIdentity(row, handle, platform) }}
+                  className="flex-1 px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs hover:bg-amber-700 transition font-medium"
+                >
+                  {platformChanged && !handleChanged ? "Change platform" : "Change handle"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
-      {/* Decline — the SAME modal the Pipeline board opens for "Mark as not
-          interested", over the same reason list, so a decline made here is
-          recorded identically (components/shared/decline-modal.tsx). */}
-      {showDeclineModal && pendingDeclineRowIdx !== null && filteredRows[pendingDeclineRowIdx] && (
-        <DeclineModal
-          name={filteredRows[pendingDeclineRowIdx].full_name?.trim() || filteredRows[pendingDeclineRowIdx].handle || "Influencer"}
-          handle={filteredRows[pendingDeclineRowIdx].handle}
-          profileImageUrl={filteredRows[pendingDeclineRowIdx].profile_image_url}
-          /* Above the profile sidebar's zIndex 500 — the sidebar can be open
-             behind this (its Status dropdown is one way in), and at the default
-             z-50 it stayed painted over the modal. */
-          zIndex={600}
-          onConfirm={handleDeclineConfirm}
-          onCancel={() => { setShowDeclineModal(false); setPendingDeclineRowIdx(null); containerRef.current?.focus() }}
-        />
-      )}
+      <AddRowsModal isOpen={showAddRowsModal} onClose={() => setShowAddRowsModal(false)} onAdd={handleAddMultipleRows} selectedCount={selectedRowIds.size} />
 
       {sidebarRow && (
         <ProfileSidebar row={sidebarRow} customCols={customCols} onUpdate={handleUpdateRow} onClose={() => setSidebarRowId(null)}

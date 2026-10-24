@@ -1,119 +1,14 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
-import { getUserSignatureHtml, plainTextBodyToHtml } from "@/lib/signature"
+import { getUserSignatureHtml } from "@/lib/signature"
 import { autoMarkContactedOnSend } from "@/lib/pipeline"
-import { getGmailAccessToken, sanitizeFilename } from "@/lib/gmail"
+import { getGmailAccessToken } from "@/lib/gmail"
+import { buildRawEmail, type Attachment } from "@/lib/gmail-message"
 
 // Vercel Serverless Functions cap request bodies well under Gmail's own
 // ~25MB attachment limit, so that's the real binding constraint here.
 const MAX_TOTAL_ATTACHMENT_BYTES = 4 * 1024 * 1024
-
-type Attachment = { filename: string; mimeType: string; data: Buffer }
-
-// ─── Build RFC 2822 email message ─────────────────────────────────────────────
-
-function wrapBase64(base64: string): string {
-  return base64.replace(/.{1,76}/g, "$&\r\n").trim()
-}
-
-function buildRawEmail({
-  to,
-  from,
-  subject,
-  body,
-  threadId,
-  inReplyTo,
-  signatureHtml,
-  isHtmlBody = false,
-  attachments = [],
-}: {
-  to: string
-  from: string
-  subject: string
-  body: string
-  threadId?: string
-  inReplyTo?: string
-  signatureHtml?: string | null
-  isHtmlBody?: boolean
-  attachments?: Attachment[]
-}): string {
-  const replySubject = subject.startsWith("Re:") ? subject : `Re: ${subject}`
-
-  // The body itself already has real HTML when it came from the rich compose
-  // editor (isHtmlBody) — running it through plainTextBodyToHtml would
-  // double-escape it. Plain-text callers (reply box) are unaffected since
-  // they never set isHtmlBody.
-  let bodyContentType: string
-  let bodyText: string
-  if (isHtmlBody) {
-    bodyContentType = "text/html"
-    bodyText = body + (signatureHtml ?? "")
-  } else if (signatureHtml) {
-    bodyContentType = "text/html"
-    bodyText = plainTextBodyToHtml(body) + signatureHtml
-  } else {
-    bodyContentType = "text/plain"
-    bodyText = body
-  }
-
-  const headerLines = [
-    `From: ${from}`,
-    `To: ${to}`,
-    `Subject: ${replySubject}`,
-    `MIME-Version: 1.0`,
-    ...(inReplyTo ? [`In-Reply-To: ${inReplyTo}`] : []),
-  ]
-
-  if (attachments.length === 0) {
-    const lines = [
-      ...headerLines,
-      `Content-Type: ${bodyContentType}; charset="UTF-8"`,
-      ``,
-      bodyText,
-    ]
-    return encodeRaw(lines.join("\r\n"))
-  }
-
-  const boundary = `----=_Part_${crypto.randomUUID()}`
-  const lines = [
-    ...headerLines,
-    `Content-Type: multipart/mixed; boundary="${boundary}"`,
-    ``,
-    `--${boundary}`,
-    `Content-Type: ${bodyContentType}; charset="UTF-8"`,
-    ``,
-    bodyText,
-    ``,
-  ]
-
-  for (const att of attachments) {
-    lines.push(
-      `--${boundary}`,
-      `Content-Type: ${att.mimeType || "application/octet-stream"}; name="${sanitizeFilename(att.filename)}"`,
-      `Content-Disposition: attachment; filename="${sanitizeFilename(att.filename)}"`,
-      `Content-Transfer-Encoding: base64`,
-      ``,
-      wrapBase64(att.data.toString("base64")),
-      ``
-    )
-  }
-  lines.push(`--${boundary}--`)
-
-  return encodeRaw(lines.join("\r\n"))
-}
-
-/** The OUTER base64url pass — runs once over the whole already-built raw
- *  message for Gmail's `raw` field. Separate from (and unrelated to) the
- *  per-attachment base64 wrapping above, which is an RFC 2045 requirement for
- *  the inner MIME parts themselves. */
-function encodeRaw(raw: string): string {
-  return Buffer.from(raw)
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "")
-}
 
 // ─── Main handler ─────────────────────────────────────────────────────────────
 

@@ -5,8 +5,10 @@ import { prisma } from "@/lib/prisma"
 import { sendNotification } from "@/lib/notifications"
 import { logActivity } from "@/lib/activity-log"
 import { provisionGoAffProAffiliate } from "@/lib/goaffpro-provision"
+import { getDeliverableProgress } from "@/lib/deliverables"
 import {
   derivePipelineStage,
+  isListDeclined,
   isTransitionAllowed,
   pipelineStatusToFields,
   transitionRefusalReason,
@@ -27,7 +29,7 @@ const PIPELINE_TARGET: Record<string, string> = {
   REJECTED:        "Not Interested",
 }
 
-// COMPLETED has no Post Tracker column; it maps to Posted.
+// COMPLETED = Posted + the completed flag.
 const POST_TRACKER_TARGET: Record<string, ClosedColumn> = {
   FOR_ORDER_CREATION: "For Order Creation",
   IN_TRANSIT:         "In-Transit",
@@ -154,6 +156,13 @@ export async function PATCH(req: NextRequest) {
     influencerName = influencer.full_name ?? influencer.handle ?? senderEmail
   }
 
+  if (isListDeclined(existingBi.approval_status, existingBi.contact_status)) {
+    return NextResponse.json(
+      { error: "This influencer was declined on the Influencers List. Change their status there to move them into the Pipeline." },
+      { status: 409 },
+    )
+  }
+
   const currentStage = derivePipelineStage(
     existingBi.contact_status,
     existingBi.stage,
@@ -215,6 +224,21 @@ export async function PATCH(req: NextRequest) {
           { status: 409 },
         )
       }
+    }
+
+    // Same rule as Post Tracker's "Mark as completed".
+    if (stage === "COMPLETED") {
+      const progress = getDeliverableProgress(productDetails.paidCollab, existingBi.post_url)
+      const ready = progress.total > 0 ? progress.complete : Boolean(existingBi.post_url && existingBi.post_url.trim())
+      if (!ready) {
+        return NextResponse.json(
+          { error: "Add a post link for every deliverable before marking this influencer completed." },
+          { status: 409 },
+        )
+      }
+      productDetails.completed = true
+    } else {
+      productDetails.completed = false
     }
 
     productDetails.closedStatus = postTrackerTarget

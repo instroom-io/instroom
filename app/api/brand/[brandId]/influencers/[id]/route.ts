@@ -9,6 +9,7 @@ import { canAddInfluencer } from "@/lib/subscription-limits"
 import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 import { publicHandle } from "@/lib/influencer-draft"
 import { normalizeInfluencerIdentity } from "@/lib/influencer-draft"
+import { derivePipelineStage } from "@/lib/pipeline-transitions"
 import { NextRequest, NextResponse } from "next/server"
 
 // Must cover every contact_status the app writes anywhere, because an unknown
@@ -70,6 +71,18 @@ export async function PUT(
       select: { id: true, contact_status: true, stage: true, approval_status: true },
     })
 
+    // Once outreach has started, declining is the Pipeline's Not Interested.
+    if (
+      data.approval_status === "Declined" &&
+      before?.approval_status === "Approved" &&
+      derivePipelineStage(before.contact_status, before.stage, before.approval_status) !== "For Outreach"
+    ) {
+      return NextResponse.json(
+        { error: "Outreach has already started for this influencer. Mark them Not Interested on the Pipeline instead." },
+        { status: 409 }
+      )
+    }
+
     const inf: any = {}
 
     // ── Promoting a draft ───────────────────────────────────────────────────
@@ -81,7 +94,7 @@ export async function PUT(
     // through this route, exactly as before.
     const current = await prisma.influencer.findUnique({
       where: { id },
-      select: { is_draft: true },
+      select: { is_draft: true, handle: true, platform: true },
     })
 
     // A genuinely unknown influencer is still a 404. Checked explicitly because
@@ -102,6 +115,80 @@ export async function PUT(
       typeof data.handle === "string" ? data.handle : "",
       typeof data.platform === "string" ? data.platform : ""
     )
+    // ── Handle/platform edited on a saved influencer ─────────────────────────
+    // The shared record is never renamed (other brands use it). Only this
+    // brand's row is pointed at the record for the new identity, reused or
+    // created, and the old record is removed once no brand uses it.
+    const stored = normalizeInfluencerIdentity(current.handle, current.platform ?? "")
+    const target = {
+      handle: promoting.handle || stored.handle,
+      platform: promoting.platform || stored.platform,
+    }
+    if (!current.is_draft && (target.handle !== stored.handle || target.platform !== stored.platform)) {
+      const profileSelect = {
+        id: true, handle: true, platform: true, full_name: true, email: true, gender: true,
+        social_link: true, bio: true, profile_image_url: true, follower_count: true,
+        engagement_rate: true, avg_likes: true, avg_comments: true, avg_views: true,
+        niche: true, location: true,
+      } as const
+      const existing = await prisma.influencer.findUnique({
+        where: { handle_platform: target },
+        select: profileSelect,
+      })
+      const onBrand = (influencerId: string) =>
+        prisma.brandInfluencer.findUnique({
+          where: { brand_id_influencer_id: { brand_id: brandId, influencer_id: influencerId } },
+          select: { id: true },
+        })
+      const row = await onBrand(id)
+
+      if (!row) {
+        // A late save for a row that has already switched: nothing to do.
+        if (existing && (await onBrand(existing.id))) {
+          return NextResponse.json({ success: true, code: "IDENTITY_SWITCHED", id: existing.id, influencer: existing })
+        }
+        return NextResponse.json({ error: "Not found" }, { status: 404 })
+      }
+      if (existing && (await onBrand(existing.id))) {
+        return NextResponse.json(
+          { error: `@${target.handle} is already in your list`, code: "DUPLICATE_IN_BRAND", id: existing.id },
+          { status: 409 }
+        )
+      }
+
+      const next = existing ?? await prisma.influencer.create({
+        data: {
+          handle: target.handle,
+          platform: target.platform,
+          social_link: typeof data.social_link === "string" && data.social_link ? data.social_link : null,
+        },
+        select: profileSelect,
+      })
+      await prisma.$transaction([
+        prisma.brandInfluencer.update({ where: { id: row.id }, data: { influencer_id: next.id } }),
+        prisma.brandPartner.updateMany({ where: { brand_influencer_id: row.id }, data: { influencer_id: next.id } }),
+      ])
+      if ((await prisma.brandInfluencer.count({ where: { influencer_id: id } })) === 0) {
+        await prisma.influencer.deleteMany({ where: { id, brandPartners: { none: {} } } })
+      }
+
+      await logActivity({
+        brandId,
+        userId: session.user.id,
+        action: "influencer.identity_changed",
+        entityType: "brand_influencer",
+        entityId: row.id,
+        details: { from: `${stored.handle}@${stored.platform}`, to: `${target.handle}@${target.platform}`, reused: !!existing },
+      })
+
+      return NextResponse.json({
+        success: true,
+        code: "IDENTITY_SWITCHED",
+        id: next.id,
+        reused: !!existing,
+        influencer: { ...next, engagement_rate: Number(next.engagement_rate) },
+      })
+    }
     const promotingHandle = current?.is_draft ? promoting.handle : ""
     const promotingPlatform = current?.is_draft ? promoting.platform : ""
 
@@ -480,6 +567,7 @@ export async function PUT(
 
     return NextResponse.json({
       success: true,
+      id,
       ...(savedInf
         ? {
             // Blanked while the row is still a draft: the placeholder handle

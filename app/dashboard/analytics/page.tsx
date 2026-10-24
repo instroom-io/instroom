@@ -13,6 +13,7 @@ import { toXlsx, downloadBlob, exportStamp, type ExportLine } from "@/lib/analyt
 import { DataSyncStatus } from "@/components/data-sync-status"
 import { PlatformBadge } from "@/components/shared/platform-icon"
 import { HARD_PASS_REASONS, SOFT_PASS_REASONS, OTHER_PASS_REASONS, OTHER_REASON, declineBucket, type DeclineBucket } from "@/lib/decline-reasons"
+import { useBrandTaxonomy } from "@/hooks/useBrandTaxonomy"
 
 // ============================================================
 // Types
@@ -151,6 +152,9 @@ const FIELD_LABEL = "text-xs text-gray-500"
 /** Select control, matching the post-tracker filter panel exactly. */
 const SELECT =
   `${CONTROL} w-full cursor-pointer appearance-none border border-gray-200 bg-gray-50 px-3 pr-8 text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B]`
+/** Date input for the Custom range, same box as SELECT. */
+const DATE_INPUT =
+  `${CONTROL} w-full border border-gray-200 bg-gray-50 px-3 text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#1FAE5B]`
 
 // ============================================================
 // UI Components
@@ -225,9 +229,6 @@ const SectionCard = ({
   className?: string
   children: React.ReactNode
 }) => (
-  /* No h-full: the analytics grids are items-start, and a height:100% here
-     resolved against the grid row and re-stretched every short card — the
-     "excessive empty space" in the shorter of any two paired cards. */
   <div className={`${CARD} ${CARD_PAD} flex min-w-0 flex-col ${className}`}>
     <h3 className={`${CARD_TITLE} mb-3.5 flex flex-wrap items-baseline gap-x-2`}>
       {title}
@@ -529,6 +530,8 @@ const InlineFilterPanel = ({
   locationOptions,
   onReset,
   hasActiveFilters,
+  onCancel,
+  onApply,
 }: {
   isOpen: boolean;
   filters: any;
@@ -539,13 +542,15 @@ const InlineFilterPanel = ({
   locationOptions: any[];
   onReset: () => void;
   hasActiveFilters: boolean;
+  onCancel: () => void;
+  onApply: () => void;
 }) => {
   if (!isOpen) return null
 
   return (
     <div className="animate-slideIn">
-      {/* "FILTER BY" + Clear all — the same panel header the post-tracker
-          filter panel uses, down to the weights and the red hover. */}
+      {/* Same panel as the Pipeline / Post Tracker / Brand Partners filters:
+          chip groups first, dropdowns in one row, Cancel + Apply footer. */}
       <div className="mb-3 flex items-center justify-between gap-3">
         <span className="text-xs font-bold uppercase tracking-wide text-gray-800">Filter by</span>
         {hasActiveFilters && (
@@ -558,20 +563,78 @@ const InlineFilterPanel = ({
         )}
       </div>
 
-      {/* One row of four from lg, where the popover is button-anchored and has
-          room. Fixed 150px columns, not fractions: a viewport breakpoint like
-          `md:grid-cols-4` squeezed four selects into ~90px inside the panel and
-          truncated their labels. Two up below lg, where the panel is a
-          header-width sheet. */}
-      <div className="grid grid-cols-2 gap-x-3 gap-y-3 lg:grid-cols-[repeat(4,150px)]">
-        <FilterField label="Platform" value={filters.platform} options={platformOptions} onChange={(v) => onFilterChange('platform', v)} />
-        <FilterField label="Date range" value={filters.dateRange} options={dateOptions} onChange={(v) => onFilterChange('dateRange', v)} />
-        <FilterField label="Niche" value={filters.niche} options={nicheOptions} onChange={(v) => onFilterChange('niche', v)} />
-        <FilterField label="Location" value={filters.location} options={locationOptions} onChange={(v) => onFilterChange('location', v)} />
+      <div className="flex flex-col gap-3">
+        <FilterChips label="Platform" value={filters.platform} options={platformOptions}
+          onChange={(v) => onFilterChange('platform', v)} colorClass="bg-blue-50 text-blue-700 border-blue-200" />
+        <div className="border-t border-gray-100" />
+        <div className="flex flex-col gap-2">
+          <FilterChips label="Date range" value={filters.dateRange} options={dateOptions}
+            onChange={(v) => onFilterChange('dateRange', v)} colorClass="bg-purple-50 text-purple-700 border-purple-200" />
+          {filters.dateRange === 'custom' && (
+            <div className="grid grid-cols-2 gap-x-3">
+              <div className="flex min-w-0 flex-col gap-1">
+                <label className={FIELD_LABEL}>From</label>
+                <input type="date" value={filters.dateFrom} max={filters.dateTo || undefined}
+                  onChange={(e) => onFilterChange('dateFrom', e.target.value)} className={DATE_INPUT} aria-label="From date" />
+              </div>
+              <div className="flex min-w-0 flex-col gap-1">
+                <label className={FIELD_LABEL}>To</label>
+                <input type="date" value={filters.dateTo} min={filters.dateFrom || undefined}
+                  onChange={(e) => onFilterChange('dateTo', e.target.value)} className={DATE_INPUT} aria-label="To date" />
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="border-t border-gray-100" />
+        <div className="grid grid-cols-2 gap-x-3 gap-y-3">
+          <FilterField label="Niche" value={filters.niche} options={nicheOptions} onChange={(v) => onFilterChange('niche', v)} />
+          <FilterField label="Location" value={filters.location} options={locationOptions} onChange={(v) => onFilterChange('location', v)} />
+        </div>
+      </div>
+
+      <div className="mt-3 flex items-center justify-end gap-2 border-t border-gray-100 pt-3">
+        <button onClick={onCancel}
+          className="rounded-lg border border-gray-200 px-5 py-1.5 text-sm font-medium text-gray-600 transition hover:border-gray-300">
+          Cancel
+        </button>
+        <button onClick={onApply}
+          className="rounded-lg bg-[#1FAE5B] px-5 py-1.5 text-sm font-medium text-white transition hover:bg-[#178a48]">
+          Apply
+        </button>
       </div>
     </div>
   )
 }
+
+/** Single-select chip row — the chip styling the other filter panels use. */
+const FilterChips = ({
+  label, value, options, onChange, colorClass,
+}: {
+  label: string; value: string; options: { value: string; label: string }[]; onChange: (value: string) => void; colorClass: string
+}) => (
+  <div className="flex flex-col gap-2">
+    <label className="text-xs font-medium text-gray-600">{label}</label>
+    <div className="flex flex-wrap gap-1.5">
+      {options.map(opt => {
+        const isSelected = value === opt.value
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onChange(opt.value)}
+            aria-pressed={isSelected}
+            className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-all focus:outline-none focus:ring-2 focus:ring-[#1FAE5B] focus:ring-offset-1 ${
+              isSelected ? `${colorClass} border-transparent` : 'border-gray-200 bg-gray-50 text-gray-500 hover:border-gray-300 hover:bg-gray-100'
+            }`}
+          >
+            {isSelected && <span className="mr-1 text-[9px]">✓</span>}
+            {opt.label}
+          </button>
+        )
+      })}
+    </div>
+  </div>
+)
 
 /**
  * One labelled select. `appearance-none` strips the OS dropdown arrow, so the
@@ -652,15 +715,29 @@ function AnalyticsPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const brandId = searchParams.get("brandId")
+  // The brand's own niches / locations — the lists added in the Influencers List.
+  const { niches: brandNiches, locations: brandLocations } = useBrandTaxonomy(brandId)
 
   const [activeTab, setActiveTab] = useState(0)
   const [filters, setFilters] = useState({
     platform: "all",
     niche: "all",
     location: "all",
-    dateRange: "all"
+    dateRange: "all",
+    dateFrom: "",
+    dateTo: "",
   })
   const [showFilters, setShowFilters] = useState(false)
+  // Filters apply live; Cancel restores what was set when the panel opened.
+  const filterSnapshot = useRef<typeof filters | null>(null)
+  const toggleFilters = () => {
+    if (!showFilters) filterSnapshot.current = filters
+    setShowFilters(!showFilters)
+  }
+  const cancelFilters = () => {
+    if (filterSnapshot.current) setFilters(filterSnapshot.current)
+    setShowFilters(false)
+  }
   const [search, setSearch] = useState("")
   const filterContainerRef = useRef<HTMLDivElement>(null)
 
@@ -693,8 +770,10 @@ function AnalyticsPageContent() {
         niche: filters.niche,
         location: filters.location,
         dateRange: filters.dateRange,
+        // Only sent for Custom, so every preset keeps its existing cache key.
+        ...(filters.dateRange === "custom" ? { dateFrom: filters.dateFrom, dateTo: filters.dateTo } : {}),
       }).toString(),
-    [brandId, filters.platform, filters.niche, filters.location, filters.dateRange]
+    [brandId, filters.platform, filters.niche, filters.location, filters.dateRange, filters.dateFrom, filters.dateTo]
   )
 
   const fetchAnalytics = useCallback(async () => {
@@ -728,9 +807,16 @@ function AnalyticsPageContent() {
       platform: "all",
       niche: "all",
       location: "all",
-      dateRange: "all"
+      dateRange: "all",
+      dateFrom: "",
+      dateTo: "",
     })
   }
+
+  // Custom reads as its actual dates in exports, not the bare word "custom".
+  const dateRangeLabel = filters.dateRange === "custom"
+    ? `${filters.dateFrom || "…"} to ${filters.dateTo || "…"}`
+    : filters.dateRange
 
   const hasActiveFilters = filters.platform !== "all" || filters.niche !== "all" || filters.location !== "all" || filters.dateRange !== "all"
   // Presentation only — how many of the four filters are narrowed, for the
@@ -813,11 +899,15 @@ function AnalyticsPageContent() {
     // the route) and the post-order stages (In Transit, Posted, …) only exist in
     // that extended vocabulary — but the range boundaries are
     // derivePipelineStatus's, not a separately invented list.
-    const RESPONDED_OR_BEYOND = ["In Conversation", "Onboarded", "In Transit", "Content Pending", "Posted", "Rejected"]
-    // Closed stays a strict SUBSET of responded, and counts Deal Agreed only —
-    // "Onboarded" is what Deal Agreed resolves to, together with the stages it
-    // can only be reached through.
-    const CLOSED_OR_BEYOND    = ["Onboarded", "In Transit", "Content Pending", "Posted"]
+    // Closed = Deal Agreed plus EVERY Post Tracker column, so the Closed
+    // collaborations count equals the number of influencers in the Post
+    // Tracker. "Delivery Problem" is its Issues column and "No Content" its
+    // No post column — both only reachable after a deal was agreed, so both
+    // sit inside Responded too.
+    const RESPONDED_OR_BEYOND = ["In Conversation", "Onboarded", "In Transit", "Content Pending", "Posted", "UGC", "Delivery Problem", "No Content", "Rejected"]
+    // Closed stays a strict SUBSET of responded. "Onboarded" is what Deal
+    // Agreed / For Order Creation resolve to.
+    const CLOSED_OR_BEYOND    = ["Onboarded", "In Transit", "Content Pending", "Posted", "UGC", "Delivery Problem", "No Content"]
 
     const totalOutreach = dataToUse.length
     // Responded = anyone whose resolved pipeline stage is In Conversation or
@@ -884,6 +974,8 @@ function AnalyticsPageContent() {
     const deliveryProblem = dataToUse.filter(i => i.pipelineStatus === "Delivery Problem").length
     const noPost = dataToUse.filter(i => i.pipelineStatus === "Content Pending").length
     const posted = dataToUse.filter(i => i.pipelineStatus === "Posted").length
+    // Plain UGC: outside post rate.
+    const ugcDeals = dataToUse.filter(i => i.pipelineStatus === "UGC").length
     const closedCollaborations = closed
     const receivedProduct = noPost + posted
     const postRate = receivedProduct > 0 ? (posted / receivedProduct) * 100 : 0
@@ -928,15 +1020,12 @@ function AnalyticsPageContent() {
     const totalRevenue = dataToUse.reduce((sum, i) => sum + (i.salesAmt || 0), 0)
     const conversionRate = totalClicks > 0 ? (totalSalesQty / totalClicks) * 100 : 0
     const aov = totalSalesQty > 0 ? totalRevenue / totalSalesQty : 0
-    const avgSalePerInfluencer = posted > 0 ? totalRevenue / posted : 0
-    const influencersWithSales = dataToUse.filter(i => (i.salesQty || 0) > 0).length
+    const postedRevenue = dataToUse.reduce((sum, i) => sum + (i.pipelineStatus === "Posted" ? (i.salesAmt || 0) : 0), 0)
+    const avgSalePerInfluencer = posted > 0 ? postedRevenue / posted : 0
+    const influencersWithSales = dataToUse.filter(i => i.pipelineStatus === "Posted" && (i.salesQty || 0) > 0).length
     const totalProductCost = dataToUse.reduce((sum, i) => sum + (i.prodCost || 0), 0)
 
-    // Spend/ROI metrics — every component is a stored per-partner figure
-    // (BrandPartner.fees_paid / commission_paid / product_cost). The previous
-    // code assumed a flat $300 fee per posted influencer and a 10% commission,
-    // which invented spend that was never recorded and made ROAS/ROI/profit
-    // fiction whenever the real figures differed.
+    // Recorded spend only (see resolveFees, resolveCommission, productCostFromDetails).
     const totalFeesPaid = dataToUse.reduce((sum, i) => sum + (i.feesPaid || 0), 0)
     const totalCommPaid = dataToUse.reduce((sum, i) => sum + (i.commissionPaid || 0), 0)
     const totalSpend = totalProductCost + totalFeesPaid + totalCommPaid
@@ -944,17 +1033,14 @@ function AnalyticsPageContent() {
     const roi = totalSpend > 0 ? ((totalRevenue - totalSpend) / totalSpend * 100).toFixed(1) + '%' : '—'
     const profit = totalRevenue - totalSpend
 
-    // UGC flags have no backing column yet, so the API sends null. Counting
-    // nulls as false would render a confident "0 of N" for something that was
-    // never recorded — ugcTracked lets the UI say "not tracked" instead.
-    const ugcTracked = dataToUse.some(
-      i => i.usageRights !== null || i.contentSaved !== null || i.adCode !== null
-    )
+    // null = not tracked (no column yet).
+    const ugcTracked = dataToUse.some(i => i.usageRights !== null || i.contentSaved !== null)
+    const adCodesTracked = dataToUse.some(i => i.adCode !== null)
     const usageRights = dataToUse.filter(i => i.usageRights === true).length
     const contentSaved = dataToUse.filter(i => i.contentSaved === true).length
-    const adCodesGiven = dataToUse.filter(i => i.adCode === true).length
+    const adCodesGiven = dataToUse.filter(i => i.pipelineStatus === "Posted" && i.adCode === true).length
 
-    // Aging data for No Post
+    // Aging data for Awaiting post
     const noPostItems = dataToUse.filter(i => i.pipelineStatus === 'Content Pending' && i.deliveredDaysAgo)
     // Every bucket previously reported percentage: 25 and percent: "—", i.e. four
     // identical bars regardless of the data. Both are now derived from the counts.
@@ -974,11 +1060,11 @@ function AnalyticsPageContent() {
     return {
       totalOutreach, responded, closed, completed, notInterested, responseRate, closingRate,
       reasonsBreakdown, hardTotal, softTotal, otherTotal, noOrderYet, inTransit, deliveryProblem,
-      noPost, posted, closedCollaborations, receivedProduct, postRate, platformStats,
+      noPost, posted, ugcDeals, closedCollaborations, receivedProduct, postRate, platformStats,
       platformEMV, totalViews, totalLikes, totalComments, engagementRate, totalEMV,
       totalClicks, totalSalesQty, totalRevenue, conversionRate, aov, avgSalePerInfluencer,
       influencersWithSales, totalProductCost, totalFeesPaid, totalCommPaid, totalSpend,
-      ugcTracked,
+      ugcTracked, adCodesTracked,
       roas, roi, profit, usageRights, contentSaved, adCodesGiven, agingData
     }
   }
@@ -1074,7 +1160,7 @@ function AnalyticsPageContent() {
     row('Brand ID', brandId ?? '')
     row('Search', search.trim() || '(none)')
     row('Platform filter', filters.platform)
-    row('Date range filter', filters.dateRange)
+    row('Date range filter', dateRangeLabel)
     row('Niche filter', filters.niche)
     row('Location filter', filters.location)
     row('Influencers in scope', metrics.totalOutreach)
@@ -1123,7 +1209,7 @@ function AnalyticsPageContent() {
     section('POST SUMMARY')
     header('Metric', 'Value', 'Basis')
     row('Closed collaborations', metrics.closedCollaborations, 'agreed to work')
-    row('Received product', metrics.receivedProduct, `posted (${metrics.posted}) + no post (${metrics.noPost})`)
+    row('Received product', metrics.receivedProduct, `posted (${metrics.posted}) + awaiting post (${metrics.noPost})`)
     row('Posted', metrics.posted, `of ${metrics.receivedProduct} who received`)
     row('Post rate', `${Math.round(metrics.postRate)}%`, 'posted ÷ received product')
 
@@ -1132,7 +1218,7 @@ function AnalyticsPageContent() {
     row('No Order Yet', metrics.noOrderYet, pctOf(metrics.noOrderYet, metrics.totalOutreach))
     row('In Transit', metrics.inTransit, pctOf(metrics.inTransit, metrics.totalOutreach))
     row('Delivery Problem', metrics.deliveryProblem, pctOf(metrics.deliveryProblem, metrics.totalOutreach))
-    row('No Post', metrics.noPost, pctOf(metrics.noPost, metrics.totalOutreach))
+    row('Awaiting post', metrics.noPost, pctOf(metrics.noPost, metrics.totalOutreach))
     row('Posted', metrics.posted, pctOf(metrics.posted, metrics.totalOutreach))
 
     section('NO-POST AGEING (since delivery)')
@@ -1165,11 +1251,11 @@ function AnalyticsPageContent() {
     section('CONVERSION')
     header('Metric', 'Value', 'Basis')
     row('Web clicks', metrics.totalClicks, 'affiliate attribution')
-    row('Total sales (units)', metrics.totalSalesQty, '')
+    row('Total sales (orders)', metrics.totalSalesQty, 'approved orders')
     row('Total revenue ($)', metrics.totalRevenue, 'influencer-driven sales')
-    row('Conversion rate', `${metrics.conversionRate.toFixed(1)}%`, 'units ÷ clicks')
-    row('Avg order value ($)', Math.round(metrics.aov), 'revenue ÷ units sold')
-    row('Avg sale per influencer ($)', Math.round(metrics.avgSalePerInfluencer), 'revenue ÷ all who posted')
+    row('Conversion rate', `${metrics.conversionRate.toFixed(1)}%`, 'orders ÷ clicks')
+    row('Avg order value ($)', Math.round(metrics.aov), 'revenue ÷ orders')
+    row('Avg sale per influencer ($)', Math.round(metrics.avgSalePerInfluencer), 'revenue of those who posted ÷ all who posted')
     row('Influencers with sales', metrics.influencersWithSales, pctOf(metrics.influencersWithSales, metrics.posted) + ' of those who posted')
 
     section('CAMPAIGN SPEND & RETURN')
@@ -1189,11 +1275,11 @@ function AnalyticsPageContent() {
     // Mirrors the UI: these have no backing column yet, so the export says so
     // rather than writing a 0 that reads as a real measurement.
     row('Usage rights granted', metrics.ugcTracked ? metrics.usageRights : untracked,
-      metrics.ugcTracked ? pctOf(metrics.usageRights, metrics.posted) + ' of those who posted' : 'no source field in schema')
+      metrics.ugcTracked ? pctOf(metrics.usageRights, metrics.closedCollaborations) + ' of closed collaborations' : 'no source field in schema')
     row('Content saved', metrics.ugcTracked ? metrics.contentSaved : untracked,
       metrics.ugcTracked ? pctOf(metrics.contentSaved, metrics.usageRights) + ' of usage rights granted' : 'no source field in schema')
-    row('Ad codes given', metrics.ugcTracked ? metrics.adCodesGiven : untracked,
-      metrics.ugcTracked ? pctOf(metrics.adCodesGiven, metrics.posted) + ' of those who posted' : 'no source field in schema')
+    row('Ad codes given', metrics.adCodesTracked ? metrics.adCodesGiven : untracked,
+      metrics.adCodesTracked ? pctOf(metrics.adCodesGiven, metrics.posted) + ' of those who posted' : 'no source field in schema')
 
     // ── Per-influencer detail (the original export, unchanged in meaning) ───
     section('INFLUENCER DETAIL')
@@ -1222,7 +1308,7 @@ function AnalyticsPageContent() {
         platform: filters.platform,
         niche: filters.niche,
         location: filters.location,
-        dateRange: filters.dateRange,
+        dateRange: dateRangeLabel,
       },
       scopeCount: metrics.totalOutreach,
     }
@@ -1256,24 +1342,19 @@ function AnalyticsPageContent() {
     { value: "7", label: "Last 7 days" },
     { value: "30", label: "Last 30 days" },
     { value: "90", label: "Last 90 days" },
-    { value: "month", label: "This month" }
+    { value: "month", label: "This month" },
+    { value: "custom", label: "Custom" }
   ]
 
+  // Values are the stored names, which is what the API matches location/niche on.
   const nicheOptions = [
     { value: "all", label: "All niches" },
-    { value: "Beauty", label: "Beauty" },
-    { value: "Fitness", label: "Fitness" },
-    { value: "Lifestyle", label: "Lifestyle" },
-    { value: "Food", label: "Food" },
-    { value: "Tech", label: "Tech" }
+    ...brandNiches.map(n => ({ value: n.name, label: n.name })),
   ]
 
   const locationOptions = [
     { value: "all", label: "All locations" },
-    { value: "PH", label: "Philippines" },
-    { value: "SG", label: "Singapore" },
-    { value: "US", label: "United States" },
-    { value: "AU", label: "Australia" }
+    ...brandLocations.map(l => ({ value: l.name, label: l.name })),
   ]
 
   // The shared vocabulary, not a local copy: these were hardcoded lists that
@@ -1359,7 +1440,7 @@ function AnalyticsPageContent() {
               button-anchored from lg up where the single row fits. */}
           <div className="static lg:relative" ref={filterContainerRef}>
             <button
-              onClick={() => setShowFilters(!showFilters)}
+              onClick={toggleFilters}
               aria-expanded={showFilters}
               data-tour="analytics-filters"
               className={`${CONTROL} flex items-center gap-1.5 border px-3 font-medium transition-colors ${
@@ -1385,7 +1466,7 @@ function AnalyticsPageContent() {
                  exactly as wide as one clean row needs and no wider. On mobile
                  it spans the viewport minus the page gutter instead. p-4 keeps
                  it compact; left-0 hangs it directly under the button. */
-              <div className="absolute left-4 right-4 top-full z-30 mt-2 rounded-xl border border-gray-200 bg-white p-4 shadow-lg lg:left-0 lg:right-auto lg:w-max lg:max-w-[calc(100vw-3rem)]">
+              <div className="absolute left-4 right-4 top-full z-30 mt-2 rounded-xl border border-gray-200 bg-white p-4 shadow-lg lg:left-0 lg:right-auto lg:w-[420px] lg:max-w-[90vw] max-h-[calc(100vh-240px)] overflow-y-auto">
                 <InlineFilterPanel
                   isOpen={showFilters}
                   filters={filters}
@@ -1396,6 +1477,8 @@ function AnalyticsPageContent() {
                   locationOptions={locationOptions}
                   onReset={resetFilters}
                   hasActiveFilters={hasActiveFilters}
+                  onCancel={cancelFilters}
+                  onApply={() => setShowFilters(false)}
                 />
               </div>
             )}
@@ -1500,7 +1583,7 @@ function AnalyticsPageContent() {
               />
             </div>
 
-            <div className="grid items-start gap-4 md:grid-cols-2">
+            <div className="grid items-stretch gap-4 md:grid-cols-2">
               {/* Campaign Funnel */}
               <SectionCard title="Campaign funnel">
                 <FunnelStep index={1} name="Reached out" value={metrics.totalOutreach} total={metrics.totalOutreach} color="#1FAE5B" />
@@ -1587,7 +1670,7 @@ function AnalyticsPageContent() {
             </div>
 
             {/* Hard vs Soft Pass Donut */}
-            <div className="grid items-start gap-4 md:grid-cols-2">
+            <div className="grid items-stretch gap-4 md:grid-cols-2">
               <SectionCard title="Hard pass vs Soft pass">
                 <DonutChart
                   segments={[
@@ -1635,8 +1718,8 @@ function AnalyticsPageContent() {
                 info="The same closed collaborations as the Campaign Summary: influencers who agreed and entered the post-collaboration flow. This is where the funnel continues — from a closed deal to a published post."
               />
               <MetricCard
-                label="Received product" value={metrics.receivedProduct} subLabel={`posted (${metrics.posted}) + no post (${metrics.noPost})`}
-                info="Influencers whose product has arrived, so a post is now expected: Posted plus No Post (delivered but still waiting on content). Influencers with no order yet, in transit, or with a delivery problem are excluded, and it is the denominator of Post rate."
+                label="Received product" value={metrics.receivedProduct} subLabel={`posted (${metrics.posted}) + awaiting post (${metrics.noPost})`}
+                info="Influencers whose product has arrived, so a post is now expected: Posted plus Awaiting post (delivered but not posted yet). Influencers with no order yet, in transit, or with a delivery problem are excluded, and it is the denominator of Post rate."
               />
               <MetricCard
                 label="Posted" value={metrics.posted} subLabel={`of ${metrics.receivedProduct} who received`} isGreen
@@ -1648,40 +1731,44 @@ function AnalyticsPageContent() {
               />
             </div>
 
-            <div className="grid items-start gap-4 md:grid-cols-2">
+            <div className="grid items-stretch gap-4 md:grid-cols-2">
               <SectionCard
                 title="Pipeline status breakdown"
-                footnote="% is each state's share of all influencers in view — these stages are mutually exclusive. Post rate uses received (Posted + No Post) as its base."
+                footnote="% is each state's share of all influencers in view — these stages are mutually exclusive. Post rate uses received (Posted + Awaiting post) as its base."
               >
                 <PipelineItem status="No Order Yet" count={metrics.noOrderYet} total={metrics.totalOutreach} color="#B4B2A9" />
                 <PipelineItem status="In Transit" count={metrics.inTransit} total={metrics.totalOutreach} color="#2C8EC4" />
                 <PipelineItem status="Delivery Problem" count={metrics.deliveryProblem} total={metrics.totalOutreach} color="#E24B4A" />
-                <PipelineItem status="No Post" count={metrics.noPost} total={metrics.totalOutreach} color="#F4B740" agingData={metrics.agingData} />
+                <PipelineItem status="Awaiting post" count={metrics.noPost} total={metrics.totalOutreach} color="#F4B740" agingData={metrics.agingData} />
                 <PipelineItem status="Posted" count={metrics.posted} total={metrics.totalOutreach} color="#1FAE5B" />
+                {metrics.ugcDeals > 0 && <PipelineItem status="UGC (no post required)" count={metrics.ugcDeals} total={metrics.totalOutreach} color="#9B7FD4" />}
               </SectionCard>
 
-              <SectionCard title="Post rate by platform" hint="Posted ÷ Received">
-                {Object.entries(metrics.platformStats).map(([platform, stats]) => (
-                  <PlatformRow key={platform} platform={platform} posted={stats.posted} received={stats.received}
-                    color={platformConfig[platform as keyof typeof platformConfig].color}
-                    iconBg={platformConfig[platform as keyof typeof platformConfig].bg} />
-                ))}
-              </SectionCard>
+              <div className="flex flex-col gap-4">
+                <SectionCard title="Post rate by platform" hint="Posted ÷ Received">
+                  {Object.entries(metrics.platformStats).map(([platform, stats]) => (
+                    <PlatformRow key={platform} platform={platform} posted={stats.posted} received={stats.received}
+                      color={platformConfig[platform as keyof typeof platformConfig].color}
+                      iconBg={platformConfig[platform as keyof typeof platformConfig].bg} />
+                  ))}
+                </SectionCard>
+
+                <SectionCard title="Posted vs Not Posted" className="flex-1">
+                  <DonutChart
+                    segments={[
+                      { label: 'Posted', value: metrics.posted, color: '#1FAE5B' },
+                      { label: 'Awaiting post', value: metrics.noPost, color: '#F4B740' },
+                      { label: 'No Order Yet', value: metrics.noOrderYet, color: '#B4B2A9' },
+                      { label: 'In Transit', value: metrics.inTransit, color: '#2C8EC4' },
+                      { label: 'Delivery Problem', value: metrics.deliveryProblem, color: '#E24B4A' },
+                      { label: 'UGC (no post required)', value: metrics.ugcDeals, color: '#9B7FD4' },
+                    ]}
+                    centerLabel={`${Math.round(metrics.postRate)}%`}
+                    centerSub="post rate"
+                  />
+                </SectionCard>
+              </div>
             </div>
-
-            <SectionCard title="Posted vs Not Posted">
-              <DonutChart
-                segments={[
-                  { label: 'Posted', value: metrics.posted, color: '#1FAE5B' },
-                  { label: 'No Post', value: metrics.noPost, color: '#F4B740' },
-                  { label: 'No Order Yet', value: metrics.noOrderYet, color: '#B4B2A9' },
-                  { label: 'In Transit', value: metrics.inTransit, color: '#2C8EC4' },
-                  { label: 'Delivery Problem', value: metrics.deliveryProblem, color: '#E24B4A' }
-                ]}
-                centerLabel={Math.round(metrics.postRate)}
-                centerSub="post rate"
-              />
-            </SectionCard>
           </div>
         )}
 
@@ -1695,7 +1782,7 @@ function AnalyticsPageContent() {
               <StatTile value={formatMoney(Math.round(metrics.totalEMV))} label="Total EMV" />
             </div>
 
-            <div className="grid items-start gap-4 md:grid-cols-2">
+            <div className="grid items-stretch gap-4 md:grid-cols-2">
               <SectionCard
                 title="EMV by platform"
                 hint="(Estimated Media Value)"
@@ -1718,7 +1805,7 @@ function AnalyticsPageContent() {
               </SectionCard>
             </div>
 
-            <div className="grid items-start gap-4 md:grid-cols-2">
+            <div className="grid items-stretch gap-4 md:grid-cols-2">
               <SectionCard title="Views share by platform">
                 <DonutChart
                   segments={Object.entries(metrics.platformStats).map(([platform, stats]) => ({ label: platform, value: stats.views, color: platformConfig[platform as keyof typeof platformConfig].color }))}
@@ -1728,7 +1815,7 @@ function AnalyticsPageContent() {
               <SectionCard title="EMV share by platform">
                 <DonutChart
                   segments={Object.entries(metrics.platformEMV).map(([platform, emv]) => ({ label: platform, value: Math.round(emv), color: platformConfig[platform as keyof typeof platformConfig].color }))}
-                  centerLabel={`$${Math.round(metrics.totalEMV / 1000)}K`} centerSub="total EMV"
+                  centerLabel={`$${formatNumber(Math.round(metrics.totalEMV))}`} centerSub="total EMV"
                 />
               </SectionCard>
             </div>
@@ -1740,7 +1827,7 @@ function AnalyticsPageContent() {
           <div className="space-y-5">
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
               <StatTile value={metrics.totalClicks.toLocaleString()} label="Web clicks" />
-              <StatTile value={metrics.totalSalesQty} label="Total sales (units)" />
+              <StatTile value={metrics.totalSalesQty} label="Total sales (orders)" />
               <StatTile value={formatMoney(metrics.totalRevenue)} label="Total revenue" />
               <StatTile value={`${metrics.conversionRate.toFixed(1)}%`} label="Conversion rate" />
             </div>
@@ -1753,7 +1840,11 @@ function AnalyticsPageContent() {
               <div className="grid grid-cols-2 gap-x-6 gap-y-4 lg:grid-cols-3">
                 <MetricCard nested label="Total revenue" value={formatMoney(metrics.totalRevenue)} subLabel="from influencer-driven sales" isGreen />
                 <MetricCard nested label="Total spend" value={formatMoney(metrics.totalSpend)} subLabel="COGS + fees + commission" />
-                <MetricCard nested label="Net profit / loss" value={`${metrics.profit >= 0 ? '+' : ''}${formatMoney(metrics.profit)}`} subLabel={metrics.profit >= 0 ? 'profitable campaign' : 'loss-making campaign'} isGreen={metrics.profit >= 0} />
+                {metrics.totalRevenue === 0 && metrics.totalSpend === 0 ? (
+                  <MetricCard nested label="Net profit / loss" value="—" subLabel="no revenue or spend yet" />
+                ) : (
+                  <MetricCard nested label="Net profit / loss" value={`${metrics.profit >= 0 ? '+' : ''}${formatMoney(metrics.profit)}`} subLabel={metrics.profit >= 0 ? 'profitable campaign' : 'loss-making campaign'} isGreen={metrics.profit >= 0} />
+                )}
                 <MetricCard nested label="ROAS" value={metrics.roas !== '—' ? `${metrics.roas}x` : '—'} subLabel="revenue ÷ total spend" isGreen={typeof metrics.roas === 'string' ? parseFloat(metrics.roas) >= 1 : false} />
                 <MetricCard nested label="ROI" value={metrics.roi} subLabel="net profit ÷ total spend" isGreen={metrics.profit >= 0} />
                 <MetricCard nested label="Break-even" value={formatMoney(metrics.totalSpend)} subLabel="min revenue needed" />
@@ -1769,17 +1860,17 @@ function AnalyticsPageContent() {
                   <span className={`shrink-0 text-sm font-semibold text-gray-900 ${NUM}`}>{formatMoney(metrics.totalFeesPaid)}</span>
                 </div>
                 <div className="flex min-w-0 items-center justify-between gap-3 rounded-lg bg-gray-50 px-2.5 py-2">
-                  <span className="min-w-0 truncate text-sm text-gray-600">🔗 Commission paid (10%)</span>
+                  <span className="min-w-0 truncate text-sm text-gray-600">🔗 Commission paid</span>
                   <span className={`shrink-0 text-sm font-semibold text-gray-900 ${NUM}`}>{formatMoney(metrics.totalCommPaid)}</span>
                 </div>
               </div>
             </SectionCard>
 
-            <div className="grid items-start gap-4 md:grid-cols-2">
+            <div className="grid items-stretch gap-4 md:grid-cols-2">
               <SectionCard title="Additional conversion metrics">
-                <div className="divide-y divide-gray-100 [&>*]:py-3 [&>*:first-child]:pt-0 [&>*:last-child]:pb-0">
-                  <MetricCard nested label="Avg order value (AOV)" value={formatMoney(Math.round(metrics.aov))} subLabel="revenue ÷ units sold" isGreen />
-                  <MetricCard nested label="Avg sale per influencer" value={formatMoney(Math.round(metrics.avgSalePerInfluencer))} subLabel="revenue ÷ all who posted" isGreen />
+                <div className="grid grid-cols-1 gap-x-6 gap-y-4 min-[380px]:grid-cols-2">
+                  <MetricCard nested label="Avg order value (AOV)" value={formatMoney(Math.round(metrics.aov))} subLabel="revenue ÷ orders" isGreen />
+                  <MetricCard nested label="Avg sale per influencer" value={formatMoney(Math.round(metrics.avgSalePerInfluencer))} subLabel="their revenue ÷ all who posted" isGreen />
                   <MetricCard nested label="Influencers with sales" value={`${metrics.influencersWithSales} (${formatPercent(metrics.influencersWithSales, metrics.posted)})`} subLabel="of those who posted" isGreen />
                   <MetricCard nested label="Product cost (total)" value={formatMoney(metrics.totalProductCost)} subLabel="cost of products sent" />
                 </div>
@@ -1800,14 +1891,10 @@ function AnalyticsPageContent() {
             {/* UGC Overview */}
             <div className="space-y-3">
               <div className={LABEL}>UGC overview</div>
-              {/* Usage rights, content saved and ad codes have no column in the
-                  schema yet, so the API reports them as untracked. Showing "—"
-                  and saying so is the honest rendering; a confident "0" would
-                  read as "nobody granted rights" rather than "never recorded". */}
               {metrics.ugcTracked ? (
                 <>
                   <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-                    <StatTile value={metrics.usageRights} label="Usage rights granted" sub={`${formatPercent(metrics.usageRights, metrics.posted)} of those who posted`} />
+                    <StatTile value={metrics.usageRights} label="Usage rights granted" sub={`${formatPercent(metrics.usageRights, metrics.closedCollaborations)} of closed collaborations`} />
                     <StatTile value={metrics.contentSaved} label="Content saved" sub={`${formatPercent(metrics.contentSaved, metrics.usageRights)} of usage rights granted`} />
                     <StatTile value={metrics.adCodesGiven} label="Ad codes given" sub={`${formatPercent(metrics.adCodesGiven, metrics.posted)} of those who posted`} />
                   </div>
@@ -1821,9 +1908,9 @@ function AnalyticsPageContent() {
                         { label: 'Usage rights granted', value: metrics.usageRights, color: '#1FAE5B' },
                         { label: 'Content saved', value: metrics.contentSaved, color: '#2C8EC4' },
                         { label: 'Ad code given', value: metrics.adCodesGiven, color: '#F4B740' },
-                        { label: 'No rights', value: metrics.posted - metrics.usageRights, color: '#e0e0de' }
+                        { label: 'No rights', value: Math.max(0, metrics.closedCollaborations - metrics.usageRights), color: '#e0e0de' }
                       ]}
-                      centerLabel={formatPercent(metrics.usageRights, metrics.posted)}
+                      centerLabel={formatPercent(metrics.usageRights, metrics.closedCollaborations)}
                       centerSub="rights granted"
                     />
                   </SectionCard>
@@ -1832,7 +1919,11 @@ function AnalyticsPageContent() {
                 <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
                   <StatTile value="—" label="Usage rights granted" sub="not tracked yet" />
                   <StatTile value="—" label="Content saved" sub="not tracked yet" />
-                  <StatTile value="—" label="Ad codes given" sub="not tracked yet" />
+                  {metrics.adCodesTracked ? (
+                    <StatTile value={metrics.adCodesGiven} label="Ad codes given" sub={`${formatPercent(metrics.adCodesGiven, metrics.posted)} of those who posted`} />
+                  ) : (
+                    <StatTile value="—" label="Ad codes given" sub="not tracked yet" />
+                  )}
                 </div>
               )}
             </div>

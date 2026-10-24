@@ -50,6 +50,7 @@ export async function POST(req: NextRequest) {
   let to: string, subject: string | undefined, body: string, brandId: string | undefined
   let isHtmlBody = false
   let includeSignature = true
+  let isReply = false
   const attachments: { name: string; mimeType: string; data: Buffer }[] = []
 
   const contentType = req.headers.get("content-type") || ""
@@ -61,6 +62,7 @@ export async function POST(req: NextRequest) {
     brandId = form.get("brandId") ? String(form.get("brandId")) : undefined
     isHtmlBody = form.get("isHtmlBody") === "true"
     includeSignature = form.get("includeSignature") !== "false"
+    isReply = form.get("isReply") === "true"
 
     const files = form.getAll("attachments").filter((v): v is File => v instanceof File)
     const totalBytes = files.reduce((sum, f) => sum + f.size, 0)
@@ -85,13 +87,15 @@ export async function POST(req: NextRequest) {
     brandId = jsonBody.brandId
     isHtmlBody = Boolean(jsonBody.isHtmlBody)
     includeSignature = jsonBody.includeSignature !== false
+    isReply = jsonBody.isReply === true
   }
 
   if (!to || !body) {
     return NextResponse.json({ error: "Missing required fields: to, body" }, { status: 400 })
   }
 
-  const replySubject = subject?.startsWith("Re:") ? subject : subject ? `Re: ${subject}` : "(No subject)"
+  // "Re:" only on replies.
+  const replySubject = !subject ? "(No subject)" : isReply && !/^re:/i.test(subject) ? `Re: ${subject}` : subject
 
   try {
     const signatureHtml = includeSignature ? await getUserSignatureHtml(userId) : null

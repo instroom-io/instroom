@@ -1,0 +1,3 @@
+# pnpm-only settings. Kept here instead of .npmrc because npm reads .npmrc too
+# and warns on keys it doesn't recognize ("Unknown project config").
+shamefullyHoist: true

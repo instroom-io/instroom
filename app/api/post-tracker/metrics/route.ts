@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
-import { prisma } from "@/lib/prisma"
+import { prisma, withUtf8mb4 } from "@/lib/prisma"
 import { checkBrandAccess } from "@/lib/brand-access"
 import { hasBrandCapability } from "@/lib/permissions"
 import { isAddonActive } from "@/lib/post-tracker/addon"
@@ -93,6 +93,8 @@ export async function POST(req: NextRequest) {
     let views: number | null = null
     let fetched = 0
     const errors: string[] = []
+    // Each link's own numbers, so every deliverable keeps the metrics of ITS post.
+    const byLink = new Map<string, { likes: number | null; comments: number | null; views: number | null }>()
 
     const add = (total: number | null, v: number | null) => (v == null ? total : (total ?? 0) + v)
 
@@ -109,6 +111,7 @@ export async function POST(req: NextRequest) {
         continue
       }
       fetched++
+      byLink.set(link, { likes: res.data.likeCount, comments: res.data.commentCount, views: res.data.viewCount })
       likes = add(likes, res.data.likeCount)
       comments = add(comments, res.data.commentCount)
       views = add(views, res.data.viewCount)
@@ -116,7 +119,10 @@ export async function POST(req: NextRequest) {
 
     // Only what the provider actually returned is written. With several links a
     // metric one post lacks still sums the others — it is not zeroed.
-    const data: { likes_count?: number; comments_count?: number; views_count?: number; engagement_count?: number } = {}
+    const data: {
+      likes_count?: number; comments_count?: number; views_count?: number; engagement_count?: number
+      product_details?: string
+    } = {}
     if (fetched > 0) {
       if (likes != null) data.likes_count = likes
       if (comments != null) data.comments_count = comments
@@ -124,8 +130,39 @@ export async function POST(req: NextRequest) {
       if (likes != null && comments != null) data.engagement_count = likes + comments
     }
 
+    // Per-deliverable metrics, written onto each deliverable whose post was
+    // fetched. The rest of product_details is carried over untouched.
+    const deliverableMetrics: { index: number; likes: number | null; comments: number | null; views: number | null }[] = []
+    if (deliverables.length && byLink.size) {
+      const nextDeliverables = deliverables.map((d, i) => {
+        const m = byLink.get(deliverablePostUrl(d, i, row.post_url))
+        if (!m) return d
+        deliverableMetrics.push({ index: i, ...m })
+        return {
+          ...d,
+          ...(m.likes != null && { likes: m.likes }),
+          ...(m.comments != null && { comments: m.comments }),
+          ...(m.views != null && { views: m.views }),
+        }
+      })
+      if (deliverableMetrics.length) {
+        try {
+          const details = row.product_details ? JSON.parse(row.product_details) : {}
+          details.paidCollab = { ...(details.paidCollab ?? {}), deliverables: nextDeliverables }
+          data.product_details = JSON.stringify(details)
+        } catch {
+          // Unparseable product_details: leave it alone; the totals still save.
+        }
+      }
+    }
+
     if (Object.keys(data).length > 0) {
-      await prisma.brandInfluencer.updateMany({ where: { id: biId, brand_id: brandId }, data })
+      // product_details can carry emoji (captions, notes) — see withUtf8mb4.
+      if (data.product_details && /[\u{10000}-\u{10FFFF}]/u.test(data.product_details)) {
+        await withUtf8mb4((tx) => tx.brandInfluencer.updateMany({ where: { id: biId, brand_id: brandId }, data }))
+      } else {
+        await prisma.brandInfluencer.updateMany({ where: { id: biId, brand_id: brandId }, data })
+      }
     }
 
     return NextResponse.json({
@@ -135,6 +172,7 @@ export async function POST(req: NextRequest) {
       likes: data.likes_count ?? null,
       comments: data.comments_count ?? null,
       views: data.views_count ?? null,
+      deliverables: deliverableMetrics,
       ...(errors.length ? { error: errors.join("; ").slice(0, 500) } : {}),
     })
   } catch (error) {

@@ -7,6 +7,8 @@ type SettingsItem = {
   label: string
   href: string
   icon: React.ReactNode
+  /** Small pill after the label, e.g. "Beta" for an unreleased section. */
+  badge?: string
 }
 
 type SettingsSection = {
@@ -92,6 +94,17 @@ const settingsSections: SettingsSection[] = [
         ),
       },
       {
+        key: "sops",
+        label: "SOPs",
+        href: "/dashboard/settings/sops",
+        icon: (
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" width={14} height={14}>
+            <rect x="3" y="1.5" width="10" height="13" rx="1.5" />
+            <path d="M5.5 5h5M5.5 8h5M5.5 11h3" />
+          </svg>
+        ),
+      },
+      {
         key: "integrations",
         label: "Integrations",
         href: "/dashboard/settings/integrations",
@@ -100,6 +113,18 @@ const settingsSections: SettingsSection[] = [
             <path d="M6.5 9.5l3-3" />
             <path d="M7 4.5L8 3.5a2.5 2.5 0 113.5 3.5l-1 1" />
             <path d="M9 11.5L8 12.5a2.5 2.5 0 11-3.5-3.5l1-1" />
+          </svg>
+        ),
+      },
+      {
+        key: "outreach",
+        label: "Auto Outreach",
+        href: "/dashboard/settings/outreach",
+        icon: (
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" width={14} height={14}>
+            <rect x="1.5" y="3.5" width="10" height="8" rx="1.5" />
+            <path d="M1.5 5l5 3.5 5-3.5" />
+            <path d="M13 6.5l2 1.5-2 1.5" />
           </svg>
         ),
       },
@@ -219,6 +244,17 @@ export function SettingsSidebar() {
                   {item.icon}
                 </span>
                 {item.label}
+                {item.badge && (
+                  <span
+                    style={{
+                      fontSize: 9, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
+                      color: "#b45309", background: "#fef3c7", border: "1px solid #fde68a",
+                      borderRadius: 999, padding: "1px 6px", lineHeight: 1.4,
+                    }}
+                  >
+                    {item.badge}
+                  </span>
+                )}
               </div>
             )
           })}

@@ -24,6 +24,7 @@ import {
 import { invalidateInfluencerDerivedCaches, closedCacheKey } from "@/lib/cache-invalidation"
 import { parseMetricInput } from "@/lib/post-tracker-status"
 import type { CampaignDeliverable } from "@/lib/deliverables"
+import type { PayStructure, OrderProduct } from "@/lib/pipeline-transitions"
 import { mutationErrorMessage } from "@/lib/user-facing-error"
 
 /** Stable empty reference used before the first payload arrives. */
@@ -46,6 +47,10 @@ export interface ClosedInfluencer {
   platform: string
   followers: string
   followerCount: number
+  /** Profile averages from the lookup. */
+  avgLikes?: number | null
+  avgComments?: number | null
+  avgViews?: number | null
   engagementRate: string
   niche: string
   location: string
@@ -66,6 +71,8 @@ export interface ClosedInfluencer {
   contentStatus: string | null
 
   agreedRate: number | null
+  /** Commission rate (%), if set. */
+  commissionRate?: number | null
   currency: string | null
   deliverables: string | null
   deadline: string | null
@@ -77,6 +84,8 @@ export interface ClosedInfluencer {
   shippedAt: string | null
   deliveredAt: string | null
   trackingNumber: string | null
+  usageRights?: string | null
+  driveLink?: string | null
 
   postUrl: string | null
   postedAt: string | null
@@ -110,10 +119,13 @@ export interface PaidCollabData {
   scriptEnabled: boolean
   postStatus: string
   deliverables: CollabDeliverable[]
-  agreedRate: number
-  payStructure: "upfront" | "5050" | "after" | "custom"
+  /** Unused: the fee is the agreed_rate column. */
+  agreedRate?: number
+  payStructure: PayStructure
+  /** Per milestone: unpaid | due | paid */
   milestoneStatuses: string[]
   milestoneProofLinks: string[]
+  paymentMethod?: string
 }
 
 // One shape for campaign deliverables everywhere — see lib/deliverables.ts.
@@ -137,6 +149,8 @@ export interface OrderDetailsFields {
   /** Human-typed product note — kept separate from the Shopify-order JSON
    *  that shares the same underlying column. */
   note?: string
+  /** Also rewrites `note` with the names. */
+  products?: OrderProduct[]
   trackingNumber?: string
   shippedAt?: string
   deliveredAt?: string
@@ -152,6 +166,8 @@ export interface PostMetricsResult {
   likes: number | null
   comments: number | null
   views: number | null
+  /** Each fetched deliverable's own metrics, by its position in the list. */
+  deliverables?: { index: number; likes: number | null; comments: number | null; views: number | null }[]
   /** Set when nothing was fetched: add-on off, no link, provider error… */
   error?: string
 }
@@ -169,6 +185,9 @@ export interface PostDetailsFields {
   contentStatus?: string
   /** Full deliverables write (per-deliverable post links); supersedes the rollup. */
   paidCollabData?: PaidCollabData
+  /** No-deliverable case only. */
+  usageRights?: string
+  driveLink?: string
 }
 
 interface UseClosedDataReturn {
@@ -186,7 +205,8 @@ interface UseClosedDataReturn {
     newColumn: ClosedColumn,
     options?: { resetWorkflow?: boolean; deferDerivedInvalidation?: boolean; notes?: string }
   ) => Promise<UpdateColumnResult>
-  updatePaidCollab: (id: string, paidCollabData: PaidCollabData) => Promise<boolean>
+  /** `agreedRate`: null clears. */
+  updatePaidCollab: (id: string, paidCollabData: PaidCollabData, agreedRate?: number | null) => Promise<boolean>
   /** "Mark as completed" on a Posted row — moves it to the Completed column. */
   markCompleted: (id: string, completed: boolean) => Promise<UpdateColumnResult>
   updateCampaignType: (id: string, campaignType: string) => Promise<boolean>
@@ -218,6 +238,19 @@ interface UseClosedDataReturn {
   /** Processing wording for the write in flight; null takes "Saving changes…". */
   saveMessage: string | null
   refetch: () => void
+}
+
+/** Mirrors the closed PATCH route's product_details write. */
+function withOrderProducts(productDetails: string | null, fields: Pick<OrderDetailsFields, "note" | "products">): string {
+  let details: Record<string, unknown>
+  try { details = JSON.parse(productDetails || "{}") ?? {} } catch { details = { note: productDetails } }
+  if (fields.note !== undefined) details.note = fields.note
+  if (fields.products !== undefined) {
+    const products = fields.products.filter(p => p.name.trim() || p.unitCost != null).map(p => ({ ...p, name: p.name.trim() }))
+    details.products = products
+    details.note = products.map(p => p.name).filter(Boolean).join("\n")
+  }
+  return JSON.stringify(details)
 }
 
 // ─── Infer script/content status from paidCollabData ─────────────────────────
@@ -323,6 +356,20 @@ function applyColumnChange(
         postedAt:       null,
         approvalStatus: "Declined",
         approvalNotes:  "No content published - exited",
+      }
+
+    // Mirrors mapClosedToPipelineFields' Issues case (lib/post-tracker-status):
+    // stage 9, dates kept. Without this the optimistic update was a no-op and
+    // the card only reached Issues after the next refetch.
+    case "Issues":
+      return {
+        ...item,
+        closedStatus:   "Issues",
+        contactStatus:  "for_order_creation",
+        stage:          9,
+        contentPosted:  false,
+        postedAt:       null,
+        approvalStatus: "Approved",
       }
 
     default:
@@ -625,7 +672,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
 
   // ── Update Paid Collab (optimistic) ───────────────────────────────────────
   const updatePaidCollab = useCallback(
-    async (id: string, paidCollabData: PaidCollabData): Promise<boolean> => {
+    async (id: string, paidCollabData: PaidCollabData, agreedRate?: number | null): Promise<boolean> => {
       if (!brandId) return false
 
       // Claim this row's newest write and open the write window BEFORE the
@@ -643,6 +690,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
             ...item,
             paidCollabData,
             ...inferContentStatuses({ paidCollabData }),
+            ...(agreedRate !== undefined ? { agreedRate: agreedRate && agreedRate > 0 ? agreedRate : null } : {}),
           }
         )
       })
@@ -669,7 +717,7 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
         const res = await rowFetch(id, `/api/brand/${brandId}/closed/${id}`, {
           method:  "PATCH",
           headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify({ paidCollabData }),
+          body:    JSON.stringify({ paidCollabData, ...(agreedRate !== undefined ? { agreedRate } : {}) }),
         })
 
         if (!res.ok) {
@@ -847,6 +895,9 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
             ...(fields.currency !== undefined && { currency: fields.currency || null }),
             ...(fields.deliverables !== undefined && { deliverables: fields.deliverables || null }),
             ...(fields.notes !== undefined && { notes: fields.notes || "" }),
+            ...((fields.note !== undefined || fields.products !== undefined) && {
+              productDetails: withOrderProducts(item.productDetails, fields),
+            }),
           }
         })
       })
@@ -932,6 +983,8 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
             ...(fields.comments !== undefined && { commentsCount: parseMetricInput(fields.comments) }),
             ...(fields.engagement !== undefined && { engagementCount: parseMetricInput(fields.engagement) }),
             ...(fields.views !== undefined && { viewsCount: parseMetricInput(fields.views) }),
+            ...(fields.usageRights !== undefined && { usageRights: fields.usageRights || null }),
+            ...(fields.driveLink !== undefined && { driveLink: fields.driveLink.trim() || null }),
             ...(fields.internalRating !== undefined && {
               internalRating: fields.internalRating === "" ? null : Number(fields.internalRating),
             }),
@@ -1042,18 +1095,38 @@ export function useClosedData(brandId?: string): UseClosedDataReturn {
           likes: body.likes ?? null,
           comments: body.comments ?? null,
           views: body.views ?? null,
+          deliverables: Array.isArray(body.deliverables) ? body.deliverables : [],
         }
+        const perDeliverable = new Map((result.deliverables ?? []).map((m) => [m.index, m]))
         setDataCached((prev) =>
-          prev.map((item) =>
-            item.id === id
+          prev.map((item) => {
+            if (item.id !== id) return item
+            // Mirror the server's per-deliverable write into the cached row.
+            const deliverables = item.paidCollabData?.deliverables
+            const nextPaid = perDeliverable.size && item.paidCollabData && Array.isArray(deliverables)
               ? {
-                  ...item,
-                  ...(result.likes != null && { likesCount: result.likes }),
-                  ...(result.comments != null && { commentsCount: result.comments }),
-                  ...(result.views != null && { viewsCount: result.views }),
+                  ...item.paidCollabData,
+                  deliverables: deliverables.map((d, i) => {
+                    const m = perDeliverable.get(i)
+                    return m
+                      ? {
+                          ...d,
+                          ...(m.likes != null && { likes: m.likes }),
+                          ...(m.comments != null && { comments: m.comments }),
+                          ...(m.views != null && { views: m.views }),
+                        }
+                      : d
+                  }),
                 }
-              : item
-          )
+              : item.paidCollabData
+            return {
+              ...item,
+              ...(result.likes != null && { likesCount: result.likes }),
+              ...(result.comments != null && { commentsCount: result.comments }),
+              ...(result.views != null && { viewsCount: result.views }),
+              paidCollabData: nextPaid,
+            }
+          })
         )
         // Analytics reads these metrics — mark it (and the other views) stale.
         invalidateInfluencerDerivedCaches(brandId, [closedCacheKey(brandId)])

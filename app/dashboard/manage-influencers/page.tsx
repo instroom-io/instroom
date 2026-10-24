@@ -2,6 +2,7 @@
 "use client"
 
 import { useState, useRef, Suspense, useCallback, useEffect } from "react"
+import { AutoOutreachConfirm, type OutreachChoice, type OutreachPreview } from "@/components/auto-outreach-confirm"
 import { useSearchParams, useRouter } from "next/navigation"
 import { useSession } from "next-auth/react"
 
@@ -242,7 +243,6 @@ function normalisedRow(normalised: Record<string, unknown>): Partial<InfluencerR
 /** Where an approval decision lands the influencer on the Pipeline board. */
 const APPROVAL_DESTINATION: Record<string, string> = {
   Approved: "For Outreach",
-  Declined: "Not Interested",
 }
 
 /**
@@ -826,7 +826,7 @@ function InfluencersContent() {
     return run
   }, [])
 
-  const idSwapCallback = useRef<((tempId: string, realId: string) => void) | null>(null)
+  const idSwapCallback = useRef<((tempId: string, realId: string, asDraft?: boolean) => void) | null>(null)
 
   /**
    * Stable, so the sheet's registration effect does not re-run every render.
@@ -836,7 +836,7 @@ function InfluencersContent() {
    * re-ran constantly, re-registering it each time. It only writes a ref, so it
    * has no dependencies and never needs to change identity.
    */
-  const handleRegisterIdSwap = useCallback((fn: (tempId: string, realId: string) => void) => {
+  const handleRegisterIdSwap = useCallback((fn: (tempId: string, realId: string, asDraft?: boolean) => void) => {
     idSwapCallback.current = fn
   }, [])
 
@@ -925,15 +925,18 @@ function InfluencersContent() {
           const next = JSON.parse(payload)
           const changed = LIFECYCLE_FIELDS.filter((f) => prev[f] !== next[f])
           if (!changed.length) return { discrete: false, moveMessage: null as string | null }
-          // Destination is the pipeline column the row actually lands in, not
-          // the approval verdict: approving puts an influencer in For Outreach
-          // (stage 1), declining puts it in Not Interested. Anything else reads
-          // the funnel stage label.
+          // Declined/Pending keep them off the Pipeline, so no column is named.
+          const who = row.handle?.trim() || row.full_name?.trim() || "Influencer"
+          if (changed.includes("approval_status") && next.approval_status === "Declined") {
+            return { discrete: true, moveMessage: `${who} declined` }
+          }
+          if (changed.includes("approval_status") && next.approval_status === "Pending") {
+            return { discrete: true, moveMessage: `${who} set to Pending` }
+          }
           const approvalDestination = changed.includes("approval_status")
             ? APPROVAL_DESTINATION[String(next.approval_status)] ?? null
             : null
           const destination = approvalDestination ?? STATUS_LABEL[String(next.contact_status)] ?? null
-          const who = row.handle?.trim() || row.full_name?.trim() || "Influencer"
           return {
             discrete: true,
             moveMessage: destination ? `${who} moved to ${destination}` : null,
@@ -1013,7 +1016,10 @@ function InfluencersContent() {
             // in (from the response where the route rewrote a field, from the
             // row that was sent otherwise) means the first paint is already
             // right, with no extra request and no full-page refresh.
-            const confirmed = { ...row, ...normalisedRow(normalised) }
+            // A typed save on a draft promotes it; the sheet must stop treating it as one.
+            const promoted = Boolean(row.is_draft && saved.handle)
+            if (promoted) idSwapCallback.current?.(row.id, row.id, false)
+            const confirmed = { ...row, ...normalisedRow(normalised), ...(promoted ? { is_draft: false } : {}) }
             setRows((prev) => prev.map((r) => (r.id === row.id ? confirmed : r)))
             markRowConfirmed(influencersCacheKey(brandId), row.id, confirmed)
 
@@ -1282,7 +1288,7 @@ function InfluencersContent() {
         // than create another.
         dbIds.current.add(realId)
         tempToReal.current.set(rowId, realId)
-        idSwapCallback.current?.(rowId, realId)
+        idSwapCallback.current?.(rowId, realId, true)
         return realId
       } catch {
         return null
@@ -1430,6 +1436,50 @@ function InfluencersContent() {
   )
 
   // ── handleBulkApprove ─────────────────────────────────────────────────────
+  // Auto outreach popup before an approval.
+  const [outreachPreview, setOutreachPreview] = useState<OutreachPreview | null>(null)
+  const outreachChoice = useRef<((choice: OutreachChoice) => void) | null>(null)
+  const handleBeforeApprove = useCallback(
+    async (influencerIds: string[]): Promise<boolean> => {
+      if (!brandId) return true
+      const url = `/api/brand/${brandId}/auto-outreach/queue`
+      const post = (preview: boolean) =>
+        fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ influencerIds, preview }),
+        }).then((r) => (r.ok ? r.json() : Promise.reject(r)))
+
+      let preview
+      try {
+        preview = await post(true)
+      } catch {
+        notify("error", "Couldn't check auto outreach. Approving without sending.")
+        return true
+      }
+      if (!preview.enabled) return true
+
+      const choice = await new Promise<OutreachChoice>((resolve) => {
+        outreachChoice.current = resolve
+        setOutreachPreview(preview)
+      })
+      setOutreachPreview(null)
+      if (choice === "cancel") return false
+      if (choice === "send") {
+        try {
+          const queued = await post(false)
+          if (queued.queued > 0) {
+            notify("success", `Outreach scheduled for ${queued.queued} influencer${queued.queued === 1 ? "" : "s"}`)
+          }
+        } catch {
+          notify("error", "Approved, but the outreach emails couldn't be scheduled. Please try again from the Pipeline.")
+        }
+      }
+      return true
+    },
+    [brandId, notify]
+  )
+
   // One request for the whole selection instead of one debounced PUT per row.
   // The route applies the writes in a transaction and returns the persisted
   // rows, which TableSheet then renders; the derived caches are marked stale
@@ -1522,6 +1572,46 @@ function InfluencersContent() {
     const row = latestRows.current.find((r) => r.id === rowId)
     manualRows.current.set(rowId, row?.handle?.trim().replace(/^@/, "") ?? "")
   }, [])
+
+  // Handle/platform edited on a saved row: the server points this brand's row at
+  // the record for the new identity. Queued saves for the old record are dropped
+  // first so they can't re-add it.
+  const handleIdentityChange = useCallback(
+    async (rowId: string, handle: string, platform: string, socialLink: string) => {
+      if (!brandId) return { ok: false as const, error: "No brand selected" }
+      const pending = updateTimers.current.get(rowId)
+      if (pending) { clearTimeout(pending); updateTimers.current.delete(rowId) }
+      pendingFlush.current.delete(rowId)
+      try {
+        const res = await fetch(`/api/brand/${brandId}/influencers/${rowId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ handle, platform, social_link: socialLink }),
+        })
+        const body = await res.json().catch(() => ({}))
+        if (!res.ok || !body.id) {
+          return { ok: false as const, error: body.error || `Couldn't change the handle to @${handle}. Please try again.` }
+        }
+        dbIds.current.delete(rowId)
+        dbIds.current.add(body.id)
+        lastSentPayloads.current.delete(rowId)
+        manualRows.current.delete(rowId)
+        invalidateInfluencerDerivedCaches(brandId, [influencersCacheKey(brandId)])
+        return {
+          ok: true as const,
+          id: body.id as string,
+          influencer: body.influencer as Record<string, unknown> | undefined,
+          // Called by the sheet once its own row has the new id, so the cached
+          // list never holds the old row (it would reappear on the next sync).
+          commit: (switched: InfluencerRow) =>
+            setRows((prev) => prev.map((r) => (r.id === rowId ? switched : r))),
+        }
+      } catch {
+        return { ok: false as const, error: `Couldn't change the handle to @${handle} — you appear to be offline.` }
+      }
+    },
+    [brandId, setRows]
+  )
 
   // ── handleRowsChange ──────────────────────────────────────────────────────
   // Called on every table edit (keystroke, dropdown change, etc.)
@@ -1938,6 +2028,7 @@ function InfluencersContent() {
 
   return (
     <div className="flex flex-col gap-4 p-6 relative min-h-screen">
+      <AutoOutreachConfirm preview={outreachPreview} onChoose={(c) => outreachChoice.current?.(c)} />
       {isLoading ? (
         <TableSkeleton rows={10} cols={7} label="Fetching data..." />
       ) : (
@@ -1950,6 +2041,7 @@ function InfluencersContent() {
           onCustomColumnsChange={handleCustomColumnsChange}
           onImportRows={handleImportRows}
           onBulkApprove={handleBulkApprove}
+          onBeforeApprove={handleBeforeApprove}
           onRegisterIdSwap={handleRegisterIdSwap}
           onCreateDraft={handleCreateDraft}
           onContactHoldChange={handleContactHoldChange}
@@ -1972,6 +2064,7 @@ function InfluencersContent() {
           // Every message the table raises lands in this page's single toast.
           onNotify={notify}
           onLookupFailed={handleLookupFailed}
+          onIdentityChange={handleIdentityChange}
           readOnly={!canManageInfluencers}
           canApproveInfluencers={canApproveInfluencers}
         />

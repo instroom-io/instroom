@@ -8,6 +8,7 @@ import {
   outlookTokenErrorMessage,
 } from "@/lib/microsoft-oauth"
 import { autoAdvanceRepliedToInConversation } from "@/lib/pipeline"
+import { isPostTrackerCompleted } from "@/lib/pipeline-transitions"
 import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
 
 function stripHtml(html: string): string {
@@ -187,7 +188,7 @@ export async function GET(req: NextRequest) {
 
     const senderEmails = [...new Set(shapedThreads.map((t) => t.senderEmail).filter(Boolean))]
 
-    const brandInfluencers = await prisma.brandInfluencer.findMany({
+    const brandInfluencers = (await prisma.brandInfluencer.findMany({
       where: {
         brand_id,
         influencer: { email: { in: senderEmails } },
@@ -198,9 +199,11 @@ export async function GET(req: NextRequest) {
         content_posted: true,
         stage: true,
         order_status: true,
+        approval_status: true,
+        product_details: true,
         influencer: { select: { email: true } },
       },
-    })
+    })).map(({ product_details, ...bi }) => ({ ...bi, completed: isPostTrackerCompleted(product_details) }))
 
     const biByEmail = new Map(
       brandInfluencers.map((bi) => [bi.influencer.email?.toLowerCase(), bi])

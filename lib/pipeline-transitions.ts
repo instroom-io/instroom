@@ -148,6 +148,148 @@ export function transitionRefusalReason(from: string, to: string): string {
   return `Cannot move from ${from} to ${to}.`
 }
 
+/** Declined on the Influencers List (a Pipeline Not Interested sets contact_status "not_interested"). */
+export function isListDeclined(approvalStatus: string | null | undefined, contactStatus: string | null | undefined): boolean {
+  return approvalStatus === "Declined" && contactStatus !== "not_interested"
+}
+
+/** unitCost null = not entered. */
+export type OrderProduct = { name: string; qty: number; unitCost: number | null }
+
+/** product_details.products; older records only have names in `note` (qty 1, no cost). */
+export function orderProductsOf(details: unknown): OrderProduct[] {
+  const d = (details && typeof details === "object" ? details : {}) as { products?: unknown; note?: unknown }
+  if (Array.isArray(d.products)) {
+    return d.products.flatMap((p): OrderProduct[] => {
+      if (!p || typeof p !== "object") return []
+      const { name, qty, unitCost } = p as Record<string, unknown>
+      const q = Number(qty), c = unitCost == null || unitCost === "" ? NaN : Number(unitCost)
+      return [{
+        name: typeof name === "string" ? name : "",
+        qty: Number.isFinite(q) && q > 0 ? q : 1,
+        unitCost: Number.isFinite(c) && c >= 0 ? c : null,
+      }]
+    })
+  }
+  if (typeof d.note === "string") {
+    return d.note.split("\n").map(x => x.trim()).filter(Boolean).map(name => ({ name, qty: 1, unitCost: null }))
+  }
+  return []
+}
+
+export function productCostOf(products: readonly OrderProduct[]): number {
+  return products.reduce((sum, p) => sum + (p.unitCost ?? 0) * p.qty, 0)
+}
+
+export function productCostFromDetails(productDetails: string | null | undefined): number {
+  try {
+    return productCostOf(orderProductsOf(JSON.parse(productDetails || "{}")))
+  } catch {
+    return 0
+  }
+}
+
+export type PayStructure = "upfront" | "5050" | "after" | "custom"
+
+export function paymentMilestones(agreed: number, structure: PayStructure | null | undefined): { label: string; amount: number; dot: string }[] {
+  const fee = Number.isFinite(agreed) ? Math.max(0, agreed) : 0
+  switch (structure) {
+    case "upfront": return [{ label: "100% upfront — before shoot", amount: fee, dot: "#1fae5b" }]
+    case "after": return [{ label: "100% — after all deliverables", amount: fee, dot: "#ef9f27" }]
+    case "custom": {
+      const p1 = Math.round(fee * 0.4), p2 = Math.round(fee * 0.4), p3 = fee - p1 - p2
+      return [
+        { label: "Payment 1 — upfront", amount: p1, dot: "#1fae5b" },
+        { label: "Payment 2 — after content approved", amount: p2, dot: "#ef9f27" },
+        { label: "Payment 3 — after post goes live", amount: p3, dot: "#aaaaaa" },
+      ]
+    }
+    default: return [
+      { label: "50% upfront — before shoot", amount: fee / 2, dot: "#1fae5b" },
+      { label: "50% — after post goes live", amount: fee / 2, dot: "#ef9f27" },
+    ]
+  }
+}
+
+export function totalPaidOf(agreed: number, structure: PayStructure | null | undefined, statuses: readonly (string | null | undefined)[] | null | undefined): number {
+  return paymentMilestones(agreed, structure).reduce((sum, m, i) => sum + (statuses?.[i] === "paid" ? m.amount : 0), 0)
+}
+
+export type FeeSource = "paid" | "none"
+
+/** Fees: milestones marked Paid in Paid collab details, else $0. */
+export function resolveFees({ productDetails, agreedRate }: {
+  productDetails?: string | null
+  agreedRate?: number | string | { toString(): string } | null
+}): { amount: number; agreed: number; source: FeeSource } {
+  const rawAgreed = Number(agreedRate ?? 0)
+  const agreed = Number.isFinite(rawAgreed) && rawAgreed > 0 ? rawAgreed : 0
+  let amount = 0
+  try {
+    const pc = JSON.parse(productDetails || "{}")?.paidCollab
+    if (pc && Array.isArray(pc.milestoneStatuses)) amount = totalPaidOf(agreed, pc.payStructure, pc.milestoneStatuses)
+  } catch { /* unreadable details: nothing paid */ }
+  return { amount, agreed, source: amount > 0 ? "paid" : "none" }
+}
+
+/** Commission rate (%): partner default, else product_details.commissionRate. */
+export function resolveCommissionRate({ partnerDefault, productDetails }: {
+  partnerDefault?: number | string | { toString(): string } | null
+  productDetails?: string | null
+}): number | null {
+  const partner = Number(partnerDefault ?? 0)
+  if (Number.isFinite(partner) && partner > 0) return partner
+  try {
+    const raw = JSON.parse(productDetails || "{}")?.commissionRate
+    const typed = raw == null || raw === "" ? NaN : Number(raw)
+    if (Number.isFinite(typed)) return typed
+  } catch { /* unreadable details */ }
+  return null
+}
+
+export type CommissionSource = "paid" | "goaffpro" | "estimated" | "none"
+
+/** Commission: paid if entered → GoAffPro → revenue × rate. A partner's 0 means "not entered". */
+export function resolveCommission({ partnerCommissionPaid, productDetails, goaffproCommission, revenue, commissionRate }: {
+  partnerCommissionPaid?: number | string | { toString(): string } | null
+  productDetails?: string | null
+  goaffproCommission?: number | null
+  revenue?: number | null
+  commissionRate?: number | null
+}): { amount: number; source: CommissionSource } {
+  const partner = Number(partnerCommissionPaid ?? 0)
+  if (Number.isFinite(partner) && partner > 0) return { amount: partner, source: "paid" }
+  try {
+    const raw = JSON.parse(productDetails || "{}")?.commissionPaid
+    const typed = raw == null || raw === "" ? NaN : Number(raw)
+    if (Number.isFinite(typed)) return { amount: typed, source: "paid" }
+  } catch { /* unreadable details: fall through */ }
+  if (goaffproCommission != null && goaffproCommission > 0) return { amount: goaffproCommission, source: "goaffpro" }
+  const rev = Number(revenue ?? 0)
+  const rate = Number(commissionRate ?? 0)
+  if (rev > 0 && rate > 0) return { amount: Math.round(rev * rate) / 100, source: "estimated" }
+  return { amount: 0, source: "none" }
+}
+
+/** "$100", "$100 + 10%", "10%" or "—". */
+export function formatDealRate(agreedRate?: number | string | null, commissionRate?: number | string | null): string {
+  const fee = Number(agreedRate ?? 0)
+  const pct = commissionRate == null || commissionRate === "" ? NaN : Number(commissionRate)
+  const parts: string[] = []
+  if (Number.isFinite(fee) && fee > 0) parts.push("$" + fee.toLocaleString())
+  if (Number.isFinite(pct) && pct > 0) parts.push(`${pct}%`)
+  return parts.length ? parts.join(" + ") : "—"
+}
+
+/** Post Tracker's product_details.completed flag. */
+export function isPostTrackerCompleted(productDetails: string | null | undefined): boolean {
+  try {
+    return JSON.parse(productDetails || "{}")?.completed === true
+  } catch {
+    return false
+  }
+}
+
 /** DB fields for a move to a Pipeline stage. Shared by the pipeline and inbox routes. */
 export function pipelineStatusToFields(pipelineStatus: string, collaborationType?: string): {
   contact_status:  string

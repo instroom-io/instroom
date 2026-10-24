@@ -9,9 +9,12 @@ const ACTION_LABELS: Record<string, string> = {
   "influencer.submitted":        "Submitted for approval",
   "influencer.approval_changed": "Changed approval status",
   "influencer.updated":          "Updated influencer info",
-  "pipeline.stage_changed":      "Moved pipeline stage",
-  "pipeline.status_changed":     "Updated contact status",
+  "influencer.identity_changed": "Changed handle / platform",
+  "pipeline.stage_changed":      "Moved stage",
+  "pipeline.status_changed":     "Moved stage",
   "posttracker.stage_changed":   "Updated post tracker stage",
+  "outreach.auto_sent":          "Outreach email sent",
+  "outreach.auto_followup_sent": "Follow-up email sent",
 }
 
 export async function GET(

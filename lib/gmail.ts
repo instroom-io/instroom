@@ -112,6 +112,18 @@ export async function getGmailAccessToken(userId: string | null | undefined): Pr
 }
 
 
+/** Token for one specific mailbox. */
+export async function getGmailAccessTokenForAccount(userId: string, accountId: string): Promise<string | null> {
+  const account = await prisma.account.findFirst({
+    where: { id: accountId, userId, provider: GMAIL_PROVIDER },
+    select: { id: true, access_token: true, refresh_token: true, expires_at: true },
+  })
+  if (!account?.access_token) return null
+  const isExpired = account.expires_at ? Date.now() > account.expires_at * 1000 : false
+  if (isExpired) return account.refresh_token ? refreshGmailToken(account.refresh_token, account.id) : null
+  return account.access_token
+}
+
 export async function getGmailAccountEmail(userId: string | null | undefined): Promise<string | null> {
   if (!userId) return null
 

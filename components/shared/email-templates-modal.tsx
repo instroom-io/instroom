@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react"
 import { IconX, IconPlus, IconEdit, IconTrash, IconArrowLeft } from "@tabler/icons-react"
+import { TEMPLATE_PLACEHOLDERS } from "@/lib/template-placeholders"
 
-type EmailTemplate = {
+export type EmailTemplate = {
   id: string
   name: string
   subject: string
@@ -14,10 +15,15 @@ export function EmailTemplatesModal({
   isOpen,
   onClose,
   brandId,
+  draft,
+  onSaved,
 }: {
   isOpen: boolean
   onClose: () => void
   brandId: string | null
+  /** Opens a prefilled new template; closes after saving. */
+  draft?: { name: string; subject: string; body: string }
+  onSaved?: (template: EmailTemplate) => void
 }) {
   const [templates, setTemplates] = useState<EmailTemplate[]>([])
   const [loading, setLoading] = useState(false)
@@ -27,6 +33,14 @@ export function EmailTemplatesModal({
   const [body, setBody] = useState("")
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState("")
+  const [copied, setCopied] = useState<string | null>(null)
+
+  const copyPlaceholder = (token: string) => {
+    navigator.clipboard?.writeText(token).then(() => {
+      setCopied(token)
+      setTimeout(() => setCopied((c) => (c === token ? null : c)), 1500)
+    }).catch(() => {})
+  }
 
   useEffect(() => {
     if (!isOpen || !brandId) return
@@ -36,9 +50,16 @@ export function EmailTemplatesModal({
       .then((data) => setTemplates(data.templates || []))
       .catch(() => setError("Failed to load templates"))
       .finally(() => setLoading(false))
-    setEditing(null)
     setError("")
-  }, [isOpen, brandId])
+    if (draft) {
+      setEditing("new")
+      setName(draft.name)
+      setSubject(draft.subject)
+      setBody(draft.body)
+    } else {
+      setEditing(null)
+    }
+  }, [isOpen, brandId, draft])
 
   if (!isOpen) return null
 
@@ -82,6 +103,8 @@ export function EmailTemplatesModal({
         isNew ? [data.template, ...prev] : prev.map((t) => (t.id === data.template.id ? data.template : t))
       )
       setEditing(null)
+      onSaved?.(data.template)
+      if (draft) onClose()
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to save template")
     } finally {
@@ -162,14 +185,25 @@ export function EmailTemplatesModal({
                 value={body}
                 onChange={(e) => setBody(e.target.value)}
                 rows={10}
-                placeholder="Hi {{name}}, ..."
+                placeholder="Hi {{first_name}}, ..."
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-400 focus:border-green-400 outline-none transition resize-none"
               />
               <p className="text-[11px] text-gray-400 mt-1">
-                Use <code className="bg-gray-100 px-1 rounded">{"{{name}}"}</code> and{" "}
-                <code className="bg-gray-100 px-1 rounded">{"{{handle}}"}</code> — filled in automatically with the
-                recipient&apos;s real name and social handle when you use the template.
+                Click to copy, then paste where you want it. Filled in with the recipient&apos;s details when the template is used.
               </p>
+              <div className="flex flex-wrap gap-1.5 mt-1.5">
+                {TEMPLATE_PLACEHOLDERS.map((p) => (
+                  <button
+                    key={p.token}
+                    type="button"
+                    onClick={() => copyPlaceholder(p.token)}
+                    title={`e.g. ${p.example}`}
+                    className="text-[11px] px-2 py-0.5 rounded-full border border-gray-200 bg-gray-50 text-gray-600 hover:border-green-400 hover:text-green-700 transition"
+                  >
+                    {copied === p.token ? "Copied" : p.label} <code className="text-gray-400">{p.token}</code>
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         ) : (

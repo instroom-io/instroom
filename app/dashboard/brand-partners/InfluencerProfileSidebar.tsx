@@ -1,6 +1,9 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import { Skeleton } from "@/components/ui/skeleton"
+import { getCachedHistory, loadHistory, prefetchHistory } from "@/lib/activity-history"
+import { invalidateInfluencerDerivedCaches } from "@/lib/cache-invalidation"
 
 // ─── Types (mirrors what BrandPartnersPage passes) ────────────────────────────
 
@@ -140,23 +143,29 @@ function formatActivityDetails(action: string, details: Record<string, unknown>)
 }
 
 function HistoryTab({ brandId, biId }: { brandId?: string; biId?: string }) {
-  const [logs, setLogs]       = useState<ActivityLog[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError]     = useState<string | null>(null)
+  // Cached copy first (an earlier open, or the drawer's prefetch), refreshed
+  // in the background — see lib/activity-history.
+  const key = `${brandId}/${biId}`
+  const cachedLogs = getCachedHistory<ActivityLog>(brandId, biId)
+  const [result, setResult] = useState<{ key: string; logs: ActivityLog[] | null; error: boolean } | null>(null)
 
   useEffect(() => {
-    if (!brandId || !biId) { setLoading(false); return }
-    setLoading(true); setError(null)
-    const controller = new AbortController()
-    fetch(`/api/brand/${brandId}/influencers/${biId}/activity`, { signal: controller.signal })
-      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
-      .then(d => { setLogs(d.logs ?? []); setLoading(false) })
+    if (!brandId || !biId) return
+    let cancelled = false
+    loadHistory<ActivityLog>(brandId, biId)
+      .then(l => { if (!cancelled) setResult({ key, logs: l, error: false }) })
       .catch(err => {
-        if (err?.name === "AbortError") return
-        console.error("[HistoryTab]", err); setError("Failed to load history"); setLoading(false)
+        if (cancelled) return
+        console.error("[HistoryTab]", err)
+        setResult({ key, logs: null, error: true })
       })
-    return () => controller.abort()
-  }, [brandId, biId])
+    return () => { cancelled = true }
+  }, [brandId, biId, key])
+
+  const fresh = result?.key === key ? result : null
+  const logs: ActivityLog[] = fresh?.logs ?? cachedLogs ?? []
+  const loading = !fresh && !cachedLogs
+  const error = fresh?.error && !cachedLogs ? "Failed to load history" : null
 
   if (!brandId || !biId) return (
     <div style={{ textAlign: "center", padding: "40px 20px", color: "#9ca3af", fontSize: 12 }}>
@@ -164,8 +173,16 @@ function HistoryTab({ brandId, biId }: { brandId?: string; biId?: string }) {
     </div>
   )
   if (loading) return (
-    <div style={{ textAlign: "center", padding: "48px 20px", color: "#9ca3af", fontSize: 13 }}>
-      Loading history…
+    <div style={{ display: "flex", flexDirection: "column", gap: 14, padding: "4px 0" }} aria-busy="true" aria-label="Loading history">
+      {[0, 1, 2].map(i => (
+        <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+          <Skeleton className="h-7 w-7 shrink-0 rounded-full bg-gray-100" />
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
+            <Skeleton className="h-3 w-2/3 bg-gray-100" />
+            <Skeleton className="h-2.5 w-1/3 bg-gray-100" />
+          </div>
+        </div>
+      ))}
     </div>
   )
   if (error) return (
@@ -257,10 +274,38 @@ const STATUS_COLORS: Record<string, { bg: string; color: string }> = {
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function InfluencerProfileSidebar({ partner, campaigns, onClose }: Props) {
   const [profileTab, setProfileTab] = useState(0)
+  // Load History in the background as the drawer opens, so it is ready when clicked.
+  useEffect(() => { prefetchHistory(partner.brandId, partner.brandInfluencerId) }, [partner.brandId, partner.brandInfluencerId])
+
+  // Notes — BrandInfluencer.notes, saved through the same pipeline route the
+  // Pipeline drawer uses. savedNotes is what Cancel restores.
+  const [notesValue, setNotesValue] = useState(partner.notes ?? "")
+  const [savedNotes, setSavedNotes] = useState(partner.notes ?? "")
+  const [notesSaveState, setNotesSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle")
+  const handleNotesSave = async () => {
+    if (!partner.brandId || !partner.brandInfluencerId) return
+    setNotesSaveState("saving")
+    try {
+      const res = await fetch(`/api/brand/${partner.brandId}/pipeline/${partner.brandInfluencerId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notes: notesValue }),
+      })
+      if (!res.ok) throw new Error("Failed to update")
+      setSavedNotes(notesValue)
+      setNotesSaveState("saved")
+      // Brand Partners, Pipeline and Post Tracker all read this column.
+      invalidateInfluencerDerivedCaches(partner.brandId)
+    } catch {
+      setNotesSaveState("error")
+    } finally {
+      setTimeout(() => setNotesSaveState("idle"), 3000)
+    }
+  }
 
   const [orderData, setOrderData] = useState({
     firstName: partner.firstName, lastName: partner.lastName, contactNumber: "",
-    productName: "", orderNumber: "", productCost: "",
+    productName: "", orderNumber: "",
     discountCode: partner.coupon || partner.ref_code || "CODE" + partner.firstName.toUpperCase(),
     affiliateLink: partner.affiliate_link || "https://instroom.io/ref/" + partner.firstName.toLowerCase(),
     sparkAds: partner.spark_ads || "",
@@ -347,8 +392,8 @@ export default function InfluencerProfileSidebar({ partner, campaigns, onClose }
         {/* ── Header ── */}
         <div className="pph">
           <button onClick={onClose} title="Close" className="close-btn">✕</button>
-          <div className="ppt">Influencer Profile</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+          <div className="ppt" style={{ paddingRight: 40 }}>Influencer Profile</div>
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, marginBottom: 12, paddingRight: 40 }}>
             <div
               className="pav"
               style={partner.profile_image_url ? {
@@ -357,7 +402,7 @@ export default function InfluencerProfileSidebar({ partner, campaigns, onClose }
             >
               {!partner.profile_image_url && (partner.firstName ? partner.firstName[0] : partner.handle[1]?.toUpperCase())}
             </div>
-            <div style={{ flex: 1 }}>
+            <div style={{ flexGrow: 1, flexShrink: 0, flexBasis: "auto" }}>
               <div className="pnm">{partner.firstName} {partner.lastName}</div>
               <div className="phd">{partner.handle}</div>
             </div>
@@ -438,8 +483,26 @@ export default function InfluencerProfileSidebar({ partner, campaigns, onClose }
                 </div>
               )}
               <div>
-                <div style={{ fontSize: 10, color: "#888", marginBottom: 6 }}>Notes</div>
-                <textarea className="pfi" style={{ minHeight: 80, resize: "vertical" }} defaultValue={partner.notes || ""} placeholder="Add notes..." />
+                <div className="section-label">Notes</div>
+                <textarea
+                  className="pfi"
+                  style={{ minHeight: 72, resize: "vertical" }}
+                  placeholder="Add notes..."
+                  value={notesValue}
+                  onChange={(e) => setNotesValue(e.target.value)}
+                />
+              </div>
+              {/* Same sticky action bar as the Influencer List profile — stays in
+                  view at the bottom of the drawer while the tab scrolls. */}
+              <div className="pab">
+                {notesSaveState === "saved" && notesValue === savedNotes && <span style={{ marginRight: "auto", fontSize: 12, color: "#1fae5b", fontWeight: 600 }}>Saved</span>}
+                {notesSaveState === "error" && <span style={{ marginRight: "auto", fontSize: 12, color: "#dc2626" }}>Couldn&apos;t save — try again</span>}
+                <button className="btn-secondary" onClick={() => setNotesValue(savedNotes)} disabled={notesSaveState === "saving" || notesValue === savedNotes}
+                  style={{ opacity: notesValue === savedNotes ? 0.5 : 1 }}>Cancel</button>
+                <button className="btn-primary" onClick={handleNotesSave} disabled={notesSaveState === "saving" || notesValue === savedNotes}
+                  style={{ opacity: notesSaveState === "saving" || notesValue === savedNotes ? 0.6 : 1 }}>
+                  {notesSaveState === "saving" ? "Saving…" : "Save Changes"}
+                </button>
               </div>
             </div>
           )}
@@ -454,7 +517,11 @@ export default function InfluencerProfileSidebar({ partner, campaigns, onClose }
               <div className="pfg"><div className="pfl">Contact Number</div><input className="pfi" value={orderData.contactNumber} onChange={e => setOrderData(d => ({ ...d, contactNumber: e.target.value }))} placeholder="Contact Number" /></div>
               <div className="pfg"><div className="pfl">Product Name</div><input className="pfi" value={orderData.productName} onChange={e => setOrderData(d => ({ ...d, productName: e.target.value }))} placeholder="Product Name" /></div>
               <div className="pfg"><div className="pfl">Order Number</div><input className="pfi" value={orderData.orderNumber} onChange={e => setOrderData(d => ({ ...d, orderNumber: e.target.value }))} placeholder="Order Number" /></div>
-              <div className="pfg"><div className="pfl">Product Cost</div><input className="pfi" value={orderData.productCost} onChange={e => setOrderData(d => ({ ...d, productCost: e.target.value }))} /></div>
+              <div className="pfg">
+                <div className="pfl">Product Cost</div>
+                <input className="pfi" value={formatMoney(partner.prodCost)} readOnly title="Quantity × unit cost of the products in Post Tracker's Order tab" style={{ cursor: "default" }} />
+                <div style={{ fontSize: 10, color: "#9ca3af" }}>From the products in Post Tracker&apos;s Order tab</div>
+              </div>
               <div className="pfg"><div className="pfl">Shipping Address</div><input className="pfi" value={orderData.shippingAddress} onChange={e => setOrderData(d => ({ ...d, shippingAddress: e.target.value }))} placeholder="Shipping Address" /></div>
               <div className="pfg"><div className="pfl">Tracking Link</div><input className="pfi" value={orderData.trackingLink} onChange={e => setOrderData(d => ({ ...d, trackingLink: e.target.value }))} placeholder="Tracking Link" /></div>
               <div style={{ display: "flex", justifyContent: "flex-end" }}><button className="btn-primary">Save</button></div>
@@ -577,21 +644,21 @@ export default function InfluencerProfileSidebar({ partner, campaigns, onClose }
         </div>
 
         <style jsx>{`
-          .pp { position:fixed; top:0; right:0; width:520px; max-width:100vw; height:100%; background:#fff; box-shadow:-8px 0 40px rgba(0,0,0,0.14); z-index:500; display:flex; flex-direction:column; font-family:"Inter",system-ui,sans-serif; }
+          .pp { position:fixed; top:0; right:0; width:560px; max-width:100vw; height:100%; background:#fff; box-shadow:-8px 0 40px rgba(0,0,0,0.14); z-index:500; display:flex; flex-direction:column; font-family:"Inter",system-ui,sans-serif; }
           .pph { position:relative; padding:16px 20px; border-bottom:1px solid #f0f0f0; }
           .ppt { font-size:11px; font-weight:600; color:#9ca3af; letter-spacing:.1em; text-transform:uppercase; margin-bottom:12px; }
           .pav { width:44px; height:44px; border-radius:50%; background:#1fae5b; display:flex; align-items:center; justify-content:center; font-size:18px; font-weight:700; color:#fff; flex-shrink:0; box-shadow:0 0 0 3px #dcfce7; background-size:cover; background-position:center; }
           .pnm { font-size:15px; font-weight:700; color:#111827; }
           .phd { font-size:12px; color:#6b7280; margin-top:2px; }
           .ro-lbl { font-size:9px; font-weight:600; color:#9ca3af; text-transform:uppercase; letter-spacing:.06em; }
-          .ro-box { font-size:11px; font-weight:600; padding:5px 10px; border-radius:8px; border:.5px solid #e5e7eb; background:#f9fafb; color:#374151; white-space:nowrap; }
+          .ro-box { font-size:11px; font-weight:600; padding:5px 10px; border-radius:8px; border:.5px solid #e5e7eb; background:#f9fafb; color:#374151; white-space:nowrap; width:115px; box-sizing:border-box; overflow:hidden; text-overflow:ellipsis; text-transform:capitalize; }
 
-          .close-btn { position:absolute; top:16px; right:20px; width:30px; height:30px; border-radius:50%; border:1.5px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; flex-shrink:0; line-height:1; transition:background .15s,border-color .15s,color .15s; }
+          .close-btn { position:absolute; top:16px; right:20px; z-index:1; width:30px; height:30px; border-radius:50%; border:1.5px solid #e5e7eb; background:#f9fafb; color:#374151; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; flex-shrink:0; line-height:1; transition:background .15s,border-color .15s,color .15s; }
           .close-btn:hover { background:#fee2e2; color:#dc2626; border-color:#fca5a5; }
           .atag { font-size:12px; font-weight:500; padding:6px 14px; border-radius:20px; cursor:pointer; border:1px solid #e5e7eb; background:#f9fafb; color:#555; }
           .atag.plat { background:#1fae5b; color:#fff; border-color:#1fae5b; }
           .pit-bar { display:flex; gap:0; padding:0 20px; border-bottom:1px solid #f0f0f0; overflow-x:auto; }
-          .pit { font-size:12px; font-weight:600; padding:11px 14px; cursor:pointer; color:#9ca3af; border-bottom:2px solid transparent; white-space:nowrap; transition:color .15s; flex-shrink:0; }
+          .pit { font-size:12px; font-weight:600; padding:11px 12px; cursor:pointer; color:#9ca3af; border-bottom:2px solid transparent; white-space:nowrap; transition:color .15s; flex-shrink:0; }
           .pit.active { color:#1fae5b; border-bottom-color:#1fae5b; }
           .ppb { flex:1; overflow-y:auto; padding:18px 20px; }
           .sr4 { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; background:linear-gradient(135deg,#f0fdf4 0%,#f9fafb 100%); border-radius:12px; padding:14px; margin-bottom:4px; border:1px solid #dcfce7; }
@@ -603,10 +670,10 @@ export default function InfluencerProfileSidebar({ partner, campaigns, onClose }
           .avg-card { background:#fff; border:1.5px solid #e5e7eb; border-radius:10px; padding:12px 8px; text-align:center; box-shadow:0 1px 3px rgba(0,0,0,.05); }
           .avg-val { font-size:18px; font-weight:700; color:#111827; }
           .avg-lbl { font-size:9px; font-weight:600; color:#9ca3af; text-transform:uppercase; letter-spacing:.07em; margin-top:3px; }
-          .fgrd { display:grid; grid-template-columns:1fr 1fr; }
-          .frow { padding:8px 0; border-bottom:.5px solid rgba(0,0,0,.05); }
-          .flbl { font-size:9px; font-weight:600; color:#9ca3af; text-transform:uppercase; letter-spacing:.06em; margin-bottom:2px; }
-          .fval { font-size:13px; color:#111827; font-weight:500; }
+          .fgrd { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:4px 0 14px; }
+          .frow { min-width:0; padding:10px 12px; background:#fafaf9; border:1px solid #f0f0ee; border-radius:10px; }
+          .flbl { font-size:11px; font-weight:500; color:#9ca3af; margin-bottom:3px; }
+          .fval { font-size:13px; color:#111827; font-weight:600; overflow-wrap:anywhere; }
           .pfr { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
           .pfg { display:flex; flex-direction:column; gap:4px; margin-bottom:10px; }
           .pfl { font-size:10px; font-weight:600; color:#6b7280; }
@@ -632,10 +699,14 @@ export default function InfluencerProfileSidebar({ partner, campaigns, onClose }
           .ms-txt { font-size:10px; color:#888; }
           .btn-primary { background:#1fae5b; color:#fff; border:none; padding:8px 18px; border-radius:8px; cursor:pointer; font-size:12px; font-weight:600; font-family:inherit; transition:background .15s; }
           .btn-primary:hover { background:#0f6b3e; }
+          .btn-secondary { background:transparent; color:#6b7280; border:1.5px solid #e5e7eb; padding:8px 16px; border-radius:8px; cursor:pointer; font-size:12px; font-weight:600; font-family:inherit; transition:background .15s,border-color .15s; }
+          .btn-secondary:hover { background:#f9fafb; border-color:#d1d5db; }
+          .pab { display:flex; align-items:center; justify-content:flex-end; gap:8px; position:sticky; bottom:-18px; margin:8px -20px -18px; padding:10px 20px; background:#fff; border-top:1px solid #eee; z-index:2; }
 
           @media (max-width:480px) {
             .pph { padding:14px 14px; }
             .ppb { padding:14px 14px; }
+            .pab { bottom:-14px; margin:8px -14px -14px; padding:10px 14px; }
             .pit-bar { padding:0 14px; }
             .close-btn { top:14px; right:14px; }
             .sr4 { grid-template-columns:repeat(2,1fr); }
