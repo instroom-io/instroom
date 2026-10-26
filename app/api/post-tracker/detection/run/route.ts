@@ -3,7 +3,7 @@ import { randomUUID } from "crypto"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { checkBrandAccess } from "@/lib/brand-access"
-import { isAddonActive } from "@/lib/post-tracker/addon"
+import { getAddonStatus } from "@/lib/post-tracker/addon"
 import { getQuota } from "@/lib/post-tracker/quota"
 import { isEnsembleConfigured } from "@/lib/ensembledata"
 import {
@@ -47,10 +47,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
-    if (!(await isAddonActive(brandId))) {
+    const addon = await getAddonStatus(brandId)
+    if (!addon.active) {
       return NextResponse.json(
         { error: "The Post Tracker Add-on is required.", addonRequired: true },
         { status: 402 }
+      )
+    }
+    if (!addon.detectionEnabled) {
+      return NextResponse.json(
+        { error: "Automatic Post Detection is switched off for this brand. Turn it on to run a check." },
+        { status: 409 }
       )
     }
 

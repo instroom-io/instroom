@@ -736,6 +736,14 @@ model DetectedPost {
   comment_count       Int?
   view_count          Int?
   share_count         Int?
+  // How the post was found: "caption" (influencer's own feed, matched on a
+  // hashtag/mention) or "tagged" (the brand account's tagged-posts feed).
+  source              String    @default("caption") @db.VarChar(20)
+  // video | carousel | image — Instagram tagged posts only.
+  media_type          String?   @db.VarChar(20)
+  // Archived copies of the post's media in Cloudinary:
+  // [{ url, type: "video" | "image" }]. Null until archived.
+  media               Json?
   detected_at         DateTime  @default(now())
 
   // Dedupe guard. Two monitor runs finding the same post must not create two
@@ -776,6 +784,43 @@ model PostTrackerAddon {
   // those, so nothing already working stops working.
   detection_hashtags String? @db.VarChar(255)
   detection_mentions String? @db.VarChar(255)
+
+  // The brand-wide on/off switch for Automatic Post Detection (the card's
+  // toggle). Detection covers every tracked influencer of the brand, so the
+  // switch is per brand too. Defaults on: before this existed, detection ran
+  // for every brand with an active add-on regardless of any toggle.
+  detection_enabled Boolean @default(true)
+
+  // ── Daily schedule ────────────────────────────────────────────────────────
+  // Each platform runs once a day at the brand's chosen local time. An
+  // external cron calls /api/cron/post-detection every ~15 min; a platform is
+  // due when its time has passed today (in schedule_timezone) and its
+  // *_last_scheduled_date isn't today yet (lib/post-tracker/schedule.ts).
+  // Defaults match the n8n flows: Instagram 6 PM, TikTok 9 PM, Manila time.
+  ig_schedule_time           String  @default("18:00") @db.VarChar(5)
+  tiktok_schedule_time       String  @default("21:00") @db.VarChar(5)
+  schedule_timezone          String  @default("Asia/Manila") @db.VarChar(64)
+  ig_last_scheduled_date     String? @db.VarChar(10)
+  tiktok_last_scheduled_date String? @db.VarChar(10)
+
+  // ── Instagram tagged-posts detection ──────────────────────────────────────
+  // The brand's own Instagram account. Posts that TAG this account are matched
+  // to the brand's influencers by author (lib/post-tracker/tagged.ts).
+  // instagram_user_id is resolved from the username once and cached, since the
+  // tagged-posts endpoint only accepts the numeric id. Changing the username
+  // clears it.
+  instagram_username    String?   @db.VarChar(64)
+  instagram_user_id     String?   @db.VarChar(30)
+  tagged_last_synced_at DateTime?
+  tagged_last_error     String?   @db.Text
+
+  // ── TikTok keyword detection ──────────────────────────────────────────────
+  // TikTok has no "tagged posts" feed, so videos are found by searching for the
+  // brand's keyword (usually its name, e.g. "lotgenootje") and matching each
+  // video's author to the brand's influencers (lib/post-tracker/tiktok.ts).
+  tiktok_keyword         String?   @db.VarChar(100)
+  keyword_last_synced_at DateTime?
+  keyword_last_error     String?   @db.Text
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt

@@ -9,11 +9,18 @@ import {
   IconLock,
   IconRadar2,
   IconRefresh,
+  IconBrandInstagram,
+  IconBrandTiktok,
+  IconClock,
 } from "@tabler/icons-react"
 import { Switch } from "@/components/ui/switch"
 import { Button } from "@/components/ui/button"
 import { DetectedPostsList, type DetectedPost } from "./DetectedPostsList"
 import { invalidateInfluencerDerivedCaches } from "@/lib/cache-invalidation"
+import {
+  DEFAULT_IG_TIME, DEFAULT_TIKTOK_TIME, DEFAULT_TIMEZONE,
+  SCHEDULE_TIME_OPTIONS, SCHEDULE_TIMEZONES, formatScheduleTime,
+} from "@/lib/post-tracker/schedule"
 
 type Quota = {
   apiRequests: number
@@ -53,6 +60,17 @@ export default function AutoPostDetectionCard({
   const [enabled, setEnabled] = useState(false)
   const [hashtags, setHashtags] = useState("")
   const [mentions, setMentions] = useState("")
+  // Brand's own Instagram account — posts that tag it are matched to influencers.
+  const [instagramUsername, setInstagramUsername] = useState("")
+  const [instagramFound, setInstagramFound] = useState(false)
+  const [taggedLastError, setTaggedLastError] = useState<string | null>(null)
+  // Keyword searched on TikTok (usually the brand name) — authors are matched.
+  const [tiktokKeyword, setTiktokKeyword] = useState("")
+  const [keywordLastError, setKeywordLastError] = useState<string | null>(null)
+  // Daily schedule — one local time per platform, in the brand's timezone.
+  const [igScheduleTime, setIgScheduleTime] = useState(DEFAULT_IG_TIME)
+  const [tiktokScheduleTime, setTiktokScheduleTime] = useState(DEFAULT_TIKTOK_TIME)
+  const [scheduleTimezone, setScheduleTimezone] = useState(DEFAULT_TIMEZONE)
   const [posts, setPosts] = useState<DetectedPost[]>([])
   const [postsHasMore, setPostsHasMore] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -74,6 +92,14 @@ export default function AutoPostDetectionCard({
         setEnabled(data.enabled ?? false)
         setHashtags(data.hashtags ?? "")
         setMentions(data.mentions ?? "")
+        setInstagramUsername(data.instagramUsername ?? "")
+        setInstagramFound(Boolean(data.instagramAccountFound))
+        setTaggedLastError(data.taggedLastError ?? null)
+        setTiktokKeyword(data.tiktokKeyword ?? "")
+        setKeywordLastError(data.keywordLastError ?? null)
+        setIgScheduleTime(data.igScheduleTime ?? DEFAULT_IG_TIME)
+        setTiktokScheduleTime(data.tiktokScheduleTime ?? DEFAULT_TIKTOK_TIME)
+        setScheduleTimezone(data.scheduleTimezone ?? DEFAULT_TIMEZONE)
         setPosts(data.posts ?? [])
         setPostsHasMore(Boolean(data.postsHasMore))
         setAddonActive(Boolean(data.addonActive))
@@ -151,10 +177,18 @@ export default function AutoPostDetectionCard({
         setEnabled(data.enabled)
         setHashtags(data.hashtags ?? "")
         setMentions(data.mentions ?? "")
+        setInstagramUsername(data.instagramUsername ?? "")
+        setInstagramFound(Boolean(data.instagramAccountFound))
+        setTaggedLastError(data.taggedLastError ?? null)
+        setTiktokKeyword(data.tiktokKeyword ?? "")
+        setKeywordLastError(data.keywordLastError ?? null)
+        setIgScheduleTime(data.igScheduleTime ?? DEFAULT_IG_TIME)
+        setTiktokScheduleTime(data.tiktokScheduleTime ?? DEFAULT_TIKTOK_TIME)
+        setScheduleTimezone(data.scheduleTimezone ?? DEFAULT_TIMEZONE)
         setSaveMsg("Saved")
         setTimeout(() => setSaveMsg(""), 2000)
-      } catch {
-        setSaveMsg("Failed to save")
+      } catch (err) {
+        setSaveMsg(err instanceof Error && err.message ? err.message : "Failed to save")
       } finally {
         setSaving(false)
       }
@@ -297,7 +331,10 @@ export default function AutoPostDetectionCard({
    * request to guarantee no result. "Check now" is gated on this rather than
    * left clickable and silently useless.
    */
-  const hasMonitoringInput = Boolean(hashtags.trim() || mentions.trim())
+  // Detection is Instagram tagged posts + TikTok keyword search (caption
+  // matching is switched off in lib/post-tracker/monitor.ts), so the brand's
+  // Instagram account and TikTok keyword are the inputs.
+  const hasMonitoringInput = Boolean(instagramUsername.trim() || tiktokKeyword.trim())
 
   return (
     <div className="rounded-xl border border-gray-100 bg-white">
@@ -314,7 +351,7 @@ export default function AutoPostDetectionCard({
               Add-on
             </span>
           </div>
-          <div className="text-[11px] text-gray-400">Detects posts via hashtag &amp; mention monitoring</div>
+          <div className="text-[11px] text-gray-400">Detects Instagram posts that tag your brand and TikTok videos that mention it</div>
         </div>
         {/* Always rendered: flipping it on without the add-on sends the user to
             the Pricing page rather than hiding the control. */}
@@ -322,7 +359,8 @@ export default function AutoPostDetectionCard({
           checked={enabled}
           disabled={loading || saving || unlocking}
           onCheckedChange={handleToggle}
-          aria-label="Enable automatic post detection"
+          aria-label="Enable automatic post detection for this brand"
+          title="Turns Automatic Post Detection on or off for every influencer of this brand"
         />
       </div>
 
@@ -340,8 +378,8 @@ export default function AutoPostDetectionCard({
           </div>
           <p className="text-xs font-medium text-gray-700">Add-on required</p>
           <p className="text-[11px] text-gray-400 max-w-[240px]">
-            Automatic Post Detection is a Post Tracker add-on. Unlock it to monitor hashtags and mentions and pull
-            matching posts into the tracker.
+            Automatic Post Detection is a Post Tracker add-on. Unlock it to find Instagram posts that tag your
+            brand and pull them into the tracker.
           </p>
           {unlockError && <p className="text-[11px] text-red-600 max-w-[240px]">{unlockError}</p>}
           <Button
@@ -378,7 +416,98 @@ export default function AutoPostDetectionCard({
                   works in. They were below the status row and disabled until
                   `enabled`, which meant the toggle had to be flipped before the
                   thing it needs could be typed. */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1">
+                <label className="flex items-center gap-1 text-[11px] font-semibold text-gray-500">
+                  <IconBrandInstagram size={12} />
+                  Brand Instagram account
+                </label>
+                <input
+                  className="w-full text-xs px-2.5 py-2 rounded-lg border border-gray-200 bg-gray-50 text-gray-900 outline-none focus:border-[#0F6B3E]/40 focus:bg-white transition-colors"
+                  placeholder="@yourbrand"
+                  value={instagramUsername}
+                  onChange={(e) => setInstagramUsername(e.target.value)}
+                  onBlur={() => patch({ instagramUsername })}
+                />
+                <p className="text-[10px] text-gray-400">
+                  {taggedLastError
+                    ? <span className="text-red-600">{taggedLastError}</span>
+                    : instagramUsername.trim() && instagramFound
+                      ? "Account found. The newest posts that tag it are matched to your Instagram influencers in Delivered or Posted."
+                      : "The newest Instagram posts that tag this account are matched to your influencers automatically."}
+                </p>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="flex items-center gap-1 text-[11px] font-semibold text-gray-500">
+                  <IconBrandTiktok size={12} />
+                  Brand TikTok keyword
+                </label>
+                <input
+                  className="w-full text-xs px-2.5 py-2 rounded-lg border border-gray-200 bg-gray-50 text-gray-900 outline-none focus:border-[#0F6B3E]/40 focus:bg-white transition-colors"
+                  placeholder="yourbrand"
+                  value={tiktokKeyword}
+                  onChange={(e) => setTiktokKeyword(e.target.value)}
+                  onBlur={() => patch({ tiktokKeyword })}
+                />
+                <p className="text-[10px] text-gray-400">
+                  {keywordLastError
+                    ? <span className="text-red-600">{keywordLastError}</span>
+                    : "TikTok videos that mention this keyword (usually your brand name) are matched to your TikTok influencers in Delivered or Posted — via TikTok search and each influencer's own feed."}
+                </p>
+              </div>
+              {/* Daily schedule — brand-wide, like every field above. The cron
+                  ticks every ~15 min and runs each platform once a day on the
+                  first tick after its time (lib/post-tracker/schedule.ts). */}
+              <div className="flex flex-col gap-1">
+                <label className="flex items-center gap-1 text-[11px] font-semibold text-gray-500">
+                  <IconClock size={12} />
+                  Daily check
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-[10px] text-gray-400">Instagram</span>
+                    <select
+                      className="w-full text-xs px-2 py-2 rounded-lg border border-gray-200 bg-gray-50 text-gray-900 outline-none focus:border-[#0F6B3E]/40 focus:bg-white transition-colors"
+                      value={igScheduleTime}
+                      onChange={(e) => { setIgScheduleTime(e.target.value); patch({ igScheduleTime: e.target.value }) }}
+                    >
+                      {SCHEDULE_TIME_OPTIONS.map((t) => <option key={t} value={t}>{formatScheduleTime(t)}</option>)}
+                    </select>
+                  </div>
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-[10px] text-gray-400">TikTok</span>
+                    <select
+                      className="w-full text-xs px-2 py-2 rounded-lg border border-gray-200 bg-gray-50 text-gray-900 outline-none focus:border-[#0F6B3E]/40 focus:bg-white transition-colors"
+                      value={tiktokScheduleTime}
+                      onChange={(e) => { setTiktokScheduleTime(e.target.value); patch({ tiktokScheduleTime: e.target.value }) }}
+                    >
+                      {SCHEDULE_TIME_OPTIONS.map((t) => <option key={t} value={t}>{formatScheduleTime(t)}</option>)}
+                    </select>
+                  </div>
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-[10px] text-gray-400">Timezone</span>
+                    <select
+                      className="w-full text-xs px-2 py-2 rounded-lg border border-gray-200 bg-gray-50 text-gray-900 outline-none focus:border-[#0F6B3E]/40 focus:bg-white transition-colors"
+                      value={scheduleTimezone}
+                      onChange={(e) => { setScheduleTimezone(e.target.value); patch({ scheduleTimezone: e.target.value }) }}
+                    >
+                      {(SCHEDULE_TIMEZONES as readonly string[]).includes(scheduleTimezone) ? null : (
+                        <option value={scheduleTimezone}>{scheduleTimezone}</option>
+                      )}
+                      {SCHEDULE_TIMEZONES.map((z) => <option key={z} value={z}>{z.replace("_", " ")}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <p className="text-[10px] text-gray-400">
+                  Checked automatically every day — Instagram at {formatScheduleTime(igScheduleTime)}, TikTok at{" "}
+                  {formatScheduleTime(tiktokScheduleTime)} ({scheduleTimezone.replace("_", " ")}), within about 15 minutes.
+                  Applies to every influencer of this brand.
+                </p>
+              </div>
+              {/* Hashtag/mention inputs belong to caption matching, which is
+                  switched off (CAPTION_DETECTION_ENABLED in
+                  lib/post-tracker/monitor.ts). Kept, hidden, so turning it back
+                  on is a one-line change. */}
+              <div className="hidden grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="flex flex-col gap-1">
                   <label className="flex items-center gap-1 text-[11px] font-semibold text-gray-500">
                     <IconHash size={12} />
@@ -415,7 +544,7 @@ export default function AutoPostDetectionCard({
                     app/api/cron/post-detection/route.ts). "Enabled" describes
                     the saved config; detection only happens on "Check now". */}
                 <span className={enabled ? "text-[#0F6B3E]" : "text-gray-400"}>
-                  {enabled ? "Monitoring enabled" : "Monitoring off"}
+                  {enabled ? "Monitoring enabled for this brand" : "Monitoring off for this brand"}
                 </span>
                 {enabled && (
                   <button
@@ -424,7 +553,7 @@ export default function AutoPostDetectionCard({
                     disabled={checking || quotaReached || !hasMonitoringInput}
                     title={
                       !hasMonitoringInput
-                        ? "Add a hashtag or mention above first — a check has nothing to match without one"
+                        ? "Add the brand's Instagram account or TikTok keyword first — a check has nothing to match without one"
                         : undefined
                     }
                     className="ml-auto inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-[10px] font-medium text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-50"
@@ -435,17 +564,12 @@ export default function AutoPostDetectionCard({
                 )}
               </div>
 
-              {/* Background checks are live again — driven by server request
-                  traffic rather than a cron schedule (lib/post-tracker/scheduler.ts),
-                  so this no longer has to tell the user the system is asleep.
-                  The wording avoids promising a guaranteed clock tick, because
-                  the trigger is traffic-driven: "about every 5 minutes" is what
-                  it does on an app in use, which is when detection matters. */}
+              {/* Automatic runs come from an external cron (InterServer
+                  DirectAdmin, every ~15 min) calling /api/cron/post-detection,
+                  which runs each platform at the brand's daily time above. */}
               {enabled && (
                 <div className="text-[10px] text-gray-400">
-                  Automatic background checks are active — your hashtags and mentions are polled
-                  about every 5 minutes, with no need to keep this page open. Use &ldquo;Check
-                  now&rdquo; to run a pass immediately.
+                  Runs automatically at the daily times above. Use &ldquo;Check now&rdquo; to look for new posts right away.
                 </div>
               )}
 

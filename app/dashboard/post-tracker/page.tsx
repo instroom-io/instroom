@@ -1369,7 +1369,15 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
       if (ds.some(d => (d.postUrl ?? "").trim() === post.postUrl)) return
       const idx = ds.findIndex(d => !(d.postUrl ?? "").trim())
       if (idx === -1) return
-      setDeliverableDrafts(prev => prev.map((d, i) => (i === idx ? { ...d, postUrl: post.postUrl } : d)))
+      setDeliverableDrafts(prev => prev.map((d, i) => (i === idx ? {
+        ...d,
+        postUrl: post.postUrl,
+        // The detected post's own date and numbers, so the deliverable is complete.
+        ...(post.publishedAt ? { postDate: post.publishedAt.slice(0, 10) } : {}),
+        ...(post.likeCount    != null ? { likes:    post.likeCount } : {}),
+        ...(post.commentCount != null ? { comments: post.commentCount } : {}),
+        ...(post.viewCount    != null ? { views:    post.viewCount } : {}),
+      } : d)))
       setPostUrlOrigin("detected")
       if (idx > 0) return
     } else if (postUrlValueRef.current.trim()) return
