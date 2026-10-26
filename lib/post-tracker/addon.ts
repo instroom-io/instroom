@@ -9,7 +9,9 @@ import "server-only"
 // on top of any plan, so it must survive plan changes and must never be
 // inferred from subscription status.
 
+import type { PostTrackerAddon } from "@prisma/client"
 import { prisma } from "@/lib/prisma"
+import { DEFAULT_IG_TIME, DEFAULT_TIKTOK_TIME, DEFAULT_TIMEZONE } from "./schedule"
 
 export const ADDON_KEY = "post_tracker_detection"
 
@@ -28,6 +30,46 @@ export type AddonStatus = {
    */
   hashtags: string
   mentions: string
+  /** The brand's own Instagram account, for tagged-posts detection. */
+  instagramUsername: string
+  /** Cached numeric id for instagramUsername; null until first resolved. */
+  instagramUserId: string | null
+  taggedLastSyncedAt: Date | null
+  taggedLastError: string | null
+  /** Brand-wide on/off switch (the card's toggle). True unless switched off. */
+  detectionEnabled: boolean
+  /** Daily schedule — local "HH:MM" per platform, in scheduleTimezone. */
+  igScheduleTime: string
+  tiktokScheduleTime: string
+  scheduleTimezone: string
+  /** Brand-local "YYYY-MM-DD" of each platform's last scheduled run. */
+  igLastScheduledDate: string | null
+  tiktokLastScheduledDate: string | null
+  /** Keyword searched on TikTok (usually the brand name). */
+  tiktokKeyword: string
+  keywordLastSyncedAt: Date | null
+  keywordLastError: string | null
+}
+
+/** The configuration half of the status — identical whether or not it's active. */
+function configOf(row: PostTrackerAddon | null) {
+  return {
+    hashtags: row?.detection_hashtags ?? "",
+    mentions: row?.detection_mentions ?? "",
+    instagramUsername: row?.instagram_username ?? "",
+    instagramUserId: row?.instagram_user_id ?? null,
+    taggedLastSyncedAt: row?.tagged_last_synced_at ?? null,
+    taggedLastError: row?.tagged_last_error ?? null,
+    detectionEnabled: row?.detection_enabled ?? true,
+    igScheduleTime: row?.ig_schedule_time ?? DEFAULT_IG_TIME,
+    tiktokScheduleTime: row?.tiktok_schedule_time ?? DEFAULT_TIKTOK_TIME,
+    scheduleTimezone: row?.schedule_timezone ?? DEFAULT_TIMEZONE,
+    igLastScheduledDate: row?.ig_last_scheduled_date ?? null,
+    tiktokLastScheduledDate: row?.tiktok_last_scheduled_date ?? null,
+    tiktokKeyword: row?.tiktok_keyword ?? "",
+    keywordLastSyncedAt: row?.keyword_last_synced_at ?? null,
+    keywordLastError: row?.keyword_last_error ?? null,
+  }
 }
 
 /** Subscription states that count as paid. `basic` is the free tier. */
@@ -79,7 +121,7 @@ export async function getAddonStatus(brandId: string): Promise<AddonStatus> {
   const row = await prisma.postTrackerAddon.findUnique({ where: { brand_id: brandId } })
 
   if (!row) {
-    return { active: false, status: "inactive", activatedAt: null, expiresAt: null, hashtags: "", mentions: "" }
+    return { active: false, status: "inactive", activatedAt: null, expiresAt: null, ...configOf(null) }
   }
 
   // An expired row is reported inactive without being mutated — the historical
@@ -98,8 +140,7 @@ export async function getAddonStatus(brandId: string): Promise<AddonStatus> {
         status: eligibility.reason === "no_subscription" ? "revoked" : "subscription_inactive",
         activatedAt: row.activated_at,
         expiresAt: row.expires_at,
-        hashtags: row.detection_hashtags ?? "",
-        mentions: row.detection_mentions ?? "",
+        ...configOf(row),
       }
     }
   }
@@ -109,8 +150,7 @@ export async function getAddonStatus(brandId: string): Promise<AddonStatus> {
     status: expired ? "expired" : row.status,
     activatedAt: row.activated_at,
     expiresAt: row.expires_at,
-    hashtags: row.detection_hashtags ?? "",
-    mentions: row.detection_mentions ?? "",
+    ...configOf(row),
   }
 }
 

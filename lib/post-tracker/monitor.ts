@@ -1,8 +1,20 @@
 import "server-only"
 
 // ─── Automatic post detection engine ─────────────────────────────────────────
-// For each enabled influencer, polls THAT INFLUENCER'S OWN account feed, keeps
-// the posts carrying a configured hashtag/mention, and imports them.
+// Instagram tagged posts: when the brand has set its Instagram account, ONE
+// request for the newest posts that tag it, matched to the brand's influencers
+// by author (lib/post-tracker/tagged.ts).
+//
+// TikTok keyword: when the brand has set a TikTok keyword, ONE search for the
+// videos matching it, matched to the brand's influencers by author
+// (lib/post-tracker/tiktok.ts).
+//
+// The older caption route — polling each influencer's own feed for a
+// hashtag/mention (pollInfluencer below) — is disabled by
+// CAPTION_DETECTION_ENABLED.
+//
+// All routes only look for posts while a card is Delivered, or Posted and not yet
+// Completed, and both write to the card through recordPostOnInfluencer.
 //
 // Invariants:
 //   • Nothing runs for a brand without an active add-on (checked per brand).
@@ -41,9 +53,21 @@ import {
 } from "@/lib/ensembledata"
 import { getAddonStatus } from "./addon"
 import { consumeApiQuota, consumePostQuota, getQuota, remainingPostImports } from "./quota"
-import { mapClosedToPipelineFields } from "@/lib/post-tracker-status"
+import { isTrackedForDetection, parseDetails, recordPostOnInfluencer } from "./apply"
+import { detectionWindowStart } from "@/lib/post-tracker-status"
+import { isScheduleDue, localNow } from "./schedule"
+import { runTaggedPass, type TaggedTarget } from "./tagged"
+import { runTikTokKeywordPass, type KeywordTarget } from "./tiktok"
 
 const LOG = "[post-detection]"
+
+/**
+ * Caption matching (each influencer's own feed, filtered by hashtag/mention —
+ * pollInfluencer below) is switched OFF, per the product decision of
+ * 2026-10-21: Instagram uses tagged posts and TikTok uses a brand keyword
+ * search instead. The code is kept, not deleted, so it can be re-enabled here.
+ */
+const CAPTION_DETECTION_ENABLED = false
 
 /** Platforms queried when a setting doesn't name its own. */
 export const MONITORED_PLATFORMS: EnsemblePlatform[] = ["instagram", "tiktok"]
@@ -179,83 +203,6 @@ async function resolveInfluencerAccount(brandInfluencerId: string, brandId: stri
  * Poll one influencer. Returns counters; never throws — a provider or DB error
  * is recorded against this influencer and the caller moves on.
  */
-/**
- * Populate the influencer's post fields from a detected post and move the card
- * to Posted, using the same mapping a manual drag writes.
- *
- * Three rules, none of them new:
- *
- *   * A MANUAL Post URL is never overwritten. `post_url` already holding
- *     something means a human typed or dropped it, and the client side already
- *     refuses to replace it (handleDetectedPost in
- *     app/dashboard/post-tracker/page.tsx). This mirrors that server-side, so a
- *     background pass cannot do what the UI forbids.
- *   * The transition goes through mapClosedToPipelineFields("Posted", …), the
- *     same function the manual PATCH route and the Shopify sync call, so an
- *     automatic move and a human move write identical field shapes.
- *   * `posted_at` prefers the post's own published date over "now", so the
- *     timeline reflects when the influencer actually posted.
- *
- * updateMany, not update: it is a single scoped write with no read-back, and it
- * lets the `post_url IS NULL` condition do the "don't overwrite" check in the
- * database rather than in a read-then-write that could race a manual save.
- */
-async function applyDetectionToInfluencer(
-  brandInfluencerId: string,
-  brandId: string,
-  post: EnsemblePost
-): Promise<void> {
-  const current = await prisma.brandInfluencer.findUnique({
-    where: { id: brandInfluencerId },
-    select: { post_url: true, shipped_at: true, delivered_at: true, posted_at: true, content_posted: true },
-  })
-  if (!current) return
-
-  // Already carries a URL — manual entry, or an earlier detection. Leave it.
-  if (current.post_url && current.post_url.trim()) {
-    console.log(`${LOG} ${brandInfluencerId} already has a post URL — detection not applied`)
-    return
-  }
-
-  const fields = mapClosedToPipelineFields("Posted", {
-    shipped_at:   current.shipped_at,
-    delivered_at: current.delivered_at,
-    // Prefer the post's own timestamp; the mapping falls back to now().
-    posted_at:    post.publishedAt ?? current.posted_at,
-  })
-
-  // The post_url guard is part of the WHERE, so a manual save landing between
-  // the read above and this write wins rather than being clobbered.
-  const result = await prisma.brandInfluencer.updateMany({
-    where: {
-      id: brandInfluencerId,
-      brand_id: brandId,
-      OR: [{ post_url: null }, { post_url: "" }],
-    },
-    data: {
-      ...fields,
-      post_url: post.postUrl,
-      // Only what the provider actually returned — a missing metric is left at
-      // whatever the record already holds rather than being zeroed.
-      ...(post.likeCount    != null ? { likes_count:    post.likeCount } : {}),
-      ...(post.commentCount != null ? { comments_count: post.commentCount } : {}),
-      ...(post.viewCount    != null ? { views_count:    post.viewCount } : {}),
-      // engagement_count is interactions, so likes + comments — NOT views.
-      // Written only when the provider returned both, since a sum with a
-      // missing half would understate it and read as a real figure.
-      ...(post.likeCount != null && post.commentCount != null
-        ? { engagement_count: post.likeCount + post.commentCount }
-        : {}),
-    },
-  })
-
-  if (result.count === 0) {
-    console.log(`${LOG} ${brandInfluencerId} gained a post URL mid-write — detection not applied`)
-    return
-  }
-  console.log(`${LOG} ${brandInfluencerId} moved to Posted from detection ${post.postUrl}`)
-}
-
 async function pollInfluencer(
   setting: {
     /** Null when this influencer has no bookkeeping row yet. */
@@ -484,7 +431,7 @@ async function pollInfluencer(
           // this did before: the post appeared under "Recently detected posts"
           // but Post URL stayed empty and the card stayed in Delivered until
           // somebody dragged the post onto the field by hand.
-          await applyDetectionToInfluencer(setting.brand_influencer_id, setting.brand_id, post)
+          await recordPostOnInfluencer(setting.brand_influencer_id, setting.brand_id, post)
           console.log(`${LOG} IMPORTED published=${post.publishedAt?.toISOString()} ${post.platform} ${post.postUrl} (matched ${match.hashtag ? `#${match.hashtag}` : `@${match.mention}`})`)
         } catch (err) {
           const code = (err as { code?: string })?.code
@@ -560,7 +507,15 @@ async function pollInfluencer(
  * One monitoring pass over every enabled influencer whose brand has an active
  * add-on and remaining quota.
  */
-export async function runMonitoringPass(options?: { brandId?: string; force?: boolean }): Promise<MonitorSummary> {
+export async function runMonitoringPass(options?: {
+  brandId?: string
+  force?: boolean
+  /**
+   * Cron mode: each platform runs only when its daily schedule is due for the
+   * brand (lib/post-tracker/schedule.ts), and is then marked done for today.
+   */
+  scheduled?: boolean
+}): Promise<MonitorSummary> {
   const summary: MonitorSummary = {
     brandsConsidered: 0,
     influencersPolled: 0,
@@ -602,32 +557,44 @@ export async function runMonitoringPass(options?: { brandId?: string; force?: bo
 
   // ── Who gets polled ─────────────────────────────────────────────────────
   // Detection is a PAID BRAND-LEVEL feature, not a per-influencer opt-in. So
-  // the target list is derived, not configured: every influencer a brand has at
-  // In-Transit or beyond, for every brand whose add-on is active. Nobody has to
-  // switch anything on per influencer, and nothing is missed because a toggle
-  // was forgotten.
+  // the target list is derived, not configured: every influencer whose card is
+  // Delivered, or Posted and not yet Completed (isTrackedForDetection), for
+  // every brand whose add-on is active. Nobody has to switch anything on per
+  // influencer, and nothing is missed because a toggle was forgotten.
   //
-  // Stage 6 = In-Transit, 7 = Delivered, 8 = Posted, 9 = Issues
-  // (lib/post-tracker-status.ts). Tracking starts the moment the order ships,
-  // and only posts published from then on count (tracking_since below), so the
-  // influencer's older posts are never picked up. For Order Creation (5) has
-  // not shipped yet, so there is nothing to track.
+  // The column is read the way the board reads it — product_details.closedStatus
+  // first, then the stage — so a card is tracked exactly while it shows as
+  // Delivered or Posted. Only posts published after the order shipped count
+  // (tracking_since below), so the influencer's older posts are never picked up.
   //
   // PostDetectionSetting is still read, but only for what it is now: per-handle
   // BOOKKEEPING. `last_synced_at` paces the poll interval and `last_error`
   // carries the last failure. Its legacy `hashtags`/`mentions` are used as a
   // fallback so brands configured before the brand-level columns existed keep
   // working with no data migration.
-  const candidateRows = await prisma.brandInfluencer.findMany({
+  const stageRows = await prisma.brandInfluencer.findMany({
     where: {
       stage: { gte: 6 },
+      influencer: { is_draft: false },
       ...(options?.brandId ? { brand_id: options.brandId } : {}),
     },
-    select: { id: true, brand_id: true, shipped_at: true, delivered_at: true },
+    select: {
+      id: true,
+      brand_id: true,
+      stage: true,
+      shipped_at: true,
+      delivered_at: true,
+      product_details: true,
+      influencer: { select: { handle: true, platform: true } },
+    },
+  })
+  const candidateRows = stageRows.filter((row) => {
+    const details = parseDetails(row.product_details)
+    return details !== null && isTrackedForDetection(row.stage, details)
   })
 
   if (candidateRows.length === 0) {
-    console.log(`${LOG} no influencers at In-Transit or beyond — nothing to poll`)
+    console.log(`${LOG} no influencers in Delivered or Posted (not completed) — nothing to poll`)
   }
 
   // Bookkeeping rows for those influencers, in one query.
@@ -646,71 +613,55 @@ export async function runMonitoringPass(options?: { brandId?: string; force?: bo
     : []
   const bookByInfluencer = new Map(bookkeeping.map((b) => [b.brand_influencer_id, b]))
 
-  // The poll interval still applies: an influencer polled within
-  // MIN_POLL_INTERVAL_MS is skipped unless force=true.
-  const settings = candidateRows
-    .filter((row) => {
-      if (options?.force) return true
-      const last = bookByInfluencer.get(row.id)?.last_synced_at
-      return !last || last < staleBefore
-    })
-    .map((row) => {
-      const book = bookByInfluencer.get(row.id)
-      return {
-        // Null when this influencer has no bookkeeping row yet — pollInfluencer
-        // upserts by brand_influencer_id, so it does not need one to exist.
-        id: book?.id ?? null,
-        brand_id: row.brand_id,
-        brand_influencer_id: row.id,
-        // Legacy per-influencer values, used only as a fallback below.
-        hashtags: book?.hashtags ?? null,
-        mentions: book?.mentions ?? null,
-        platforms: book?.platforms ?? null,
-        tracking_since: row.shipped_at ?? row.delivered_at ?? null,
-        last_synced_at: book?.last_synced_at ?? null,
-      }
-    })
-    // Oldest first, so a long backlog is worked through fairly.
-    .sort((a, b) => (a.last_synced_at?.getTime() ?? 0) - (b.last_synced_at?.getTime() ?? 0))
+  /** Caption-route bookkeeping shape for one influencer. */
+  const toSetting = (row: (typeof candidateRows)[number]) => {
+    const book = bookByInfluencer.get(row.id)
+    return {
+      // Null when this influencer has no bookkeeping row yet — pollInfluencer
+      // upserts by brand_influencer_id, so it does not need one to exist.
+      id: book?.id ?? null,
+      brand_id: row.brand_id,
+      brand_influencer_id: row.id,
+      // Legacy per-influencer values, used only as a fallback below.
+      hashtags: book?.hashtags ?? null,
+      mentions: book?.mentions ?? null,
+      platforms: book?.platforms ?? null,
+      tracking_since: detectionWindowStart(row.shipped_at),
+      last_synced_at: book?.last_synced_at ?? null,
+    }
+  }
 
-  console.log(
-    `${LOG} ${settings.length} influencer(s) due for polling` +
-      (settings.length === 0 && candidateRows.length > 0
-        ? ` — all ${candidateRows.length} at In-Transit+ were polled within the last ` +
-          `${MIN_POLL_INTERVAL_MS / 60000} minutes (pass force=true to override).`
-        : "")
-  )
+  const isInstagram = (row: (typeof candidateRows)[number]) =>
+    (row.influencer.platform ?? "").trim().toLowerCase() === "instagram"
+  const isTikTok = (row: (typeof candidateRows)[number]) =>
+    (row.influencer.platform ?? "").trim().toLowerCase() === "tiktok"
 
   // Group by brand so the add-on and quota checks happen once per brand rather
   // than once per influencer.
-  const byBrand = new Map<string, typeof settings>()
-  for (const s of settings) {
-    const list = byBrand.get(s.brand_id) ?? []
-    list.push(s)
-    byBrand.set(s.brand_id, list)
+  const byBrand = new Map<string, typeof candidateRows>()
+  for (const row of candidateRows) {
+    const list = byBrand.get(row.brand_id) ?? []
+    list.push(row)
+    byBrand.set(row.brand_id, list)
   }
 
-  for (const [brandId, brandSettings] of byBrand) {
+  for (const [brandId, brandRows] of byBrand) {
     summary.brandsConsidered++
 
     // getAddonStatus, not isAddonActive: the same row carries the gate AND the
-    // brand's hashtags/mentions, so one read answers both. The add-on being
-    // active is what enables detection for every In-Transit+ influencer of this
+    // brand's detection config, so one read answers both. The add-on being
+    // active is what enables detection for every tracked influencer of this
     // brand — there is no per-influencer switch.
     const addon = await getAddonStatus(brandId)
     if (!addon.active) {
       summary.skipped.push(`${brandId}: add-on not active`)
       continue
     }
-
-    // Nothing to match on. Skipped before any provider request, since a pass
-    // with no hashtag and no mention can only ever return nothing.
-    if (!addon.hashtags.trim() && !addon.mentions.trim()) {
-      const anyLegacy = brandSettings.some((x) => (x.hashtags ?? "").trim() || (x.mentions ?? "").trim())
-      if (!anyLegacy) {
-        summary.skipped.push(`${brandId}: no hashtags or mentions configured`)
-        continue
-      }
+    // The brand-wide switch on the card. Off = no detection for any of this
+    // brand's influencers, from the cron or "Check now".
+    if (!addon.detectionEnabled) {
+      summary.skipped.push(`${brandId}: Automatic Post Detection switched off`)
+      continue
     }
 
     const quota = await getQuota(brandId)
@@ -720,6 +671,119 @@ export async function runMonitoringPass(options?: { brandId?: string; force?: bo
     }
     if (quota.postsExhausted) {
       summary.skipped.push(`${brandId}: daily post import limit reached`)
+      continue
+    }
+
+    // ── Instagram: posts that tag the brand ─────────────────────────────────
+    // With the brand's account set, its Instagram influencers are covered by
+    // the tagged-posts feed and are NOT also polled one by one below.
+    const useTagged = Boolean(addon.instagramUsername.trim())
+    if (useTagged) {
+      const targets: TaggedTarget[] = brandRows
+        .filter(isInstagram)
+        .map((row) => ({
+          brandInfluencerId: row.id,
+          handle: normaliseHandle(row.influencer.handle),
+          trackingSince: detectionWindowStart(row.shipped_at),
+        }))
+        .filter((t) => t.handle)
+      const due = options?.scheduled
+        ? isScheduleDue(addon.igScheduleTime, addon.igLastScheduledDate, addon.scheduleTimezone)
+        : options?.force || !addon.taggedLastSyncedAt || addon.taggedLastSyncedAt < staleBefore
+
+      // A scheduled run counts for today even if it finds nothing or fails, so
+      // a broken provider can't trigger a retry on every 15-minute tick.
+      if (options?.scheduled && due) await markScheduledRun(brandId, "instagram", addon.scheduleTimezone)
+
+      if (targets.length && due) {
+        const result = await runTaggedPass(brandId, addon, targets)
+        summary.influencersPolled += targets.length
+        summary.apiCalls += result.apiCalls
+        summary.postsFound += result.found
+        summary.postsImported += result.imported
+        for (const e of result.errors) summary.errors.push(`${brandId} (tagged posts): ${e}`)
+      } else if (targets.length) {
+        summary.skipped.push(
+          options?.scheduled
+            ? `${brandId}: Instagram not due (daily at ${addon.igScheduleTime} ${addon.scheduleTimezone})`
+            : `${brandId}: tagged posts checked within the last ${MIN_POLL_INTERVAL_MS / 60000} minutes`
+        )
+      } else {
+        summary.skipped.push(`${brandId}: no Instagram influencers in Delivered or Posted`)
+      }
+    } else {
+      summary.skipped.push(`${brandId}: no brand Instagram account set`)
+    }
+
+    // ── TikTok: videos matching the brand's keyword ─────────────────────────
+    // One keyword search covers every TikTok influencer of the brand; they are
+    // not also polled one by one below.
+    const useKeyword = Boolean(addon.tiktokKeyword.trim())
+    if (useKeyword) {
+      const targets: KeywordTarget[] = brandRows
+        .filter(isTikTok)
+        .map((row) => ({
+          brandInfluencerId: row.id,
+          handle: normaliseHandle(row.influencer.handle),
+          trackingSince: detectionWindowStart(row.shipped_at),
+        }))
+        .filter((t) => t.handle)
+      const due = options?.scheduled
+        ? isScheduleDue(addon.tiktokScheduleTime, addon.tiktokLastScheduledDate, addon.scheduleTimezone)
+        : options?.force || !addon.keywordLastSyncedAt || addon.keywordLastSyncedAt < staleBefore
+      if (options?.scheduled && due) await markScheduledRun(brandId, "tiktok", addon.scheduleTimezone)
+
+      if (targets.length && due) {
+        const result = await runTikTokKeywordPass(brandId, addon, targets)
+        summary.influencersPolled += targets.length
+        summary.apiCalls += result.apiCalls
+        summary.postsFound += result.found
+        summary.postsImported += result.imported
+        for (const e of result.errors) summary.errors.push(`${brandId} (TikTok keyword): ${e}`)
+      } else if (targets.length) {
+        summary.skipped.push(
+          options?.scheduled
+            ? `${brandId}: TikTok not due (daily at ${addon.tiktokScheduleTime} ${addon.scheduleTimezone})`
+            : `${brandId}: TikTok keyword checked within the last ${MIN_POLL_INTERVAL_MS / 60000} minutes`
+        )
+      } else {
+        summary.skipped.push(`${brandId}: no TikTok influencers in Delivered or Posted`)
+      }
+    } else {
+      summary.skipped.push(`${brandId}: no TikTok keyword set`)
+    }
+
+    if (!CAPTION_DETECTION_ENABLED) continue
+
+    // ── Everything else: each influencer's own feed, caption-matched ────────
+    // The poll interval still applies: an influencer polled within
+    // MIN_POLL_INTERVAL_MS is skipped unless force=true.
+    const brandSettings = brandRows
+      .filter((row) => !(useTagged && isInstagram(row)))
+      .filter((row) => !(useKeyword && isTikTok(row)))
+      .filter((row) => {
+        if (options?.force) return true
+        const last = bookByInfluencer.get(row.id)?.last_synced_at
+        return !last || last < staleBefore
+      })
+      .map(toSetting)
+      // Oldest first, so a long backlog is worked through fairly.
+      .sort((a, b) => (a.last_synced_at?.getTime() ?? 0) - (b.last_synced_at?.getTime() ?? 0))
+    if (brandSettings.length === 0) continue
+
+    // Nothing to match on. Skipped before any provider request, since a pass
+    // with no hashtag and no mention can only ever return nothing.
+    if (!addon.hashtags.trim() && !addon.mentions.trim()) {
+      const anyLegacy = brandSettings.some((x) => (x.hashtags ?? "").trim() || (x.mentions ?? "").trim())
+      if (!anyLegacy) {
+        summary.skipped.push(`${brandId}: no hashtags or mentions configured for caption matching`)
+        continue
+      }
+    }
+
+    const quotaBeforeCaption = await getQuota(brandId)
+    if (quotaBeforeCaption.apiExhausted || quotaBeforeCaption.postsExhausted) {
+      summary.skipped.push(`${brandId}: quota reached before caption matching`)
       continue
     }
 
@@ -793,4 +857,15 @@ export async function releaseMonitoringLock(holder: string): Promise<void> {
   // Scoped to this holder so a slow run can't release a lock someone else took
   // over after its lease expired.
   await prisma.monitoringLock.deleteMany({ where: { key: LOCK_KEY, holder } }).catch(() => {})
+}
+
+/** Record that a platform's scheduled run happened today (brand-local date). */
+async function markScheduledRun(brandId: string, platform: "instagram" | "tiktok", timezone: string) {
+  const today = localNow(timezone).date
+  await prisma.postTrackerAddon
+    .update({
+      where: { brand_id: brandId },
+      data: platform === "instagram" ? { ig_last_scheduled_date: today } : { tiktok_last_scheduled_date: today },
+    })
+    .catch(() => {})
 }

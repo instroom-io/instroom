@@ -216,7 +216,10 @@ export async function GET(
         })
       : []
 
-    const trackingSinceById = new Map(rows.map((r) => [r.id, r.shipped_at ?? r.delivered_at ?? null]))
+    // Ship date only — delivered_at is usually when the card was dragged, not a
+    // real delivery, and fell after genuine posts. Undated rows were already
+    // windowed at import (detectionWindowStart in lib/post-tracker-status.ts).
+    const trackingSinceById = new Map(rows.map((r) => [r.id, r.shipped_at ?? null]))
     const detectionByInfluencer = new Map<string, { count: number; latest: Date | null }>()
     for (const d of detectionRows) {
       const since = trackingSinceById.get(d.brand_influencer_id)

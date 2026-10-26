@@ -59,11 +59,12 @@ export async function GET(req: NextRequest) {
     const since = parseDate(sp.get("since"))
     const before = parseDate(sp.get("before"))
 
-    // Tracking starts when the order went In-Transit (shipped_at, else
-    // delivered_at) — the same cutoff the detection pass uses. Posts published
-    // before it, including any imported before that rule existed, are not
-    // shown, so the list only ever holds this collaboration's latest posts.
-    const trackingSince = influencer.shipped_at ?? influencer.delivered_at ?? null
+    // Tracking starts when the order shipped — the same cutoff the detection
+    // pass uses. Posts published before it, including any imported before that
+    // rule existed, are not shown. delivered_at is deliberately not a fallback:
+    // it usually records when the card was dragged, after genuine posts (see
+    // detectionWindowStart in lib/post-tracker-status.ts).
+    const trackingSince = influencer.shipped_at ?? null
 
     const posts = await prisma.detectedPost.findMany({
       where: {
@@ -94,6 +95,9 @@ export async function GET(req: NextRequest) {
         likeCount: p.like_count,
         commentCount: p.comment_count,
         viewCount: p.view_count,
+        source: p.source,
+        mediaType: p.media_type,
+        media: p.media,
         detectedAt: p.detected_at,
       })),
       // Only meaningful for paging older rows; a `since` poll is open-ended.

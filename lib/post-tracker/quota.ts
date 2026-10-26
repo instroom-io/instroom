@@ -7,11 +7,21 @@ import "server-only"
 // TO REMOVE THE TESTING LIMITS: replace the two constants below with values
 // resolved from the brand's plan/add-on entitlement. No caller changes needed —
 // consumeApiQuota()/consumePostQuota() keep the same signatures.
+//
+// Both can be overridden per deployment for testing, without a code change:
+//   POST_TRACKER_DAILY_API_LIMIT=100
+//   POST_TRACKER_DAILY_POST_LIMIT=100
+// Unset, or not a positive whole number → the default of 20.
 
 import { prisma } from "@/lib/prisma"
 
-export const DAILY_API_REQUEST_LIMIT = 20
-export const DAILY_POST_IMPORT_LIMIT = 20
+function limitFromEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name])
+  return Number.isInteger(value) && value > 0 ? value : fallback
+}
+
+export const DAILY_API_REQUEST_LIMIT = limitFromEnv("POST_TRACKER_DAILY_API_LIMIT", 20)
+export const DAILY_POST_IMPORT_LIMIT = limitFromEnv("POST_TRACKER_DAILY_POST_LIMIT", 20)
 
 export type QuotaSnapshot = {
   apiRequests: number
