@@ -1,16 +1,7 @@
-import crypto from "crypto"
 import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
-import { getShopifyWebhookSecret } from "@/lib/shopify-oauth"
+import { verifyShopifyWebhook } from "@/lib/shopify-oauth"
 import { getBrandIdByShopDomain } from "@/lib/shopify-connection"
-
-const HEADER_NAME = "x-shopify-hmac-sha256"
-
-function verifySignature(rawBody: string, signature: string, secret: string) {
-  const expected = crypto.createHmac("sha256", secret).update(rawBody).digest("base64")
-  if (expected.length !== signature.length) return false
-  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature))
-}
 
 function safeParse(value: string | null) {
   if (!value) return {}
@@ -29,9 +20,7 @@ function safeParse(value: string | null) {
 // for good.
 export async function POST(req: NextRequest) {
   const rawBody = await req.text()
-  const signature = req.headers.get(HEADER_NAME)
-
-  if (!signature || !verifySignature(rawBody, signature, getShopifyWebhookSecret())) {
+  if (!verifyShopifyWebhook(rawBody, req.headers.get("x-shopify-hmac-sha256"))) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
@@ -39,13 +28,13 @@ export async function POST(req: NextRequest) {
   try {
     payload = JSON.parse(rawBody)
   } catch {
-    console.error("[Shopify GDPR webhook] malformed JSON body", rawBody.slice(0, 500))
+    console.error("[Shopify GDPR webhook] malformed JSON body", { bytes: rawBody.length })
     return NextResponse.json({ received: true }, { status: 200 })
   }
 
   const shopDomain = payload?.shop_domain as string | undefined
   if (!shopDomain) {
-    console.error("[Shopify GDPR webhook] shop/redact missing shop_domain", payload)
+    console.error("[Shopify GDPR webhook] shop/redact missing shop_domain")
     return NextResponse.json({ received: true }, { status: 200 })
   }
 

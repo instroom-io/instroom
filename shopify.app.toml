@@ -1,0 +1,32 @@
+client_id = "64eae60dea37c2eaec925e771f180eab"
+application_url = "https://instroom.io/shopify-embedded"
+embedded = true
+name = "Instroom"
+
+[access_scopes]
+scopes = "read_discounts,write_draft_orders,read_draft_orders,read_orders,write_orders,read_products"
+optional_scopes = [ ]
+use_legacy_install_flow = false
+
+[auth]
+redirect_urls = [
+  "https://instroom.io/api/settings/integrations/shopify/callback",
+  "https://staging-instroom.vercel.app/api/settings/integrations/shopify/callback",
+  "http://localhost:3000/api/settings/integrations/shopify/callback"
+]
+
+[webhooks]
+api_version = "2026-07"
+
+# GDPR only; order and uninstall webhooks are registered per store on connect.
+[[webhooks.subscriptions]]
+compliance_topics = [ "customers/data_request" ]
+uri = "https://instroom.io/api/webhooks/shopify/gdpr/customers-data-request"
+
+[[webhooks.subscriptions]]
+compliance_topics = [ "customers/redact" ]
+uri = "https://instroom.io/api/webhooks/shopify/gdpr/customers-redact"
+
+[[webhooks.subscriptions]]
+compliance_topics = [ "shop/redact" ]
+uri = "https://instroom.io/api/webhooks/shopify/gdpr/shop-redact"

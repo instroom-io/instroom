@@ -304,7 +304,11 @@ function IntegrationsContent() {
         ...prev,
         shopify: { ...prev.shopify, unmatchedOrders: data.unmatched },
       }))
-      show(`Shopify synced: ${data.ordersSynced} orders (${data.matched} matched, ${data.unmatched} unmatched)`, "success")
+      show(
+        `Shopify synced: ${data.ordersSynced} orders (${data.matched} matched, ${data.unmatched} unmatched)` +
+          (data.complete === false ? ". More orders remain — click Sync now again to continue." : ""),
+        "success"
+      )
     } catch (err: any) {
       show(err.message || "Failed to sync Shopify orders", "error")
     } finally {

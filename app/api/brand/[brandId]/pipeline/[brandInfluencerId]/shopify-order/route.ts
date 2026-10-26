@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import { hasBrandCapability } from "@/lib/permissions"
-import { createShopifyOrderForInfluencer } from "@/lib/shopify-create-order"
+import { createShopifyOrderForInfluencer, ShopifyOrderExistsError } from "@/lib/shopify-create-order"
 import { getShopifyConnection } from "@/lib/shopify-connection"
 import type { ShopifyShippingAddress } from "@/lib/shopify"
 
@@ -37,8 +37,9 @@ export async function GET(
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
+    // Instroom's own order only, not customers' coupon orders.
     const order = await prisma.shopifyOrder.findFirst({
-      where: { brand_id: brandId, brand_influencer_id: brandInfluencerId },
+      where: { brand_id: brandId, brand_influencer_id: brandInfluencerId, source: "instroom" },
       orderBy: { created_at: "desc" },
     })
 
@@ -133,13 +134,16 @@ export async function POST(
       brandId,
       brandInfluencerId,
       variantId,
-      quantity: quantity && quantity > 0 ? quantity : 1,
+      quantity: Number.isInteger(quantity) && quantity! > 0 ? Math.min(quantity!, 100) : 1,
       shippingAddress,
       productName: typeof productName === "string" ? productName.slice(0, 200) : undefined,
     })
 
     return NextResponse.json(result)
   } catch (error: any) {
+    if (error instanceof ShopifyOrderExistsError) {
+      return NextResponse.json({ error: error.message, orderNumber: error.orderNumber, adminUrl: error.adminUrl }, { status: 409 })
+    }
     console.error("POST shopify-order error:", error)
     return NextResponse.json(
       { error: error?.message || "Failed to create Shopify order" },

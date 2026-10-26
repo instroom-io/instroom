@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { checkBrandAccess } from "@/lib/brand-access"
+import { hasBrandCapability } from "@/lib/permissions"
 import { syncShopifyOrdersForBrand } from "@/lib/shopify-orders"
 
 // POST /api/settings/integrations/shopify/sync
@@ -31,6 +32,9 @@ export async function POST(req: NextRequest) {
     const brand = await checkBrandAccess(brandId, session.user.id)
     if (!brand) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
+    if (!(await hasBrandCapability(brandId, session.user.id, "approveInfluencers"))) {
+      return NextResponse.json({ error: "Only Owners and Managers can sync Shopify orders" }, { status: 403 })
     }
 
     const result = await syncShopifyOrdersForBrand(brandId)
