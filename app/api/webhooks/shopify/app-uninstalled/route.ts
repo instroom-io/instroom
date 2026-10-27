@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { verifyShopifyWebhook, isValidShopDomain } from "@/lib/shopify-oauth"
+import { deletePendingInstallation } from "@/lib/shopify-installation"
 
 // Keeps shopDomain so the GDPR shop/redact 48 hours later still finds the brand.
 export async function POST(req: NextRequest) {
@@ -19,6 +20,7 @@ export async function POST(req: NextRequest) {
     select: { id: true },
   })
 
+  await deletePendingInstallation(shop)
   const now = new Date().toISOString()
   for (const c of connections) {
     await prisma.integrationConnection.update({

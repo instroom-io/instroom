@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { verifyShopifyWebhook } from "@/lib/shopify-oauth"
 import { getBrandIdByShopDomain } from "@/lib/shopify-connection"
+import { deletePendingInstallation } from "@/lib/shopify-installation"
 
 function safeParse(value: string | null) {
   if (!value) return {}
@@ -39,6 +40,7 @@ export async function POST(req: NextRequest) {
   }
 
   const brandId = await getBrandIdByShopDomain(shopDomain)
+  await deletePendingInstallation(shopDomain)
 
   if (brandId) {
     await prisma.shopifyOrder.deleteMany({ where: { brand_id: brandId } })

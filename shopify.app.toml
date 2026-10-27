@@ -1,5 +1,5 @@
 client_id = "64eae60dea37c2eaec925e771f180eab"
-application_url = "https://instroom.io/shopify-embedded"
+application_url = "https://staging-instroom.vercel.app/shopify-embedded"
 embedded = true
 name = "Instroom"
 

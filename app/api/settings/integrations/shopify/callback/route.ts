@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
-import { encrypt } from "@/lib/crypto"
 import {
   verifyShopifyOAuthCallback,
   decodeShopifyState,
@@ -10,10 +9,9 @@ import {
   missingShopifyScopes,
   isValidShopDomain,
   SHOPIFY_NONCE_COOKIE,
+  type ShopifyTokens,
 } from "@/lib/shopify-oauth"
-import { getShopifyShopInfo, createShopifyWebhook } from "@/lib/shopify"
-
-const SHOPIFY_KEY = "shopify"
+import { connectShopToBrand, shopifyLinkProblem } from "@/lib/shopify-installation"
 
 export async function GET(req: NextRequest) {
   const { searchParams, origin } = new URL(req.url)
@@ -59,24 +57,15 @@ export async function GET(req: NextRequest) {
     return fail("Brand not found")
   }
 
-  // One store per brand: webhooks and GDPR requests identify stores by domain.
-  const otherBrand = await prisma.integrationConnection.findFirst({
-    where: {
-      integration_key: SHOPIFY_KEY,
-      connected: true,
-      brand_id: { not: brandId },
-      config: { path: "$.shopDomain", equals: shop },
-    },
-    select: { brand_id: true },
-  })
-  if (otherBrand) {
-    return fail("This Shopify store is already connected to another brand")
+  const problem = await shopifyLinkProblem(shop, brandId)
+  if (problem) {
+    return fail(problem)
   }
 
-  let accessToken: string
+  let tokens: ShopifyTokens
   let grantedScope: string
   try {
-    ({ accessToken, grantedScope } = await exchangeShopifyCodeForToken(shop, code))
+    ({ grantedScope, ...tokens } = await exchangeShopifyCodeForToken(shop, code))
   } catch (error) {
     console.error("[Shopify OAuth callback] token exchange failed", error)
     return fail("Failed to complete Shopify authorization")
@@ -88,33 +77,7 @@ export async function GET(req: NextRequest) {
     return fail(`Shopify didn't grant all the permissions Instroom needs (${missing.join(", ")}). Please try connecting again and approve all permissions.`)
   }
 
-  let storeName: string | null = null
-  try {
-    const info = await getShopifyShopInfo(shop, accessToken)
-    storeName = info.storeName
-  } catch (error) {
-    console.error("[Shopify OAuth callback] failed to fetch shop info", error)
-  }
-
-  const config = {
-    shopDomain: shop,
-    accessTokenEncrypted: encrypt(accessToken),
-    storeName,
-    verifiedAt: new Date().toISOString(),
-  }
-
-  await prisma.integrationConnection.upsert({
-    where: { brand_id_integration_key: { brand_id: brandId, integration_key: SHOPIFY_KEY } },
-    create: { brand_id: brandId, integration_key: SHOPIFY_KEY, connected: true, connected_as: storeName ?? "Shopify", config },
-    update: { connected: true, connected_as: storeName ?? "Shopify", config },
-  })
-
-  const webhookAddress = `${origin}/api/webhooks/shopify/orders/${brandId}`
-  await Promise.all([
-    createShopifyWebhook(shop, accessToken, "orders/create", webhookAddress),
-    createShopifyWebhook(shop, accessToken, "orders/updated", webhookAddress),
-    createShopifyWebhook(shop, accessToken, "app/uninstalled", `${origin}/api/webhooks/shopify/app-uninstalled`),
-  ])
+  await connectShopToBrand({ brandId, shop, tokens, origin })
 
   const successUrl = new URL("/dashboard/settings/integrations", origin)
   successUrl.searchParams.set("brandId", brandId)

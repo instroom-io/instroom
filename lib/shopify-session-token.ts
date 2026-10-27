@@ -52,11 +52,12 @@ export function verifyShopifySessionToken(token: string): ShopifySessionTokenPay
   if (typeof payload.nbf === "number" && payload.nbf > nowSeconds) return null
   if (payload.aud !== getClientId()) return null
 
-  const shopUrl = payload.dest ?? payload.iss
-  if (!shopUrl) return null
+  if (!payload.dest || !payload.iss) return null
   let shop: string
   try {
-    shop = new URL(shopUrl).host
+    shop = new URL(payload.dest).host
+    // Issuer and destination must be the same store.
+    if (new URL(payload.iss).host !== shop) return null
   } catch {
     return null
   }

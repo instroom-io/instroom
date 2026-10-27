@@ -22,6 +22,9 @@ import { SettingsSkeleton } from "@/components/shared/skeletons"
 import { fetchCached, invalidateCache, getCachedData } from "@/lib/data-cache"
 import { invalidateInfluencerDerivedCaches } from "@/lib/cache-invalidation"
 
+// App Store listing, or the install link until listed.
+const SHOPIFY_INSTALL_URL = process.env.NEXT_PUBLIC_SHOPIFY_INSTALL_URL
+
 function LoadingScreen() {
   return (
     <SettingsSkeleton
@@ -97,10 +100,8 @@ function IntegrationsContent() {
 
   const [shopifySyncing, setShopifySyncing] = useState(false)
   const [shopifyModalOpen, setShopifyModalOpen] = useState(false)
-  const [shopifyShopDomain, setShopifyShopDomain] = useState("")
 
-  // Shopify connects via a full-page OAuth redirect, not a fetch — it lands
-  // back here with ?shopify=connected or ?shopify_error=... once done.
+  // Set by the link page.
   useEffect(() => {
     const shopifyResult = searchParams.get("shopify")
     const shopifyError = searchParams.get("shopify_error")
@@ -153,7 +154,6 @@ function IntegrationsContent() {
       return
     }
     if (id === "shopify") {
-      setShopifyShopDomain("")
       setShopifyModalOpen(true)
       return
     }
@@ -214,22 +214,6 @@ function IntegrationsContent() {
     } finally {
       setPendingId(null)
     }
-  }
-
-  // Shopify connects via OAuth — this navigates the browser away to Shopify's
-  // consent screen (not a fetch call), so there's no local success/error
-  // handling here; the callback route redirects back with ?shopify=connected
-  // or ?shopify_error=..., handled by the effect above.
-  function handleShopifyConnectSubmit() {
-    if (!shopifyShopDomain.trim()) {
-      show("Shop domain is required", "error")
-      return
-    }
-
-    const url = `/api/settings/integrations/shopify/install?brandId=${encodeURIComponent(
-      brandId ?? ""
-    )}&shopDomain=${encodeURIComponent(shopifyShopDomain.trim())}`
-    window.location.href = url
   }
 
   async function handleDisconnect(id: IntegrationId, label: string) {
@@ -495,22 +479,16 @@ function IntegrationsContent() {
           <DialogHeader>
             <DialogTitle>Connect Shopify</DialogTitle>
             <DialogDescription>
-              Enter your store&rsquo;s domain, then you&rsquo;ll be sent to Shopify to review and
-              approve access — nothing to set up in your Shopify admin first.
+              Shopify stores connect from Shopify itself. It takes a minute.
             </DialogDescription>
           </DialogHeader>
 
           <div className="flex flex-col gap-4 py-2">
-            <div className="flex flex-col gap-1.5">
-              <Label className="text-[11px] font-semibold tracking-wide text-[#555]">
-                Shop Domain
-              </Label>
-              <Input
-                placeholder="yourstore.myshopify.com"
-                value={shopifyShopDomain}
-                onChange={(e) => setShopifyShopDomain(e.target.value)}
-              />
-            </div>
+            <ol className="flex list-decimal flex-col gap-2 pl-5 text-[13px] text-[#333]">
+              <li>Install the Instroom app on your Shopify store.</li>
+              <li>In your Shopify admin, open <strong>Apps → Instroom</strong> and click <strong>Link to your Instroom workspace</strong>.</li>
+              <li>Sign in here if asked, choose this brand, and confirm.</li>
+            </ol>
 
             <div className="rounded-lg bg-[#fff8e1] px-3 py-2 text-[11px] text-[#854F0B]">
               Auto-advancing a card to In-Transit / Delivered depends on Shopify recognizing your
@@ -522,14 +500,15 @@ function IntegrationsContent() {
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setShopifyModalOpen(false)}>
-              Cancel
+              Close
             </Button>
-            <Button
-              className="bg-[#1FAE5B] text-white hover:bg-[#0F6B3E]"
-              onClick={handleShopifyConnectSubmit}
-            >
-              Continue to Shopify
-            </Button>
+            {SHOPIFY_INSTALL_URL && (
+              <Button asChild className="bg-[#1FAE5B] text-white hover:bg-[#0F6B3E]">
+                <a href={SHOPIFY_INSTALL_URL} target="_blank" rel="noopener noreferrer">
+                  Install Instroom on Shopify
+                </a>
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
