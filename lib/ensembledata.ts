@@ -19,6 +19,19 @@ const MAX_ATTEMPTS = 3
 /** Base backoff; doubled per attempt. */
 const RETRY_BASE_MS = 600
 
+/** Errors where no connection was made — the request never reached the provider. */
+const CONNECT_ERROR_CODES = new Set([
+  "UND_ERR_CONNECT_TIMEOUT",
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ETIMEDOUT",
+  "ENETUNREACH",
+])
+/** Extra, unbilled tries for a connection that failed to open. */
+const CONNECT_RETRIES = 3
+const CONNECT_RETRY_BASE_MS = 1500
+
 /** Single prefix so every provider failure is greppable in production logs. */
 const LOG = "[ensembledata]"
 
@@ -81,7 +94,14 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
  * the caller's quota accounting reflects real provider usage, not just the
  * number of logical requests.
  */
-async function request<T>(path: string, params: Record<string, string>): Promise<EnsembleResult<T>> {
+async function request<T>(
+  path: string,
+  params: Record<string, string>,
+  /** Per-endpoint overrides for slow endpoints (tagged posts). */
+  opts?: { timeoutMs?: number; maxAttempts?: number }
+): Promise<EnsembleResult<T>> {
+  const timeoutMs = opts?.timeoutMs ?? TIMEOUT_MS
+  const maxAttempts = opts?.maxAttempts ?? MAX_ATTEMPTS
   const token = getEnsembleToken()
   if (!token) {
     console.error(
@@ -98,16 +118,17 @@ async function request<T>(path: string, params: Record<string, string>): Promise
   const safeQuery = new URLSearchParams({ ...params, token: "***" }).toString()
 
   let apiCalls = 0
+  let connectRetries = 0
   let lastError = "Unknown error calling EnsembleData"
 
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     apiCalls++
     const startedAt = Date.now()
-    console.log(`${LOG} → REQUEST ${path}?${safeQuery} (attempt ${attempt}/${MAX_ATTEMPTS})`)
+    console.log(`${LOG} → REQUEST ${path}?${safeQuery} (attempt ${attempt}/${maxAttempts})`)
     try {
       const res = await fetch(url, {
         headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
         cache: "no-store",
       })
       console.log(`${LOG} ← RESPONSE ${path} HTTP ${res.status} ${res.statusText} in ${Date.now() - startedAt}ms`)
@@ -116,8 +137,8 @@ async function request<T>(path: string, params: Record<string, string>): Promise
         // Retryable. Respect Retry-After when the provider sends one.
         const retryAfter = Number(res.headers.get("retry-after"))
         lastError = `HTTP ${res.status} ${res.statusText}`
-        console.warn(`${LOG} ${path} ${lastError} (attempt ${attempt}/${MAX_ATTEMPTS})`)
-        if (attempt < MAX_ATTEMPTS) {
+        console.warn(`${LOG} ${path} ${lastError} (attempt ${attempt}/${maxAttempts})`)
+        if (attempt < maxAttempts) {
           await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : RETRY_BASE_MS * 2 ** (attempt - 1))
           continue
         }
@@ -145,9 +166,34 @@ async function request<T>(path: string, params: Record<string, string>): Promise
       }
     } catch (err) {
       const isTimeout = err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")
-      lastError = isTimeout ? `Request timed out after ${TIMEOUT_MS}ms` : err instanceof Error ? err.message : lastError
-      console.warn(`${LOG} ${path} ${lastError} (attempt ${attempt}/${MAX_ATTEMPTS})`)
-      if (attempt < MAX_ATTEMPTS) {
+      const causeCode = (err as { cause?: { code?: string } })?.cause?.code
+
+      // Connection never established (seen live: UND_ERR_CONNECT_TIMEOUT on a
+      // flaky network while plain HTTPS to the host worked moments later). The
+      // provider never received the request, so it is not billed: undo this
+      // attempt's charge and retry with a longer backoff, up to
+      // CONNECT_RETRIES extra times, without using up a billed attempt.
+      if (causeCode && CONNECT_ERROR_CODES.has(causeCode) && connectRetries < CONNECT_RETRIES) {
+        connectRetries++
+        apiCalls--
+        attempt--
+        lastError = `Could not connect to EnsembleData (${causeCode})`
+        console.warn(`${LOG} ${path} ${lastError} — connection retry ${connectRetries}/${CONNECT_RETRIES}`)
+        await sleep(CONNECT_RETRY_BASE_MS * 2 ** (connectRetries - 1))
+        continue
+      }
+      if (causeCode && CONNECT_ERROR_CODES.has(causeCode)) {
+        apiCalls--
+        lastError = `Could not connect to EnsembleData (${causeCode}) — check the server's internet connection`
+        console.error(`${LOG} ${path} ${lastError}`)
+        return { ok: false, error: lastError, retryable: true, apiCalls }
+      }
+
+      lastError = isTimeout
+        ? `Request timed out after ${timeoutMs}ms`
+        : err instanceof Error ? `${err.message}${causeCode ? ` (${causeCode})` : ""}` : lastError
+      console.warn(`${LOG} ${path} ${lastError} (attempt ${attempt}/${maxAttempts})`)
+      if (attempt < maxAttempts) {
         await sleep(RETRY_BASE_MS * 2 ** (attempt - 1))
         continue
       }
@@ -530,6 +576,267 @@ export function normaliseHandle(handle: string | null | undefined): string {
 }
 
 /**
+ * Numeric Instagram user id for a handle — the form /instagram/user/posts and
+ * /instagram/user/tagged-posts require. One billed call.
+ */
+export async function resolveInstagramUserId(handle: string): Promise<EnsembleResult<string>> {
+  const name = normaliseHandle(handle)
+  if (!name) {
+    return { ok: false, error: "No Instagram handle given", retryable: false, apiCalls: 0 }
+  }
+
+  const info = await request<unknown>("/instagram/user/info", { username: name })
+  if (!info.ok) return info
+
+  const data = obj(obj(info.data).data)
+  const userId = str(data.pk) ?? num(data.pk)?.toString() ?? str(data.pk_id) ?? str(data.id)
+  if (!userId) {
+    // data:null means the handle doesn't exist on Instagram — the single most
+    // likely reason a lookup silently yields nothing.
+    const error = `Instagram handle "@${name}" was not found`
+    console.warn(`${LOG} ${error}. It must be a real account handle, not a display name.`)
+    return { ok: false, error, retryable: false, apiCalls: info.apiCalls }
+  }
+  return { ok: true, data: userId, apiCalls: info.apiCalls }
+}
+
+/* ── Instagram tagged posts ───────────────────────────────────────────────── */
+
+/**
+ * One entry of an account's tagged-posts feed — just enough to decide whether
+ * the post is worth a details call. The feed carries the author and type but
+ * NOT the publish time (taken_at_timestamp is null there; verified live), so
+ * the date always comes from fetchInstagramPostDetails.
+ */
+export interface TaggedPostRef {
+  shortcode: string
+  postUrl: string
+  author: string | null
+}
+
+/**
+ * Posts that TAG one Instagram account, newest first — `chunkSize` per page.
+ *
+ * Pages back until `maxPages` is spent or a page contains a shortcode the
+ * caller already knows (`stopAt`) — the feed is newest-first, so everything
+ * past a known post was seen on an earlier run.
+ */
+export async function fetchTaggedPosts(
+  userId: string,
+  options?: { maxPages?: number; stopAt?: Set<string>; chunkSize?: number }
+): Promise<EnsembleResult<TaggedPostRef[]>> {
+  const maxPages = Math.max(1, options?.maxPages ?? 1)
+  const chunkSize = Math.max(1, options?.chunkSize ?? 5)
+  const stopAt = options?.stopAt ?? new Set<string>()
+  const context = `tagged posts of Instagram user ${userId}`
+
+  const collected: TaggedPostRef[] = []
+  const seen = new Set<string>()
+  let cursor: string | null = null
+  let apiCalls = 0
+
+  for (let page = 0; page < maxPages; page++) {
+    // This endpoint regularly takes longer than the default 15s (seen timing
+    // out live), and every attempt is billed — so a long timeout and a single
+    // retry, rather than three short attempts that all time out.
+    const res = await request<unknown>(
+      "/instagram/user/tagged-posts",
+      { user_id: userId, chunk_size: String(chunkSize), ...(cursor ? { cursor } : {}) },
+      { timeoutMs: 60_000, maxAttempts: 2 }
+    )
+    apiCalls += res.apiCalls
+    if (!res.ok) {
+      console.error(`${LOG} ${context}: request failed — ${res.error}`)
+      // Pages already collected are still usable.
+      if (page === 0) return { ...res, apiCalls }
+      break
+    }
+
+    const data = obj(obj(res.data).data)
+    const items = Array.isArray(data.posts) ? data.posts : []
+    let reachedKnown = false
+
+    for (const item of items) {
+      const node = obj(obj(item).node ?? item)
+      const shortcode = str(node.shortcode) ?? str(node.code)
+      if (!shortcode || seen.has(shortcode)) continue
+      seen.add(shortcode)
+      if (stopAt.has(shortcode)) {
+        reachedKnown = true
+        continue
+      }
+      collected.push({
+        shortcode,
+        postUrl: instagramPostUrl(shortcode),
+        author: str(obj(node.owner).username),
+      })
+    }
+
+    const cursorRaw = data.nextCursor ?? data.next_cursor
+    cursor = typeof cursorRaw === "string" && cursorRaw ? cursorRaw : typeof cursorRaw === "number" ? String(cursorRaw) : null
+    console.log(
+      `${LOG} ${context} page ${page + 1}: ${items.length} item(s)` +
+        `${reachedKnown ? ", reached an already-known post" : ""}${cursor ? "" : ", no further pages"}`
+    )
+    if (reachedKnown || !cursor) break
+  }
+
+  return { ok: true, data: collected, apiCalls }
+}
+
+/** Canonical link for an Instagram post. /p/ resolves for reels and carousels too. */
+export function instagramPostUrl(shortcode: string): string {
+  return `https://www.instagram.com/p/${shortcode}/`
+}
+
+export type InstagramMediaType = "video" | "carousel" | "image"
+
+export interface InstagramPostMedia {
+  type: InstagramMediaType
+  /** Source URLs on Instagram's CDN, in slide order. Signed — they expire. */
+  items: { url: string; kind: "video" | "image" }[]
+}
+
+/** Largest rendition from display_resources, else display_url. */
+function bestImageUrl(node: Record<string, unknown>): string | null {
+  const resources = Array.isArray(node.display_resources) ? node.display_resources : []
+  const best = obj(resources[resources.length - 1])
+  return str(best.src) ?? str(node.display_url)
+}
+
+function mediaItem(node: Record<string, unknown>): { url: string; kind: "video" | "image" } | null {
+  const video = node.is_video === true ? str(node.video_url) : null
+  if (video) return { url: video, kind: "video" }
+  const image = bestImageUrl(node)
+  return image ? { url: image, kind: "image" } : null
+}
+
+/**
+ * One Instagram post with its publish date, metrics and downloadable media.
+ * GraphVideo → video, GraphSidecar → carousel (every slide), GraphImage → image.
+ */
+export async function fetchInstagramPostDetails(
+  shortcode: string
+): Promise<EnsembleResult<{ post: EnsemblePost; media: InstagramPostMedia }>> {
+  const res = await request<unknown>(
+    "/instagram/post/details",
+    { code: shortcode, n_comments_to_fetch: "0" },
+    { timeoutMs: 30_000, maxAttempts: 2 }
+  )
+  if (!res.ok) return res
+
+  const node = obj(obj(res.data).data ?? res.data)
+  const post = normaliseInstagram(node)
+  if (!post) {
+    return { ok: false, error: "Instagram post not found", retryable: false, apiCalls: res.apiCalls }
+  }
+
+  const typename = str(node.__typename)
+  const slides = obj(node.edge_sidecar_to_children).edges
+  let media: InstagramPostMedia
+  if (typename === "GraphSidecar" && Array.isArray(slides) && slides.length) {
+    media = {
+      type: "carousel",
+      items: slides.map((e) => mediaItem(obj(obj(e).node))).filter((m): m is NonNullable<typeof m> => m !== null),
+    }
+  } else {
+    const item = mediaItem(node)
+    media = { type: typename === "GraphVideo" || node.is_video === true ? "video" : "image", items: item ? [item] : [] }
+  }
+
+  return { ok: true, data: { post, media }, apiCalls: res.apiCalls }
+}
+
+/* ── TikTok keyword search ────────────────────────────────────────────────── */
+
+/** One TikTok video from a keyword search, with what's needed to archive it. */
+export interface TikTokVideo {
+  post: EnsemblePost
+  /** Author's region code (e.g. "NL", "DE"), when TikTok reports one. */
+  region: string | null
+  /** Downloadable video URLs, best first. Signed CDN links — they expire. */
+  videoUrls: string[]
+}
+
+/** EnsembleData's accepted `period` values, in days (0 = all time). */
+const TIKTOK_SEARCH_PERIODS = [1, 7, 30, 90, 180] as const
+
+/**
+ * TikTok videos matching a keyword, newest first — `/tt/keyword/full-search`
+ * with `sorting=2` (by date) and `match_exactly=true`, as in the n8n flow.
+ *
+ * One request returns the whole window with stats, publish time and video URLs
+ * already included, so the caller needs no per-video details call. Verified
+ * live: 1 unit for a 7-day window, ~25 s response time.
+ */
+export async function searchTikTokByKeyword(
+  keyword: string,
+  options?: { periodDays?: number }
+): Promise<EnsembleResult<TikTokVideo[]>> {
+  const name = keyword.trim().replace(/^[#@]+/, "")
+  if (!name) return { ok: false, error: "No TikTok keyword given", retryable: false, apiCalls: 0 }
+
+  // Snap to the nearest period the endpoint accepts, at or above what was asked.
+  const wanted = options?.periodDays ?? 7
+  const period = TIKTOK_SEARCH_PERIODS.find((p) => p >= wanted) ?? 180
+
+  const res = await request<unknown>(
+    "/tt/keyword/full-search",
+    { name, period: String(period), sorting: "2", match_exactly: "true" },
+    // Slow endpoint (~25 s live) and billed per attempt.
+    { timeoutMs: 90_000, maxAttempts: 2 }
+  )
+  if (!res.ok) return res
+
+  const videos = parseTikTokVideos(res.data)
+  console.log(`${LOG} TikTok keyword "${name}" (${period}d): ${videos.length} video(s)`)
+  return { ok: true, data: videos, apiCalls: res.apiCalls }
+}
+
+/**
+ * One TikTok account's own recent videos, newest first — `/tt/user/posts`.
+ *
+ * Real-time, unlike the keyword index (which was seen lagging more than a day:
+ * a video posted 21 Oct was in the account feed but not yet searchable).
+ * ~4 s per call.
+ */
+export async function fetchTikTokUserVideos(handle: string): Promise<EnsembleResult<TikTokVideo[]>> {
+  const username = normaliseHandle(handle)
+  if (!username) return { ok: false, error: "No TikTok handle given", retryable: false, apiCalls: 0 }
+
+  const res = await request<unknown>(
+    "/tt/user/posts",
+    { username, depth: "1" },
+    { timeoutMs: 45_000, maxAttempts: 2 }
+  )
+  if (!res.ok) return res
+  return { ok: true, data: parseTikTokVideos(res.data), apiCalls: res.apiCalls }
+}
+
+/** TikTok payloads nest the list under `data` or `data.data`; each item may wrap `aweme_info`. */
+function parseTikTokVideos(payload: unknown): TikTokVideo[] {
+  const root = obj(payload)
+  const list = Array.isArray(root.data) ? root.data : Array.isArray(obj(root.data).data) ? (obj(root.data).data as unknown[]) : []
+
+  const videos: TikTokVideo[] = []
+  for (const item of list) {
+    const aweme = obj(obj(item).aweme_info ?? item)
+    const post = normaliseTikTok(aweme)
+    if (!post) continue
+    const urls = obj(obj(aweme.video).play_addr).url_list
+    videos.push({
+      post,
+      region: str(obj(aweme.author).region) ?? str(aweme.region),
+      // n8n downloaded url_list[2] (the API host); try it first, CDNs after.
+      videoUrls: Array.isArray(urls)
+        ? [urls[2], urls[0], urls[1]].filter((u): u is string => typeof u === "string" && u.length > 0)
+        : [],
+    })
+  }
+  return videos.sort((a, b) => (b.post.publishedAt?.getTime() ?? 0) - (a.post.publishedAt?.getTime() ?? 0))
+}
+
+/**
  * Recent posts published BY one account.
  *
  * This is the account-scoped endpoint pair: every post it returns belongs to
@@ -566,22 +873,13 @@ export async function fetchAccountPosts(
   let apiCalls = 0
 
   if (platform === "instagram") {
-    const info = await request<unknown>("/instagram/user/info", { username: name })
+    const info = await resolveInstagramUserId(name)
     apiCalls += info.apiCalls
     if (!info.ok) {
       console.error(`${LOG} ${context}: could not resolve handle — ${info.error}`)
       return { ...info, apiCalls }
     }
-
-    const data = obj(obj(info.data).data)
-    const userId = str(data.pk) ?? num(data.pk)?.toString() ?? str(data.pk_id) ?? str(data.id)
-    if (!userId) {
-      // data:null means the handle doesn't exist on Instagram — the single most
-      // likely reason a mention silently yields nothing.
-      const error = `Instagram handle "@${name}" was not found`
-      console.warn(`${LOG} ${context}: ${error}. The influencer's handle must be a real account handle, not a display name.`)
-      return { ok: false, error, retryable: false, apiCalls }
-    }
+    const userId = info.data
 
     const res = await request<unknown>("/instagram/user/posts", {
       user_id: userId,

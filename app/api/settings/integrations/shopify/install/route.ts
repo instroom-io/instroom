@@ -2,7 +2,12 @@ import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
-import { buildShopifyInstallUrl, isValidShopDomain } from "@/lib/shopify-oauth"
+import {
+  buildShopifyInstallUrl,
+  isValidShopDomain,
+  SHOPIFY_NONCE_COOKIE,
+  SHOPIFY_STATE_MAX_AGE_SECONDS,
+} from "@/lib/shopify-oauth"
 
 // GET /api/settings/integrations/shopify/install?brandId=...&shopDomain=...
 //
@@ -40,7 +45,16 @@ export async function GET(req: NextRequest) {
   }
 
   const redirectUri = `${origin}/api/settings/integrations/shopify/callback`
-  const installUrl = buildShopifyInstallUrl(shopDomain, redirectUri, brandId)
+  const { url, nonce } = buildShopifyInstallUrl(shopDomain, redirectUri, brandId, session.user.id)
 
-  return NextResponse.redirect(installUrl)
+  const res = NextResponse.redirect(url)
+  // Lax, so it's sent on Shopify's redirect back.
+  res.cookies.set(SHOPIFY_NONCE_COOKIE, nonce, {
+    httpOnly: true,
+    secure: origin.startsWith("https://"),
+    sameSite: "lax",
+    path: "/api/settings/integrations/shopify",
+    maxAge: SHOPIFY_STATE_MAX_AGE_SECONDS,
+  })
+  return res
 }

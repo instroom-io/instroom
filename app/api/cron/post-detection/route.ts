@@ -24,15 +24,19 @@ import {
 // Set up (production):
 //   1. Set CRON_SECRET in the Vercel project environment — a long random
 //      string. Without it this handler fails closed with 401, by design.
-//   2. Point the scheduler at it every 5 minutes:
-//        curl -X POST https://instroom.io/api/cron/post-detection //             -H "Authorization: Bearer $CRON_SECRET"
+//   2. Point the scheduler at it every 15 minutes (InterServer DirectAdmin →
+//      Cron Jobs, schedule */15 * * * *):
+//        curl -s -X POST -H "Authorization: Bearer $CRON_SECRET" \
+//          https://instroom.io/api/cron/post-detection >/dev/null 2>&1
 //      A GET with the same header works too, for schedulers that only do GETs.
 //   3. Nothing else. The secret never reaches the browser: it is read only
 //      here, server-side.
 //
-// Polling faster than every 5 minutes is harmless but pointless —
-// runMonitoringPass only picks up settings whose last_synced_at is older than
-// MIN_POLL_INTERVAL_MS, so extra calls find nothing due and spend no quota.
+// SCHEDULED MODE: each brand picks a daily time per platform (Instagram,
+// TikTok) and a timezone on the Auto Post Detection card. A platform runs on the
+// first tick at or after its time, once per day (lib/post-tracker/schedule.ts),
+// so a 15-minute tick hits the chosen time within 15 minutes. Ticks with nothing
+// due do DB reads only and spend no provider quota.
 //
 // This works with zero user traffic and no browser session: the scheduler is
 // the only thing that has to be awake.
@@ -91,7 +95,8 @@ async function handle(req: NextRequest) {
 
   try {
     const brandId = req.nextUrl.searchParams.get("brandId") ?? undefined
-    const summary = await runMonitoringPass({ brandId })
+    // Scheduled mode: each brand/platform runs once a day at its chosen time.
+    const summary = await runMonitoringPass({ brandId, scheduled: true })
     return NextResponse.json({ ok: true, summary })
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error"

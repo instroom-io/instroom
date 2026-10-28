@@ -24,7 +24,15 @@ function deriveShipmentStatus(order: ShopifyOrderEntry): string | null {
   return last?.shipment_status ?? null
 }
 
-async function matchInfluencerByDiscountCode(brandId: string, order: ShopifyOrderEntry) {
+type CouponAttribution = { brand_influencer_id: string; coupon: string | null }
+
+const loadCouponAttributions = (brandId: string): Promise<CouponAttribution[]> =>
+  prisma.attribution.findMany({
+    where: { brand_id: brandId, coupon: { not: null } },
+    select: { brand_influencer_id: true, coupon: true },
+  })
+
+async function matchInfluencerByDiscountCode(brandId: string, order: ShopifyOrderEntry, preloaded?: CouponAttribution[]) {
   const codes = (order.discount_codes ?? [])
     .map((dc) => dc.code?.trim().toUpperCase())
     .filter((code): code is string => Boolean(code))
@@ -33,10 +41,7 @@ async function matchInfluencerByDiscountCode(brandId: string, order: ShopifyOrde
     return { brandInfluencerId: null, matchedCode: null }
   }
 
-  const attributions = await prisma.attribution.findMany({
-    where: { brand_id: brandId, coupon: { not: null } },
-    select: { brand_influencer_id: true, coupon: true },
-  })
+  const attributions = preloaded ?? await loadCouponAttributions(brandId)
 
   const match = attributions.find((a) => a.coupon && codes.includes(a.coupon.trim().toUpperCase()))
 
@@ -46,13 +51,19 @@ async function matchInfluencerByDiscountCode(brandId: string, order: ShopifyOrde
   }
 }
 
-export async function syncShopifyOrder(params: { brandId: string; order: ShopifyOrderEntry }) {
-  const { brandId, order } = params
+export async function syncShopifyOrder(params: { brandId: string; order: ShopifyOrderEntry; attributions?: CouponAttribution[] }) {
+  const { brandId, order, attributions } = params
   const orderId = String(order.id)
 
   const existing = await prisma.shopifyOrder.findUnique({
     where: { brand_id_shopify_order_id: { brand_id: brandId, shopify_order_id: orderId } },
   })
+
+  // Webhooks can arrive out of order.
+  const savedUpdatedAt = (existing?.raw as { updated_at?: string } | null)?.updated_at
+  if (savedUpdatedAt && order.updated_at && new Date(order.updated_at) < new Date(savedUpdatedAt)) {
+    return { success: true as const, orderId, brandInfluencerId: existing!.brand_influencer_id, skipped: "stale" as const }
+  }
 
   let brandInfluencerId: string | null
   let discountCode: string | null
@@ -62,7 +73,7 @@ export async function syncShopifyOrder(params: { brandId: string; order: Shopify
     brandInfluencerId = existing.brand_influencer_id
     discountCode = existing.discount_code
   } else {
-    const match = await matchInfluencerByDiscountCode(brandId, order)
+    const match = await matchInfluencerByDiscountCode(brandId, order, attributions)
     brandInfluencerId = match.brandInfluencerId
     discountCode = match.matchedCode
   }
@@ -93,6 +104,11 @@ export async function syncShopifyOrder(params: { brandId: string; order: Shopify
 
   if (!brandInfluencerId) {
     return { success: true as const, orderId, brandInfluencerId: null }
+  }
+
+  // Only Instroom's own order moves the card, not customers' coupon orders.
+  if (existing?.source !== "instroom") {
+    return { success: true as const, orderId, brandInfluencerId, skipped: "customer-order" as const }
   }
 
   const record = await prisma.brandInfluencer.findUnique({
@@ -180,15 +196,17 @@ export async function syncShopifyOrdersForBrand(brandId: string) {
     return { success: false as const, reason: "Shopify is not connected" }
   }
 
-  const orders = await listShopifyOrders(connection.shopDomain, connection.accessToken, {
+  const startedAt = new Date()
+  const { orders, complete } = await listShopifyOrders(connection.shopDomain, connection.accessToken, {
     updatedAtMin: connection.lastOrderSyncAt,
   })
+  const attributions = await loadCouponAttributions(brandId)
 
   let matched = 0
   let unmatched = 0
 
   for (const order of orders) {
-    const result = await syncShopifyOrder({ brandId, order })
+    const result = await syncShopifyOrder({ brandId, order, attributions })
     if (result.brandInfluencerId) {
       matched += 1
     } else {
@@ -196,7 +214,9 @@ export async function syncShopifyOrdersForBrand(brandId: string) {
     }
   }
 
-  await setShopifyOrderSyncCursor(brandId, new Date())
+  // Stopped early: resume from the last order so none are skipped.
+  const lastUpdated = orders.at(-1)?.updated_at
+  await setShopifyOrderSyncCursor(brandId, complete || !lastUpdated ? startedAt : new Date(lastUpdated))
 
-  return { success: true as const, ordersSynced: orders.length, matched, unmatched }
+  return { success: true as const, ordersSynced: orders.length, matched, unmatched, complete }
 }

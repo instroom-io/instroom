@@ -29,6 +29,19 @@ export interface CampaignDeliverable {
   usageRights?: string
 }
 
+/** Sum one metric across deliverables; null when no deliverable has it. */
+export function sumDeliverableMetric(
+  list: CampaignDeliverable[],
+  key: "likes" | "comments" | "views"
+): number | null {
+  let total: number | null = null
+  for (const d of list) {
+    const v = d[key]
+    if (typeof v === "number" && Number.isFinite(v)) total = (total ?? 0) + v
+  }
+  return total
+}
+
 /** Same upper bound as the Paid Collaboration editor's "How many?" select. */
 export const MAX_DELIVERABLES = 10
 const MAX_NAME_LENGTH = 200

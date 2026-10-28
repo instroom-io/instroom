@@ -70,6 +70,29 @@ export const CLOSED_COLUMNS: readonly ClosedColumn[] = [
   "Issues",
 ] as const
 
+/** How far back detection looks for an order with no ship date. */
+export const DETECTION_FALLBACK_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
+
+/**
+ * Earliest publish time a detected post may have to count for a card.
+ *
+ * The ship date when there is one: a post made before the product went out
+ * can't be about this collaboration. Otherwise the last 30 days.
+ *
+ * Deliberately NOT delivered_at: on most cards that records when someone
+ * dragged the card into Delivered, not when the parcel arrived, so it fell
+ * AFTER posts the influencer had already published and hid them (a post from
+ * 18 Oct was skipped because the card was moved on 21 Oct).
+ *
+ * Used at import time by detection (lib/post-tracker/monitor.ts → tagged.ts and
+ * the caption route). The detected-posts list and the Posted evidence check
+ * filter by the ship date alone: undated rows were already windowed here at
+ * import, and a rolling 30 days there would make old detections vanish.
+ */
+export function detectionWindowStart(shippedAt: Date | null | undefined, now: number = Date.now()): Date {
+  return shippedAt ?? new Date(now - DETECTION_FALLBACK_WINDOW_MS)
+}
+
 export function isClosedColumn(value: unknown): value is ClosedColumn {
   return typeof value === "string" && (CLOSED_COLUMNS as readonly string[]).includes(value)
 }

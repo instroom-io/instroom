@@ -6,9 +6,17 @@ import {
   completeShopifyDraftOrder,
   getShopifyDiscountByCode,
   getShopifyOrder,
+  findShopifyOrderIdByTag,
+  findOpenDraftOrderIdByTag,
   type ShopifyShippingAddress,
   type ShopifyAppliedDiscount,
 } from "@/lib/shopify"
+
+export class ShopifyOrderExistsError extends Error {
+  constructor(public orderNumber: string, public adminUrl: string) {
+    super(`An order was already created for this influencer (${orderNumber})`)
+  }
+}
 
 function safeParse(value: string | null) {
   if (!value) return {}
@@ -50,42 +58,62 @@ export async function createShopifyOrderForInfluencer(params: {
   const campaignType = productDetails.campaignType as string | undefined
   const coupon = brandInfluencer.attribution?.coupon ?? null
 
-  const note = `Instroom — ${brandInfluencer.influencer.full_name || brandInfluencer.influencer.handle}`
-  const tags = "instroom"
+  const { shopDomain, accessToken } = connection
+
+  const saved = await prisma.shopifyOrder.findFirst({
+    where: { brand_id: brandId, brand_influencer_id: brandInfluencerId, source: "instroom" },
+    orderBy: { created_at: "desc" },
+    select: { shopify_order_id: true, raw: true },
+  })
+  if (saved) {
+    const raw = saved.raw as { name?: string } | null
+    throw new ShopifyOrderExistsError(raw?.name ?? saved.shopify_order_id, `https://${shopDomain}/admin/orders/${saved.shopify_order_id}`)
+  }
+
+  // Per-influencer tag: a retry reuses what a failed attempt left in Shopify.
+  const tag = `instroom-${brandInfluencerId}`
 
   let appliedDiscount: ShopifyAppliedDiscount | undefined
-  let priceOverride: string | undefined
   let discountAmount: string | null = null
+  let orderId = await findShopifyOrderIdByTag(shopDomain, accessToken, tag)
 
-  if (campaignType === "gifting") {
-    priceOverride = "0.00"
-  } else if (coupon) {
-    const discount = await getShopifyDiscountByCode(connection.shopDomain, connection.accessToken, coupon)
-    if (discount) {
-      appliedDiscount = { value_type: discount.valueType, value: discount.value, title: coupon }
-      discountAmount = discount.value
+  if (!orderId) {
+    let draftId = await findOpenDraftOrderIdByTag(shopDomain, accessToken, tag)
+    if (!draftId) {
+      let priceOverride: string | undefined
+      if (campaignType === "gifting") {
+        priceOverride = "0.00"
+      } else if (coupon) {
+        const discount = await getShopifyDiscountByCode(shopDomain, accessToken, coupon)
+        if (discount) {
+          appliedDiscount = { value_type: discount.valueType, value: discount.value, title: coupon }
+          discountAmount = discount.value
+        }
+      }
+      const draftOrder = await createShopifyDraftOrder(shopDomain, accessToken, {
+        variantId,
+        quantity,
+        shippingAddress,
+        note: `Instroom — ${brandInfluencer.influencer.full_name || brandInfluencer.influencer.handle}`,
+        tags: ["instroom", tag],
+        priceOverride,
+        appliedDiscount,
+      })
+      draftId = draftOrder.id
     }
+
+    const completed = await completeShopifyDraftOrder(shopDomain, accessToken, draftId)
+    if (!completed.order_id) {
+      throw new Error("Shopify did not return a completed order")
+    }
+    orderId = completed.order_id
   }
 
-  const draftOrder = await createShopifyDraftOrder(connection.shopDomain, connection.accessToken, {
-    variantId,
-    quantity,
-    shippingAddress,
-    note,
-    tags,
-    priceOverride,
-    appliedDiscount,
-  })
-
-  const completed = await completeShopifyDraftOrder(connection.shopDomain, connection.accessToken, draftOrder.id)
-  if (!completed.order_id) {
-    throw new Error("Shopify did not return a completed order")
-  }
-
-  const finalOrder = await getShopifyOrder(connection.shopDomain, connection.accessToken, completed.order_id)
+  const finalOrder = await getShopifyOrder(shopDomain, accessToken, orderId)
   const shopifyOrderId = String(finalOrder.id)
 
-  await prisma.shopifyOrder.upsert({
+  // The webhook may insert this row concurrently; retry once.
+  const save = () => prisma.shopifyOrder.upsert({
     where: { brand_id_shopify_order_id: { brand_id: brandId, shopify_order_id: shopifyOrderId } },
     create: {
       brand_id: brandId,
@@ -108,6 +136,10 @@ export async function createShopifyOrderForInfluencer(params: {
       raw: finalOrder as any,
     },
   })
+  await save().catch((e: { code?: string }) => {
+    if (e?.code === "P2002") return save()
+    throw e
+  })
 
   productDetails.shippingAddress = shippingAddress
   productDetails.variantId = String(variantId)
@@ -128,7 +160,7 @@ export async function createShopifyOrderForInfluencer(params: {
     success: true as const,
     shopifyOrderId,
     orderNumber: finalOrder.name ?? (finalOrder.order_number ? `#${finalOrder.order_number}` : shopifyOrderId),
-    adminUrl: `https://${connection.shopDomain}/admin/orders/${finalOrder.id}`,
+    adminUrl: `https://${shopDomain}/admin/orders/${finalOrder.id}`,
     priceBreakdown: {
       productPrice,
       discountCode: appliedDiscount ? coupon : null,

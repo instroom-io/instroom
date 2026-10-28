@@ -1,37 +1,28 @@
 import { NextRequest, NextResponse } from "next/server"
 import { verifyShopifySessionToken } from "@/lib/shopify-session-token"
 import { getBrandIdByShopDomain, getShopifyConnection } from "@/lib/shopify-connection"
+import { ensureShopifyInstallation, idTokenFrom, retryWithFreshIdToken } from "@/lib/shopify-embedded"
 
-// Backs the embedded panel Shopify iframes into its own admin — authenticated
-// via the session token App Bridge hands the page client-side (there's no
-// NextAuth cookie in that context), not the usual getServerSession pattern
-// every other route in this app uses.
+// Auth: App Bridge ID token (no login cookie inside Shopify's iframe).
 export async function GET(req: NextRequest) {
-  const authHeader = req.headers.get("authorization")
-  const token = authHeader?.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : null
-  if (!token) {
-    return NextResponse.json({ error: "Missing session token" }, { status: 401 })
-  }
-
-  const verified = verifyShopifySessionToken(token)
-  if (!verified) {
-    return NextResponse.json({ error: "Invalid session token" }, { status: 401 })
-  }
+  const idToken = idTokenFrom(req)
+  const verified = idToken ? verifyShopifySessionToken(idToken) : null
+  if (!idToken || !verified) return retryWithFreshIdToken()
 
   const brandId = await getBrandIdByShopDomain(verified.shop)
-  if (!brandId) {
-    return NextResponse.json({ connected: false })
+  const connection = brandId ? await getShopifyConnection(brandId) : null
+  if (connection && connection.shopDomain === verified.shop) {
+    return NextResponse.json({
+      connected: true,
+      brandId,
+      storeName: connection.storeName,
+      lastOrderSyncAt: connection.lastOrderSyncAt?.toISOString() ?? null,
+    })
   }
 
-  const connection = await getShopifyConnection(brandId)
-  if (!connection) {
-    return NextResponse.json({ connected: false })
-  }
+  // Not linked yet: get access now, before any UI.
+  const installed = await ensureShopifyInstallation(verified.shop, idToken)
+  if (installed !== "ok") return installed
 
-  return NextResponse.json({
-    connected: true,
-    brandId,
-    storeName: connection.storeName,
-    lastOrderSyncAt: connection.lastOrderSyncAt?.toISOString() ?? null,
-  })
+  return NextResponse.json({ connected: false })
 }

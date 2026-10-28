@@ -177,7 +177,8 @@ export async function PATCH(
       const hasUrl = Boolean(record.post_url && record.post_url.trim()) ||
         Boolean(typeof postUrl === "string" && postUrl.trim()) ||
         hasDeliverableLink
-      const trackingSince = record.shipped_at ?? record.delivered_at ?? null
+      // Ship date only — see detectionWindowStart in lib/post-tracker-status.ts.
+      const trackingSince = record.shipped_at ?? null
       const detected = hasUrl
         ? 0
         : await prisma.detectedPost.count({
