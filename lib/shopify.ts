@@ -17,6 +17,18 @@ function shopifyGraphQLUrl(shopDomain: string) {
 
 type GraphQLUserError = { field?: string[] | null; message: string }
 
+const MAX_THROTTLE_RETRIES = 4
+
+type ThrottleStatus = { currentlyAvailable?: number; restoreRate?: number }
+
+function throttleWaitSeconds(json: { extensions?: { cost?: { requestedQueryCost?: number; throttleStatus?: ThrottleStatus } } } | null) {
+  const cost = json?.extensions?.cost
+  const available = cost?.throttleStatus?.currentlyAvailable ?? 0
+  const rate = cost?.throttleStatus?.restoreRate || 50
+  const needed = (cost?.requestedQueryCost ?? rate) - available
+  return Math.min(10, Math.max(1, Math.ceil(needed / rate)))
+}
+
 async function shopifyGraphQL<T>(
   shopDomain: string,
   accessToken: string,
@@ -27,29 +39,39 @@ async function shopifyGraphQL<T>(
     throw new Error("Shopify access token is not configured")
   }
 
-  const res = await fetch(shopifyGraphQLUrl(shopDomain), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Shopify-Access-Token": accessToken,
-    },
-    body: JSON.stringify({ query, variables }),
-    cache: "no-store",
-  })
+  for (let attempt = 0; ; attempt += 1) {
+    const res = await fetch(shopifyGraphQLUrl(shopDomain), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Shopify-Access-Token": accessToken,
+      },
+      body: JSON.stringify({ query, variables }),
+      cache: "no-store",
+    })
 
-  const json = await res.json().catch(() => null)
+    const json = await res.json().catch(() => null)
+    const throttled = res.status === 429 ||
+      (json?.errors ?? []).some((e: { extensions?: { code?: string } }) => e?.extensions?.code === "THROTTLED")
 
-  if (!res.ok) {
-    throw new Error(json?.errors ? JSON.stringify(json.errors) : `Shopify API error ${res.status}`)
+    // Throttled: wait for the bucket to refill.
+    if (throttled && attempt < MAX_THROTTLE_RETRIES) {
+      const retryAfter = Number(res.headers.get("Retry-After"))
+      const seconds = retryAfter > 0 ? retryAfter : throttleWaitSeconds(json)
+      await new Promise((resolve) => setTimeout(resolve, seconds * 1000))
+      continue
+    }
+
+    if (!res.ok) {
+      throw new Error(json?.errors ? JSON.stringify(json.errors) : `Shopify API error ${res.status}`)
+    }
+    // Mutation userErrors also come with HTTP 200; see throwOnUserErrors.
+    if (json?.errors?.length) {
+      throw new Error(JSON.stringify(json.errors))
+    }
+
+    return json.data as T
   }
-  // Top-level GraphQL errors (bad query, access-scope denial, etc.) are
-  // distinct from a mutation's `userErrors` — those still return HTTP 200
-  // and are handled per-mutation via throwOnUserErrors below.
-  if (json?.errors?.length) {
-    throw new Error(JSON.stringify(json.errors))
-  }
-
-  return json.data as T
 }
 
 function throwOnUserErrors(userErrors: GraphQLUserError[] | null | undefined) {
@@ -148,6 +170,7 @@ export type ShopifyOrderEntry = {
   fulfillment_status?: string | null
   cancelled_at?: string | null
   created_at?: string
+  updated_at?: string
   discount_codes?: { code: string; amount?: string }[]
   fulfillments?: ShopifyFulfillment[]
   line_items?: { price: string; quantity: number }[]
@@ -167,36 +190,40 @@ export type ShopifyProduct = {
   variants: ShopifyVariant[]
 }
 
-// Shared field selection for both listShopifyOrders and getShopifyOrder so
-// the two stay in lockstep — same shape in, same shape out.
-const ORDER_FIELDS = `
+// List sizes stay small: Shopify rejects queries over 1,000 cost points.
+function orderFields(size: "list" | "single") {
+  const [lineItems, fulfillments, events] = size === "list" ? [1, 3, 1] : [50, 10, 5]
+  return `
   legacyResourceId
   name
   createdAt
+  updatedAt
   cancelledAt
   displayFinancialStatus
   displayFulfillmentStatus
   currentTotalPriceSet { shopMoney { amount } }
   currentTotalDiscountsSet { shopMoney { amount } }
   discountCodes
-  lineItems(first: 50) {
+  lineItems(first: ${lineItems}) {
     nodes {
       quantity
       discountedUnitPriceSet { shopMoney { amount } }
     }
   }
-  fulfillments(first: 10) {
+  fulfillments(first: ${fulfillments}) {
     status
-    events(first: 5, sortKey: HAPPENED_AT, reverse: true) {
+    events(first: ${events}, sortKey: HAPPENED_AT, reverse: true) {
       nodes { status }
     }
   }
 `
+}
 
 type GraphQLOrderNode = {
   legacyResourceId: string
   name: string
   createdAt: string
+  updatedAt: string
   cancelledAt: string | null
   displayFinancialStatus: string | null
   displayFulfillmentStatus: string | null
@@ -217,6 +244,7 @@ function mapGraphQLOrder(node: GraphQLOrderNode): ShopifyOrderEntry {
     fulfillment_status: lowerOrNull(node.displayFulfillmentStatus),
     cancelled_at: node.cancelledAt,
     created_at: node.createdAt,
+    updated_at: node.updatedAt,
     discount_codes: (node.discountCodes ?? []).map((code) => ({ code })),
     fulfillments: (node.fulfillments ?? []).map((f) => ({
       status: lowerOrNull(f.status),
@@ -250,21 +278,24 @@ async function getShopCurrencyCode(shopDomain: string, accessToken: string): Pro
   return shop.currencyCode
 }
 
+const ORDERS_PAGE_SIZE = 30
+
+/** Oldest first; `complete: false` when stopped at `maxPages`. */
 export async function listShopifyOrders(
   shopDomain: string,
   accessToken: string,
-  opts?: { updatedAtMin?: Date | null }
-): Promise<ShopifyOrderEntry[]> {
+  opts?: { updatedAtMin?: Date | null; maxPages?: number }
+): Promise<{ orders: ShopifyOrderEntry[]; complete: boolean }> {
   const allOrders: ShopifyOrderEntry[] = []
-  const maxPages = 20
+  const maxPages = opts?.maxPages ?? 40
   let cursor: string | null = null
   const searchQuery = opts?.updatedAtMin ? `updated_at:>='${opts.updatedAtMin.toISOString()}'` : undefined
 
   const query = `
     query ListOrders($cursor: String, $searchQuery: String) {
-      orders(first: 250, after: $cursor, query: $searchQuery, sortKey: UPDATED_AT) {
+      orders(first: ${ORDERS_PAGE_SIZE}, after: $cursor, query: $searchQuery, sortKey: UPDATED_AT) {
         pageInfo { hasNextPage endCursor }
-        nodes { ${ORDER_FIELDS} }
+        nodes { ${orderFields("list")} }
       }
     }
   `
@@ -279,77 +310,64 @@ export async function listShopifyOrders(
       searchQuery,
     })
 
-    const pageOrders = data.orders.nodes ?? []
-    if (pageOrders.length === 0) break
+    allOrders.push(...(data.orders.nodes ?? []).map(mapGraphQLOrder))
 
-    allOrders.push(...pageOrders.map(mapGraphQLOrder))
-
-    if (!data.orders.pageInfo.hasNextPage) break
+    if (!data.orders.pageInfo.hasNextPage) return { orders: allOrders, complete: true }
     cursor = data.orders.pageInfo.endCursor
   }
 
-  return allOrders
+  return { orders: allOrders, complete: false }
 }
 
+/** Queried per variant to stay under the 1,000-point query cost cap. */
 export async function listShopifyProducts(shopDomain: string, accessToken: string): Promise<ShopifyProduct[]> {
-  const allProducts: ShopifyProduct[] = []
-  const maxPages = 20
+  const products = new Map<string, ShopifyProduct>()
+  const maxPages = 40
   let cursor: string | null = null
 
   const query = `
-    query ListProducts($cursor: String) {
-      products(first: 250, after: $cursor) {
+    query ListVariants($cursor: String) {
+      productVariants(first: 250, after: $cursor) {
         pageInfo { hasNextPage endCursor }
         nodes {
           legacyResourceId
           title
-          featuredImage { url }
-          variants(first: 100) {
-            nodes { legacyResourceId title price sku }
-          }
+          price
+          sku
+          product { legacyResourceId title }
         }
       }
     }
   `
 
-  type GraphQLProductNode = {
+  type VariantNode = {
     legacyResourceId: string
     title: string
-    featuredImage: { url: string } | null
-    variants: { nodes: { legacyResourceId: string; title: string; price: string; sku: string | null }[] }
+    price: string
+    sku: string | null
+    product: { legacyResourceId: string; title: string }
   }
 
-  type ProductsResponse = {
-    products: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: GraphQLProductNode[] }
+  type VariantsResponse = {
+    productVariants: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: VariantNode[] }
   }
 
   for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
-    const data: ProductsResponse = await shopifyGraphQL<ProductsResponse>(shopDomain, accessToken, query, {
+    const data: VariantsResponse = await shopifyGraphQL<VariantsResponse>(shopDomain, accessToken, query, {
       cursor,
     })
 
-    const pageProducts = data.products.nodes ?? []
-    if (pageProducts.length === 0) break
+    for (const v of data.productVariants.nodes ?? []) {
+      const id = v.product.legacyResourceId
+      if (!products.has(id)) products.set(id, { id, title: v.product.title, image: null, variants: [] })
+      products.get(id)!.variants.push({ id: v.legacyResourceId, title: v.title, price: v.price, sku: v.sku ?? null })
+    }
 
-    allProducts.push(
-      ...pageProducts.map((p: GraphQLProductNode) => ({
-        id: p.legacyResourceId,
-        title: p.title,
-        image: p.featuredImage ? { src: p.featuredImage.url } : null,
-        variants: (p.variants?.nodes ?? []).map((v: GraphQLProductNode["variants"]["nodes"][number]) => ({
-          id: v.legacyResourceId,
-          title: v.title,
-          price: v.price,
-          sku: v.sku ?? null,
-        })),
-      }))
-    )
-
-    if (!data.products.pageInfo.hasNextPage) break
-    cursor = data.products.pageInfo.endCursor
+    if (!data.productVariants.pageInfo.hasNextPage) break
+    cursor = data.productVariants.pageInfo.endCursor
   }
 
-  return allProducts
+  return [...products.values()]
 }
 
 export type ShopifyShippingAddress = {
@@ -378,7 +396,7 @@ export async function createShopifyDraftOrder(
     quantity: number
     shippingAddress: ShopifyShippingAddress
     note?: string
-    tags?: string
+    tags?: string[]
     priceOverride?: string
     appliedDiscount?: ShopifyAppliedDiscount
   }
@@ -413,7 +431,7 @@ export async function createShopifyDraftOrder(
     useCustomerDefaultAddress: false,
   }
   if (params.note !== undefined) input.note = params.note
-  if (params.tags !== undefined) input.tags = [params.tags]
+  if (params.tags !== undefined) input.tags = params.tags
   if (params.appliedDiscount) {
     input.appliedDiscount = {
       title: params.appliedDiscount.title,
@@ -476,6 +494,7 @@ export async function completeShopifyDraftOrder(
 const WEBHOOK_TOPIC_MAP: Record<string, string> = {
   "orders/create": "ORDERS_CREATE",
   "orders/updated": "ORDERS_UPDATED",
+  "app/uninstalled": "APP_UNINSTALLED",
 }
 
 // Registers a webhook subscription right after OAuth install, so the brand
@@ -526,10 +545,57 @@ export async function createShopifyWebhook(
   }
 }
 
+export async function findShopifyOrderIdByTag(shopDomain: string, accessToken: string, tag: string) {
+  const data = await shopifyGraphQL<{ orders: { nodes: { legacyResourceId: string }[] } }>(
+    shopDomain,
+    accessToken,
+    `query FindOrderByTag($q: String!) {
+      orders(first: 1, query: $q, sortKey: CREATED_AT, reverse: true) { nodes { legacyResourceId } }
+    }`,
+    { q: `tag:'${tag}'` }
+  )
+  return data.orders.nodes[0]?.legacyResourceId ?? null
+}
+
+export async function findOpenDraftOrderIdByTag(shopDomain: string, accessToken: string, tag: string) {
+  const data = await shopifyGraphQL<{ draftOrders: { nodes: { legacyResourceId: string }[] } }>(
+    shopDomain,
+    accessToken,
+    `query FindDraftByTag($q: String!) {
+      draftOrders(first: 1, query: $q, sortKey: UPDATED_AT, reverse: true) { nodes { legacyResourceId } }
+    }`,
+    { q: `tag:'${tag}' status:open` }
+  )
+  return data.draftOrders.nodes[0]?.legacyResourceId ?? null
+}
+
+/** Best-effort. */
+export async function deleteShopifyWebhooks(shopDomain: string, accessToken: string) {
+  try {
+    const data = await shopifyGraphQL<{ webhookSubscriptions: { nodes: { id: string }[] } }>(
+      shopDomain,
+      accessToken,
+      `query ListWebhooks { webhookSubscriptions(first: 50) { nodes { id } } }`
+    )
+    for (const { id } of data.webhookSubscriptions.nodes) {
+      await shopifyGraphQL(
+        shopDomain,
+        accessToken,
+        `mutation DeleteWebhook($id: ID!) {
+          webhookSubscriptionDelete(id: $id) { deletedWebhookSubscriptionId userErrors { field message } }
+        }`,
+        { id }
+      )
+    }
+  } catch (error) {
+    console.error(`[Shopify] failed to remove webhooks for ${shopDomain}`, error)
+  }
+}
+
 export async function getShopifyOrder(shopDomain: string, accessToken: string, orderId: string | number) {
   const query = `
     query GetOrder($id: ID!) {
-      order(id: $id) { ${ORDER_FIELDS} }
+      order(id: $id) { ${orderFields("single")} }
     }
   `
   const data = await shopifyGraphQL<{ order: GraphQLOrderNode | null }>(shopDomain, accessToken, query, {

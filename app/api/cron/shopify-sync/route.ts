@@ -1,3 +1,4 @@
+import crypto from "crypto"
 import { NextRequest, NextResponse } from "next/server"
 import { listConnectedShopifyBrandIds } from "@/lib/shopify-connection"
 import { syncShopifyOrdersForBrand } from "@/lib/shopify-orders"
@@ -24,13 +25,16 @@ import { syncShopifyOrdersForBrand } from "@/lib/shopify-orders"
 export const dynamic = "force-dynamic"
 export const maxDuration = 300
 
-export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url)
-  const headerSecret = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "")
-  const querySecret = searchParams.get("secret")
-  const providedSecret = headerSecret || querySecret
+// Header only (URLs get logged), constant-time compare.
+function isAuthorized(req: NextRequest) {
+  const expected = process.env.CRON_SECRET
+  const provided = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "")
+  if (!expected || !provided || provided.length !== expected.length) return false
+  return crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected))
+}
 
-  if (!providedSecret || providedSecret !== process.env.CRON_SECRET) {
+export async function GET(req: NextRequest) {
+  if (!isAuthorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 

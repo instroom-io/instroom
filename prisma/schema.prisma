@@ -505,6 +505,14 @@ model ShopifyOrder {
 // No FK to Brand — shop/redact fires when a store's connection is being torn
 // down, and a data_request/redact can arrive for a shop that's since
 // disconnected, so brand_id is a plain nullable scalar, not a relation.
+// Installed from Shopify, not yet linked to a brand. Linking moves the tokens to IntegrationConnection.
+model ShopifyInstallation {
+  shop_domain String   @id @db.VarChar(255)
+  config      Json
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+}
+
 model ShopifyComplianceRequest {
   id                  String    @id @default(cuid()) @db.VarChar(30)
   brand_id            String?   @db.VarChar(30)

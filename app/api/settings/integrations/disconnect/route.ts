@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
+import { getShopifyConnection } from "@/lib/shopify-connection"
+import { deleteShopifyWebhooks } from "@/lib/shopify"
 
 const GOAFFPRO_KEY = "goaffpro"
 const SHOPIFY_KEY = "shopify"
@@ -36,8 +38,19 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Brand not found" }, { status: 404 })
     }
 
+    // Remove webhooks while the token works; keep shopDomain for GDPR requests.
+    let shopDomain: string | undefined
+    if (integrationKey === SHOPIFY_KEY) {
+      const shopify = await getShopifyConnection(brandId)
+      if (shopify) {
+        shopDomain = shopify.shopDomain
+        await deleteShopifyWebhooks(shopify.shopDomain, shopify.accessToken)
+      }
+    }
+
     // Soft disconnect — drops the encrypted secrets but keeps order history
     // (GoAffProOrder / ShopifyOrder rows) intact for reconnection later.
+    const config = { disconnectedAt: new Date().toISOString(), ...(shopDomain ? { shopDomain } : {}) }
     await prisma.integrationConnection.upsert({
       where: { brand_id_integration_key: { brand_id: brandId, integration_key: integrationKey } },
       create: {
@@ -45,16 +58,12 @@ export async function POST(req: NextRequest) {
         integration_key: integrationKey,
         connected: false,
         connected_as: null,
-        config: {
-          disconnectedAt: new Date().toISOString(),
-        },
+        config,
       },
       update: {
         connected: false,
         connected_as: null,
-        config: {
-          disconnectedAt: new Date().toISOString(),
-        },
+        config,
       },
     })
 
