@@ -2,13 +2,9 @@ import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { verifyShopifyWebhook } from "@/lib/shopify-oauth"
 import { getBrandIdByShopDomain } from "@/lib/shopify-connection"
-import { redactOrderPII } from "@/lib/shopify-orders"
+import { openOrder, sealOrder } from "@/lib/shopify-orders"
 
-// Shopify's mandatory GDPR compliance webhook: a customer's personal data
-// must be deleted within 30 days. The ShopifyOrder rows themselves stay —
-// order history and influencer-attribution linkage are the app's own data,
-// not the customer's — only the PII inside each matching order's raw
-// payload is scrubbed.
+// GDPR customers/redact: re-saves older full copies in minimal form.
 export async function POST(req: NextRequest) {
   const rawBody = await req.text()
   if (!verifyShopifyWebhook(rawBody, req.headers.get("x-shopify-hmac-sha256"))) {
@@ -40,7 +36,7 @@ export async function POST(req: NextRequest) {
     for (const order of orders) {
       await prisma.shopifyOrder.update({
         where: { id: order.id },
-        data: { raw: redactOrderPII(order.raw) as any },
+        data: { raw: sealOrder(openOrder(order.raw) ?? {}) },
       })
     }
   }

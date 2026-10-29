@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma"
 import { getShopifyConnection } from "@/lib/shopify-connection"
+import { openOrder, sealOrder } from "@/lib/shopify-orders"
 import { orderProductsOf, type OrderProduct } from "@/lib/pipeline-transitions"
 import {
   createShopifyDraftOrder,
@@ -38,8 +39,10 @@ export async function createShopifyOrderForInfluencer(params: {
   quantity: number
   shippingAddress: ShopifyShippingAddress
   productName?: string
+  /** Confirmed extra order. */
+  another?: boolean
 }) {
-  const { brandId, brandInfluencerId, variantId, quantity, shippingAddress, productName } = params
+  const { brandId, brandInfluencerId, variantId, quantity, shippingAddress, productName, another } = params
 
   const connection = await getShopifyConnection(brandId)
   if (!connection) {
@@ -60,22 +63,23 @@ export async function createShopifyOrderForInfluencer(params: {
 
   const { shopDomain, accessToken } = connection
 
-  const saved = await prisma.shopifyOrder.findFirst({
+  const saved = await prisma.shopifyOrder.findMany({
     where: { brand_id: brandId, brand_influencer_id: brandInfluencerId, source: "instroom" },
     orderBy: { created_at: "desc" },
     select: { shopify_order_id: true, raw: true },
   })
-  if (saved) {
-    const raw = saved.raw as { name?: string } | null
-    throw new ShopifyOrderExistsError(raw?.name ?? saved.shopify_order_id, `https://${shopDomain}/admin/orders/${saved.shopify_order_id}`)
+  if (saved.length > 0 && !another) {
+    const latest = saved[0]
+    throw new ShopifyOrderExistsError(openOrder(latest.raw)?.name ?? latest.shopify_order_id, `https://${shopDomain}/admin/orders/${latest.shopify_order_id}`)
   }
 
-  // Per-influencer tag: a retry reuses what a failed attempt left in Shopify.
-  const tag = `instroom-${brandInfluencerId}`
+  // One tag per order, so a retry reuses its failed attempt.
+  const tag = saved.length === 0 ? `instroom-${brandInfluencerId}` : `instroom-${brandInfluencerId}-${saved.length + 1}`
 
   let appliedDiscount: ShopifyAppliedDiscount | undefined
   let discountAmount: string | null = null
-  let orderId = await findShopifyOrderIdByTag(shopDomain, accessToken, tag)
+  let orderId: string | null = await findShopifyOrderIdByTag(shopDomain, accessToken, tag)
+  if (orderId && saved.some(s => s.shopify_order_id === String(orderId))) orderId = null
 
   if (!orderId) {
     let draftId = await findOpenDraftOrderIdByTag(shopDomain, accessToken, tag)
@@ -124,7 +128,7 @@ export async function createShopifyOrderForInfluencer(params: {
       financial_status: finalOrder.financial_status ?? null,
       fulfillment_status: finalOrder.fulfillment_status ?? null,
       shipment_status: null,
-      raw: finalOrder as any,
+      raw: sealOrder(finalOrder),
       shopify_created_at: finalOrder.created_at ? new Date(finalOrder.created_at) : null,
     },
     update: {
@@ -133,7 +137,7 @@ export async function createShopifyOrderForInfluencer(params: {
       source: "instroom",
       financial_status: finalOrder.financial_status ?? null,
       fulfillment_status: finalOrder.fulfillment_status ?? null,
-      raw: finalOrder as any,
+      raw: sealOrder(finalOrder),
     },
   })
   await save().catch((e: { code?: string }) => {

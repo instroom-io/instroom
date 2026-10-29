@@ -105,7 +105,8 @@ export function BrandSelector() {
             setSelectedBrandId(brandId)
           } else if (data.brands.length > 0) {
             setSelectedBrandId(data.brands[0].id)
-            const newParams = new URLSearchParams()
+            // Keep other params (e.g. link ticket).
+            const newParams = new URLSearchParams(window.location.search)
             newParams.set("brandId", data.brands[0].id)
             router.push(`${pathname}?${newParams.toString()}`)
           } else if (pathname !== "/dashboard/brand/create") {
