@@ -578,6 +578,13 @@ function compactNum(n: number | null | undefined): string {
 
 // Strings, so half-typed input like "1." isn't lost.
 type FormProduct = { name: string; qty: string; unitCost: string }
+type ShopifyOrderSummary = {
+  shopifyOrderId: string
+  orderNumber: string
+  adminUrl: string | null
+  productSummary?: string | null
+  priceBreakdown?: { total: string | null; discountCode: string | null }
+}
 
 function toFormProducts(products: OrderProduct[]): FormProduct[] {
   const lines = products.map(p => ({ name: p.name, qty: String(p.qty), unitCost: p.unitCost != null ? String(p.unitCost) : "" }))
@@ -1089,7 +1096,8 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
   })
   const [shopifySubmitting, setShopifySubmitting] = useState(false)
   const [shopifyError, setShopifyError] = useState("")
-  const [shopifyOrderResult, setShopifyOrderResult] = useState<any>(null)
+  const [shopifyOrders, setShopifyOrders] = useState<ShopifyOrderSummary[]>([])
+  const [confirmAnotherOrder, setConfirmAnotherOrder] = useState(false)
 
   useEffect(() => {
     if (!brandId) return
@@ -1112,20 +1120,18 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
       .catch(() => {})
   }, [brandId])
 
-  // An order placed in an earlier session is still real — without this, the
-  // panel always shows the blank "Create Order" form even when one already
-  // exists (e.g. the influencer is already at Delivered), since
-  // shopifyOrderResult otherwise only ever gets set right after a create.
   useEffect(() => {
     if (!brandId || !inf.id) return
     fetch(`/api/brand/${brandId}/pipeline/${inf.id}/shopify-order`)
       .then(r => r.ok ? r.json() : null)
       .then(json => {
-        if (!json?.order) return
-        setShopifyOrderResult(json.order)
+        const orders: ShopifyOrderSummary[] = json?.orders ?? []
+        if (orders.length === 0) return
+        setShopifyOrders(orders)
         // Only into an empty list.
-        if (json.order.productSummary) {
-          setOrderData(d => d.products.some(p => p.name.trim()) ? d : { ...d, products: [{ name: json.order.productSummary, qty: "1", unitCost: "" }] })
+        const summaries = orders.map(o => o.productSummary).filter((s): s is string => !!s)
+        if (summaries.length > 0) {
+          setOrderData(d => d.products.some(p => p.name.trim()) ? d : { ...d, products: summaries.map(name => ({ name, qty: "1", unitCost: "" })) })
         }
       })
       .catch(() => {})
@@ -1166,6 +1172,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
           variantId: shopifyForm.variantId,
           quantity: shopifyQuantity,
           productName,
+          another: shopifyOrders.length > 0,
           shippingAddress: {
             first_name: shopifyForm.firstName || undefined,
             last_name: shopifyForm.lastName || undefined,
@@ -1181,7 +1188,8 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(json?.error || "Failed to create order")
-      setShopifyOrderResult(json)
+      setShopifyOrders(o => [...o, json])
+      setConfirmAnotherOrder(false)
       // Already saved by the server.
       setOrderData(d => ({
         ...d,
@@ -1653,24 +1661,36 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
 
                     {shopifyError && <div style={{ fontSize: 12, color: "#dc2626" }}>{shopifyError}</div>}
 
-                    {shopifyOrderResult ? (
-                      <div style={{ background: "#f0faf5", border: "1px solid #bbf7d0", borderRadius: 8, padding: "10px 12px", fontSize: 12, display: "flex", flexDirection: "column", gap: 4 }}>
-                        <div style={{ fontWeight: 700, color: "#166534" }}>Order {shopifyOrderResult.orderNumber} created</div>
+                    {shopifyOrders.map(o => (
+                      <div key={o.shopifyOrderId} style={{ background: "#f0faf5", border: "1px solid #bbf7d0", borderRadius: 8, padding: "10px 12px", fontSize: 12, display: "flex", flexDirection: "column", gap: 4 }}>
+                        <div style={{ fontWeight: 700, color: "#166534" }}>Order {o.orderNumber} created</div>
                         <div>
-                          Total: {shopifyOrderResult.priceBreakdown?.total ? `$${shopifyOrderResult.priceBreakdown.total}` : "—"}
-                          {shopifyOrderResult.priceBreakdown?.discountCode ? ` (code: ${shopifyOrderResult.priceBreakdown.discountCode})` : ""}
+                          Total: {o.priceBreakdown?.total ? `$${o.priceBreakdown.total}` : "—"}
+                          {o.priceBreakdown?.discountCode ? ` (code: ${o.priceBreakdown.discountCode})` : ""}
                         </div>
-                        <a href={shopifyOrderResult.adminUrl} target="_blank" rel="noreferrer" style={{ color: "#1fae5b", fontWeight: 600 }}>View in Shopify admin →</a>
+                        {o.adminUrl && <a href={o.adminUrl} target="_blank" rel="noreferrer" style={{ color: "#1fae5b", fontWeight: 600 }}>View in Shopify admin →</a>}
+                      </div>
+                    ))}
+
+                    {confirmAnotherOrder ? (
+                      <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "10px 12px", fontSize: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+                        <div>This influencer already has {shopifyOrders.length === 1 ? "an order" : `${shopifyOrders.length} orders`}. Create another, separate order?</div>
+                        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                          <button className="btn-secondary" onClick={() => setConfirmAnotherOrder(false)} disabled={shopifySubmitting}>Cancel</button>
+                          <button className="btn-primary" onClick={handleCreateShopifyOrder} disabled={shopifySubmitting} style={{ opacity: shopifySubmitting ? 0.6 : 1 }}>
+                            {shopifySubmitting ? "Creating…" : "Yes, create order"}
+                          </button>
+                        </div>
                       </div>
                     ) : (
                       <button
-                        className="btn-primary"
+                        className={shopifyOrders.length > 0 ? "btn-secondary" : "btn-primary"}
                         disabled={!canApproveInfluencers || !shopifyForm.variantId || !shopifyAddressComplete || shopifySubmitting}
                         title={!canApproveInfluencers ? "Only Owners and Managers can create Shopify orders" : undefined}
-                        onClick={handleCreateShopifyOrder}
+                        onClick={shopifyOrders.length > 0 ? () => setConfirmAnotherOrder(true) : handleCreateShopifyOrder}
                         style={{ alignSelf: "flex-end", opacity: shopifySubmitting || !canApproveInfluencers ? 0.6 : 1 }}
                       >
-                        {shopifySubmitting ? "Creating…" : "Create Order in Shopify"}
+                        {shopifySubmitting ? "Creating…" : shopifyOrders.length > 0 ? "Create another order" : "Create Order in Shopify"}
                       </button>
                     )}
                   </div>
