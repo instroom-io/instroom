@@ -985,8 +985,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
   const buildOrderData = () => ({
     products: toFormProducts(orderProductsOf(savedProductDetails)),
     trackingNumber: inf.trackingNumber || "", shippedAt: inf.shippedAt ? inf.shippedAt.slice(0,10) : "",
-    deliveredAt: inf.deliveredAt ? inf.deliveredAt.slice(0,10) : "", deadline: inf.deadline ? inf.deadline.slice(0,10) : "",
-    deliverables: inf.deliverables || "", currency: inf.currency || "USD",
+    deliveredAt: inf.deliveredAt ? inf.deliveredAt.slice(0,10) : "", currency: inf.currency || "USD",
   })
   const [orderData, setOrderData] = useState(buildOrderData)
   const [savingOrder, setSavingOrder] = useState(false)
@@ -1193,9 +1192,9 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
       // Already saved by the server.
       setOrderData(d => ({
         ...d,
-        products: [...d.products.filter(p => p.name.trim() || p.unitCost.trim()), { name: productName || "Shopify product", qty: String(shopifyQuantity), unitCost: "" }],
+        products: [...d.products.filter(p => p.name.trim() || p.unitCost.trim()), { name: productName || "Shopify product", qty: String(shopifyQuantity), unitCost: json.unitCost != null ? String(json.unitCost) : "" }],
       }))
-      showToast("Shopify order created — add its cost under Product Details")
+      showToast(json.unitCost != null ? "Shopify order created" : "Shopify order created — add its cost under Product Details")
     } catch (e: any) {
       setShopifyError(e?.message || "Failed to create order")
     } finally {
@@ -1331,9 +1330,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
       trackingNumber: orderData.trackingNumber,
       shippedAt: orderData.shippedAt,
       deliveredAt: orderData.deliveredAt,
-      deadline: orderData.deadline,
       currency: orderData.currency,
-      deliverables: orderData.deliverables,
     })
     setSavingOrder(false)
     showToast(ok ? "Order details saved" : "Failed to save order details")
@@ -1602,10 +1599,6 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                 <div className="pfg"><div className="pfl">Shipped At</div><input type="date" className="pfi" value={orderData.shippedAt} onChange={e => setOrderData(d => ({ ...d, shippedAt: e.target.value }))} /></div>
                 <div className="pfg"><div className="pfl">Delivered At</div><input type="date" className="pfi" value={orderData.deliveredAt} onChange={e => setOrderData(d => ({ ...d, deliveredAt: e.target.value }))} /></div>
               </div>
-              <div className="pfr">
-                <div className="pfg"><div className="pfl">Deadline</div><input type="date" className="pfi" value={orderData.deadline} onChange={e => setOrderData(d => ({ ...d, deadline: e.target.value }))} /></div>
-                <div className="pfg"><div className="pfl">Deliverables</div><input className="pfi" value={orderData.deliverables} onChange={e => setOrderData(d => ({ ...d, deliverables: e.target.value }))} placeholder="Deliverables" /></div>
-              </div>
 
               {/* ── Shopify order creation — self-contained, own submit path ── */}
               <div style={{ borderTop: "1px solid #eee", marginTop: 4, paddingTop: 14 }}>
@@ -1665,7 +1658,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
                       <div key={o.shopifyOrderId} style={{ background: "#f0faf5", border: "1px solid #bbf7d0", borderRadius: 8, padding: "10px 12px", fontSize: 12, display: "flex", flexDirection: "column", gap: 4 }}>
                         <div style={{ fontWeight: 700, color: "#166534" }}>Order {o.orderNumber} created</div>
                         <div>
-                          Total: {o.priceBreakdown?.total ? `$${o.priceBreakdown.total}` : "—"}
+                          Total: {o.priceBreakdown?.total ? `$${Number(o.priceBreakdown.total).toFixed(2)}` : "—"}
                           {o.priceBreakdown?.discountCode ? ` (code: ${o.priceBreakdown.discountCode})` : ""}
                         </div>
                         {o.adminUrl && <a href={o.adminUrl} target="_blank" rel="noreferrer" style={{ color: "#1fae5b", fontWeight: 600 }}>View in Shopify admin →</a>}

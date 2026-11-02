@@ -158,6 +158,9 @@ export type ShopifyFulfillment = {
   shipment_status?: string | null
   tracking_company?: string | null
   tracking_number?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  delivered_at?: string | null
 }
 
 export type ShopifyOrderEntry = {
@@ -212,6 +215,9 @@ function orderFields(size: "list" | "single") {
   }
   fulfillments(first: ${fulfillments}) {
     status
+    createdAt
+    deliveredAt
+    trackingInfo(first: 1) { number }
     events(first: ${events}, sortKey: HAPPENED_AT, reverse: true) {
       nodes { status }
     }
@@ -231,7 +237,13 @@ type GraphQLOrderNode = {
   currentTotalDiscountsSet: { shopMoney: { amount: string } } | null
   discountCodes: string[] | null
   lineItems: { nodes: { quantity: number; discountedUnitPriceSet: { shopMoney: { amount: string } } | null }[] } | null
-  fulfillments: { status: string; events: { nodes: { status: string }[] } }[] | null
+  fulfillments: {
+    status: string
+    createdAt: string | null
+    deliveredAt: string | null
+    trackingInfo: { number: string | null }[] | null
+    events: { nodes: { status: string }[] }
+  }[] | null
 }
 
 function mapGraphQLOrder(node: GraphQLOrderNode): ShopifyOrderEntry {
@@ -252,6 +264,9 @@ function mapGraphQLOrder(node: GraphQLOrderNode): ShopifyOrderEntry {
       // true) so index 0 is the current shipment state, matching the REST
       // shipment_status field's single-current-value semantic.
       shipment_status: lowerOrNull(f.events?.nodes?.[0]?.status ?? null),
+      created_at: f.createdAt,
+      delivered_at: f.deliveredAt,
+      tracking_number: f.trackingInfo?.[0]?.number ?? null,
     })),
     line_items: (node.lineItems?.nodes ?? []).map((li) => ({
       price: li.discountedUnitPriceSet?.shopMoney?.amount ?? "0",
@@ -605,6 +620,22 @@ export async function getShopifyOrder(shopDomain: string, accessToken: string, o
     throw new Error(`Shopify order ${orderId} not found`)
   }
   return { ...mapGraphQLOrder(data.order), admin_graphql_api_id: `gid://shopify/Order/${orderId}` }
+}
+
+/** "Cost per item", or null. */
+export async function getShopifyVariantCost(shopDomain: string, accessToken: string, variantId: string | number) {
+  try {
+    const data = await shopifyGraphQL<{ productVariant: { inventoryItem: { unitCost: { amount: string } | null } | null } | null }>(
+      shopDomain,
+      accessToken,
+      `query VariantCost($id: ID!) { productVariant(id: $id) { inventoryItem { unitCost { amount } } } }`,
+      { id: `gid://shopify/ProductVariant/${variantId}` }
+    )
+    const amount = data.productVariant?.inventoryItem?.unitCost?.amount
+    return amount != null && Number(amount) > 0 ? Number(amount) : null
+  } catch {
+    return null
+  }
 }
 
 // Looks up a discount code's real configured value via the GraphQL Admin

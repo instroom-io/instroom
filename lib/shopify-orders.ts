@@ -19,6 +19,11 @@ function safeParse(value: string | null) {
   }
 }
 
+function toDate(value?: string | null) {
+  const date = value ? new Date(value) : null
+  return date && !isNaN(date.getTime()) ? date : null
+}
+
 function deriveShipmentStatus(order: ShopifyOrderEntry): string | null {
   const fulfillments = order.fulfillments ?? []
   const last = fulfillments[fulfillments.length - 1]
@@ -136,21 +141,34 @@ export async function syncShopifyOrder(params: { brandId: string; order: Shopify
     return { success: true as const, orderId, brandInfluencerId, skipped: "terminal" as const }
   }
 
-  const target = deriveShopifyTargetStatus(order)
-  if (!target) {
-    return { success: true as const, orderId, brandInfluencerId, skipped: "no-progress" as const }
-  }
+  // Keeps typed values.
+  const fulfillments = order.fulfillments ?? []
+  const tracking = [...fulfillments].reverse().find((f) => f.tracking_number)?.tracking_number
+  const addTracking = Boolean(tracking && !productDetails.trackingNumber)
+  if (addTracking) productDetails.trackingNumber = tracking
 
+  const target = deriveShopifyTargetStatus(order)
   const currentRank = storedStatus && storedStatus in SHOPIFY_STAGE_RANK
     ? SHOPIFY_STAGE_RANK[storedStatus as keyof typeof SHOPIFY_STAGE_RANK]
     : SHOPIFY_STAGE_RANK["For Order Creation"]
-  const targetRank = SHOPIFY_STAGE_RANK[target]
 
-  if (targetRank <= currentRank) {
-    return { success: true as const, orderId, brandInfluencerId, skipped: "no-forward-progress" as const }
+  if (!target || SHOPIFY_STAGE_RANK[target] <= currentRank) {
+    if (addTracking) {
+      await prisma.brandInfluencer.update({
+        where: { id: brandInfluencerId },
+        data: { product_details: JSON.stringify(productDetails), updated_at: new Date() },
+      })
+    }
+    return { success: true as const, orderId, brandInfluencerId, skipped: target ? "no-forward-progress" as const : "no-progress" as const }
   }
 
-  const mapped = mapClosedToPipelineFields(target, record)
+  const shipped = fulfillments.find((f) => f.status === "success")
+  const delivered = fulfillments.find((f) => f.shipment_status === "delivered")
+  const mapped = mapClosedToPipelineFields(target, {
+    ...record,
+    shipped_at: record.shipped_at ?? toDate(shipped?.created_at),
+    delivered_at: record.delivered_at ?? toDate(delivered?.delivered_at ?? delivered?.updated_at),
+  })
   productDetails.closedStatus = target
   productDetails.lastSyncSource = "shopify"
 
