@@ -7,6 +7,7 @@ import {
   completeShopifyDraftOrder,
   getShopifyDiscountByCode,
   getShopifyOrder,
+  getShopifyVariantCost,
   findShopifyOrderIdByTag,
   findOpenDraftOrderIdByTag,
   type ShopifyShippingAddress,
@@ -147,10 +148,10 @@ export async function createShopifyOrderForInfluencer(params: {
 
   productDetails.shippingAddress = shippingAddress
   productDetails.variantId = String(variantId)
-  // Cost is entered in the Order tab.
   const name = productName?.trim() || "Shopify product"
+  const unitCost = await getShopifyVariantCost(shopDomain, accessToken, variantId)
   const products = orderProductsOf(productDetails).filter(p => p.name.trim() || p.unitCost != null)
-  productDetails.products = [...products, { name, qty: quantity, unitCost: null }]
+  productDetails.products = [...products, { name, qty: quantity, unitCost }]
   productDetails.note = productDetails.products.map((p: OrderProduct) => p.name).filter(Boolean).join("\n")
   await prisma.brandInfluencer.update({
     where: { id: brandInfluencerId },
@@ -165,6 +166,7 @@ export async function createShopifyOrderForInfluencer(params: {
     shopifyOrderId,
     orderNumber: finalOrder.name ?? (finalOrder.order_number ? `#${finalOrder.order_number}` : shopifyOrderId),
     adminUrl: `https://${shopDomain}/admin/orders/${finalOrder.id}`,
+    unitCost,
     priceBreakdown: {
       productPrice,
       discountCode: appliedDiscount ? coupon : null,
