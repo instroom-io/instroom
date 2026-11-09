@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import { hasBrandCapability } from "@/lib/permissions"
 import { createShopifyOrderForInfluencer, ShopifyOrderExistsError } from "@/lib/shopify-create-order"
+import { openOrder } from "@/lib/shopify-orders"
 import { getShopifyConnection } from "@/lib/shopify-connection"
 import type { ShopifyShippingAddress } from "@/lib/shopify"
 
@@ -37,31 +38,27 @@ export async function GET(
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
-    // Instroom's own order only, not customers' coupon orders.
-    const order = await prisma.shopifyOrder.findFirst({
+    // Instroom's own orders, oldest first.
+    const rows = await prisma.shopifyOrder.findMany({
       where: { brand_id: brandId, brand_influencer_id: brandInfluencerId, source: "instroom" },
-      orderBy: { created_at: "desc" },
+      orderBy: { created_at: "asc" },
     })
 
-    if (!order) {
-      return NextResponse.json({ order: null })
+    if (rows.length === 0) {
+      return NextResponse.json({ orders: [] })
     }
 
     const connection = await getShopifyConnection(brandId)
-    const raw = order.raw as any
-    const lineItem = raw?.line_items?.[0]
-    const productPrice = lineItem ? (parseFloat(lineItem.price) * lineItem.quantity).toFixed(2) : null
-    // "Product X - Variant Y", for pre-filling the Order tab's Product Details
-    // note when it's still empty — never used to overwrite a note someone
-    // already wrote.
-    const productSummary = lineItem
-      ? (lineItem.name as string | undefined) ||
-        [lineItem.title, lineItem.variant_title].filter(Boolean).join(" - ") ||
-        null
-      : null
-
-    return NextResponse.json({
-      order: {
+    const orders = rows.map(order => {
+      const raw = openOrder(order.raw)
+      const lineItem = raw?.line_items?.[0]
+      const productPrice = lineItem?.price ? (parseFloat(lineItem.price) * (lineItem.quantity ?? 1)).toFixed(2) : null
+      const productSummary = lineItem
+        ? lineItem.name ||
+          [lineItem.title, lineItem.variant_title].filter(Boolean).join(" - ") ||
+          null
+        : null
+      return {
         shopifyOrderId: order.shopify_order_id,
         orderNumber: raw?.name ?? (raw?.order_number ? `#${raw.order_number}` : order.shopify_order_id),
         adminUrl: connection ? `https://${connection.shopDomain}/admin/orders/${order.shopify_order_id}` : null,
@@ -72,8 +69,10 @@ export async function GET(
           discountAmount: null,
           total: raw?.total_price ?? null,
         },
-      },
+      }
     })
+
+    return NextResponse.json({ orders })
   } catch (error: any) {
     console.error("GET shopify-order error:", error)
     return NextResponse.json(
@@ -116,11 +115,12 @@ export async function POST(
     }
 
     const body = await req.json().catch(() => ({}))
-    const { variantId, quantity, shippingAddress, productName } = body as {
+    const { variantId, quantity, shippingAddress, productName, another } = body as {
       variantId?: string | number
       quantity?: number
       shippingAddress?: ShopifyShippingAddress
       productName?: string
+      another?: boolean
     }
 
     if (!variantId) {
@@ -137,6 +137,7 @@ export async function POST(
       quantity: Number.isInteger(quantity) && quantity! > 0 ? Math.min(quantity!, 100) : 1,
       shippingAddress,
       productName: typeof productName === "string" ? productName.slice(0, 200) : undefined,
+      another: another === true,
     })
 
     return NextResponse.json(result)

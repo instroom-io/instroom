@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma"
+import { decrypt, encrypt } from "@/lib/crypto"
 import { getShopifyConnection, setShopifyOrderSyncCursor } from "@/lib/shopify-connection"
 import { listShopifyOrders, type ShopifyOrderEntry } from "@/lib/shopify"
 import {
@@ -16,6 +17,11 @@ function safeParse(value: string | null) {
   } catch {
     return {}
   }
+}
+
+function toDate(value?: string | null) {
+  const date = value ? new Date(value) : null
+  return date && !isNaN(date.getTime()) ? date : null
 }
 
 function deriveShipmentStatus(order: ShopifyOrderEntry): string | null {
@@ -60,7 +66,7 @@ export async function syncShopifyOrder(params: { brandId: string; order: Shopify
   })
 
   // Webhooks can arrive out of order.
-  const savedUpdatedAt = (existing?.raw as { updated_at?: string } | null)?.updated_at
+  const savedUpdatedAt = openOrder(existing?.raw)?.updated_at
   if (savedUpdatedAt && order.updated_at && new Date(order.updated_at) < new Date(savedUpdatedAt)) {
     return { success: true as const, orderId, brandInfluencerId: existing!.brand_influencer_id, skipped: "stale" as const }
   }
@@ -89,7 +95,7 @@ export async function syncShopifyOrder(params: { brandId: string; order: Shopify
       financial_status: order.financial_status ?? null,
       fulfillment_status: order.fulfillment_status ?? null,
       shipment_status: deriveShipmentStatus(order),
-      raw: order as any,
+      raw: sealOrder(order),
       shopify_created_at: order.created_at ? new Date(order.created_at) : null,
     },
     update: {
@@ -98,7 +104,7 @@ export async function syncShopifyOrder(params: { brandId: string; order: Shopify
       financial_status: order.financial_status ?? null,
       fulfillment_status: order.fulfillment_status ?? null,
       shipment_status: deriveShipmentStatus(order),
-      raw: order as any,
+      raw: sealOrder(order),
     },
   })
 
@@ -135,21 +141,34 @@ export async function syncShopifyOrder(params: { brandId: string; order: Shopify
     return { success: true as const, orderId, brandInfluencerId, skipped: "terminal" as const }
   }
 
-  const target = deriveShopifyTargetStatus(order)
-  if (!target) {
-    return { success: true as const, orderId, brandInfluencerId, skipped: "no-progress" as const }
-  }
+  // Keeps typed values.
+  const fulfillments = order.fulfillments ?? []
+  const tracking = [...fulfillments].reverse().find((f) => f.tracking_number)?.tracking_number
+  const addTracking = Boolean(tracking && !productDetails.trackingNumber)
+  if (addTracking) productDetails.trackingNumber = tracking
 
+  const target = deriveShopifyTargetStatus(order)
   const currentRank = storedStatus && storedStatus in SHOPIFY_STAGE_RANK
     ? SHOPIFY_STAGE_RANK[storedStatus as keyof typeof SHOPIFY_STAGE_RANK]
     : SHOPIFY_STAGE_RANK["For Order Creation"]
-  const targetRank = SHOPIFY_STAGE_RANK[target]
 
-  if (targetRank <= currentRank) {
-    return { success: true as const, orderId, brandInfluencerId, skipped: "no-forward-progress" as const }
+  if (!target || SHOPIFY_STAGE_RANK[target] <= currentRank) {
+    if (addTracking) {
+      await prisma.brandInfluencer.update({
+        where: { id: brandInfluencerId },
+        data: { product_details: JSON.stringify(productDetails), updated_at: new Date() },
+      })
+    }
+    return { success: true as const, orderId, brandInfluencerId, skipped: target ? "no-forward-progress" as const : "no-progress" as const }
   }
 
-  const mapped = mapClosedToPipelineFields(target, record)
+  const shipped = fulfillments.find((f) => f.status === "success")
+  const delivered = fulfillments.find((f) => f.shipment_status === "delivered")
+  const mapped = mapClosedToPipelineFields(target, {
+    ...record,
+    shipped_at: record.shipped_at ?? toDate(shipped?.created_at),
+    delivered_at: record.delivered_at ?? toDate(delivered?.delivered_at ?? delivered?.updated_at),
+  })
   productDetails.closedStatus = target
   productDetails.lastSyncSource = "shopify"
 
@@ -165,29 +184,68 @@ export async function syncShopifyOrder(params: { brandId: string; order: Shopify
   return { success: true as const, orderId, brandInfluencerId, appliedStatus: target }
 }
 
-// Strips customer PII out of a stored order's raw payload for a
-// customers/redact GDPR request. `raw` can be either shape this codebase
-// produces: a full REST-style webhook push (still carries customer/address/
-// IP fields) or the slimmer object lib/shopify.ts's GraphQL functions build
-// (which never included these fields to begin with) — deleting a key that
-// isn't present is a harmless no-op, so the same field list handles both.
-const PII_FIELDS = [
-  "customer",
-  "email",
-  "phone",
-  "shipping_address",
-  "billing_address",
-  "contact_email",
-  "client_details", // carries browser_ip
-]
+/** Fields Instroom reads; no buyer personal data. */
+export type StoredOrder = {
+  id?: string | number
+  name?: string
+  order_number?: number
+  created_at?: string
+  updated_at?: string
+  cancelled_at?: string | null
+  financial_status?: string | null
+  fulfillment_status?: string | null
+  total_price?: string
+  total_discounts?: string
+  discount_codes?: { code: string; amount?: string }[]
+  fulfillments?: { status?: string | null; shipment_status?: string | null }[]
+  line_items?: { price?: string; quantity?: number; name?: string; title?: string; variant_title?: string }[]
+}
 
-export function redactOrderPII(raw: unknown): unknown {
-  if (!raw || typeof raw !== "object") return raw
-  const redacted: Record<string, unknown> = { ...(raw as Record<string, unknown>) }
-  for (const field of PII_FIELDS) {
-    delete redacted[field]
+// Allow-list, so new personal fields are never stored.
+function minimizeOrder(order: Record<string, any>): StoredOrder {
+  return {
+    id: order.id,
+    name: order.name,
+    order_number: order.order_number,
+    created_at: order.created_at,
+    updated_at: order.updated_at,
+    cancelled_at: order.cancelled_at ?? null,
+    financial_status: order.financial_status ?? null,
+    fulfillment_status: order.fulfillment_status ?? null,
+    total_price: order.total_price,
+    total_discounts: order.total_discounts,
+    discount_codes: (order.discount_codes ?? []).map((d: { code: string; amount?: string }) => ({ code: d.code, amount: d.amount })),
+    fulfillments: (order.fulfillments ?? []).map((f: { status?: string | null; shipment_status?: string | null }) => ({
+      status: f.status ?? null,
+      shipment_status: f.shipment_status ?? null,
+    })),
+    line_items: (order.line_items ?? []).slice(0, 1).map((li: Record<string, any>) => ({
+      price: li.price,
+      quantity: li.quantity,
+      name: li.name,
+      title: li.title,
+      variant_title: li.variant_title,
+    })),
   }
-  return redacted
+}
+
+/** Minimized, then encrypted. */
+export function sealOrder(order: object): { enc: string } {
+  return { enc: encrypt(JSON.stringify(minimizeOrder(order))) }
+}
+
+/** Reads encrypted or older plain rows. */
+export function openOrder(raw: unknown): StoredOrder | null {
+  if (!raw || typeof raw !== "object") return null
+  const enc = (raw as { enc?: unknown }).enc
+  if (typeof enc === "string") {
+    try {
+      return JSON.parse(decrypt(enc)) as StoredOrder
+    } catch {
+      return null
+    }
+  }
+  return raw as StoredOrder
 }
 
 export async function syncShopifyOrdersForBrand(brandId: string) {

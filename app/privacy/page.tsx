@@ -118,8 +118,10 @@ export default function InstroomPrivacyPolicy() {
                 conversations to the relevant campaign and creator
               </>,
               <>
-                <strong className="text-[#1E1E1E] font-semibold">Shopify</strong> — order, sales, revenue, and
-                shipment-status data when you connect your store, used for campaign attribution and reporting
+                <strong className="text-[#1E1E1E] font-semibold">Shopify</strong> — product, order, and
+                shipment data used to create influencer orders and track delivery and discount-code sales.
+                Influencer shipping details are sent to your store; stored orders exclude customer details, are
+                encrypted, and are deleted after you uninstall
               </>,
               <>
                 <strong className="text-[#1E1E1E] font-semibold">GoAffPro</strong> — discount codes, affiliate
