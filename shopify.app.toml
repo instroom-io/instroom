@@ -1,5 +1,5 @@
 client_id = "64eae60dea37c2eaec925e771f180eab"
-application_url = "https://staging-instroom.vercel.app/shopify-embedded"
+application_url = "https://instroom.io/shopify-embedded"
 embedded = true
 name = "Instroom"
 
@@ -9,16 +9,17 @@ optional_scopes = [ ]
 use_legacy_install_flow = false
 
 [auth]
-redirect_urls = [
-  "https://instroom.io/api/settings/integrations/shopify/callback",
-  "https://staging-instroom.vercel.app/api/settings/integrations/shopify/callback",
-  "http://localhost:3000/api/settings/integrations/shopify/callback"
-]
+redirect_urls = [ "https://instroom.io/shopify-embedded" ]
 
 [webhooks]
 api_version = "2026-07"
 
-# GDPR only; order and uninstall webhooks are registered per store on connect.
+# Also covers stores that never linked.
+[[webhooks.subscriptions]]
+topics = [ "app/uninstalled" ]
+uri = "https://instroom.io/api/webhooks/shopify/app-uninstalled"
+
+# Order webhooks are added per store on link.
 [[webhooks.subscriptions]]
 compliance_topics = [ "customers/data_request" ]
 uri = "https://instroom.io/api/webhooks/shopify/gdpr/customers-data-request"

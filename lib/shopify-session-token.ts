@@ -1,13 +1,7 @@
 import crypto from "crypto"
 import { getClientId, getClientSecret } from "@/lib/shopify-oauth"
 
-// Verifies the session token Shopify's App Bridge hands the embedded page
-// (window.shopify.idToken()) — a JWT signed HS256 with the app's own Client
-// Secret. No JWT library here on purpose, matching this file's siblings
-// (lib/shopify-oauth.ts's verifyShopifyOAuthCallback, the webhook routes'
-// verifySignature): it's the same "HMAC-SHA256, timing-safe compare"
-// primitive, just applied to a JWT's two encoded segments instead of a query
-// string or a request body.
+// App Bridge session token: HS256 JWT signed with the client secret.
 
 export type ShopifySessionTokenPayload = {
   shop: string

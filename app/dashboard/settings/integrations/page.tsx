@@ -103,19 +103,11 @@ function IntegrationsContent() {
 
   // Set by the link page.
   useEffect(() => {
-    const shopifyResult = searchParams.get("shopify")
-    const shopifyError = searchParams.get("shopify_error")
-    if (!shopifyResult && !shopifyError) return
-
-    if (shopifyResult === "connected") {
-      show("Shopify connected", "success")
-    } else if (shopifyError) {
-      show(shopifyError, "error")
-    }
+    if (searchParams.get("shopify") !== "connected") return
+    show("Shopify connected", "success")
 
     const cleanUrl = new URL(window.location.href)
     cleanUrl.searchParams.delete("shopify")
-    cleanUrl.searchParams.delete("shopify_error")
     router.replace(cleanUrl.pathname + cleanUrl.search)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

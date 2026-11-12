@@ -66,9 +66,7 @@ export async function POST(req: NextRequest) {
     if (body?.id === GOAFFPRO_KEY) {
       return await connectGoAffPro(brandId, body)
     }
-    // Shopify connects via OAuth (GET /api/settings/integrations/shopify/install),
-    // not this generic paste-a-token endpoint — that flow no longer exists for
-    // new Shopify apps as of the Jan 2026 legacy-custom-app shutdown.
+    // Shopify links via /shopify-embedded.
     return NextResponse.json({ error: "Unsupported integration" }, { status: 400 })
   } catch (error: any) {
     console.error("[POST /settings/integrations/connect]", error)
