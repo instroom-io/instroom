@@ -51,8 +51,9 @@ async function shopifyGraphQL<T>(
     })
 
     const json = await res.json().catch(() => null)
+    // `errors` can be a string.
     const throttled = res.status === 429 ||
-      (json?.errors ?? []).some((e: { extensions?: { code?: string } }) => e?.extensions?.code === "THROTTLED")
+      (Array.isArray(json?.errors) && json.errors.some((e: { extensions?: { code?: string } }) => e?.extensions?.code === "THROTTLED"))
 
     // Throttled: wait for the bucket to refill.
     if (throttled && attempt < MAX_THROTTLE_RETRIES) {
