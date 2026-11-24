@@ -45,6 +45,7 @@ model User {
   brandMembers BrandMember[]
   activityLogs ActivityLog[]
   pollVotes    CommunityPollVote[]
+  extensionTokens ExtensionToken[]
 
   // Discord account linkage. Populated by the OAuth link flow; read on every
   // Discord request to compute which channels this user may see.
@@ -1225,4 +1226,27 @@ model ResearchSopRunResult {
 
   @@index([run_id, status])
   @@index([brand_id, brand_influencer_id])
+}
+
+// A Chrome extension's credential for one user. Created on /extension/connect
+// while the user is signed in to the app, and sent as `Authorization: Bearer`
+// on every /api/extension/* call. Only the sha256 of the token is stored -- the
+// raw value is shown to the extension once and cannot be recovered from here.
+//
+// The token identifies the PERSON only. Which workspace they may act in is
+// decided per request from Brand.owner_id / BrandMember, so removing someone
+// from a team takes effect immediately even while their token is still valid.
+model ExtensionToken {
+  id           String    @id @default(cuid()) @db.VarChar(30)
+  user_id      String    @db.VarChar(30)
+  token_hash   String    @unique @db.VarChar(64)
+  label        String?   @db.VarChar(100)
+  last_used_at DateTime?
+  expires_at   DateTime
+  revoked_at   DateTime?
+  created_at   DateTime  @default(now())
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
 }

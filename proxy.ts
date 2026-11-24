@@ -59,7 +59,10 @@ export async function proxy(req: NextRequest) {
     // /settings/account renders account and billing data and reads the session
     // client-side, but sat outside the matcher entirely — so it was served to
     // anyone who typed the URL, and only failed once its client fetches 401'd.
-    pathname.startsWith("/settings")
+    pathname.startsWith("/settings") ||
+    // The Chrome extension's connect page mints a token for the signed-in
+    // user, so it must never render for a visitor without a session.
+    pathname.startsWith("/extension")
   ) {
     // getToken verifies the JWT signature AND its exp claim, so a session past
     // the 7-day deadline fails here with no extra check needed.
@@ -83,5 +86,5 @@ export async function proxy(req: NextRequest) {
 
 // No `runtime` export: Next 16 rejects route segment config in a Proxy file.
 export const config = {
-  matcher: ["/onboarding/:path*", "/dashboard/:path*", "/admin/:path*", "/settings/:path*"],
+  matcher: ["/onboarding/:path*", "/dashboard/:path*", "/admin/:path*", "/settings/:path*", "/extension/:path*"],
 };
