@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 
-// This endpoint is deprecated - use /api/subscription/activate instead
-// which handles subscription creation only AFTER PayPal payment confirmation
+// Deprecated. Plans are activated only by the verified Lemon Squeezy webhook
+// (app/api/lemon-squeezy/webhook) after payment confirmation.
 
 export async function POST(req: Request) {
   return NextResponse.json(
