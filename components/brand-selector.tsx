@@ -13,6 +13,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Plus, Zap, AlertCircle, Check, ChevronDown, Users } from "lucide-react"
 import { WorkspaceUnavailableModal } from "@/components/workspace-unavailable-modal"
 import { fetchCached } from "@/lib/data-cache"
+import { SHOPIFY_LINK_PATH } from "@/lib/shopify-link-return"
 
 interface Brand {
   id: string
@@ -67,6 +68,16 @@ export function BrandSelector() {
   const [unavailableBrand, setUnavailableBrand] = useState<Brand | null>(null)
 
   const [planInfo, setPlanInfo] = useState<{ name: string; displayName: string } | null>(null)
+  const [billing, setBilling] = useState<{ provider: string | null; manageUrl: string | null } | null>(null)
+  const billedByShopify = billing?.provider === "shopify"
+  const goToUpgrade = () => {
+    if (billedByShopify) {
+      if (billing?.manageUrl) window.location.href = billing.manageUrl
+      else router.push("/dashboard/settings/billing")
+    } else {
+      router.push("/pricing")
+    }
+  }
 
   const handleUnavailableModalClose = () => {
     setUnavailableModalOpen(false)
@@ -109,7 +120,7 @@ export function BrandSelector() {
             const newParams = new URLSearchParams(window.location.search)
             newParams.set("brandId", data.brands[0].id)
             router.push(`${pathname}?${newParams.toString()}`)
-          } else if (pathname !== "/dashboard/brand/create") {
+          } else if (pathname !== "/dashboard/brand/create" && pathname !== SHOPIFY_LINK_PATH) {
             // No workspace yet — send them straight into setup instead of
             // making them find the "Create Workspace" button themselves.
             // Covers post-payment redirects and any other brandless landing.
@@ -145,6 +156,7 @@ export function BrandSelector() {
         if (d?.subscription?.plan) {
           setPlanInfo({ name: d.subscription.plan.name, displayName: d.subscription.plan.display_name })
         }
+        if (d?.billing) setBilling(d.billing)
       })
       .catch(() => {})
   }, [session?.user?.id])
@@ -199,6 +211,11 @@ export function BrandSelector() {
       const res = await fetch("/api/subscription/check-brand-limit")
       const data = await res.json()
       if (!res.ok) { setError(data.error || "Failed to check brand limit"); return }
+      if (billedByShopify) {
+        if (data.allowed) router.push("/dashboard/brand/create")
+        else setUpgradeRequired(true)
+        return
+      }
       if (data.canBuyMore) {
         setBuyBrandsModal({
           isOpen: true,
@@ -306,7 +323,7 @@ export function BrandSelector() {
             <span className="text-[13px] font-semibold text-gray-900">{planInfo.displayName} Plan</span>
             {planInfo.name !== "team" && (
               <button
-                onClick={() => { router.push("/pricing"); setDropdownOpen(false) }}
+                onClick={() => { goToUpgrade(); setDropdownOpen(false) }}
                 className="text-[11px] font-semibold text-[#0F6B3E] bg-[#0F6B3E]/10 hover:bg-[#0F6B3E]/15 px-2 py-0.5 rounded-md transition-colors"
               >
                 Upgrade

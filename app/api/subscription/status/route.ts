@@ -3,6 +3,7 @@ import { authOptions } from "@/lib/auth"
 import { prisma, withDbRetry } from "@/lib/prisma"
 import { NextResponse } from "next/server"
 import { isDatabaseCapacityError, databaseCapacityResponse } from "@/lib/db-capacity"
+import { maybeSyncShopifyBilling } from "@/lib/shopify-billing"
 
 export async function GET(request: Request) {
   try {
@@ -45,6 +46,8 @@ export async function GET(request: Request) {
       targetUserId = brand.owner_id
     }
 
+    await maybeSyncShopifyBilling(targetUserId)
+
     const subscription = await withDbRetry(() => prisma.userSubscription.findUnique({
       where: { user_id: targetUserId },
       include: { plan: true },
@@ -74,9 +77,10 @@ export async function GET(request: Request) {
       subscription.status === "paused" ||
       (endDate && endDate < now)
 
-    // Determine if expiring soon (within 7 days and not expired)
+    // Expiring within 7 days; not for Shopify, which auto-renews.
+    const billedByShopify = subscription.billing_provider === "shopify"
     const isExpiringSoon =
-      !isExpired && endDate && daysUntilExpiry !== null && daysUntilExpiry <= 7
+      !billedByShopify && !isExpired && endDate && daysUntilExpiry !== null && daysUntilExpiry <= 7
 
     return NextResponse.json({
       status: subscription.status,
@@ -92,6 +96,7 @@ export async function GET(request: Request) {
         current_period_end: endDate?.toISOString() ?? null,
         current_period_start: subscription.current_period_start?.toISOString() ?? null,
         ended_at: subscription.ended_at?.toISOString() ?? null,
+        billing_provider: subscription.billing_provider,
       },
       isExpired,
       isExpiringSoon,

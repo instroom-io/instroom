@@ -13,6 +13,7 @@ const ACTION_LABELS: Record<string, string> = {
   "pipeline.stage_changed":      "Moved stage",
   "pipeline.status_changed":     "Moved stage",
   "posttracker.stage_changed":   "Updated post tracker stage",
+  "posttracker.auto_no_post":    "No post after 10 days",
   "outreach.auto_sent":          "Outreach email sent",
   "outreach.auto_followup_sent": "Follow-up email sent",
 }
@@ -82,6 +83,18 @@ export async function GET(
       try {
         details = JSON.parse(log.details ?? "{}")
       } catch {}
+
+      // System actions are stored under the brand owner but shown as Instroom.
+      if (details.automatic === true) {
+        return {
+          id: log.id,
+          action: log.action,
+          label: ACTION_LABELS[log.action] ?? log.action,
+          details,
+          created_at: log.created_at.toISOString(),
+          user: { id: "system", name: "Instroom (automatic)", image: null, initials: "IN" },
+        }
+      }
 
       const u = userMap.get(log.user_id)
       const displayName = u?.name ?? u?.email ?? "Unknown user"

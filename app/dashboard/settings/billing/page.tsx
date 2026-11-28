@@ -52,6 +52,10 @@ export default function BillingPage() {
     : undefined
 
   const [subscription, setSubscription] = useState<any>(cachedCheck?.subscription ?? null)
+  const [billing, setBilling] = useState<{ provider: string | null; manageUrl: string | null } | null>(
+    cachedCheck?.billing ?? null
+  )
+  const billedByShopify = billing?.provider === "shopify"
   const [subscriptionLoaded, setSubscriptionLoaded] = useState(cachedCheck !== undefined)
   // Seeded from the shared cache — a revisit renders the real figures rather
   // than the "loading" placeholders while they revalidate.
@@ -99,7 +103,7 @@ export default function BillingPage() {
       if (!r.ok) throw new Error(`Request failed (${r.status})`)
       return r.json()
     }, { force })
-      .then((d) => setSubscription(d.subscription))
+      .then((d) => { setSubscription(d.subscription); setBilling(d.billing ?? null) })
       .catch(() => {})
       .finally(() => setSubscriptionLoaded(true))
   }
@@ -109,7 +113,7 @@ export default function BillingPage() {
   // client's real figures disagree. Each existing fetch below still runs.
   useRestoredCache<any>(
     subscriptionKey,
-    (data) => { setSubscription(data?.subscription ?? null); setSubscriptionLoaded(true) }
+    (data) => { setSubscription(data?.subscription ?? null); setBilling(data?.billing ?? null); setSubscriptionLoaded(true) }
   )
   useRestoredCache<{ brandCount?: number }>("/api/user/brand-usage", (data) => {
     setBrandCount(data?.brandCount ?? 0)
@@ -166,13 +170,18 @@ export default function BillingPage() {
   }, [session?.user?.id])
 
   const planColors: Record<string, string> = {
+    basic: "bg-gray-100 text-gray-700",
     solo: "bg-stone-100 text-stone-700",
     team: "bg-emerald-50 text-emerald-800",
     agency: "bg-amber-50 text-amber-800",
   }
-  const planName = subscription?.plan?.name?.toLowerCase() || "solo"
-  const planLabel = ({ solo: "Solo", team: "Team", agency: "Agency" } as Record<string, string>)[planName] || "Solo"
-  const planColor = planColors[planName] || planColors.solo
+  const planName = subscription?.plan?.name?.toLowerCase() || "basic"
+  const planLabel =
+    ({ basic: "Basic", solo: "Solo", team: "Team", agency: "Agency" } as Record<string, string>)[planName] ||
+    planName.charAt(0).toUpperCase() + planName.slice(1)
+  const planColor = planColors[planName] || planColors.basic
+  const isFreePlan = planName === "basic"
+  const shopifyManageUrl = billedByShopify ? billing?.manageUrl ?? null : null
 
   async function openBillingPortal() {
     try {
@@ -236,15 +245,14 @@ export default function BillingPage() {
 
   function usageRows() {
     const maxBrands = subscription?.plan?.max_brands || subscription?.plan?.included_brands
-    const maxSeats = subscription?.plan?.max_seats || subscription?.plan?.included_seats
     const seatCount = subscription?.seat_count ?? 1
 
     const brandsUnlimited = maxBrands === null || maxBrands > 100
-    const seatsUnlimited = maxSeats === null || maxSeats > 100
 
     return [
       { label: "Brands", used: brandCount, max: brandsUnlimited ? null : maxBrands },
-      { label: "Team members", used: seatCount, max: seatsUnlimited ? null : maxSeats },
+      // Team members are unlimited on every plan.
+      { label: "Team members", used: seatCount, max: null },
     ]
   }
 
@@ -303,11 +311,15 @@ export default function BillingPage() {
         <Card className="mb-4">
           <CardContent className="space-y-3 py-10 text-center">
             <p className="text-sm text-muted-foreground">No active subscription found.</p>
-            <Link href="/pricing?cycle=monthly">
-              <Button className="gap-1 bg-[#15803d] text-white hover:bg-[#166534]">
-                View Plans <ArrowRight className="h-3.5 w-3.5" />
-              </Button>
-            </Link>
+            {billedByShopify ? (
+              <ShopifyPlanAction manageUrl={shopifyManageUrl} label="View plans in Shopify" />
+            ) : (
+              <Link href="/pricing?cycle=monthly">
+                <Button className="gap-1 bg-[#15803d] text-white hover:bg-[#166534]">
+                  View Plans <ArrowRight className="h-3.5 w-3.5" />
+                </Button>
+              </Link>
+            )}
           </CardContent>
         </Card>
       ) : (
@@ -321,8 +333,10 @@ export default function BillingPage() {
               <div>
                 <p className="text-sm font-semibold leading-tight text-foreground">Current Plan</p>
                 <p className="text-xs leading-tight text-muted-foreground">
-                  Billed {subscription.billing_cycle || "monthly"}
-                  {subscription.current_period_end &&
+                  {isFreePlan
+                    ? "Free plan"
+                    : `Billed ${subscription.billing_cycle || "monthly"}${billedByShopify ? " through Shopify" : ""}`}
+                  {!isFreePlan && !billedByShopify && subscription.current_period_end &&
                     ` · Next renewal ${new Date(subscription.current_period_end).toLocaleDateString()}`}
                 </p>
               </div>
@@ -382,17 +396,28 @@ export default function BillingPage() {
                 </div>
               )}
 
+              {billedByShopify && (
+                <p className="text-xs text-muted-foreground">
+                  Your plan is billed through Shopify. Upgrade, downgrade or cancel it on Shopify&rsquo;s plan page;
+                  charges appear on your Shopify bill.
+                </p>
+              )}
+
               <div className="flex flex-wrap gap-2 border-t pt-3">
-                <Link href="/pricing?cycle=monthly">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="gap-1 border-emerald-600 text-emerald-800 hover:bg-emerald-600 hover:text-white"
-                  >
-                    Upgrade plan <ArrowRight className="h-3.5 w-3.5" />
-                  </Button>
-                </Link>
-                {planName !== "free" && !subscription.cancel_at_period_end && (
+                {billedByShopify ? (
+                  <ShopifyPlanAction manageUrl={shopifyManageUrl} label={isFreePlan ? "Upgrade plan in Shopify" : "Manage plan in Shopify"} />
+                ) : (
+                  <Link href="/pricing?cycle=monthly">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1 border-emerald-600 text-emerald-800 hover:bg-emerald-600 hover:text-white"
+                    >
+                      Upgrade plan <ArrowRight className="h-3.5 w-3.5" />
+                    </Button>
+                  </Link>
+                )}
+                {!billedByShopify && !isFreePlan && !subscription.cancel_at_period_end && (
                   <>
                     <Button
                       variant="outline"
@@ -418,6 +443,8 @@ export default function BillingPage() {
             </CardContent>
           </Card>
 
+          {/* Lemon Squeezy only */}
+          {!billedByShopify && (<>
           {/* Payment Method */}
           <Card className="mb-4">
             <div className="flex items-center gap-3 border-b px-5 py-3">
@@ -552,6 +579,7 @@ export default function BillingPage() {
               )}
             </CardContent>
           </Card>
+          </>)}
 
           <Dialog
             open={!!refundDialogPayment}
@@ -588,5 +616,26 @@ export default function BillingPage() {
         </>
       )}
     </div>
+  )
+}
+
+function ShopifyPlanAction({ manageUrl, label }: { manageUrl: string | null; label: string }) {
+  if (!manageUrl) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        To change your plan, open <strong>Instroom</strong> in your Shopify admin (Apps → Instroom).
+      </p>
+    )
+  }
+  return (
+    <a href={manageUrl} target="_blank" rel="noopener noreferrer">
+      <Button
+        variant="outline"
+        size="sm"
+        className="gap-1 border-emerald-600 text-emerald-800 hover:bg-emerald-600 hover:text-white"
+      >
+        {label} <ArrowRight className="h-3.5 w-3.5" />
+      </Button>
+    </a>
   )
 }

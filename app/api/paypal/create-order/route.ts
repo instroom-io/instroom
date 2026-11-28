@@ -1,6 +1,7 @@
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { NextResponse } from "next/server"
+import { shopifyBillingBlock } from "@/lib/shopify-billing"
 
 const PAYPAL_API_URL = process.env.PAYPAL_MODE === "live" 
   ? "https://api-m.paypal.com" 
@@ -37,6 +38,9 @@ export async function POST(req: Request) {
     if (!session?.user?.id) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
+
+    const blocked = await shopifyBillingBlock(session.user.id)
+    if (blocked) return blocked
 
     const { amount, description } = await req.json()
     const amountNum = typeof amount === "string" ? parseFloat(amount) : amount

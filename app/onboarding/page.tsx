@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useSession } from 'next-auth/react'
 import { OnboardingForm } from '@/components/onboarding-form'
 import { LEMON_SQUEEZY_VARIANTS } from '@/lib/pricing-plans'
+import { pendingShopifyLink } from '@/lib/shopify-link-return'
 
 function OnboardingPageInner() {
   const router = useRouter()
@@ -122,6 +123,12 @@ function OnboardingPageInner() {
   }
 
   const redirectAfterOnboarding = async () => {
+    // From the Shopify app: back to linking, never /pricing.
+    const shopifyLink = pendingShopifyLink()
+    if (shopifyLink) {
+      router.push(shopifyLink)
+      return
+    }
     const paidCycle: "monthly" | "yearly" = preselectedCycle === 'monthly' ? 'monthly' : 'yearly'
     try {
       const userId = (session?.user as any)?.id

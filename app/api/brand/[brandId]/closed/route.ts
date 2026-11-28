@@ -311,6 +311,7 @@ export async function GET(
 
         paidCollabData:  productDetails.paidCollab || null,
         completed:       productDetails.completed === true,
+        autoNoPostAt:    closedStatus === "No post" && productDetails.autoNoPost?.at ? String(productDetails.autoNoPost.at) : null,
 
         internalRating:  row.internal_rating ? Number(row.internal_rating) : null,
         lastContact:     row.updated_at.toISOString(),

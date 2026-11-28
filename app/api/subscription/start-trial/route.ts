@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
+import { shopifyBillingBlock } from "@/lib/shopify-billing"
 
 export async function POST(req: Request) {
   try {
@@ -21,6 +22,11 @@ export async function POST(req: Request) {
         { error: "Missing required fields: planName, cycle" },
         { status: 400 }
       )
+    }
+
+    if (planName !== "basic") {
+      const blocked = await shopifyBillingBlock(session.user.id)
+      if (blocked) return blocked
     }
 
     // Get the plan

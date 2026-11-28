@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { AlertCircle } from "lucide-react"
 import { invalidateCache } from "@/lib/data-cache"
+import { pendingShopifyLink } from "@/lib/shopify-link-return"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -496,10 +497,10 @@ export default function CreateBrandPage() {
               </div>
 
               <Button
-                onClick={() => router.push(`/dashboard/manage-influencers`)}
+                onClick={() => router.push(pendingShopifyLink() ?? `/dashboard/manage-influencers`)}
                 className="mt-5 text-[13px] font-semibold text-white bg-[#1FAE5B] hover:bg-[#18a050] border-none rounded-lg px-7 py-2.5 cursor-pointer"
               >
-                Go to my workspace →
+                {pendingShopifyLink() ? "Connect your Shopify store →" : "Go to my workspace →"}
               </Button>
             </div>
           )}

@@ -71,8 +71,9 @@ export async function connectShopToBrand({ brandId, shop, tokens, origin }: {
   origin: string
 }) {
   let storeName: string | null = null
+  let shopGid: string | null = null
   try {
-    storeName = (await getShopifyShopInfo(shop, tokens.accessToken)).storeName
+    ;({ storeName, shopGid } = await getShopifyShopInfo(shop, tokens.accessToken))
   } catch (error) {
     console.error("[Shopify] failed to fetch shop info", error)
   }
@@ -98,5 +99,5 @@ export async function connectShopToBrand({ brandId, shop, tokens, origin }: {
     createShopifyWebhook(shop, tokens.accessToken, "app/uninstalled", `${origin}/api/webhooks/shopify/app-uninstalled`),
   ])
 
-  return { storeName }
+  return { storeName, shopGid }
 }

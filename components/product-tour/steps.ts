@@ -4,6 +4,8 @@
 // visits it, whenever that happens. Seeing (or skipping) one scene never
 // marks any other scene seen; each is tracked separately in
 // User.product_tour_seen_scenes.
+import { SHOPIFY_LINK_PATH } from "@/lib/shopify-link-return"
+
 export type TourStep = {
   target: string
   title: string
@@ -56,8 +58,9 @@ export const isBrandPartnersRoute = requiresResolvedBrand((pathname) =>
 )
 export const isCommunityRoute = requiresResolvedBrand((pathname) => pathname.startsWith(COMMUNITY_ROUTE_PREFIX))
 export const isAnalyticsRoute = requiresResolvedBrand((pathname) => pathname.startsWith(ANALYTICS_ROUTE_PREFIX))
+// Paused on the Shopify link page so it doesn't cover the Connect button.
 export const isDashboardRoute = requiresResolvedBrand(
-  (pathname) => pathname.startsWith("/dashboard") && !isWizardRoute(pathname)
+  (pathname) => pathname.startsWith("/dashboard") && !isWizardRoute(pathname) && pathname !== SHOPIFY_LINK_PATH
 )
 
 export const SCENES: TourScene[] = [

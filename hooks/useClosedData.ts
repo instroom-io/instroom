@@ -106,6 +106,8 @@ export interface ClosedInfluencer {
   paidCollabData: PaidCollabData | null
   /** Marked completed from the Posted column — shown in the Completed column. */
   completed: boolean
+  /** Set when moved to No post automatically after 10 days. */
+  autoNoPostAt?: string | null
 
   internalRating: number | null
   lastContact: string
@@ -284,6 +286,7 @@ function applyColumnChange(
   newColumn: ClosedColumn
 ): ClosedInfluencer {
   const now = new Date().toISOString()
+  item = { ...item, autoNoPostAt: null }
 
   switch (newColumn) {
     case "For Order Creation":

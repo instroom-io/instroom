@@ -752,7 +752,15 @@ function PostTrackerCardBase({ inf, onOpen, onMove, onComplete, canApproveInflue
               <IconLink size={10}/> {inf.postUrl ? "Content live" : "Content delivered"}
             </span>
           )}
-          {isExit && (
+          {isExit && inf.autoNoPostAt && (
+            <span
+              className="text-[10px] text-amber-700 bg-amber-50 rounded-full px-2 py-0.5 inline-block font-medium"
+              title="Moved here automatically: 10 days in Delivered with no post. Still tracked — a post moves it to Posted."
+            >
+              ⏱ No post after 10 days
+            </span>
+          )}
+          {isExit && !inf.autoNoPostAt && (
             <span className="text-[10px] text-red-500 bg-red-50 rounded-full px-2 py-0.5 inline-block font-medium">
               ✕ No content published
             </span>
@@ -1477,11 +1485,15 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
               </select>
             </DrawerControl>
           </>}
-          notice={inf.closedStatus === "No post" && (
+          notice={inf.closedStatus === "No post" && (inf.autoNoPostAt ? (
+            <div style={{ marginTop: 8, padding: "6px 12px", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, fontSize: 11, color: "#b45309", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <span>⏱</span> No post after 10 days in Delivered. Still tracked: a post moves it to Posted.
+            </div>
+          ) : (
             <div style={{ marginTop: 8, padding: "6px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, fontSize: 11, color: "#dc2626", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
               <span>✕</span> No content published
             </div>
-          )}
+          ))}
         />
 
         <DrawerTabs
@@ -1705,7 +1717,7 @@ function ProfileDrawer({ inf, brandId, onClose, onNotify, onColumnChange, onColl
               {/* Gated on the stage, not just hidden: rendering the card is what
                   mounts it and fires its GET, so an influencer who cannot have
                   posted yet costs no request and no API allowance. */}
-              {brandId && canDetectPost(inf.closedStatus) && (
+              {brandId && (canDetectPost(inf.closedStatus) || Boolean(inf.autoNoPostAt)) && (
                 <AutoPostDetectionCard
                   brandId={brandId}
                   biId={inf.id}

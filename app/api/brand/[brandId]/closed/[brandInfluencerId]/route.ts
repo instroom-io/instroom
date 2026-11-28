@@ -246,6 +246,15 @@ export async function PATCH(
 
     // ✅ Merge JSON updates (no overwrite loss)
     if (closedStatus !== undefined) {
+      // A manual move ends an auto No post; entering Delivered restarts the 10 days.
+      delete productDetails.autoNoPost
+      if (closedStatus === "Delivered") {
+        if (productDetails.closedStatus !== "Delivered") {
+          productDetails.deliveredSince = new Date().toISOString()
+        }
+      } else {
+        delete productDetails.deliveredSince
+      }
       productDetails.closedStatus = closedStatus
     }
     if (paidCollabData !== undefined) {

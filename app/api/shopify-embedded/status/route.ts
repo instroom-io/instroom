@@ -4,6 +4,7 @@ import { verifyShopifySessionToken } from "@/lib/shopify-session-token"
 import { getBrandIdByShopDomain, getShopifyConnection } from "@/lib/shopify-connection"
 import { ensureShopifyInstallation, idTokenFrom, retryWithFreshIdToken } from "@/lib/shopify-embedded"
 import { openOrder } from "@/lib/shopify-orders"
+import { markShopifyBilled, shopifyPlanSelectionUrl, syncShopifyBillingForShop } from "@/lib/shopify-billing"
 
 type OrderState = "awaiting" | "in_transit" | "delivered" | "cancelled"
 
@@ -46,18 +47,58 @@ async function orderOverview(brandId: string) {
   }
 }
 
+/** The store's plan, synced from Shopify; falls back to the stored plan on API failure. */
+async function storePlan(shop: string, ownerId: string | null, planHandle: string | null) {
+  try {
+    const synced = await syncShopifyBillingForShop(shop, planHandle)
+    if (!synced && ownerId) await markShopifyBilled(ownerId, shop)
+  } catch (error) {
+    console.error("[shopify-embedded] plan sync failed", error)
+  }
+
+  const select = {
+    billing_cycle: true,
+    current_period_end: true,
+    plan: { select: { name: true, display_name: true } },
+  } as const
+  const sub = await prisma.userSubscription.findFirst({
+    where: { shopify_shop_domain: shop, billing_provider: "shopify" },
+    select,
+  })
+  if (sub) {
+    return {
+      plan: { name: sub.plan.name, displayName: sub.plan.display_name, cycle: sub.billing_cycle },
+      manageUrl: shopifyPlanSelectionUrl(shop),
+    }
+  }
+
+  // Owner still on an Instroom-paid plan: no Shopify upgrade, to avoid double billing.
+  const ownerSub = ownerId ? await prisma.userSubscription.findUnique({ where: { user_id: ownerId }, select }) : null
+  if (ownerSub && ownerSub.plan.name !== "basic") {
+    return {
+      plan: { name: ownerSub.plan.name, displayName: ownerSub.plan.display_name, cycle: ownerSub.billing_cycle },
+      manageUrl: null,
+      billedByInstroomUntil: ownerSub.current_period_end?.toISOString() ?? null,
+    }
+  }
+  return { plan: null, manageUrl: shopifyPlanSelectionUrl(shop) }
+}
+
 // Auth: App Bridge ID token (no login cookie inside Shopify's iframe).
 export async function GET(req: NextRequest) {
   const idToken = idTokenFrom(req)
   const verified = idToken ? verifyShopifySessionToken(idToken) : null
   if (!idToken || !verified) return retryWithFreshIdToken()
 
+  const planHandle = req.nextUrl.searchParams.get("plan_handle")
+
   const brandId = await getBrandIdByShopDomain(verified.shop)
   const connection = brandId ? await getShopifyConnection(brandId) : null
   if (brandId && connection && connection.shopDomain === verified.shop) {
-    const [brand, overview] = await Promise.all([
-      prisma.brand.findUnique({ where: { id: brandId }, select: { name: true } }),
+    const brand = await prisma.brand.findUnique({ where: { id: brandId }, select: { name: true, owner_id: true } })
+    const [overview, billing] = await Promise.all([
       orderOverview(brandId),
+      storePlan(verified.shop, brand?.owner_id ?? null, planHandle),
     ])
     return NextResponse.json({
       connected: true,
@@ -66,6 +107,7 @@ export async function GET(req: NextRequest) {
       storeName: connection.storeName,
       lastOrderSyncAt: connection.lastOrderSyncAt?.toISOString() ?? null,
       ...overview,
+      ...billing,
     })
   }
 
@@ -73,5 +115,5 @@ export async function GET(req: NextRequest) {
   const installed = await ensureShopifyInstallation(verified.shop, idToken)
   if (installed !== "ok") return installed
 
-  return NextResponse.json({ connected: false })
+  return NextResponse.json({ connected: false, ...(await storePlan(verified.shop, null, planHandle)) })
 }

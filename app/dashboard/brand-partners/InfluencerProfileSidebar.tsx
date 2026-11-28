@@ -132,6 +132,7 @@ function formatActivityDetails(action: string, details: Record<string, unknown>)
     case "influencer.added":
       return `via ${details.method ?? "manual"}${details.platform ? ` on ${details.platform}` : ""}`
     case "posttracker.stage_changed":
+    case "posttracker.auto_no_post":
       return `${details.from} → ${details.to}`
     case "influencer.updated": {
       const fields = details.fields as string[] | undefined

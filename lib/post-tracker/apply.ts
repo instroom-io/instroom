@@ -11,7 +11,8 @@ import "server-only"
 //                       ("x/N deliverables"); when every slot is taken, a new
 //                       deliverable is added for it (up to MAX_DELIVERABLES).
 //                       Marking Completed stays a human step.
-//   • Anything else   → untouched (Completed, Issues, No post, earlier stages).
+//   • Auto No post    → same as Delivered.
+//   • Anything else   → untouched (Completed, Issues, manual No post, earlier stages).
 //
 // The column is moved through product_details.closedStatus as well as the
 // stage fields. closedStatus is what the board reads first (deriveClosedStatus
@@ -48,10 +49,16 @@ export function postTrackerColumn(stage: number, details: Record<string, unknown
   return null
 }
 
+/** Auto-moved No post (after 10 days): still tracked, unlike a manual No post. */
+export function isAutoNoPost(details: Record<string, unknown>): boolean {
+  return details.closedStatus === "No post" && !!details.autoNoPost && typeof details.autoNoPost === "object"
+}
+
 /** Is this card one that detection should look for posts for? */
 export function isTrackedForDetection(stage: number, details: Record<string, unknown>): boolean {
   const column = postTrackerColumn(stage, details)
   if (column === "Delivered") return true
+  if (column === "No post") return isAutoNoPost(details)
   return column === "Posted" && details.completed !== true
 }
 
@@ -189,7 +196,10 @@ export async function recordPostOnInfluencer(
     return "no-open-slot"
   }
 
-  if (column === "Delivered") {
+  const awaitingFirstPost = column === "Delivered" || column === "No post"
+  if (awaitingFirstPost) {
+    delete details.autoNoPost
+    delete details.deliveredSince
     Object.assign(
       data,
       mapClosedToPipelineFields("Posted", {
@@ -206,7 +216,7 @@ export async function recordPostOnInfluencer(
 
   if (!(await writeCard(brandInfluencerId, brandId, current.updated_at, data, post))) return "changed-concurrently"
 
-  const outcome: RecordOutcome = column === "Delivered" ? "moved-to-posted" : "deliverable-filled"
+  const outcome: RecordOutcome = awaitingFirstPost ? "moved-to-posted" : "deliverable-filled"
   console.log(`${LOG} ${brandInfluencerId}: ${outcome} from ${post.postUrl}`)
   return outcome
 }

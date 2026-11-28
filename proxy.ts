@@ -5,6 +5,7 @@ import { NextResponse } from "next/server"
 import type { NextRequest } from "next/server"
 import { getToken } from "next-auth/jwt"
 import { SESSION_COOKIE_NAME } from "@/lib/auth"
+import { isShopifyLinkTarget, SHOPIFY_LINK_COOKIE, SHOPIFY_LINK_MAX_AGE } from "@/lib/shopify-link-return"
 
 const ADMIN_EMAIL = "admin@instroom.io"
 
@@ -23,7 +24,17 @@ function redirectToLogin(req: NextRequest) {
   const login = new URL("/login", req.url);
   const intended = req.nextUrl.pathname + req.nextUrl.search;
   if (intended && intended !== "/") login.searchParams.set("callbackUrl", intended);
-  return NextResponse.redirect(login);
+  const res = NextResponse.redirect(login);
+  // Remember the Shopify link page so signup/onboarding return to it.
+  if (isShopifyLinkTarget(intended)) {
+    res.cookies.set(SHOPIFY_LINK_COOKIE, intended, {
+      maxAge: SHOPIFY_LINK_MAX_AGE,
+      path: "/",
+      sameSite: "lax",
+      secure: req.nextUrl.protocol === "https:",
+    });
+  }
+  return res;
 }
 
 export async function proxy(req: NextRequest) {

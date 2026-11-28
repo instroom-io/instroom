@@ -170,6 +170,7 @@ function formatDetails(
         details.platform ? ` on ${details.platform}` : ""
       }`
     case "posttracker.stage_changed":
+    case "posttracker.auto_no_post":
       return `${details.from} → ${details.to}`
     default:
       return ""

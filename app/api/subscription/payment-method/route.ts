@@ -13,10 +13,10 @@ export async function GET() {
 
     const subscription = await prisma.userSubscription.findUnique({
       where: { user_id: session.user.id },
-      select: { payment_subscription_id: true },
+      select: { payment_subscription_id: true, billing_provider: true },
     })
 
-    if (!subscription?.payment_subscription_id) {
+    if (!subscription?.payment_subscription_id || subscription.billing_provider === "shopify") {
       return NextResponse.json({ paymentMethod: null })
     }
 

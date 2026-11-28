@@ -277,12 +277,12 @@ function mapGraphQLOrder(node: GraphQLOrderNode): ShopifyOrderEntry {
 }
 
 export async function getShopifyShopInfo(shopDomain: string, accessToken: string) {
-  const { shop } = await shopifyGraphQL<{ shop: { name: string } }>(
+  const { shop } = await shopifyGraphQL<{ shop: { id: string; name: string } }>(
     shopDomain,
     accessToken,
-    `{ shop { name } }`
+    `{ shop { id name } }`
   )
-  return { storeName: shop?.name ?? null }
+  return { storeName: shop?.name ?? null, shopGid: shop?.id ?? null }
 }
 
 async function getShopCurrencyCode(shopDomain: string, accessToken: string): Promise<string> {

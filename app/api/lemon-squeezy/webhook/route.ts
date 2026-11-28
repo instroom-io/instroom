@@ -65,6 +65,15 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "No user ID in webhook" }, { status: 400 })
     }
 
+    // Shopify-billed plans come only from Shopify.
+    const billedBy = await prisma.userSubscription.findUnique({
+      where: { user_id: userId },
+      select: { billing_provider: true },
+    })
+    if (billedBy?.billing_provider === "shopify") {
+      return NextResponse.json({ success: true, skipped: "billed_by_shopify" })
+    }
+
     if (
       eventName === "order:created" ||
       eventName === "order:finished" ||
@@ -142,6 +151,7 @@ export async function POST(req: Request) {
             current_period_start: periodStart,
             current_period_end: periodEnd,
             last_webhook_event_at: eventTimestamp,
+            billing_provider: "lemonsqueezy",
           },
         })
       } else {
@@ -156,6 +166,7 @@ export async function POST(req: Request) {
             current_period_start: periodStart,
             current_period_end: periodEnd,
             last_webhook_event_at: eventTimestamp,
+            billing_provider: "lemonsqueezy",
           },
         })
       }

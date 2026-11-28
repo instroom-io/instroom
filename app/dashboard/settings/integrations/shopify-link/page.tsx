@@ -9,8 +9,14 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { invalidateCache } from "@/lib/data-cache"
 import { invalidateInfluencerDerivedCaches } from "@/lib/cache-invalidation"
+import { forgetShopifyLink, rememberShopifyLink, SHOPIFY_LINK_PATH } from "@/lib/shopify-link-return"
 
-type LinkInfo = { shop: string; brands: { id: string; name: string }[]; previousBrandId: string | null }
+type LinkInfo = {
+  shop: string
+  brands: { id: string; name: string }[]
+  previousBrandId: string | null
+  canCreateBrand?: boolean
+}
 
 function ShopifyLinkContent() {
   const router = useRouter()
@@ -23,6 +29,7 @@ function ShopifyLinkContent() {
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
+    rememberShopifyLink(`${SHOPIFY_LINK_PATH}?ticket=${encodeURIComponent(ticket)}`)
     fetch(`/api/settings/integrations/shopify/link?ticket=${encodeURIComponent(ticket)}`)
       .then(async (r) => {
         const data = await r.json().catch(() => ({}))
@@ -44,6 +51,7 @@ function ShopifyLinkContent() {
       })
       const data = await r.json().catch(() => ({}))
       if (!r.ok) throw new Error(data.error || "Couldn't connect the store")
+      forgetShopifyLink()
       invalidateCache(`/api/settings/integrations?brandId=${brandId}`)
       invalidateInfluencerDerivedCaches(brandId)
       router.replace(`/dashboard/settings/integrations?brandId=${encodeURIComponent(brandId)}&shopify=connected`)
@@ -85,7 +93,18 @@ function ShopifyLinkContent() {
             </div>
           )}
 
-          {info && info.brands.length === 0 && (
+          {info && info.brands.length === 0 && info.canCreateBrand !== false && (
+            <div className="flex flex-col items-start gap-3">
+              <div className="text-[12px] text-[#555]">
+                Create your brand in Instroom first, then you&rsquo;ll come back here to connect this store.
+              </div>
+              <Button className="bg-[#1FAE5B] text-white hover:bg-[#0F6B3E]" asChild>
+                <Link href="/dashboard/brand/create">Create your brand</Link>
+              </Button>
+            </div>
+          )}
+
+          {info && info.brands.length === 0 && info.canCreateBrand === false && (
             <div className="text-[12px] text-[#555]">
               Only a brand&rsquo;s owner can connect a Shopify store, and you don&rsquo;t own a brand. Ask the
               owner to open Instroom in their Shopify admin and click <strong>Link to your Instroom workspace</strong>.

@@ -177,6 +177,11 @@ model UserSubscription {
   created_at              DateTime  @default(now())
   updated_at              DateTime  @updatedAt
 
+  billing_provider    String?   @db.VarChar(20) // "lemonsqueezy" | "shopify"
+  shopify_shop_domain String?   @db.VarChar(191) // 191: MyISAM index key limit
+  shopify_shop_gid    String?   @db.VarChar(100)
+  shopify_synced_at   DateTime?
+
   plan SubscriptionPlan @relation(fields: [plan_id], references: [id])
   user User             @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
@@ -184,6 +189,7 @@ model UserSubscription {
   @@index([status])
   @@index([payment_subscription_id])
   @@index([plan_id])
+  @@index([shopify_shop_domain])
 }
 
 model BrandSeatOverride {

@@ -75,6 +75,35 @@ export function GET() {
     }
   }
 
+  function planSection(data) {
+    var plan = data.plan;
+    var paid = plan && plan.name !== "basic";
+    // Instroom-paid plan: moves to Shopify billing at renewal.
+    if (paid && data.billedByInstroomUntil !== undefined) {
+      var until = data.billedByInstroomUntil ? " until " + new Date(data.billedByInstroomUntil).toLocaleDateString() : "";
+      return section("Plan", el("s-stack", { gap: "base" }, [
+        el("s-text", { type: "strong" }, plan.displayName),
+        el("s-text", { color: "subdued" }, "Your current plan is paid in Instroom" + until + ". After that, your plan is billed through Shopify."),
+      ]));
+    }
+    var children = [
+      el("s-stack", { direction: "inline", gap: "small-200", alignItems: "center" }, [
+        el("s-text", { type: "strong" }, plan ? plan.displayName : "Basic"),
+        el("s-badge", { tone: paid ? "success" : "neutral" }, paid ? (plan.cycle === "yearly" ? "Billed yearly" : "Billed monthly") : "Free"),
+      ]),
+      el("s-text", { color: "subdued" }, "Billed through Shopify. Upgrade, downgrade or cancel at any time."),
+    ];
+    if (data.manageUrl) {
+      children.push(el("s-button", { href: data.manageUrl, target: "_top" }, paid ? "Change plan" : "Upgrade plan"));
+    }
+    return section("Plan", el("s-stack", { gap: "base" }, children));
+  }
+
+  function planChangedBanner(data) {
+    if (!new URLSearchParams(location.search).get("plan_handle") || !data.plan) return null;
+    return el("s-banner", { tone: "success", heading: "You're on the " + data.plan.displayName + " plan" }, "Your Instroom limits have been updated.");
+  }
+
   function showError(message) {
     var retry = el("s-button", {}, "Try again");
     retry.addEventListener("click", load);
@@ -124,10 +153,10 @@ export function GET() {
       el("s-paragraph", {}, "3. The influencer's card updates to In-Transit and Delivered automatically."),
     ]), "aside");
 
-    show([connection, summary, section("Recent orders", recent), steps, section("Help", helpLinks(), "aside")]);
+    show([planChangedBanner(data), connection, planSection(data), summary, section("Recent orders", recent), steps, section("Help", helpLinks(), "aside")].filter(Boolean));
   }
 
-  function showLink() {
+  function showLink(data) {
     var note = el("s-paragraph", {}, "Instroom now has access to this store. Link it to your brand to start creating influencer orders and tracking shipments.");
     var link = el("s-button", { variant: "primary" }, "Link to your Instroom workspace");
     var refresh = el("s-button", {}, "Refresh");
@@ -145,19 +174,22 @@ export function GET() {
       }
     });
     show([
+      planChangedBanner(data),
       section("Link this store to Instroom", el("s-stack", { gap: "base" }, [
         note,
         el("s-stack", { direction: "inline", gap: "small-200" }, [link, refresh]),
       ])),
+      planSection(data),
       section("Help", helpLinks(), "aside"),
-    ]);
+    ].filter(Boolean));
   }
 
   async function load() {
     show([el("s-section", {}, el("s-spinner", { accessibilityLabel: "Loading" }))]);
     try {
-      var data = await api("/api/shopify-embedded/status");
-      data.connected ? showConnected(data) : showLink();
+      var planHandle = new URLSearchParams(location.search).get("plan_handle");
+      var data = await api("/api/shopify-embedded/status" + (planHandle ? "?plan_handle=" + encodeURIComponent(planHandle) : ""));
+      data.connected ? showConnected(data) : showLink(data);
     } catch (e) {
       showError(e.message);
     }
